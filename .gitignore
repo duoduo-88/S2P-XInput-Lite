@@ -1,0 +1,11 @@
+﻿__pycache__/
+*.py[cod]
+switch2env/
+switch2env_backup/
+runtime/
+build/
+dist/
+*.spec
+S2P-XInput-Lite.exe
+.vscode/
+.idea/
