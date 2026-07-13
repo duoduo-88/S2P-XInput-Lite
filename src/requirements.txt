@@ -1,0 +1,5 @@
+pyserial
+vgamepad
+bleak
+PyBluez
+winrt-Windows.Devices.Bluetooth
