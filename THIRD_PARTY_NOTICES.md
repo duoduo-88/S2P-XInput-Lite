@@ -29,6 +29,7 @@ Modifications and additions include, but are not limited to:
 - Stick direction mapping
 - Graphical configuration interface
 - ESP32 automatic detection and connection workflow integration
+- Wired USB HID report translation, startup sequencing, and non-blocking rumble transport
 
 S2P-XInput-Lite itself is distributed under the GNU General Public License v3.0 (GPL-3.0).
 
@@ -38,20 +39,34 @@ The authors and contributors of Switch2Connect do not provide official support f
 
 ---
 
+## Wired USB Python Libraries
+
+Wired controller support bundles `hidapi`, `PyUSB`, and `libusb-package` in the
+portable Python runtime. These components remain subject to their respective
+upstream licenses and copyright notices.
+
+- hidapi: https://github.com/trezor/cython-hidapi
+- PyUSB: https://github.com/pyusb/pyusb
+- libusb-package: https://github.com/pyocd/libusb-package
+
+---
+
 ## ESP32-S3 Firmware Files
 
-The following file distributed with this project:
+The bundled ESP32-S3 Bluedroid bridge binary, boot files, and complete matching
+source are copied without modification from Switch2Connect commit
+`d63b044e66cfb93f8377a3596e3f00c82715b029`. The corresponding source is
+distributed under `esp32s3/source/esp32s3_usb_bridge_bluedroid`. Firmware and
+source report version `0.12.4`.
 
-`esp32s3.zip`
-
-is provided directly from the Switch2Connect project by TommyWabg.
-
-**Source:**  
+**Upstream source:**  
 https://github.com/TommyWabg/Switch2Connect
 
-S2P-XInput-Lite has not modified this ZIP archive.
+**Exact upstream revision:**  
+https://github.com/TommyWabg/Switch2Connect/tree/d63b044e66cfb93f8377a3596e3f00c82715b029/ESP32-S3%20firmware/esp32s3_usb_bridge_bluedroid
 
-The file is redistributed as an upstream project file. Its original copyright and applicable license terms remain in effect.
+These files remain subject to their applicable upstream copyright and license
+terms. They are not an unmodified upstream ZIP archive.
 
 ---
 
