@@ -1,4 +1,0 @@
-APP_NAME = "S2P-XInput-Lite"
-VERSION = "0.3.0"
-
-APP_TITLE = f"{APP_NAME} v{VERSION}"
