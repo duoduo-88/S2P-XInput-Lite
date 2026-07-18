@@ -30,6 +30,7 @@ Modifications and additions include, but are not limited to:
 - Graphical configuration interface
 - ESP32 automatic detection and connection workflow integration
 - Wired USB HID report translation, startup sequencing, and non-blocking rumble transport
+- Low-latency ESP32 BLE-to-USB CDC scheduling and latest-state forwarding
 
 S2P-XInput-Lite itself is distributed under the GNU General Public License v3.0 (GPL-3.0).
 
@@ -53,11 +54,19 @@ upstream licenses and copyright notices.
 
 ## ESP32-S3 Firmware Files
 
-The bundled ESP32-S3 Bluedroid bridge binary, boot files, and complete matching
-source are copied without modification from Switch2Connect commit
-`d63b044e66cfb93f8377a3596e3f00c82715b029`. The corresponding source is
-distributed under `esp32s3/source/esp32s3_usb_bridge_bluedroid`. Firmware and
-source report version `0.12.4`.
+The bundled `cdc_bridge_2_lowlatency` ESP32-S3 Bluedroid bridge firmware is a
+modified build based on Switch2Connect commit
+`d63b044e66cfb93f8377a3596e3f00c82715b029`. Its complete corresponding source
+is distributed under `esp32s3/source/esp32s3_usb_bridge_bluedroid`. The
+firmware protocol reports version `0.12.4`.
+
+S2P-XInput-Lite modifications include low-latency BLE-to-USB CDC scheduling,
+immediate CDC task wake-up, newest-input priority, combined CDC report writes,
+and an updated build identifier. These modifications remain distributed under
+the GNU General Public License terms stated in the firmware source.
+
+The unmodified upstream firmware and boot files are retained separately under
+`esp32s3/firmware/upstream_0.12.4` for rollback and attribution clarity.
 
 **Upstream source:**  
 https://github.com/TommyWabg/Switch2Connect
@@ -66,20 +75,40 @@ https://github.com/TommyWabg/Switch2Connect
 https://github.com/TommyWabg/Switch2Connect/tree/d63b044e66cfb93f8377a3596e3f00c82715b029/ESP32-S3%20firmware/esp32s3_usb_bridge_bluedroid
 
 These files remain subject to their applicable upstream copyright and license
-terms. They are not an unmodified upstream ZIP archive.
+terms. The current low-latency files are not an unmodified upstream release.
+
+### ESP-IDF and USB firmware components
+
+The current firmware binary was built with the following third-party
+components:
+
+- ESP-IDF 5.5.4 — Apache License 2.0  
+  https://github.com/espressif/esp-idf
+- Espressif ESP TinyUSB 1.7.6~2 — Apache License 2.0  
+  https://components.espressif.com/components/espressif/esp_tinyusb
+- TinyUSB 0.19.0~3 — MIT License, copyright TinyUSB contributors and
+  hathach (tinyusb.org)  
+  https://github.com/hathach/tinyusb
+
+These components retain their respective copyright notices, disclaimers, and
+license terms. Their inclusion in the firmware binary does not change the
+license of the original components.
 
 ---
 
 ## esptool
 
-The ESP32 firmware flashing functionality included with this project uses `esptool.exe`.
+The ESP32 firmware flashing functionality included with this project uses
+`esptool.exe` version 4.11.0.
 
 esptool is an open-source utility developed by Espressif Systems for flashing and communicating with Espressif chips.
 
 **Upstream project:**  
 https://github.com/espressif/esptool
 
-`esptool.exe` is a third-party component. Its copyright and applicable license terms remain with its original authors and contributors.
+`esptool.exe` is distributed under the GNU General Public License version 2.
+Its copyright and applicable license terms remain with its original authors
+and contributors.
 
 Distribution of `esptool.exe` alongside S2P-XInput-Lite or as part of an upstream firmware package does not change its original copyright or applicable license terms.
 
