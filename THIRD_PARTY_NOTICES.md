@@ -87,6 +87,21 @@ For the complete license terms applicable to a specific version of esptool, refe
 
 ---
 
+## HidHide
+
+S2P-XInput-Lite can integrate with a separately installed copy of HidHide by
+invoking its official `HidHideCLI.exe`. HidHide is not bundled or redistributed
+with this release and remains subject to its own copyright and license terms.
+
+- Project: https://github.com/nefarius/HidHide
+- Documentation: https://docs.nefarius.at/projects/HidHide/
+
+The integration only extends the existing application and hidden-device lists;
+it does not claim ownership of, clear, or replace settings created by HidHide or
+other controller tools.
+
+---
+
 ## Third-Party Trademarks
 
 Nintendo, Nintendo Switch, Switch 2, Xbox, Microsoft, Espressif, and other third-party product names, project names, and trademarks are the property of their respective owners.
