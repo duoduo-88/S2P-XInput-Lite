@@ -2,8 +2,8 @@
 
 S2P-XInput-Lite converts a Switch 2 Pro Controller into an Xbox 360-compatible XInput controller on Windows. It supports wired USB, an ESP32-S3 USB bridge, and native Windows BLE.
 
-Current release: **v0.5.0**  
-[Release notes](RELEASE_NOTES_v0.5.0.md)
+Current release: **v0.5.1**  
+[Release notes](RELEASE_NOTES_v0.5.1.md)
 
 > This is an unofficial community project and is not affiliated with Nintendo, Microsoft, or Espressif Systems.
 
@@ -12,9 +12,9 @@ Current release: **v0.5.0**
 - Automatic wired USB priority, followed by ESP32-S3 or native BLE, with live 6-axis/9-axis sensor status
 - Xbox 360 virtual controller output through ViGEmBus
 - Low-latency input dispatch that preserves button edges while using the newest stick and motion report
-- Button, keyboard, mouse, and stick-direction mapping
-- Global mapping layers with hold/toggle activation, per-layer button and stick overrides, ordering, and import/export
-- Per-controller stick and motion calibration
+- Button, keyboard, mouse, stick-direction, linear-trigger, and linear-scroll mapping with shared target validation
+- Global mapping-layer files with hold/toggle activation, per-layer button and stick overrides, import/export, and per-profile enabled/order state
+- Per-controller stick calibration and connection-time gyro zero-bias initialization
 - Stick curves, deadzones, smoothing, stabilization, and output-shape adjustment
 - Consistent XInput-to-HD Rumble 2 conversion across USB, ESP32, and native BLE, with latest-only pacing, priority stop frames, and audio-reactive vibration
 - Gyroscope mapping to an Xbox stick or mouse
@@ -41,7 +41,7 @@ The packaged release includes a portable Python runtime and all required package
 3. Connect the controller before opening Steam or another controller tool. For native BLE, **do not pair it through Windows Bluetooth settings**; turn Bluetooth on and let this application establish the connection. For ESP32, connect a device running compatible firmware.
 4. Run `S2P-XInput-Lite.exe`.
 5. Choose a game profile or adjust settings, then use **Save Profile** or **Save New Profile**.
-6. Saving or switching a profile applies gameplay settings immediately while connected. Use **Restart** only after changing the connection method, device, or serial settings.
+6. Saving the active profile updates its stored settings. Switching profiles while connected automatically stops the connection program, applies the selected profile, refreshes the GUI, and reconnects. Use **Restart** only after changing the connection method, device, or serial settings.
 
 The application checks wired USB first, then ESP32, and finally native BLE. Keep the connection program running while playing.
 
@@ -49,11 +49,11 @@ If HidHide is missing, the application offers to open its official download page
 
 For first-time native BLE pairing, start the connection program and hold the controller's **SYNC** button. A previously paired controller can normally be woken with any button.
 
-Settings and per-controller calibration are stored in `src/config.ini`. A missing file is created automatically from `src/profiles/System Default.ini`, and missing keys in an older file are added without overwriting existing values. Keep `System Default.ini` in every release package; `config.ini` may be omitted from a clean distribution.
+Settings and per-controller stick calibration are stored in `src/config.ini`. Gyro zero-bias is initialized again after every controller connection and is not stored as permanent calibration. A missing file is created automatically from `src/profiles/System Default.ini`, and missing keys in an older file are added without overwriting existing values. Default and restore operations also use `System Default.ini` as their baseline. Keep this file in every release package; `config.ini` may be omitted from a clean distribution.
 
-The first launch provides General, Audio, FPS-COMP, FPS-IMM, Racing, Action, and Rhythm profiles. Selecting a profile refreshes the GUI and applies its saved settings to a running connection without reconnecting. Built-in profiles start from canonical button and stick-direction mappings. Custom profiles can be saved, renamed, or deleted. **System Default** is a protected read-only baseline and always appears at the bottom of the list. **Restore Defaults** resets the current controls without deleting saved profiles or calibration.
+The first launch provides General, Audio, FPS-COMP, FPS-IMM, Racing, Action, and Rhythm profiles. Selecting a profile refreshes the GUI. When the connection program is running, it is stopped and reconnected automatically so the newly selected profile is loaded completely. Built-in profiles start from canonical button and stick-direction mappings. Custom profiles can be saved, renamed, or deleted. **System Default** is a protected read-only baseline and always appears at the bottom of the list. **Restore Defaults** resets the current controls without deleting saved profiles or calibration.
 
-Mapping layers are global and can temporarily override the active profile while a button chord is held or toggled. A layer can remap buttons and stick directions, swap sticks, use a stick as a mouse, or produce linear XInput trigger/stick output. Layer priority follows the order shown in the editor. Layer files are stored under `src/layers` and can be imported or exported.
+Mapping Layer files are global and can temporarily override the active profile while a button chord is held or toggled. A Layer can remap buttons and stick directions, swap sticks, use a stick as a mouse, or produce linear XInput trigger, stick-direction, or scroll output. Layer files are stored under `src/layers` and can be imported or exported. Each game profile stores which Layers are enabled and their priority order; switching profiles changes that state without deleting or replacing the Layer files. Only the highest-priority matching Layer is active: held Layers take priority over toggled Layers, then the editor order is used.
 
 ## Verified Low-Latency Paths
 
@@ -66,8 +66,8 @@ Reusable hardware probes and automated tests are maintained in the development r
 
 ## Notes
 
-- Gyro or stick calibration should be performed from the GUI by following its on-screen instructions.
-- Save mapping changes before testing them; a running connection applies the saved settings automatically.
+- Perform stick calibration from the GUI by following its on-screen instructions. After each connection, keep the controller still for about 0.5 seconds; gyro output begins after at least 16 stable samples and zero-bias sampling continues up to 64 samples.
+- Save or apply mapping changes before testing them; invalid or damaged mapping data is reported and is not silently applied.
 - Set both LF and HF vibration strength to zero to disable vibration.
 - The default HD Rumble 2 commands are LF `225` and HF `481`; connection and Pin feedback use the same two-pulse pattern on every transport.
 - ESP32 firmware flashing requires reconnecting or restarting the ESP32-S3 afterward.
@@ -81,7 +81,7 @@ Reusable hardware probes and automated tests are maintained in the development r
 - No Joy-Con pairing or PS5 controller emulation
 - Motion is mapped to a stick or mouse; XInput does not expose raw motion sensors
 - The ESP32 connection requires compatible bridge firmware
-- The release includes the complete ESP32-S3 source for the bundled `0.12.4` protocol / `cdc_bridge_2_lowlatency` build under `esp32s3/source/esp32s3_usb_bridge_bluedroid`
+- The packaged release contains the ESP32 flashing tool and the required `0.12.4` firmware binaries under `esp32s3`; the ESP32 source and build directories are not included in the release package
 - HidHide is not bundled and is not required for ESP32 or BLE. Without it, wired input still works, but games may detect both the physical HID and virtual XInput controller.
 - If wired status shows Basic mode, fully exit Steam or other controller tools, reconnect the controller, and start this application first
 - Wired USB always requests the controller's complete sensor report; the 6-axis/9-axis label reflects the data actually received rather than a selectable polling mode
