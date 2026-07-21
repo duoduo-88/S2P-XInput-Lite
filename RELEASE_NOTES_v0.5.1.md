@@ -6,7 +6,7 @@ v0.5.1 is compared with **v0.5.0**, the previous public release. This version fo
 
 ### Changes since v0.5.0
 
-- Fixed main-profile mapping targets that could be saved in the GUI but were not executed correctly at runtime, including **Linear Trigger** and **Linear Scroll**.
+- Fixed linear mapping in the main profile. **Linear Trigger** and **Linear Scroll** now execute correctly after being saved or applied.
 - Unified mapping-source and mapping-target parsing between the main profile and Mapping Layers so identical targets behave consistently.
 - Fixed keyboard mappings that share Ctrl, Shift, Alt, or Windows modifiers. Releasing one mapped key no longer releases a modifier still required by another mapping.
 - Added correct Windows extended-key handling and prevented a cancelled custom-key recording window from saving an invalid value.
@@ -39,6 +39,7 @@ v0.5.1 is compared with **v0.5.0**, the previous public release. This version fo
 - Gyro zero-bias initialization currently runs again after every reconnection and is not stored as permanent per-controller calibration.
 - Mapping Layer files remain global under `src/layers`. Profiles store which Layers are enabled and their priority order, but switching profiles does not delete or replace the Layer files.
 - Only the highest-priority matching Mapping Layer is applied. A held Layer has priority over a toggled Layer; otherwise the order shown in the editor determines priority.
+- XInput cannot expose raw motion-sensor data, so gyro output is mapped to a stick or mouse.
 
 ---
 
@@ -46,7 +47,7 @@ v0.5.1 is compared with **v0.5.0**, the previous public release. This version fo
 
 ### 自 v0.5.0 起的更新
 
-- 修正主設定檔部分映射目標可在 GUI 儲存、但執行端未正確處理的問題，包含 **線性扳機** 與 **線性滾輪**。
+- 修正主設定檔的線性映射問題；**線性扳機** 與 **線性滾輪** 現在於儲存或套用後可正常執行。
 - 統一主設定檔與 Mapping Layers 的映射來源及目標解析方式，確保相同目標在兩條功能路徑中會有一致結果。
 - 修正多個鍵盤映射共用 Ctrl、Shift、Alt 或 Windows 修飾鍵時，放開其中一個映射可能提早放開共用修飾鍵的問題。
 - 補齊 Windows Extended Key 處理，並避免取消自訂鍵盤錄製視窗後仍儲存無效值。
@@ -79,3 +80,4 @@ v0.5.1 is compared with **v0.5.0**, the previous public release. This version fo
 - 目前每次重新連線都會重新進行陀螺儀零偏初始化，不會保存為永久的每支控制器校正資料。
 - Mapping Layer 檔案仍是 `src/layers` 內的全域資源。各設定檔會保存啟用哪些 Layers 及其優先順序，但切換設定檔不會刪除或取代 Layer 檔案。
 - 同一時間只會套用優先權最高的符合 Mapping Layer。按住啟用的 Layer 優先於切換啟用的 Layer；其餘情況依編輯器中的排列順序決定。
+- XInput 無法輸出原始動作感測資料，因此陀螺儀會映射到搖桿或滑鼠。
