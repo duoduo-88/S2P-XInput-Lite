@@ -39,7 +39,6 @@ v0.5.1 is compared with **v0.5.0**, the previous public release. This version fo
 - Gyro zero-bias initialization currently runs again after every reconnection and is not stored as permanent per-controller calibration.
 - Mapping Layer files remain global under `src/layers`. Profiles store which Layers are enabled and their priority order, but switching profiles does not delete or replace the Layer files.
 - Only the highest-priority matching Mapping Layer is applied. A held Layer has priority over a toggled Layer; otherwise the order shown in the editor determines priority.
-- XInput cannot expose raw motion-sensor data, so gyro output is mapped to a stick or mouse.
 
 ---
 
@@ -80,4 +79,3 @@ v0.5.1 is compared with **v0.5.0**, the previous public release. This version fo
 - 目前每次重新連線都會重新進行陀螺儀零偏初始化，不會保存為永久的每支控制器校正資料。
 - Mapping Layer 檔案仍是 `src/layers` 內的全域資源。各設定檔會保存啟用哪些 Layers 及其優先順序，但切換設定檔不會刪除或取代 Layer 檔案。
 - 同一時間只會套用優先權最高的符合 Mapping Layer。按住啟用的 Layer 優先於切換啟用的 Layer；其餘情況依編輯器中的排列順序決定。
-- XInput 無法輸出原始動作感測資料，因此陀螺儀會映射到搖桿或滑鼠。
