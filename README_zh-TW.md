@@ -1,85 +1,93 @@
 # S2P-XInput-Lite
 
-S2P-XInput-Lite 可在 Windows 將 Switch 2 Pro Controller 轉換為 Xbox 360 相容的 XInput 控制器，支援 USB 有線、ESP32-S3 USB 橋接器及 Windows 原生 BLE。
+S2P-XInput-Lite converts a Switch 2 Pro Controller into an Xbox 360-compatible XInput controller on Windows. It supports wired USB, an ESP32-S3 USB bridge, and native Windows BLE.
 
-目前版本：**v0.5.2**  
-[版本更新說明](RELEASE_NOTES_v0.5.2.md)
+Current release: **v0.5.2**  
+[Release notes](RELEASE_NOTES_v0.5.2.md)
 
-> 本專案是非官方社群作品，與 Nintendo、Microsoft 或 Espressif Systems 無關。
+> This is an unofficial community project and is not affiliated with Nintendo, Microsoft, or Espressif Systems.
 
-## 主要功能
+## Features
 
-- 自動依序使用 USB 有線、ESP32-S3 或原生 BLE，並即時顯示 6 軸／9 軸感測狀態
-- 透過 ViGEmBus 輸出 Xbox 360 虛擬控制器
-- 低延遲輸入處理：保留按鍵邊緣事件，同時使用最新的搖桿與動作感測報告
-- 按鍵、鍵盤、滑鼠、搖桿方向、線性扳機及線性滾輪映射，並共用一致的目標驗證
-- 全域 Mapping Layer 檔案：支援按住／切換啟用、個別按鍵與搖桿覆寫、匯入／匯出，以及各設定檔獨立保存啟用狀態與順序
-- 每支控制器獨立的搖桿校正，以及每次連線時的陀螺儀零偏初始化
-- 搖桿曲線、死區、平滑、穩定化與輸出形狀調整
-- USB、ESP32 與原生 BLE 共用一致的 XInput 至 HD Rumble 2 轉換，包含 latest-only 節流、優先停止訊框及音訊震動
-- 將陀螺儀映射至 Xbox 搖桿或滑鼠
-- 完整遊戲設定檔，可一起切換搖桿、陀螺儀、震動、音訊觸覺與映射設定
-- 繁體中文與英文介面
-- 即時顯示連線、電量、ESP32、ViGEmBus、WASAPI 及 HidHide 狀態
+- Automatic wired USB priority, followed by ESP32-S3 or native BLE, with live 6-axis/9-axis sensor status
+- Xbox 360 virtual controller output through ViGEmBus
+- Low-latency input dispatch that preserves button edges while using the newest stick and motion report
+- Button, keyboard, mouse, stick-direction, linear-trigger, and linear-scroll mapping with shared target validation
+- Global mapping-layer files with hold/toggle activation, per-layer button and stick overrides, import/export, and per-profile enabled/order state
+- Per-controller stick calibration and connection-time gyro zero-bias initialization
+- Stick curves, deadzones, smoothing, stabilization, and output-shape adjustment
+- Consistent XInput-to-HD Rumble 2 conversion across USB, ESP32, and native BLE, with latest-only pacing, priority stop frames, and audio-reactive vibration
+- Gyroscope mapping to an Xbox stick or mouse
+- Full game profiles for switching stick, gyro, rumble, audio-haptics, and mapping settings together, with automatic UI refresh
+- Traditional Chinese and English interface
+- Live connection, battery, ESP32, ViGEmBus, WASAPI, and HidHide status
 
-應用程式內各設定旁的 `?` 按鈕提供詳細說明。
+Detailed setting descriptions are available from the `?` buttons in the application.
 
-## 系統需求
+## Requirements
 
-- Windows 10 或 11
+- Windows 10 or 11
 - Switch 2 Pro Controller
 - ViGEmBus 1.22.0
-- USB 有線模式可選用最新版 [HidHide](https://github.com/nefarius/HidHide/releases/latest)，避免遊戲偵測實體 HID
-- USB-C 資料線、Bluetooth，或相容的 ESP32-S3 橋接器
+- Optional for wired USB: the current [HidHide release](https://github.com/nefarius/HidHide/releases/latest), used to hide the physical HID from games
+- A USB-C data cable, Bluetooth, or a compatible ESP32-S3 bridge
 
-發佈包已包含可攜式 Python 執行環境及所需套件，不必另外安裝 Python。
+The packaged release includes a portable Python runtime and all required packages. A separate Python installation is not required.
 
-## 安裝與使用
+## Installation and Use
 
-1. 若尚未安裝 ViGEmBus，執行 `driver\Install-ViGEmBus.bat`。
-2. USB 有線模式若希望遊戲只看到虛擬 Xbox 控制器，可另外安裝 HidHide；ESP32 與原生 BLE 不需要 HidHide。
-3. 請先連接控制器，再開啟 Steam 或其他控制器工具。原生 BLE 模式請勿在 Windows 藍牙設定內手動配對；只需開啟藍牙，讓本程式建立連線。ESP32 模式則接上已燒錄相容韌體的裝置。
-4. 執行 `S2P-XInput-Lite.exe`。
-5. 選擇遊戲設定檔或調整設定，再使用 **儲存設定檔** 或 **另存新設定檔**。
-6. 儲存目前設定檔會更新其保存內容。連線中切換設定檔時，程式會自動停止連線、套用選定設定檔、刷新 GUI，並自動重新連線。只有變更連線方式、裝置或序列埠設定時才需要 **重新啟動**。
+1. Install ViGEmBus with `driver\Install-ViGEmBus.bat` if it is not already installed.
+2. For wired USB, install HidHide if you want games to see only the virtual Xbox controller. HidHide is optional for ESP32 and native BLE.
+3. Connect the controller before opening Steam or another controller tool. For native BLE, **do not pair it through Windows Bluetooth settings**; turn Bluetooth on and let this application establish the connection. For ESP32, connect a device running compatible firmware.
+4. Run `S2P-XInput-Lite.exe`.
+5. Choose a game profile or adjust settings, then use **Save Profile** or **Save New Profile**.
+6. Saving the active profile updates its stored settings. Switching profiles while connected automatically stops the connection program, applies the selected profile, refreshes the GUI, and reconnects. Use **Restart** only after changing the connection method, device, or serial settings.
 
-程式會先檢查 USB 有線，再檢查 ESP32，最後使用 Windows 原生 BLE。遊玩期間請保持連線程式開啟。
+The application checks wired USB first, then ESP32, and finally native BLE. Keep the connection program running while playing.
 
-第一次使用原生 BLE 配對時，啟動連線後按住控制器的 **SYNC** 鍵。已配對的控制器通常按任意鍵即可喚醒。
+If HidHide is missing, the application offers to open its official download page; skipping does not block the connection. When a wired controller is detected and HidHide is installed but not configured, the application asks before adding the portable `runtime\python.exe` and the selected physical Nintendo HID to HidHide. Accepting may enable global cloaking; existing HidHide entries belonging to other applications are preserved. **Restore Defaults** removes this application and the selected controller from HidHide while preserving unrelated entries; reconnect the USB controller first if it is currently hidden.
 
-若未安裝 HidHide，程式會詢問是否開啟官方下載頁；略過不會阻止連線。USB 控制器已連接且 HidHide 尚未設定時，程式會先詢問，再將可攜式 `runtime\python.exe` 與選定的 Nintendo HID 加入 HidHide；其他應用程式既有的 HidHide 項目會保留。**恢復預設值** 只會移除本程式與選定控制器的項目，並保留無關項目。
+For first-time native BLE pairing, start the connection program and hold the controller's **SYNC** button. A previously paired controller can normally be woken with any button.
 
-## 設定檔與 Mapping Layers
+Settings and per-controller stick calibration are stored in `src/config.ini`. Gyro zero-bias is initialized again after every controller connection and is not stored as permanent calibration. A missing file is created automatically from `src/profiles/System Default.ini`, and missing keys in an older file are added without overwriting existing values. Default and restore operations also use `System Default.ini` as their baseline. Keep this file in every release package; `config.ini` may be omitted from a clean distribution.
 
-設定及每支控制器的搖桿校正資料儲存在 `src/config.ini`。陀螺儀零偏會在每次控制器連線後重新初始化，不會保存為永久校正資料。檔案不存在時，程式會以 `src/profiles/System Default.ini` 建立；舊設定缺少的欄位會自動補齊，不會覆寫既有值。各項預設值及還原操作也會以 `System Default.ini` 為基準。每個發佈包都必須保留此檔案，乾淨發佈包則可省略 `config.ini`。
+The first launch provides General, Audio, FPS-COMP, FPS-IMM, Racing, Action, and Rhythm profiles. Selecting a profile refreshes the GUI. When the connection program is running, it is stopped and reconnected automatically so the newly selected profile is loaded completely. Built-in profiles start from canonical button and stick-direction mappings. Custom profiles can be saved, renamed, or deleted. **System Default** is a protected read-only baseline and always appears at the bottom of the list. **Restore Defaults** resets the current controls without deleting saved profiles or calibration.
 
-首次啟動提供 General、Audio、FPS-COMP、FPS-IMM、Racing、Action 與 Rhythm 設定檔。選擇設定檔會更新介面；若連線程式正在執行，程式會自動停止並重新連線，使新設定檔完整載入。自訂設定檔可儲存、重新命名或刪除；**System Default** 是受保護的唯讀基準，固定顯示於清單最下方。**恢復預設值** 不會刪除設定檔或校正資料。
+Mapping Layer files are global and can temporarily override the active profile while a button chord is held or toggled. A Layer can remap buttons and stick directions, swap sticks, use a stick as a mouse, or produce linear XInput trigger, stick-direction, or scroll output. Layer files are stored under `src/layers` and can be imported or exported. Each game profile stores which Layers are enabled and their priority order; switching profiles changes that state without deleting or replacing the Layer files. Only the highest-priority matching Layer is active: held Layers take priority over toggled Layers, then the editor order is used.
 
-Mapping Layer 檔案是全域資源，可在按住按鍵組合時暫時覆寫目前設定檔，也可切換為持續啟用。Layer 可重新映射按鍵與搖桿方向、交換左右搖桿、用搖桿控制滑鼠，或輸出線性的 XInput 扳機、搖桿方向與滾輪。檔案儲存在 `src/layers`，並支援匯入與匯出。各遊戲設定檔會保存啟用哪些 Layers 及其優先順序；切換設定檔只會切換這些狀態，不會刪除或取代 Layer 檔案。同一時間只會套用優先權最高的符合 Layer：按住啟用優先於切換啟用，其餘依編輯器排列順序決定。
+## Verified Low-Latency Paths
 
-## 已驗證的低延遲路徑
+- Wired USB input: 250 Hz, 4 ms report interval, zero queue/drop in concurrent rumble stress testing.
+- ESP32 input: about 132 Hz; the low-latency firmware reduced normal host arrival p50/p95 from 7.986/8.059 ms to 7.500/7.595 ms.
+- Native Windows BLE: 66.7 Hz / 15 ms, which matches WinRT's minimum `throughput_optimized` interval.
+- Rumble is latest-only on every transport. Verified priority pacing is about 8 ms on ESP32 and wired USB, 15 ms on native BLE, while wired audio/Mix updates use 25 ms.
 
-- USB 有線輸入：250 Hz、4 ms 報告間隔；在同時進行震動壓力測試時未發生排隊或丟棄。
-- ESP32 輸入：約 132 Hz；低延遲韌體將正常主機到達時間 p50／p95 從 7.986／8.059 ms 降至 7.500／7.595 ms。
-- Windows 原生 BLE：66.7 Hz／15 ms，符合 WinRT `throughput_optimized` 的最低間隔。
-- 所有傳輸皆採用 latest-only 震動。ESP32 與 USB 有線的優先節流約 8 ms，原生 BLE 約 15 ms；USB 音訊／Mix 更新為 25 ms。
+Reusable hardware probes and automated tests are maintained in the development repository.
 
-## 注意事項與限制
+## Notes
 
-- 僅支援 Windows，且一次只支援一支控制器。
-- 不支援 Joy-Con 配對或 PS5 控制器模擬。
-- XInput 無法輸出原始動作感測資料，因此陀螺儀只能映射至搖桿或滑鼠。
-- ESP32 連線需要相容的橋接韌體。發佈包只在 `esp32s3` 內提供燒錄工具及所需的 `0.12.4` 韌體 BIN，不包含 ESP32 源碼與編譯目錄。
-- HidHide 不隨附，也不是 ESP32 或 BLE 的必要元件。未安裝時 USB 輸入仍可使用，但遊戲可能同時偵測實體 HID 與虛擬 XInput 控制器。
-- 若 USB 狀態顯示 Basic 模式，請完整關閉 Steam 或其他控制器工具，重新連接控制器，再先啟動本程式。
-- 搖桿校正請依 GUI 顯示的步驟操作。每次連線後請保持控制器靜止約 0.5 秒；收集至少 16 個穩定樣本後才會開始陀螺儀輸出，零偏取樣會繼續累積至 64 個樣本。
-- 測試映射前請先儲存或套用變更；無效或損壞的映射資料會顯示錯誤，不會再靜默套用。
-- 每個 HD Rumble 2 震動框依序封裝 9-bit LF 頻率、10-bit LF 振幅、9-bit HF 頻率與 10-bit HF 振幅。頻率數值範圍為 `0`～`511`，可近似以 Hz 理解；實際觸感仍會受致動器與外殼響應影響。
-- 將 LF 與 HF 振幅都設為零即可停止震動；所有傳輸的連線與 PIN 提示使用與 v0.5.1 相同的兩次短震動（LF `225`、HF `481`、振幅 `800`）。HF `481` 僅用於這個既有提示效果，不是一般遊戲震動的建議頻率。
-- ESP32 韌體燒錄完成後，必須重新連接或重新啟動 ESP32-S3。
+- Perform stick calibration from the GUI by following its on-screen instructions. After each connection, keep the controller still for about 0.5 seconds; gyro output begins after at least 16 stable samples and zero-bias sampling continues up to 64 samples.
+- Save or apply mapping changes before testing them; invalid or damaged mapping data is reported and is not silently applied.
+- Each HD Rumble 2 vibration frame packs a 9-bit LF frequency, 10-bit LF amplitude, 9-bit HF frequency, and 10-bit HF amplitude. Frequency values range from `0` to `511` and can be interpreted approximately in Hz; actuator and enclosure response still affect the result.
+- Set both LF and HF amplitudes to zero to stop vibration. Connection and PIN feedback use the same two short pulses as v0.5.1 (LF `225`, HF `481`, amplitude `800`) on every transport. HF `481` is retained only for this established cue and is not a recommended general-game frequency.
+- ESP32 firmware flashing requires reconnecting or restarting the ESP32-S3 afterward.
+- The status line reports 9-axis when sustained magnetometer data is available, or 6-axis when only gyro and accelerometer data are active.
+- If HidHide setup reports an error, close HidHide Configuration Client and retry. Restart Steam or the game after changing hiding, and reconnect USB if the physical controller remains visible.
 
-## 上游專案與授權
+## Limitations
 
-本專案部分內容以 TommyWabg 的 [Switch2Connect](https://github.com/TommyWabg/Switch2Connect) 為基礎或由其衍生，並已為本專案修改與重整。
+- Windows only
+- One controller at a time
+- No Joy-Con pairing or PS5 controller emulation
+- Motion is mapped to a stick or mouse; XInput does not expose raw motion sensors
+- The ESP32 connection requires compatible bridge firmware
+- The packaged release contains the ESP32 flashing tool and the required `0.12.4` firmware binaries under `esp32s3`; the ESP32 source and build directories are not included in the release package
+- HidHide is not bundled and is not required for ESP32 or BLE. Without it, wired input still works, but games may detect both the physical HID and virtual XInput controller.
+- If wired status shows Basic mode, fully exit Steam or other controller tools, reconnect the controller, and start this application first
+- Wired USB always requests the controller's complete sensor report; the 6-axis/9-axis label reflects the data actually received rather than a selectable polling mode
 
-S2P-XInput-Lite 採用 [GNU General Public License v3.0](LICENSE)。第三方來源及授權資訊請參閱 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+## Upstream and License
+
+Parts of this project are based on or derived from [Switch2Connect](https://github.com/TommyWabg/Switch2Connect) by TommyWabg and have been modified and reorganized for this project.
+
+S2P-XInput-Lite is licensed under the [GNU General Public License v3.0](LICENSE). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for third-party attribution and license information.
