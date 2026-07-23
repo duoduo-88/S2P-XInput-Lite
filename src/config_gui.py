@@ -3788,14 +3788,123 @@ class ConfigGUI:
             "error": ("● HidHide：錯誤", "#C62828"),
         }
         text, color = display.get(state, display["error"])
-        self.hidhide_status_label.config(text=self.tr(text), fg=color)
+        self.hidhide_status_label.config(
+            text=self.tr(text),
+            fg=color,
+            cursor=(
+                "hand2"
+                if state in ("not_installed", "disabled", "setup")
+                else "arrow"
+            ),
+        )
         return status
+
+    def _hidhide_missing_prompt_is_dismissed(self):
+        """Return whether the user permanently dismissed the missing prompt."""
+        try:
+            return self.config.getboolean(
+                "gui", "hidhide_missing_prompt_dismissed", fallback=False
+            )
+        except ValueError:
+            return False
+
+    def _set_hidhide_missing_prompt_dismissed(self, dismissed):
+        """Persist the missing-driver reminder without overwriting newer data."""
+        value = "true" if dismissed else "false"
+        if not self.config.has_section("gui"):
+            self.config.add_section("gui")
+        self.config.set("gui", "hidhide_missing_prompt_dismissed", value)
+        try:
+            with config_file_lock():
+                latest = load_config(CONFIG_PATH)
+                if not latest.has_section("gui"):
+                    latest.add_section("gui")
+                latest.set("gui", "hidhide_missing_prompt_dismissed", value)
+                atomic_write_config(latest, CONFIG_PATH)
+        except (OSError, configparser.Error) as exc:
+            LOGGER.warning("Could not save HidHide reminder preference: %s", exc)
+
+    def _hidhide_setup_prompt_is_dismissed(self):
+        """Return whether optional installed-HidHide setup was dismissed."""
+        try:
+            return self.config.getboolean(
+                "gui", "hidhide_setup_prompt_dismissed", fallback=False
+            )
+        except ValueError:
+            return False
+
+    def _set_hidhide_setup_prompt_dismissed(self, dismissed):
+        """Persist the optional HidHide setup reminder independently."""
+        value = "true" if dismissed else "false"
+        if not self.config.has_section("gui"):
+            self.config.add_section("gui")
+        self.config.set("gui", "hidhide_setup_prompt_dismissed", value)
+        try:
+            with config_file_lock():
+                latest = load_config(CONFIG_PATH)
+                if not latest.has_section("gui"):
+                    latest.add_section("gui")
+                latest.set("gui", "hidhide_setup_prompt_dismissed", value)
+                atomic_write_config(latest, CONFIG_PATH)
+        except (OSError, configparser.Error) as exc:
+            LOGGER.warning("Could not save HidHide setup preference: %s", exc)
+
+    def open_hidhide_download_page(self):
+        """Open the official download page when the missing status is clicked."""
+        if (
+            self.hidhide_status is not None
+            and self.hidhide_status.get("state") != "not_installed"
+        ):
+            return
+        try:
+            opened = webbrowser.open(HIDHIDE_DOWNLOAD_URL, new=2)
+            if opened is False:
+                raise OSError("The default browser did not accept the URL.")
+        except Exception as exc:
+            messagebox.showerror(
+                self.tr("無法開啟下載頁面"),
+                f"{self.tr('請手動開啟以下網址：')}\n"
+                f"{HIDHIDE_DOWNLOAD_URL}\n\n{exc}",
+                parent=self.root,
+            )
+
+    def handle_hidhide_status_click(self):
+        """Expose a manual action for every suppressible HidHide reminder."""
+        state = (self.hidhide_status or {}).get("state")
+        if state == "not_installed":
+            self.open_hidhide_download_page()
+            return
+        if state in ("disabled", "setup"):
+            self._set_hidhide_setup_prompt_dismissed(False)
+            self.hidhide_prompt_shown = False
+            self.prepare_hidhide_before_start()
 
     def prepare_hidhide_before_start(self):
         """Offer one conservative setup before launching the USB reader."""
         status = self.update_hidhide_status()
         state = status.get("state")
+        if status.get("installed") and self._hidhide_missing_prompt_is_dismissed():
+            # If HidHide is later installed, a future uninstall should be able
+            # to show the reminder once again.
+            self._set_hidhide_missing_prompt_dismissed(False)
+        if (
+            state in ("not_installed", "ready")
+            and self._hidhide_setup_prompt_is_dismissed()
+        ):
+            # A completed setup or later uninstall ends the old decision.  If
+            # setup becomes relevant again, it should be offered once.
+            self._set_hidhide_setup_prompt_dismissed(False)
         if state in ("ready", "no_device"):
+            return True
+        if (
+            state == "not_installed"
+            and self._hidhide_missing_prompt_is_dismissed()
+        ):
+            return True
+        if (
+            state in ("disabled", "setup")
+            and self._hidhide_setup_prompt_is_dismissed()
+        ):
             return True
         if self.hidhide_prompt_shown:
             return True
@@ -3807,17 +3916,14 @@ class ConfigGUI:
                 self.tr(
                     "未偵測到 HidHide。USB 有線模式仍可使用，但遊戲可能同時收到"
                     "實體手把與虛擬 Xbox 手把。\n\n是否前往 HidHide 官方下載頁面？"
+                    "\n\n選擇「否」後不再自動提醒；需要時可點擊視窗下方的"
+                    "「HidHide：缺少」。"
                 ),
             )
             if download:
-                try:
-                    webbrowser.open(HIDHIDE_DOWNLOAD_URL, new=2)
-                except Exception as exc:
-                    messagebox.showerror(
-                        self.tr("無法開啟下載頁面"),
-                        f"{self.tr('請手動開啟以下網址：')}\n"
-                        f"{HIDHIDE_DOWNLOAD_URL}\n\n{exc}",
-                    )
+                self.open_hidhide_download_page()
+            else:
+                self._set_hidhide_missing_prompt_dismissed(True)
             return True
 
         if state == "error":
@@ -3843,12 +3949,17 @@ class ConfigGUI:
                     "HidHide 清單內另有其他隱藏裝置；開啟後也會套用到它們。"
                 )
         message += "\n\n" + self.tr("是否立即完成 HidHide 設定？")
+        message += "\n\n" + self.tr(
+            "選擇「否」後不再自動提醒；需要時可點擊視窗下方的 HidHide 狀態。"
+        )
         if not messagebox.askyesno(self.tr("設定 HidHide"), message):
+            self._set_hidhide_setup_prompt_dismissed(True)
             return True
 
         configured = configure_hidhide(PYTHON_EXE, enable_cloak=True)
         self.update_hidhide_status(configured)
         if configured.get("state") == "ready":
+            self._set_hidhide_setup_prompt_dismissed(False)
             messagebox.showinfo(
                 self.tr("HidHide 設定完成"),
                 self.tr(
@@ -8882,6 +8993,8 @@ class ConfigGUI:
         # devices remain untouched; global cloaking is disabled only when empty.
         hidhide_result = remove_hidhide_configuration(PYTHON_EXE)
         self.hidhide_prompt_shown = False
+        self._set_hidhide_missing_prompt_dismissed(False)
+        self._set_hidhide_setup_prompt_dismissed(False)
         self.update_hidhide_status(hidhide_result)
         if hidhide_result.get("state") == "error":
             messagebox.showwarning(

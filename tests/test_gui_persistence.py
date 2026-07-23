@@ -23,7 +23,115 @@ class DummyVariable:
         self.value = value
 
 
+class DummyLabel:
+    def __init__(self):
+        self.options = {}
+
+    def config(self, **options):
+        self.options.update(options)
+
+
 class GuiPersistenceTests(unittest.TestCase):
+    def test_declining_missing_hidhide_prompt_is_remembered(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.ini"
+            missing_status = {"state": "not_installed", "installed": False}
+
+            first_gui = object.__new__(config_gui.ConfigGUI)
+            first_gui.config = config_gui.load_config(config_path)
+            first_gui.hidhide_prompt_shown = False
+            first_gui.hidhide_status = None
+            first_gui.hidhide_status_label = DummyLabel()
+            first_gui.tr = lambda text: text
+
+            with (
+                patch.object(config_gui, "CONFIG_PATH", config_path),
+                patch.object(config_gui, "inspect_hidhide", return_value=missing_status),
+                patch.object(config_gui.messagebox, "askyesno", return_value=False) as prompt,
+            ):
+                self.assertTrue(first_gui.prepare_hidhide_before_start())
+                prompt.assert_called_once()
+
+            saved = config_gui.load_config(config_path)
+            self.assertTrue(
+                saved.getboolean("gui", "hidhide_missing_prompt_dismissed")
+            )
+
+            second_gui = object.__new__(config_gui.ConfigGUI)
+            second_gui.config = saved
+            second_gui.hidhide_prompt_shown = False
+            second_gui.hidhide_status = None
+            second_gui.hidhide_status_label = DummyLabel()
+            second_gui.tr = lambda text: text
+
+            with (
+                patch.object(config_gui, "CONFIG_PATH", config_path),
+                patch.object(config_gui, "inspect_hidhide", return_value=missing_status),
+                patch.object(config_gui.messagebox, "askyesno") as repeated_prompt,
+            ):
+                self.assertTrue(second_gui.prepare_hidhide_before_start())
+                repeated_prompt.assert_not_called()
+
+    def test_declining_installed_hidhide_setup_is_remembered(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.ini"
+            setup_status = {
+                "state": "disabled",
+                "installed": True,
+                "cloak_active": False,
+                "hidden_count": 0,
+            }
+
+            first_gui = object.__new__(config_gui.ConfigGUI)
+            first_gui.config = config_gui.load_config(config_path)
+            first_gui.hidhide_prompt_shown = False
+            first_gui.hidhide_status = None
+            first_gui.hidhide_status_label = DummyLabel()
+            first_gui.tr = lambda text: text
+
+            with (
+                patch.object(config_gui, "CONFIG_PATH", config_path),
+                patch.object(config_gui, "inspect_hidhide", return_value=setup_status),
+                patch.object(config_gui.messagebox, "askyesno", return_value=False) as prompt,
+            ):
+                self.assertTrue(first_gui.prepare_hidhide_before_start())
+                prompt.assert_called_once()
+
+            saved = config_gui.load_config(config_path)
+            self.assertTrue(
+                saved.getboolean("gui", "hidhide_setup_prompt_dismissed")
+            )
+
+            second_gui = object.__new__(config_gui.ConfigGUI)
+            second_gui.config = saved
+            second_gui.hidhide_prompt_shown = False
+            second_gui.hidhide_status = None
+            second_gui.hidhide_status_label = DummyLabel()
+            second_gui.tr = lambda text: text
+
+            with (
+                patch.object(config_gui, "CONFIG_PATH", config_path),
+                patch.object(config_gui, "inspect_hidhide", return_value=setup_status),
+                patch.object(config_gui.messagebox, "askyesno") as repeated_prompt,
+            ):
+                self.assertTrue(second_gui.prepare_hidhide_before_start())
+                repeated_prompt.assert_not_called()
+
+    def test_clicking_setup_status_reenables_the_prompt(self):
+        gui = object.__new__(config_gui.ConfigGUI)
+        gui.hidhide_status = {"state": "setup"}
+        gui.hidhide_prompt_shown = True
+        dismissed_values = []
+        prompt_calls = []
+        gui._set_hidhide_setup_prompt_dismissed = dismissed_values.append
+        gui.prepare_hidhide_before_start = lambda: prompt_calls.append(True)
+
+        gui.handle_hidhide_status_click()
+
+        self.assertEqual(dismissed_values, [False])
+        self.assertFalse(gui.hidhide_prompt_shown)
+        self.assertEqual(prompt_calls, [True])
+
     def test_failed_bundle_restore_recovers_replaced_files_only(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -2,8 +2,9 @@
 
 S2P-XInput-Lite converts a Switch 2 Pro Controller into an Xbox 360-compatible XInput controller on Windows. It supports wired USB, an ESP32-S3 USB bridge, and native Windows BLE.
 
-Current release: **v0.5.2**  
-[Release notes](RELEASE_NOTES_v0.5.2.md)
+Current release: **v0.5.3**
+
+[Release notes](RELEASE_NOTES_v0.5.3.md)
 
 > This is an unofficial community project and is not affiliated with Nintendo, Microsoft, or Espressif Systems.
 
@@ -45,7 +46,7 @@ The packaged release includes a portable Python runtime and all required package
 
 The application checks wired USB first, then ESP32, and finally native BLE. Keep the connection program running while playing.
 
-If HidHide is missing, the application offers to open its official download page; skipping does not block the connection. When a wired controller is detected and HidHide is installed but not configured, the application asks before adding the portable `runtime\python.exe` and the selected physical Nintendo HID to HidHide. Accepting may enable global cloaking; existing HidHide entries belonging to other applications are preserved. **Restore Defaults** removes this application and the selected controller from HidHide while preserving unrelated entries; reconnect the USB controller first if it is currently hidden.
+If HidHide is missing, the application offers to open its official download page. Declining suppresses the reminder on later launches and does not block the connection; click **HidHide: Missing** at the bottom of the window to open the download page later. When a wired controller is detected and HidHide is installed but not configured, the application asks before adding the portable `runtime\python.exe` and the selected physical Nintendo HID to HidHide. Declining also suppresses later reminders; click **HidHide: Off/Setup** to reopen the setup confirmation. Accepting may enable global cloaking; existing HidHide entries belonging to other applications are preserved. **Restore Defaults** removes this application and the selected controller from HidHide while preserving unrelated entries; reconnect the USB controller first if it is currently hidden.
 
 For first-time native BLE pairing, start the connection program and hold the controller's **SYNC** button. A previously paired controller can normally be woken with any button.
 

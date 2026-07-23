@@ -56,6 +56,10 @@ def build_status_and_footer(gui, right_frame):
         anchor="w",
         padx=(8, 0),
     )
+    gui.hidhide_status_label.bind(
+        "<Button-1>",
+        lambda _event: gui.handle_hidhide_status_click(),
+    )
 
     gui.update_driver_status()
     gui.update_hidhide_status()

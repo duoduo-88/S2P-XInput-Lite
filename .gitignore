@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local application state
+src/config.ini
+src/controller_status.json
+
+# Generated release packages
+dist/
+
+# Bundled release-only runtime and launcher
+/runtime/
+/S2P-XInput-Lite.exe
+
+# Temporary GitHub maintenance checkouts
+/.github-maintenance-*/

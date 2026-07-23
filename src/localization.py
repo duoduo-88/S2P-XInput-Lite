@@ -455,6 +455,8 @@ EN_TEXT = {
     "尚未安裝 HidHide": "HidHide Not Installed",
     "未偵測到 HidHide。USB 有線模式仍可使用，但遊戲可能同時收到實體手把與虛擬 Xbox 手把。\n\n是否前往 HidHide 官方下載頁面？":
         "HidHide was not detected. Wired USB mode can still be used, but games may receive both the physical controller and virtual Xbox controller.\n\nOpen the official HidHide download page?",
+    "未偵測到 HidHide。USB 有線模式仍可使用，但遊戲可能同時收到實體手把與虛擬 Xbox 手把。\n\n是否前往 HidHide 官方下載頁面？\n\n選擇「否」後不再自動提醒；需要時可點擊視窗下方的「HidHide：缺少」。":
+        "HidHide was not detected. Wired USB mode can still be used, but games may receive both the physical controller and virtual Xbox controller.\n\nOpen the official HidHide download page?\n\nChoose No to stop automatic reminders. You can open the download page later by clicking HidHide: Missing at the bottom of the window.",
     "無法開啟下載頁面": "Could Not Open Download Page",
     "請手動開啟以下網址：": "Open this URL manually:",
     "設定 HidHide": "Set Up HidHide",
@@ -472,6 +474,8 @@ EN_TEXT = {
     "HidHide 清單內另有其他隱藏裝置；開啟後也會套用到它們。":
         "Other devices are already in the HidHide list; enabling cloaking will affect them too.",
     "是否立即完成 HidHide 設定？": "Set up HidHide now?",
+    "選擇「否」後不再自動提醒；需要時可點擊視窗下方的 HidHide 狀態。":
+        "Choose No to stop automatic reminders. Click the HidHide status at the bottom of the window to set it up later.",
     "實體 USB 手把已加入隱藏清單。若已開啟 Steam 或遊戲，請完全關閉後重新開啟；若仍看到原始手把，請重新插拔 USB。":
         "The physical USB controller was added to the hidden list. Restart Steam or the game if it is already open; reconnect USB if the original controller is still visible.",
     "無法完成 HidHide 設定。請確認 HidHide Configuration Client 已關閉。":
