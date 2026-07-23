@@ -1,14 +1,14 @@
 # S2P-XInput-Lite
 
-[English](README.md) · [使用手冊](manual/USER_GUIDE_zh-TW.md) · [English Guide](manual/USER_GUIDE.md)
+[English](README.md)
 
 ![S2P-XInput-Lite 橫幅](image/S2P-XInput-Lite-banner.jpg)
 
 S2P-XInput-Lite 可在 Windows 為 Switch 2 Pro Controller 提供 XInput 相容控制器輸出，支援 USB 有線、ESP32-S3 USB 橋接器及 Windows 原生 BLE。
 
-目前版本：**v0.5.3**
+開發版本：**v0.6.0**
 
-[版本更新說明](https://github.com/duoduo-88/S2P-XInput-Lite/releases/tag/v0.5.3)
+[最新正式版本](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 
 > 本專案是獨立、非官方的社群作品，未獲 Nintendo、Microsoft 或 Espressif Systems 授權、認證、贊助或背書，亦與這些公司無關。
 
@@ -22,6 +22,8 @@ S2P-XInput-Lite 可在 Windows 為 Switch 2 Pro Controller 提供 XInput 相容�
 - 每支控制器獨立的搖桿校正，以及每次連線時的陀螺儀零偏初始化
 - 搖桿曲線、死區、平滑、穩定化與輸出形狀調整
 - USB、ESP32 與原生 BLE 共用一致的 XInput 至 HD Rumble 2 轉換，包含 latest-only 節流、優先停止訊框及音訊震動
+- 可將相容設定檔寫入 ESP32，讓它不開啟 Windows 程式也能提供 PC XInput
+  相容輸出或標準手機 USB HID
 - 將陀螺儀映射至 XInput 搖桿或滑鼠
 - 完整遊戲設定檔，可一起切換搖桿、陀螺儀、震動、音訊觸覺與映射設定
 - 繁體中文與英文介面
@@ -73,8 +75,13 @@ Mapping Layer 檔案是全域資源，可在按住按鍵組合時暫時覆寫目
 
 - 僅支援 Windows，且一次只支援一支控制器。
 - 不支援 Joy-Con 配對或 PS5 控制器模擬。
+- ESP32 獨立模式不支援 Windows 鍵盤／滑鼠輸出、音訊震動、依程序自動
+  切換設定檔、手機震動或 BLE HID 輸出。
 - XInput 無法輸出原始動作感測資料，因此陀螺儀只能映射至搖桿或滑鼠。
-- ESP32 連線需要相容的橋接韌體。發佈包只在 `esp32s3` 內提供燒錄工具及所需的 `0.12.4` 韌體 BIN，不包含 ESP32 源碼與編譯目錄。
+- ESP32 連線需要相容韌體。寫入獨立模式設定檔及直接 USB 控制器輸出需要
+  隨附的 `0.14.0-dev` 開發韌體；較舊的純橋接韌體不支援這些功能。
+- GitHub 原始碼庫包含完整 ESP32 原始碼；發佈包則只在 `esp32s3` 內提供
+  燒錄工具及必要韌體映像。
 - HidHide 不隨附，也不是 ESP32 或 BLE 的必要元件。未安裝時 USB 輸入仍可使用，但遊戲可能同時偵測實體 HID 與虛擬 XInput 控制器。
 - 若 USB 狀態顯示 Basic 模式，請完整關閉 Steam 或其他控制器工具，重新連接控制器，再先啟動本程式。
 - 搖桿校正請依 GUI 顯示的步驟操作。每次連線後請保持控制器靜止約 0.5 秒；收集至少 16 個穩定樣本後才會開始陀螺儀輸出，零偏取樣會繼續累積至 64 個樣本。

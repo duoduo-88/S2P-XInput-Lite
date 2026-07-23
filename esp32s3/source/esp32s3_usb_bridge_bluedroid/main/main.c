@@ -1,0 +1,2027 @@
+/*
+ * Switch2Connect - A Python and ESP32-S3 bridge utility for Switch 2 controller inputs.
+ * Copyright (C) 2026 TommyWabg
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ * Contact Information:
+ * Electronic Mail: tommyw9318@gmail.com
+ */
+
+// ESP32-S3 USB <-> BLE bridge for Switch 2 controllers — BLUEDROID variant.
+//
+// Goal: see whether Bluedroid's multi-task host (BTU/BTC) beats NimBLE's single-host-
+// task ~33 rumble-writes/s/channel ceiling.  Same on-the-wire protocol & same USB-CDC
+// command protocol as the NimBLE build, so the existing Python host drives it unchanged.
+//
+// MULTI-CONTROLLER MODEL (matches NimBLE's per-conn_handle isolation): one GATTC app
+// interface (gattc_if) per channel.  Every GATTC event is tagged with its gattc_if, so
+// connections with IDENTICAL GATT handle layouts (two Joy-Cons!) never get confused —
+// the REG_FOR_NOTIFY event in particular carries no conn_id, so a single shared gattc_if
+// could not tell the two apart (it reported the 2nd controller's subscribe against the
+// 1st).  Per-channel gattc_if fixes that.
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include "esp_log.h"
+#include "esp_system.h"
+#include "nvs.h"
+#include "nvs_flash.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
+
+#include "esp_bt.h"
+#include "esp_bt_main.h"
+#include "esp_bt_device.h"
+#include "esp_gap_ble_api.h"
+#include "esp_timer.h"
+#include "esp_gattc_api.h"
+#include "esp_gatt_defs.h"
+#include "esp_gatt_common_api.h"
+
+#include "tinyusb.h"
+#include "tusb_cdc_acm.h"
+#include "standalone_xinput.h"
+
+static const char *TAG = "S3_BLUEDROID";
+
+#define APP_FIRMWARE_VERSION      "0.14.0-dev"
+#define EXPECTED_FIRMWARE_PROFILE "tinyusb_direct"
+#define EXPECTED_FIRMWARE_BUILD   "cdc_bridge_2_lowlatency"
+#define CDC_LINE_STATE_DTR        0x01
+#define NINTENDO_COMPANY_ID       0x0553
+#define MAX_CH                    8     // one GATTC app per channel
+#define REPORT_SIZE               64
+#define STANDALONE_PROFILE_SCHEMA 1
+#define STANDALONE_PROFILE_MAX    8192
+#define STANDALONE_NVS_NAMESPACE  "s2p_profile"
+
+typedef struct {
+    uint32_t magic;
+    uint16_t schema;
+    uint16_t reserved;
+    uint32_t length;
+    uint32_t crc32;
+} standalone_profile_header_t;
+
+#define STANDALONE_PROFILE_MAGIC 0x53325031u
+
+static uint8_t *s_profile_staging;
+static size_t s_profile_expected;
+static size_t s_profile_received;
+static uint16_t s_profile_schema;
+static uint32_t s_profile_crc32;
+static bool s_standalone_mode;
+static bool s_standalone_usb_hid;
+static bool s_standalone_auto_conn_pending;
+static char s_standalone_auto_conn[32];
+
+
+// --- Switch 2 GATT UUIDs (128-bit; little-endian in esp_bt_uuid_t = string reversed) ---
+#define UUID128(b0,b1,b2,b3,b4,b5,b6,b7,b8,b9,b10,b11,b12,b13,b14,b15) \
+    { .len = ESP_UUID_LEN_128, .uuid = { .uuid128 = { \
+        b15,b14,b13,b12,b11,b10,b9,b8,b7,b6,b5,b4,b3,b2,b1,b0 } } }
+static const esp_bt_uuid_t UUID_NOTIFY_FD2 =
+    UUID128(0xab,0x7d,0xe9,0xbe,0x89,0xfe,0x49,0xad,0x82,0x8f,0x11,0x8f,0x09,0xdf,0x7f,0xd2);
+static const esp_bt_uuid_t UUID_NOTIFY_LEGACY =
+    UUID128(0x74,0x92,0x86,0x6c,0xec,0x3e,0x46,0x19,0x82,0x58,0x32,0x75,0x5f,0xfc,0xc0,0xf8);
+// NSO GameCube: model-specific input notify char (GATT handle 0x000E, Input Report 0x0A).
+// This is NOT the same UUID as UUID_NOTIFY_LEGACY (7492866c…) — that one is the Pro
+// Controller's 0x000E char (Input Report 0x09) and is absent on the GameCube.  The GCN's
+// usable compact report (buttons@2-4, sticks@5-A, triggers@C/D) lives ONLY here, so the
+// generic FD2 char (0x000A, Input Report 0x05) is the wrong byte layout for the GCN.
+static const esp_bt_uuid_t UUID_NOTIFY_GC =
+    UUID128(0x82,0x61,0xcb,0xa1,0x94,0x35,0x42,0x0c,0x84,0xd6,0xf0,0xc7,0x5a,0x2c,0x8e,0x4d);
+// SW2 primary service (…fd0, NOT the input char …fd2).  Used to scope the GCN "enable
+// every notify CCCD" behaviour to this service only — mirroring the WinRT GCN path, which
+// subscribes to every notify characteristic in the ab7de9be… service.
+static const esp_bt_uuid_t UUID_SVC_SW2 =
+    UUID128(0xab,0x7d,0xe9,0xbe,0x89,0xfe,0x49,0xad,0x82,0x8f,0x11,0x8f,0x09,0xdf,0x7f,0xd0);
+static const esp_bt_uuid_t UUID_ACK =
+    UUID128(0xc7,0x65,0xa9,0x61,0xd9,0xd8,0x4d,0x36,0xa2,0x0a,0x53,0x15,0xb1,0x11,0x83,0x6a);
+static const esp_bt_uuid_t UUID_CMD =
+    UUID128(0x64,0x9d,0x4a,0xc9,0x8e,0xb7,0x4e,0x6c,0xaf,0x44,0x1e,0xa5,0x4f,0xe5,0xf0,0x05);
+static const esp_bt_uuid_t UUID_RUMBLE_PRO =
+    UUID128(0xcc,0x48,0x3f,0x51,0x92,0x58,0x42,0x7d,0xa9,0x39,0x63,0x0c,0x31,0xf7,0x2b,0x05);
+static const esp_bt_uuid_t UUID_RUMBLE_JOYCON_R =
+    UUID128(0xfa,0x19,0xb0,0xfb,0xcd,0x1f,0x46,0xa7,0x84,0xa1,0xbb,0xb0,0x9e,0x00,0xc1,0x49);
+static const esp_bt_uuid_t UUID_RUMBLE_JOYCON_L =
+    UUID128(0x28,0x93,0x26,0xcb,0xa4,0x71,0x48,0x5d,0xa8,0xf4,0x24,0x0c,0x14,0xf1,0x82,0x41);
+static const esp_bt_uuid_t UUID_CCCD =
+    { .len = ESP_UUID_LEN_16, .uuid = { .uuid16 = ESP_GATT_UUID_CHAR_CLIENT_CONFIG } };
+
+// --- per-controller channel: fixed slot, each owns one GATTC app interface ---
+typedef struct {
+    esp_gatt_if_t gattc_if;  // assigned once at REG_EVT (channel == app_id); permanent
+    bool     used;           // a controller is connected on this slot
+    bool     ready;          // discovered + input subscribed
+    bool     connecting;
+    uint16_t conn_id;
+    esp_bd_addr_t bda;
+    uint8_t  addr_type;
+    uint16_t input_handle;
+    uint16_t fd2_handle;     // canonical SW2 input notify (ab7de9be…), if present
+    uint16_t legacy_handle;  // legacy input notify (74928 66c…), if present
+    uint16_t ack_handle;
+    uint16_t cmd_handle;
+    uint16_t rumble_handle;
+    uint16_t itvl;           // connection interval in 1.25 ms units (6=7.5ms, 12=15ms)
+    uint8_t  input_src;      // which UUID set input_handle: 1=FD2, 2=legacy (diagnostic)
+    bool     prefer_legacy;  // NSO GameCube: input is on the LEGACY char, not FD2
+    // GCN only: every NOTIFY char handle in the SW2 service (collected during discovery).
+    // For the GameCube we CCCD-enable all of them — like the WinRT path — so the controller
+    // is happy to stream on 0x000E; NOTIFY_EVT still forwards only input_handle, so the extra
+    // streams never reach the host parser.  CCCDs are written one at a time (cccd_idx) driven
+    // by WRITE_DESCR_EVT to avoid back-to-back GATT-write congestion.
+    uint16_t notify_handles[8];
+    uint8_t  notify_count;
+    uint8_t  cccd_idx;
+    bool     cccd_draining;
+    uint8_t  standalone_init_step;
+    uint8_t  standalone_init_attempts;
+    bool     standalone_init_waiting;
+    uint32_t standalone_init_next_ms;
+    uint8_t  standalone_feedback_step;
+    bool     standalone_feedback_active;
+    uint32_t standalone_feedback_next_ms;
+} channel_t;
+static channel_t s_ch[MAX_CH];
+
+
+
+static volatile bool s_scan_mode = false;
+static int s_pending_conn = -1;   // channel waiting to open once the scan has stopped
+// 3rd-controller establishment: two links pinned at 7.5ms saturate the radio so the
+// controller cannot even schedule a 3rd connection's SETUP (reason 0x100 CONN_CANCEL,
+// regardless of the 3rd's requested interval).  Workaround: temporarily widen the
+// existing links to 15ms to free radio time, defer the 3rd open until that settles,
+// then restore the widened links to 7.5ms once the 3rd link is established.
+static volatile uint32_t s_conn_open_after = 0;  // tick deadline to open a deferred pending conn (0 = open immediately)
+static volatile uint8_t  s_widened_mask  = 0;    // links temporarily widened to 15ms; restored after the 3rd connects
+static char s_own_mac[18] = "00:00:00:00:00:00";
+
+// Deferred scan resume.  Starting a scan from inside a GATTC callback while another
+// GAP op (a 2nd disconnect, a connect) is still in flight collides on the HCI command
+// path and silently drops that op (symptom: only one of a merged pair disconnects).
+// So callbacks NEVER start scanning directly — they set s_resume_scan and bump a
+// "GAP busy" deadline; cdc_task starts the scan only once the bus has been quiet.
+//
+// gap_busy() uses ONLY-EXTEND semantics: it never shortens a deadline already in the
+// future.  kick_disc_queue sets a 400 ms guard before each gap_disconnect; a
+// DISCONNECT_EVT must NOT shorten that window or the next queued disconnect fires
+// before the HCI path has settled.
+static volatile bool     s_resume_scan = false;
+static volatile uint32_t s_gap_busy_until = 0;   // ms tick until GAP is considered busy
+static inline uint32_t now_ms(void) { return (uint32_t)xTaskGetTickCount(); }  // FREERTOS_HZ=1000
+static inline void gap_busy(uint32_t ms) {
+    uint32_t t = now_ms() + ms;
+    // Only extend the deadline, never shorten it (cast keeps wrap-around safe).
+    if ((int32_t)(t - s_gap_busy_until) > 0) s_gap_busy_until = t;
+}
+
+// Sequential disconnect queue.
+// Bluedroid's HCI path can safely process only ONE gap_disconnect at a time.  Issuing
+// several in a tight loop (the old do_disc_all) corrupts the BLE controller's internal
+// state → crash on the 3rd controller or after a disc_all during an active session.
+// Solution: callers set bits in s_disc_mask; kick_disc_queue() issues ONE disconnect,
+// sets s_disc_in_flight, and the DISCONNECT_EVT completion clears it and calls
+// kick_disc_queue() again for the next pending channel.
+static volatile uint8_t s_disc_mask      = 0;      // bitmask: channels queued for disconnect
+static volatile bool    s_disc_in_flight = false;   // true while a gap_disconnect is pending
+static portMUX_TYPE     s_disc_mux = portMUX_INITIALIZER_UNLOCKED;
+
+// Issue the next queued disconnect (if none is currently in flight).
+// Safe to call from cdc_task (core 1) AND from DISCONNECT_EVT (BTC task, core 0).
+static void kick_disc_queue(void) {
+    portENTER_CRITICAL(&s_disc_mux);
+    if (s_disc_in_flight || s_disc_mask == 0) {
+        portEXIT_CRITICAL(&s_disc_mux);
+        return;
+    }
+    // Find the lowest-indexed pending channel that is still in use.
+    int ch = -1;
+    for (int i = 0; i < MAX_CH; i++) {
+        if (s_disc_mask & (1u << i)) {
+            if (s_ch[i].used) { ch = i; break; }
+            s_disc_mask &= ~(1u << i);  // already gone, clear and skip
+        }
+    }
+    if (ch < 0) {
+        // Queue drained; all channels already released — safe to resume scanning.
+        bool was_last = (s_disc_mask == 0);
+        portEXIT_CRITICAL(&s_disc_mux);
+        if (was_last && s_scan_mode) s_resume_scan = true;
+        return;
+    }
+    s_disc_mask      &= ~(1u << ch);
+    s_disc_in_flight  = true;
+    portEXIT_CRITICAL(&s_disc_mux);
+    gap_busy(400);                        // hold off scan until this disconnect settles
+    esp_ble_gap_disconnect(s_ch[ch].bda);
+}
+
+static int ch_by_if(esp_gatt_if_t gif) {
+    for (int i = 0; i < MAX_CH; i++) if (s_ch[i].gattc_if == gif) return i;
+    return -1;
+}
+
+static int ch_by_bda(esp_bd_addr_t bda) {
+    for (int i = 0; i < MAX_CH; i++) {
+        if (s_ch[i].used && memcmp(s_ch[i].bda, bda, sizeof(esp_bd_addr_t)) == 0) return i;
+    }
+    return -1;
+}
+static int ch_alloc(void) {
+    for (int i = 0; i < MAX_CH; i++)
+        if (s_ch[i].gattc_if != ESP_GATT_IF_NONE && !s_ch[i].used) return i;
+    return -1;
+}
+static uint8_t ch_active_mask(void) {
+    uint8_t m = 0; for (int i = 0; i < MAX_CH; i++) if (s_ch[i].used && s_ch[i].ready) m |= (1u << i);
+    return m;
+}
+// Count slots in use (reserved/connecting) and fully ready (input subscribed).
+// Used by the connection diagnostics so a 3rd-controller failure log shows how many
+// links were already live when it was attempted.
+static void ch_count(int *used, int *ready) {
+    int u = 0, r = 0;
+    for (int i = 0; i < MAX_CH; i++) if (s_ch[i].used) { u++; if (s_ch[i].ready) r++; }
+    if (used)  *used  = u;
+    if (ready) *ready = r;
+}
+
+// --- USB-CDC transport ---
+static QueueHandle_t s_cmd_queue;   // inbound command lines
+static QueueHandle_t s_ack_queue;   // ack/cmd notifications (P0)
+static QueueHandle_t s_notify_queue; // handle-routed notifications for GCN/WinRT parity
+static QueueHandle_t s_out_queue;   // outbound JSON lines from BLE callbacks
+static TaskHandle_t s_cdc_task_h;
+static volatile bool s_request_status = false;
+typedef struct { char text[256]; } line_t;
+typedef struct { uint8_t ch; uint8_t len; uint16_t handle; uint8_t data[REPORT_SIZE]; } in_report_t;
+static char s_rx_buf[512];
+static int  s_rx_len = 0;
+static in_report_t s_in_shadow[MAX_CH];
+static volatile bool s_in_dirty[MAX_CH];
+static portMUX_TYPE s_in_mux = portMUX_INITIALIZER_UNLOCKED;
+
+// --- Jitter Buffer (FIFO) for Audio Haptics ---
+#define RUMBLE_QUEUE_SIZE 5
+typedef struct {
+    int ch;
+    uint8_t data[64];
+    size_t len;
+} rumble_pkt_t;
+
+static QueueHandle_t s_rumble_queue;
+static TaskHandle_t s_rumble_task_h;
+
+static void rumble_playout_task(void *arg) {
+    rumble_pkt_t pkt;
+    while (1) {
+        if (xQueueReceive(s_rumble_queue, &pkt, portMAX_DELAY)) {
+            if (s_ch[pkt.ch].used && s_ch[pkt.ch].rumble_handle) {
+                esp_ble_gattc_write_char(s_ch[pkt.ch].gattc_if, s_ch[pkt.ch].conn_id, s_ch[pkt.ch].rumble_handle, pkt.len, pkt.data,
+                                         ESP_GATT_WRITE_TYPE_NO_RSP, ESP_GATT_AUTH_REQ_NONE);
+            }
+            // Strict 15ms minimum gap between packets as requested
+            vTaskDelay(pdMS_TO_TICKS(15));
+        }
+    }
+}
+
+static bool cdc_host_ready(void) {
+    return tud_cdc_connected() && (tud_cdc_get_line_state() & CDC_LINE_STATE_DTR);
+}
+static void safe_cdc_write(const uint8_t *data, uint32_t len) {
+    /*
+     * CDC is an optional configuration/bridge channel.  In standalone mode
+     * it is normally closed; waiting 100 ms for DTR here would stall the same
+     * task that services the XInput endpoint and reduce input to about 10 Hz.
+     * A closed host cannot consume this data, so discard it immediately.
+     */
+    if (!cdc_host_ready()) return;
+    uint32_t w = 0, t = 0;
+    while (w < len && t < 100) {
+        if (!cdc_host_ready()) return;
+        uint32_t avail = tud_cdc_write_available();
+        if (avail > 0) {
+            uint32_t n = (len - w) > avail ? avail : (len - w);
+            tud_cdc_write(data + w, n); tud_cdc_write_flush(); w += n; t = 0;
+        } else { vTaskDelay(pdMS_TO_TICKS(1)); t++; }
+    }
+}
+static void send_json(const char *s) { safe_cdc_write((const uint8_t *)s, strlen(s)); }  // cdc_task only
+// out_json/out_debug: enqueue for cdc_task to send.  MUST be used from BLE callback
+// (BTC task) context — calling safe_cdc_write there can block up to 100 ms and, under a
+// flood of scan_results (a controller in pairing mode), stalls the BLE host -> crash.
+static void out_json(const char *s) {
+    if (!s_out_queue) return;
+    line_t L; strncpy(L.text, s, sizeof(L.text) - 1); L.text[sizeof(L.text) - 1] = '\0';
+    if (xQueueSend(s_out_queue, &L, 0) == pdTRUE && s_cdc_task_h)
+        xTaskNotifyGive(s_cdc_task_h);
+}
+static void out_debug(const char *msg) {
+    char b[200];
+    snprintf(b, sizeof(b), "{\"cmd\":\"debug\",\"msg\":\"%.172s\"}\n", msg);
+    out_json(b);
+}
+static size_t parse_hex(const char *s, uint8_t *out, size_t max);
+static void send_status_response(void) {
+    char b[512];
+    snprintf(b, sizeof(b),
+        "{\"cmd\":\"status\",\"version\":\"%s\",\"profile\":\"%s\",\"build\":\"%s\","
+        "\"ble_channels\":%u,\"mac\":\"%s\","
+        "\"features\":{\"wrpair\":1,\"shadow\":1,"
+        "\"standalone_profile_write\":1,\"standalone_profile_runtime\":1,"
+        "\"standalone_usb_xinput\":1,"
+        "\"standalone_usb_hid\":1,"
+        "\"standalone_ble_hid\":0},\"profile_schemas\":[1]}\n",
+        APP_FIRMWARE_VERSION, EXPECTED_FIRMWARE_PROFILE, EXPECTED_FIRMWARE_BUILD,
+        (unsigned)ch_active_mask(), s_own_mac);
+    send_json(b);
+}
+
+static void send_capabilities_response(void) {
+    char b[384];
+    snprintf(b, sizeof(b),
+        "{\"cmd\":\"capabilities\",\"ok\":1,\"version\":\"%s\","
+        "\"mode\":\"%s\",\"features\":{\"bridge\":1,"
+        "\"standalone_profile_write\":1,\"standalone_profile_runtime\":1,"
+        "\"standalone_usb_xinput\":1,"
+        "\"standalone_usb_hid\":1,"
+        "\"standalone_ble_hid\":0},\"profile_schemas\":[%u],"
+        "\"profile_max_bytes\":%u}\n",
+        APP_FIRMWARE_VERSION,
+        !s_standalone_mode ? "bridge" :
+            (s_standalone_usb_hid ? "standalone_hid" : "standalone"),
+        (unsigned)STANDALONE_PROFILE_SCHEMA,
+        (unsigned)STANDALONE_PROFILE_MAX);
+    send_json(b);
+}
+
+static void do_mode_command(const char *mode) {
+    bool enabled;
+    bool usb_hid;
+    if (strcmp(mode, "standalone") == 0) {
+        enabled = true;
+        usb_hid = false;
+    } else if (strcmp(mode, "standalone_hid") == 0) {
+        enabled = true;
+        usb_hid = true;
+    } else if (strcmp(mode, "bridge") == 0) {
+        enabled = false;
+        usb_hid = false;
+    }
+    else {
+        send_json("{\"cmd\":\"mode\",\"ok\":0,\"error\":\"value\"}\n");
+        return;
+    }
+    esp_err_t err = standalone_usb_hid_mode_store(usb_hid);
+    if (err == ESP_OK) err = standalone_mode_store(enabled);
+    if (err != ESP_OK) {
+        char b[112];
+        snprintf(b, sizeof(b),
+            "{\"cmd\":\"mode\",\"ok\":0,\"error\":\"nvs_%s\"}\n",
+            esp_err_to_name(err));
+        send_json(b);
+        return;
+    }
+    char b[128];
+    snprintf(b, sizeof(b),
+        "{\"cmd\":\"mode\",\"ok\":1,\"mode\":\"%s\","
+        "\"restart_required\":%d}\n",
+        !enabled ? "bridge" : (usb_hid ? "standalone_hid" : "standalone"),
+        (enabled != s_standalone_mode ||
+         usb_hid != s_standalone_usb_hid) ? 1 : 0);
+    send_json(b);
+}
+
+static void do_restart_command(void) {
+    send_json("{\"cmd\":\"restart\",\"ok\":1}\n");
+    vTaskDelay(pdMS_TO_TICKS(120));
+    esp_restart();
+}
+
+static uint32_t standalone_crc32(const uint8_t *data, size_t length) {
+    uint32_t crc = 0xffffffffu;
+    for (size_t i = 0; i < length; i++) {
+        crc ^= data[i];
+        for (int bit = 0; bit < 8; bit++)
+            crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
+    }
+    return crc ^ 0xffffffffu;
+}
+
+static void profile_reset_staging(void) {
+    free(s_profile_staging);
+    s_profile_staging = NULL;
+    s_profile_expected = 0;
+    s_profile_received = 0;
+    s_profile_schema = 0;
+    s_profile_crc32 = 0;
+}
+
+static bool profile_read_slot(
+    nvs_handle_t nvs, uint8_t slot, standalone_profile_header_t *header
+) {
+    const char *key = slot == 0 ? "slot_a" : "slot_b";
+    size_t size = 0;
+    if (nvs_get_blob(nvs, key, NULL, &size) != ESP_OK ||
+        size < sizeof(*header) || size > sizeof(*header) + STANDALONE_PROFILE_MAX)
+        return false;
+    uint8_t *blob = malloc(size);
+    if (!blob) return false;
+    bool valid = false;
+    if (nvs_get_blob(nvs, key, blob, &size) == ESP_OK) {
+        memcpy(header, blob, sizeof(*header));
+        valid =
+            header->magic == STANDALONE_PROFILE_MAGIC &&
+            header->schema == STANDALONE_PROFILE_SCHEMA &&
+            header->length == size - sizeof(*header) &&
+            standalone_crc32(blob + sizeof(*header), header->length) ==
+                header->crc32;
+    }
+    free(blob);
+    return valid;
+}
+
+static bool profile_load_active_runtime(void) {
+    nvs_handle_t nvs;
+    uint8_t active_slot = 0;
+    if (nvs_open(STANDALONE_NVS_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK)
+        return false;
+    nvs_get_u8(nvs, "active", &active_slot);
+    const char *key = active_slot == 0 ? "slot_a" : "slot_b";
+    size_t size = 0;
+    if (nvs_get_blob(nvs, key, NULL, &size) != ESP_OK ||
+        size < sizeof(standalone_profile_header_t) ||
+        size > sizeof(standalone_profile_header_t) + STANDALONE_PROFILE_MAX) {
+        nvs_close(nvs);
+        return false;
+    }
+    uint8_t *blob = malloc(size);
+    if (!blob) {
+        nvs_close(nvs);
+        return false;
+    }
+    standalone_profile_header_t header = {0};
+    bool valid = nvs_get_blob(nvs, key, blob, &size) == ESP_OK;
+    nvs_close(nvs);
+    if (valid) {
+        memcpy(&header, blob, sizeof(header));
+        valid =
+            header.magic == STANDALONE_PROFILE_MAGIC &&
+            header.schema == STANDALONE_PROFILE_SCHEMA &&
+            header.length == size - sizeof(header) &&
+            standalone_crc32(blob + sizeof(header), header.length) ==
+                header.crc32;
+    }
+    if (valid)
+        valid = standalone_xinput_apply_profile_json(
+            blob + sizeof(header), header.length
+        );
+    free(blob);
+    return valid;
+}
+
+static void send_profile_status(void) {
+    nvs_handle_t nvs;
+    uint8_t active_slot = 0;
+    standalone_profile_header_t header = {0};
+    bool valid = false;
+    if (nvs_open(STANDALONE_NVS_NAMESPACE, NVS_READONLY, &nvs) == ESP_OK) {
+        nvs_get_u8(nvs, "active", &active_slot);
+        valid = profile_read_slot(nvs, active_slot, &header);
+        nvs_close(nvs);
+    }
+    char b[240];
+    snprintf(b, sizeof(b),
+        "{\"cmd\":\"profile_status\",\"ok\":1,\"valid\":%d,\"slot\":\"%c\","
+        "\"schema\":%u,\"length\":%u,\"crc32\":\"%08lx\"}\n",
+        valid ? 1 : 0, active_slot == 0 ? 'A' : 'B',
+        valid ? (unsigned)header.schema : 0,
+        valid ? (unsigned)header.length : 0,
+        valid ? (unsigned long)header.crc32 : 0ul);
+    send_json(b);
+}
+
+static void do_profile_begin(char *args) {
+    char *save = NULL;
+    char *schema_s = strtok_r(args, " ", &save);
+    char *length_s = strtok_r(NULL, " ", &save);
+    char *crc_s = strtok_r(NULL, " ", &save);
+    if (!schema_s || !length_s || !crc_s) {
+        send_json("{\"cmd\":\"profile_begin\",\"ok\":0,\"error\":\"arguments\"}\n");
+        return;
+    }
+    unsigned long schema = strtoul(schema_s, NULL, 10);
+    unsigned long length = strtoul(length_s, NULL, 10);
+    unsigned long crc = strtoul(crc_s, NULL, 16);
+    if (schema != STANDALONE_PROFILE_SCHEMA) {
+        send_json("{\"cmd\":\"profile_begin\",\"ok\":0,\"error\":\"schema\"}\n");
+        return;
+    }
+    if (length == 0 || length > STANDALONE_PROFILE_MAX) {
+        send_json("{\"cmd\":\"profile_begin\",\"ok\":0,\"error\":\"length\"}\n");
+        return;
+    }
+    profile_reset_staging();
+    s_profile_staging = malloc(length);
+    if (!s_profile_staging) {
+        send_json("{\"cmd\":\"profile_begin\",\"ok\":0,\"error\":\"memory\"}\n");
+        return;
+    }
+    s_profile_schema = (uint16_t)schema;
+    s_profile_expected = (size_t)length;
+    s_profile_crc32 = (uint32_t)crc;
+    send_json("{\"cmd\":\"profile_begin\",\"ok\":1}\n");
+}
+
+static void do_profile_chunk(char *args) {
+    char *save = NULL;
+    char *offset_s = strtok_r(args, " ", &save);
+    char *hex_s = strtok_r(NULL, " ", &save);
+    if (!offset_s || !hex_s || !s_profile_staging) {
+        send_json("{\"cmd\":\"profile_chunk\",\"ok\":0,\"error\":\"state\"}\n");
+        return;
+    }
+    size_t offset = (size_t)strtoul(offset_s, NULL, 10);
+    if (offset != s_profile_received) {
+        send_json("{\"cmd\":\"profile_chunk\",\"ok\":0,\"error\":\"offset\"}\n");
+        return;
+    }
+    size_t remaining = s_profile_expected - s_profile_received;
+    size_t got = parse_hex(
+        hex_s, s_profile_staging + s_profile_received, remaining
+    );
+    if (got == 0 || strlen(hex_s) != got * 2) {
+        send_json("{\"cmd\":\"profile_chunk\",\"ok\":0,\"error\":\"data\"}\n");
+        return;
+    }
+    s_profile_received += got;
+    char b[96];
+    snprintf(b, sizeof(b),
+        "{\"cmd\":\"profile_chunk\",\"ok\":1,\"received\":%u}\n",
+        (unsigned)s_profile_received);
+    send_json(b);
+}
+
+static void do_profile_commit(void) {
+    if (!s_profile_staging || s_profile_received != s_profile_expected) {
+        send_json("{\"cmd\":\"profile_commit\",\"ok\":0,\"error\":\"incomplete\"}\n");
+        return;
+    }
+    if (standalone_crc32(s_profile_staging, s_profile_expected) != s_profile_crc32) {
+        send_json("{\"cmd\":\"profile_commit\",\"ok\":0,\"error\":\"crc\"}\n");
+        profile_reset_staging();
+        return;
+    }
+
+    size_t blob_size = sizeof(standalone_profile_header_t) + s_profile_expected;
+    uint8_t *blob = malloc(blob_size);
+    if (!blob) {
+        send_json("{\"cmd\":\"profile_commit\",\"ok\":0,\"error\":\"memory\"}\n");
+        return;
+    }
+    standalone_profile_header_t header = {
+        .magic = STANDALONE_PROFILE_MAGIC,
+        .schema = s_profile_schema,
+        .reserved = 0,
+        .length = (uint32_t)s_profile_expected,
+        .crc32 = s_profile_crc32,
+    };
+    memcpy(blob, &header, sizeof(header));
+    memcpy(blob + sizeof(header), s_profile_staging, s_profile_expected);
+
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open(STANDALONE_NVS_NAMESPACE, NVS_READWRITE, &nvs);
+    uint8_t active_slot = 0;
+    uint8_t target_slot = 1;
+    if (err == ESP_OK) {
+        nvs_get_u8(nvs, "active", &active_slot);
+        target_slot = active_slot == 0 ? 1 : 0;
+        const char *key = target_slot == 0 ? "slot_a" : "slot_b";
+        err = nvs_set_blob(nvs, key, blob, blob_size);
+        if (err == ESP_OK) err = nvs_commit(nvs);
+        standalone_profile_header_t verify = {0};
+        if (err == ESP_OK && !profile_read_slot(nvs, target_slot, &verify))
+            err = ESP_ERR_INVALID_CRC;
+        if (err == ESP_OK) err = nvs_set_u8(nvs, "active", target_slot);
+        if (err == ESP_OK) err = nvs_commit(nvs);
+        nvs_close(nvs);
+    }
+    free(blob);
+    if (err != ESP_OK) {
+        char b[128];
+        snprintf(b, sizeof(b),
+            "{\"cmd\":\"profile_commit\",\"ok\":0,\"error\":\"nvs_%s\"}\n",
+            esp_err_to_name(err));
+        send_json(b);
+        return;
+    }
+    uint32_t committed_crc = s_profile_crc32;
+    size_t committed_length = s_profile_expected;
+    bool runtime_applied = standalone_xinput_apply_profile_json(
+        s_profile_staging, s_profile_expected
+    );
+    profile_reset_staging();
+    if (!runtime_applied) {
+        if (
+            nvs_open(
+                STANDALONE_NVS_NAMESPACE, NVS_READWRITE, &nvs
+            ) == ESP_OK
+        ) {
+            nvs_set_u8(nvs, "active", active_slot);
+            nvs_commit(nvs);
+            nvs_close(nvs);
+        }
+        send_json(
+            "{\"cmd\":\"profile_commit\",\"ok\":0,"
+            "\"error\":\"runtime_parse\"}\n"
+        );
+        return;
+    }
+    char b[160];
+    snprintf(b, sizeof(b),
+        "{\"cmd\":\"profile_commit\",\"ok\":1,\"slot\":\"%c\","
+        "\"length\":%u,\"crc32\":\"%08lx\",\"runtime_applied\":%d}\n",
+        target_slot == 0 ? 'A' : 'B', (unsigned)committed_length,
+        (unsigned long)committed_crc, runtime_applied ? 1 : 0);
+    send_json(b);
+}
+// CDC frame: 0xaa 0x55 <len=payload+1> <chan|0x80 if cmd> <payload...>
+static void send_report_frame(uint8_t channel, const uint8_t *payload, uint8_t plen, bool is_cmd) {
+    if (plen > REPORT_SIZE) plen = REPORT_SIZE;
+    uint8_t frame[4 + REPORT_SIZE] = {
+        0xaa, 0x55, (uint8_t)(plen + 1),
+        (uint8_t)((channel + 1) | (is_cmd ? 0x80 : 0x00))
+    };
+    memcpy(frame + 4, payload, plen);
+    safe_cdc_write(frame, 4 + plen);
+}
+// CDC v2 notify frame: 0xaa 0x55 <len=payload+3> <0x40|chan> <handle_le16> <payload...>
+static void send_notify_handle_frame(uint8_t channel, uint16_t handle, const uint8_t *payload, uint8_t plen) {
+    if (plen > REPORT_SIZE) plen = REPORT_SIZE;
+    uint8_t frame[6 + REPORT_SIZE] = {
+        0xaa, 0x55, (uint8_t)(plen + 3), (uint8_t)(0x40 | (channel + 1)),
+        (uint8_t)(handle & 0xff), (uint8_t)(handle >> 8)
+    };
+    memcpy(frame + 6, payload, plen);
+    safe_cdc_write(frame, 6 + plen);
+}
+static int hexval(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static void uuid_to_str(const esp_bt_uuid_t *uuid, char *out, size_t out_len) {
+    if (!uuid || !out || out_len == 0) return;
+    if (uuid->len == ESP_UUID_LEN_16) {
+        snprintf(out, out_len, "%04x", uuid->uuid.uuid16);
+        return;
+    }
+    if (uuid->len == ESP_UUID_LEN_128) {
+        const uint8_t *u = uuid->uuid.uuid128;
+        snprintf(out, out_len,
+                 "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+                 u[15], u[14], u[13], u[12], u[11], u[10], u[9], u[8],
+                 u[7], u[6], u[5], u[4], u[3], u[2], u[1], u[0]);
+        return;
+    }
+    snprintf(out, out_len, "unknown");
+}
+static size_t parse_hex(const char *s, uint8_t *out, size_t max) {
+    size_t n = 0;
+    while (s[0] && s[1] && n < max) {
+        int hi = hexval(s[0]), lo = hexval(s[1]);
+        if (hi < 0 || lo < 0) break;
+        out[n++] = (uint8_t)((hi << 4) | lo); s += 2;
+    }
+    return n;
+}
+
+static bool write_cccd_value(int ch, uint16_t handle, bool enable) {
+    if (ch < 0 || ch >= MAX_CH || !s_ch[ch].used || handle == 0) return false;
+    esp_gattc_descr_elem_t descr;
+    uint16_t got = 1;
+    if (esp_ble_gattc_get_descr_by_char_handle(s_ch[ch].gattc_if, s_ch[ch].conn_id,
+                                                handle, UUID_CCCD, &descr, &got) == ESP_OK && got > 0) {
+        uint8_t v[2] = { enable ? 0x01 : 0x00, 0x00 };
+        esp_err_t err = esp_ble_gattc_write_char_descr(s_ch[ch].gattc_if, s_ch[ch].conn_id,
+                                                       descr.handle, sizeof(v), v,
+                                                       ESP_GATT_WRITE_TYPE_RSP, ESP_GATT_AUTH_REQ_NONE);
+        return err == ESP_OK;
+    }
+    return false;
+}
+
+static uint16_t choose_input_handle(int ch, bool prefer_legacy, uint8_t *src) {
+    if (src) *src = 0;
+    if (ch < 0 || ch >= MAX_CH) return 0;
+    if (prefer_legacy && s_ch[ch].legacy_handle) {
+        if (src) *src = 2;
+        return s_ch[ch].legacy_handle;
+    }
+    if (!prefer_legacy && s_ch[ch].fd2_handle) {
+        if (src) *src = 1;
+        return s_ch[ch].fd2_handle;
+    }
+    if (s_ch[ch].fd2_handle) {
+        if (src) *src = 1;
+        return s_ch[ch].fd2_handle;
+    }
+    if (s_ch[ch].legacy_handle) {
+        if (src) *src = 2;
+        return s_ch[ch].legacy_handle;
+    }
+    return 0;
+}
+
+// --- command handlers (cdc_task context) ---
+static void do_conn(char *args) {
+    char *save = NULL;
+    char *type_s = strtok_r(args, " ", &save);
+    char *mac_s  = strtok_r(NULL, " ", &save);
+    if (!type_s || !mac_s) return;
+    unsigned m[6];
+    if (sscanf(mac_s, "%x:%x:%x:%x:%x:%x", &m[0],&m[1],&m[2],&m[3],&m[4],&m[5]) != 6) return;
+    int ch = ch_alloc();
+    if (ch < 0) { out_debug("conn req REJECTED: no free channel slot"); return; }
+    int u0, r0; ch_count(&u0, &r0);
+    s_ch[ch].used = true;          // reserve the slot
+    s_ch[ch].ready = false;
+    s_ch[ch].connecting = true;
+    s_ch[ch].addr_type = (uint8_t)atoi(type_s);
+    for (int i = 0; i < 6; i++) s_ch[ch].bda[i] = (uint8_t)m[i];
+    s_ch[ch].prefer_legacy = false;
+    s_ch[ch].notify_count = 0;      // fresh discovery — clear the GCN notify list / drain state
+    s_ch[ch].cccd_idx = 0;
+    s_ch[ch].cccd_draining = false;
+    s_ch[ch].standalone_init_step = 0;
+    s_ch[ch].standalone_init_attempts = 0;
+    s_ch[ch].standalone_init_waiting = false;
+    s_ch[ch].standalone_init_next_ms = 0;
+    s_ch[ch].standalone_feedback_step = 0;
+    s_ch[ch].standalone_feedback_active = false;
+    s_ch[ch].standalone_feedback_next_ms = 0;
+    {   // Diagnostic: which channel + how many links already live when this starts.
+        char dbg[110];
+        snprintf(dbg, sizeof(dbg),
+            "conn req ch=%d mac=%02X:%02X:%02X:%02X:%02X:%02X type=%d (before: used=%d ready=%d)",
+            ch, s_ch[ch].bda[0],s_ch[ch].bda[1],s_ch[ch].bda[2],
+            s_ch[ch].bda[3],s_ch[ch].bda[4],s_ch[ch].bda[5], s_ch[ch].addr_type, u0, r0);
+        out_debug(dbg);
+    }
+    // If two links are already live, the radio is saturated by their 7.5ms anchors and
+    // the controller cannot schedule a 3rd connection's SETUP at all (CONN_CANCEL).
+    // Temporarily widen those links to 15ms NOW to free radio time, and defer the 3rd
+    // open until the widen has settled (the conn-param update takes effect a few
+    // intervals later).  The widened links are restored to 7.5ms once the 3rd connects.
+    // If two links are already live, the radio is saturated by their 7.5ms anchors and
+    // the controller cannot schedule a 3rd connection's SETUP at all (CONN_CANCEL).
+    // Temporarily widen those links to 15ms NOW to free radio time, and defer the 3rd
+    // open until the widen has settled (the conn-param update takes effect a few
+    // intervals later).  The widened links are restored once the 3rd connects.
+    s_widened_mask = 0;
+    s_conn_open_after = 0;
+    if (r0 >= 2) {
+        for (int i = 0; i < MAX_CH; i++) {
+            if (i != ch && s_ch[i].used && s_ch[i].ready && s_ch[i].itvl != 12) {
+                esp_ble_conn_update_params_t cp = {0};
+                memcpy(cp.bda, s_ch[i].bda, sizeof(esp_bd_addr_t));
+                cp.min_int = 12; cp.max_int = 12; cp.latency = 0; cp.timeout = 400;
+                esp_ble_gap_update_conn_params(&cp);
+                s_widened_mask |= (1u << i);
+            }
+        }
+        s_conn_open_after = now_ms() + 250;   // let the widen settle before opening
+        gap_busy(700);
+        char dbg[80];
+        snprintf(dbg, sizeof(dbg), "3rd link: widened mask=0x%02x to 15ms, defer open 250ms",
+                 s_widened_mask);
+        out_debug(dbg);
+    } else {
+        gap_busy(300);
+    }
+    // Can't initiate while the scanner runs (ESP_GATT_CONGESTED). Stop the scan; the open
+    // happens in SCAN_STOP_COMPLETE_EVT (immediate) or, for the deferred 3rd-link case,
+    // from cdc_task once s_conn_open_after elapses.
+    s_pending_conn = ch;
+    esp_ble_gap_stop_scanning();
+}
+
+static void do_inputsrc(char *args) {  // inputsrc <ch> <fd2|legacy>
+    char *save = NULL;
+    char *ch_s = strtok_r(args, " ", &save);
+    char *mode_s = strtok_r(NULL, " ", &save);
+    if (!ch_s || !mode_s) return;
+    int ch = atoi(ch_s);
+    if (ch < 0 || ch >= MAX_CH || !s_ch[ch].used) return;
+
+    bool prefer_legacy;
+    if (strcmp(mode_s, "legacy") == 0) {
+        prefer_legacy = true;
+    } else if (strcmp(mode_s, "fd2") == 0) {
+        prefer_legacy = false;
+    } else {
+        return;
+    }
+
+    s_ch[ch].prefer_legacy = prefer_legacy;
+    uint8_t new_src = 0;
+    uint16_t new_handle = choose_input_handle(ch, prefer_legacy, &new_src);
+    if (!new_handle) {
+        char dbg[96];
+        snprintf(dbg, sizeof(dbg), "inputsrc ch=%d mode=%s pending (fd2=0x%04x legacy=0x%04x)",
+                 ch, mode_s, s_ch[ch].fd2_handle, s_ch[ch].legacy_handle);
+        out_debug(dbg);
+        return;
+    }
+
+    // Retarget which stream we forward.  Do NOT disable the old handle's CCCD: for the GCN we
+    // deliberately keep EVERY SW2 notify CCCD enabled (see enable_notifications), and other
+    // controllers keep FD2 enabled — disabling here would fight that and can silently kill input.
+    // Register the new handle (idempotent) as a safety net for a switch to a not-yet-enabled char;
+    // for non-GCN, REG_FOR_NOTIFY_EVT then writes its CCCD. (Host no longer calls this; kept for
+    // backward compatibility.)
+    if (s_ch[ch].input_handle != new_handle)
+        esp_ble_gattc_register_for_notify(s_ch[ch].gattc_if, s_ch[ch].bda, new_handle);
+    s_ch[ch].input_handle = new_handle;
+    s_ch[ch].input_src = new_src;
+
+    char dbg[128];
+    snprintf(dbg, sizeof(dbg), "inputsrc ch=%d mode=%s input=0x%04x(src=%u prefer_legacy=%d)",
+             ch, mode_s, s_ch[ch].input_handle, s_ch[ch].input_src, s_ch[ch].prefer_legacy);
+    out_debug(dbg);
+}
+// Steady-state interval policy.  This controller CANNOT sustain two 7.5ms links plus a
+// third, so: 3+ established links all run at 15ms (itvl=12); with <=2 links everyone runs
+// at 7.5ms (itvl=6).  Called after a link becomes ready and after a disconnect.  Bails
+// while a connection is being established (the temporary widen owns that window) so it
+// never fights the setup.  Each link's itvl is updated BEFORE the request so a failed
+// request is not retried (no loop).
+static void reconcile_intervals(void) {
+    if (s_pending_conn >= 0 || s_widened_mask) return;
+    for (int i = 0; i < MAX_CH; i++) if (s_ch[i].connecting) return;
+    int ready = 0;
+    for (int i = 0; i < MAX_CH; i++) if (s_ch[i].used && s_ch[i].ready) ready++;
+    uint16_t target = (ready >= 3) ? 12 : 6;
+    for (int i = 0; i < MAX_CH; i++) {
+        if (s_ch[i].used && s_ch[i].ready && s_ch[i].itvl != target) {
+            s_ch[i].itvl = target;
+            esp_ble_conn_update_params_t cp = {0};
+            memcpy(cp.bda, s_ch[i].bda, sizeof(esp_bd_addr_t));
+            cp.min_int = target; cp.max_int = target; cp.latency = 0; cp.timeout = 400;
+            esp_ble_gap_update_conn_params(&cp);
+        }
+    }
+    char d[48]; snprintf(d, sizeof(d), "reconcile: %d links -> itvl=%d", ready, target);
+    out_debug(d);
+}
+static void restore_widened_links(void);   // forward decl (defined just below)
+// Open the pending connection (s_pending_conn).  Scan must already be stopped.  Called
+// from SCAN_STOP_COMPLETE_EVT (immediate, 1st/2nd link) and from cdc_task (deferred
+// 3rd-link case, after the existing links were widened to 15ms and that has settled).
+static void open_pending_conn(void) {
+    int ch = s_pending_conn;
+    if (ch < 0) return;
+    s_pending_conn = -1;
+    s_conn_open_after = 0;
+    if (!s_ch[ch].used) return;   // slot was cleared meanwhile (e.g. ble disconnect)
+
+    int other_ready = 0;
+    for (int i = 0; i < MAX_CH; i++)
+        if (i != ch && s_ch[i].used && s_ch[i].ready) other_ready++;
+
+    // 3rd+ link runs at 15ms (itvl=12); first two stay 7.5ms for gap-free rumble.
+    // (enh_open + ce_len does NOT work on this chip — see v0.12.16; plain gattc_open.)
+    s_ch[ch].itvl = (other_ready >= 2) ? 12 : 6;
+    esp_err_t pc = esp_ble_gap_set_prefer_conn_params(s_ch[ch].bda,
+                        s_ch[ch].itvl, s_ch[ch].itvl, 0, 400);
+    esp_err_t oc = esp_ble_gattc_open(s_ch[ch].gattc_if, s_ch[ch].bda,
+                        s_ch[ch].addr_type, true);
+    int u1, r1; ch_count(&u1, &r1);
+    char dbg[150];
+    snprintf(dbg, sizeof(dbg),
+        "open ch=%d itvl=%d type=%d set_prefer=%s gattc_open=%s (used=%d ready=%d other_ready=%d widened=0x%02x)",
+        ch, s_ch[ch].itvl, s_ch[ch].addr_type,
+        esp_err_to_name(pc), esp_err_to_name(oc), u1, r1, other_ready, s_widened_mask);
+    out_debug(dbg);
+
+    // If the open failed to even start, there will be no OPEN/DISCONNECT event to
+    // restore from — undo the widen now so the existing links aren't left at 15ms.
+    if (oc != ESP_OK) {
+        esp_gatt_if_t keep = s_ch[ch].gattc_if;
+        memset(&s_ch[ch], 0, sizeof(s_ch[ch]));
+        s_ch[ch].gattc_if = keep;
+        restore_widened_links();
+        if (s_scan_mode) s_resume_scan = true;
+    }
+}
+// End the temporary widen (3rd-link setup window) and apply the steady-state interval
+// policy.  On SUCCESS (now 3 links) reconcile keeps everyone at 15ms; on ABORT (back to
+// <=2 links) reconcile restores everyone to 7.5ms.  Single source of truth = reconcile.
+static void restore_widened_links(void) {
+    s_widened_mask = 0;
+    reconcile_intervals();
+}
+static void do_disc(char *args) {
+    int ch = atoi(args);
+    if (ch >= 0 && ch < MAX_CH && s_ch[ch].used) {
+        portENTER_CRITICAL(&s_disc_mux);
+        s_disc_mask |= (1u << ch);
+        portEXIT_CRITICAL(&s_disc_mux);
+        kick_disc_queue();
+    }
+}
+static void do_disc_all(void) {  // "ble disconnect": drop every live link (clear stale state)
+    // If the scan was stopped for a pending conn but gattc_open hasn't fired yet, cancel it
+    // so SCAN_STOP_COMPLETE doesn't open a connection we're about to discard anyway.
+    if (s_pending_conn >= 0) {
+        int pc = s_pending_conn; s_pending_conn = -1;
+        esp_gatt_if_t keep = s_ch[pc].gattc_if;
+        memset(&s_ch[pc], 0, sizeof(s_ch[pc]));
+        s_ch[pc].gattc_if = keep;
+    }
+    // Enqueue every live channel for sequential disconnection.
+    // Do NOT call gap_disconnect here — parallel disconnects corrupt the BLE
+    // controller's HCI state and cause crashes (status=133 flooding → assert).
+    // Scanning will resume automatically once the queue drains.
+    s_resume_scan = false;  // kick_disc_queue will set this when done
+    portENTER_CRITICAL(&s_disc_mux);
+    for (int i = 0; i < MAX_CH; i++)
+        if (s_ch[i].used) s_disc_mask |= (1u << i);
+    portEXIT_CRITICAL(&s_disc_mux);
+    kick_disc_queue();  // start first disconnect; rest follow via DISCONNECT_EVT
+}
+static void do_wr(char *args) {  // wr <ch> <c|r> <hex>
+    char *save = NULL;
+    char *ch_s = strtok_r(args, " ", &save);
+    char *k_s  = strtok_r(NULL, " ", &save);
+    char *h_s  = strtok_r(NULL, " ", &save);
+    if (!ch_s || !k_s || !h_s) return;
+    int ch = atoi(ch_s);
+    if (ch < 0 || ch >= MAX_CH || !s_ch[ch].used) return;
+    uint8_t buf[96]; size_t len = parse_hex(h_s, buf, sizeof(buf));
+    if (len == 0) return;
+    uint16_t handle = (k_s[0] == 'c') ? s_ch[ch].cmd_handle : s_ch[ch].rumble_handle;
+    if (handle == 0) return;
+    esp_ble_gattc_write_char(s_ch[ch].gattc_if, s_ch[ch].conn_id, handle, len, buf,
+                             ESP_GATT_WRITE_TYPE_NO_RSP, ESP_GATT_AUTH_REQ_NONE);
+}
+static void do_rs(char *args) {  // rs <ch> <hex>
+    char *save = NULL;
+    char *ch_s = strtok_r(args, " ", &save);
+    char *h_s  = strtok_r(NULL, " ", &save);
+    if (!ch_s || !h_s) return;
+    int ch = atoi(ch_s);
+    if (ch < 0 || ch >= MAX_CH || !s_ch[ch].used || s_ch[ch].rumble_handle == 0) return;
+
+    rumble_pkt_t pkt;
+    pkt.ch = ch;
+    pkt.len = parse_hex(h_s, pkt.data, sizeof(pkt.data));
+    if (pkt.len == 0) return;
+
+    if (s_rumble_queue) {
+        if (xQueueSend(s_rumble_queue, &pkt, 0) != pdTRUE) {
+            rumble_pkt_t dummy;
+            xQueueReceive(s_rumble_queue, &dummy, 0); // Drop oldest
+            xQueueSend(s_rumble_queue, &pkt, 0);      // Push newest
+        }
+    }
+}
+static void wr_one(int ch, char kind, const uint8_t *buf, size_t len) {
+    if (ch < 0 || ch >= MAX_CH || !s_ch[ch].used || len == 0) return;
+    uint16_t handle = (kind == 'c') ? s_ch[ch].cmd_handle : s_ch[ch].rumble_handle;
+    if (handle == 0) return;
+    esp_ble_gattc_write_char(s_ch[ch].gattc_if, s_ch[ch].conn_id, handle, len, (uint8_t *)buf,
+                             ESP_GATT_WRITE_TYPE_NO_RSP, ESP_GATT_AUTH_REQ_NONE);
+}
+static void do_wrpair(char *args) {  // wrpair <ch_l> <ch_r> <kind> <hex_l> <hex_r>
+    char *s = NULL;
+    char *cl = strtok_r(args, " ", &s), *cr = strtok_r(NULL, " ", &s);
+    char *k  = strtok_r(NULL, " ", &s);
+    char *hl = strtok_r(NULL, " ", &s), *hr = strtok_r(NULL, " ", &s);
+    if (!cl || !cr || !k || !hl || !hr) return;
+    uint8_t bl[96], br[96];
+    wr_one(atoi(cl), k[0], bl, parse_hex(hl, bl, sizeof(bl)));
+    wr_one(atoi(cr), k[0], br, parse_hex(hr, br, sizeof(br)));
+}
+
+static uint8_t s_standalone_rumble_packet_id;
+static uint8_t s_standalone_large_motor;
+static uint8_t s_standalone_small_motor;
+static uint32_t s_standalone_rumble_next_ms;
+static uint8_t s_standalone_zero_flush;
+
+#define STANDALONE_RUMBLE_REFRESH_MS 16u
+#define STANDALONE_RUMBLE_ZERO_FLUSH_COUNT 3u
+#define STANDALONE_FEEDBACK_LF_FREQUENCY 225u
+#define STANDALONE_FEEDBACK_HF_FREQUENCY 481u
+#define STANDALONE_FEEDBACK_AMPLITUDE 800u
+
+typedef struct {
+    uint8_t command_id;
+    uint8_t subcommand_id;
+    uint8_t data_len;
+    uint8_t data[21];
+} standalone_init_command_t;
+
+/*
+ * This is the same known-good feature sequence used by the desktop BLE/ESP32
+ * paths.  Merely subscribing to the characteristic leaves the controller in
+ * its low-rate basic stream (roughly 12 Hz on real hardware).
+ */
+static const standalone_init_command_t s_standalone_init_commands[] = {
+    {0x03, 0x0D, 8,  {0x01,0x00,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF}},
+    {0x07, 0x01, 0,  {0}},
+    {0x16, 0x01, 0,  {0}},
+    {0x15, 0x03, 1,  {0x00}},
+    {0x0C, 0x02, 4,  {0x94,0x00,0x00,0x00}},
+    {0x11, 0x03, 0,  {0}},
+    {0x0A, 0x08, 21, {
+        0x01,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+        0x35,0x00,0x46,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+    }},
+    {0x0C, 0x04, 4,  {0x94,0x00,0x00,0x00}},
+    {0x03, 0x0A, 4,  {0x09,0x00,0x00,0x00}},
+    {0x10, 0x01, 0,  {0}},
+    {0x01, 0x0C, 0,  {0}},
+    {0x01, 0x01, 4,  {0x00,0x00,0x00,0x00}},
+    {0x09, 0x07, 8,  {0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00}},
+};
+
+static void pump_standalone_controller_init(void) {
+    if (!s_standalone_mode) return;
+    uint32_t now = now_ms();
+    for (int ch = 0; ch < MAX_CH; ch++) {
+        if (!s_ch[ch].used || !s_ch[ch].ready || !s_ch[ch].cmd_handle)
+            continue;
+        uint8_t step = s_ch[ch].standalone_init_step;
+        if (step >=
+            sizeof(s_standalone_init_commands) /
+            sizeof(s_standalone_init_commands[0]))
+            continue;
+        if ((int32_t)(now - s_ch[ch].standalone_init_next_ms) < 0)
+            continue;
+
+        if (s_ch[ch].standalone_init_waiting) {
+            if (s_ch[ch].standalone_init_attempts < 3) {
+                s_ch[ch].standalone_init_waiting = false;
+            } else {
+                /*
+                 * Feature selection is essential for live IMU data. Restart
+                 * the complete sequence if an ACK was lost instead of
+                 * silently continuing with a basic, motion-less report.
+                 */
+                s_ch[ch].standalone_init_step = 0;
+                s_ch[ch].standalone_init_attempts = 0;
+                s_ch[ch].standalone_init_waiting = false;
+                s_ch[ch].standalone_init_next_ms = now + 500u;
+                continue;
+            }
+        }
+        const standalone_init_command_t *command =
+            &s_standalone_init_commands[step];
+        uint8_t payload[29] = {0};
+        payload[0] = command->command_id;
+        payload[1] = 0x91;
+        payload[2] = 0x01;
+        payload[3] = command->subcommand_id;
+        payload[4] = 0x00;
+        payload[5] = command->data_len;
+        payload[6] = 0x00;
+        payload[7] = 0x00;
+        if (command->data_len)
+            memcpy(payload + 8, command->data, command->data_len);
+        wr_one(ch, 'c', payload, 8u + command->data_len);
+        s_ch[ch].standalone_init_attempts++;
+        s_ch[ch].standalone_init_waiting = true;
+        s_ch[ch].standalone_init_next_ms = now + 800u;
+    }
+}
+
+static void note_standalone_init_ack(
+    int ch, const uint8_t *payload, size_t length
+) {
+    if (
+        !s_standalone_mode || ch < 0 || ch >= MAX_CH ||
+        !payload || length == 0 || !s_ch[ch].standalone_init_waiting
+    ) return;
+    uint8_t step = s_ch[ch].standalone_init_step;
+    if (step >=
+        sizeof(s_standalone_init_commands) /
+        sizeof(s_standalone_init_commands[0]))
+        return;
+    if (payload[0] != s_standalone_init_commands[step].command_id)
+        return;
+    s_ch[ch].standalone_init_step++;
+    s_ch[ch].standalone_init_attempts = 0;
+    s_ch[ch].standalone_init_waiting = false;
+    s_ch[ch].standalone_init_next_ms = now_ms() + 20u;
+    if (
+        s_ch[ch].standalone_init_step >=
+        sizeof(s_standalone_init_commands) /
+        sizeof(s_standalone_init_commands[0])
+    ) {
+        /*
+         * Match the desktop connection cue, but only after the complete
+         * feature-selection sequence is acknowledged.  "Connected" here
+         * therefore means the controller is ready for full-rate input and
+         * motion data, not merely that a BLE link exists.
+         */
+        s_ch[ch].standalone_feedback_step = 0;
+        s_ch[ch].standalone_feedback_active =
+            s_ch[ch].rumble_handle != 0;
+        s_ch[ch].standalone_feedback_next_ms = now_ms() + 20u;
+    }
+}
+
+static void encode_standalone_vibration(
+    uint8_t *output,
+    uint16_t lf_frequency,
+    uint16_t lf_amplitude,
+    uint16_t hf_frequency,
+    uint16_t hf_amplitude
+) {
+    uint64_t packed =
+        ((uint64_t)lf_frequency & 0x1ffu) |
+        (((uint64_t)lf_amplitude & 0x3ffu) << 10) |
+        (((uint64_t)hf_frequency & 0x1ffu) << 20) |
+        (((uint64_t)hf_amplitude & 0x3ffu) << 30);
+    for (int i = 0; i < 5; i++)
+        output[i] = (uint8_t)(packed >> (i * 8));
+}
+
+static void send_standalone_vibration(
+    int channel,
+    uint16_t lf_frequency,
+    uint16_t lf_amplitude,
+    uint16_t hf_frequency,
+    uint16_t hf_amplitude
+) {
+    if (
+        channel < 0 || channel >= MAX_CH ||
+        !s_ch[channel].used || !s_ch[channel].rumble_handle
+    ) return;
+    uint8_t vibration[5];
+    encode_standalone_vibration(
+        vibration, lf_frequency, lf_amplitude,
+        hf_frequency, hf_amplitude
+    );
+    uint8_t payload[33] = {0};
+    uint8_t packet_id =
+        (uint8_t)(0x50u + (s_standalone_rumble_packet_id++ & 0x0fu));
+    for (int motor = 0; motor < 2; motor++) {
+        size_t offset = 1 + motor * 16;
+        payload[offset] = packet_id;
+        memcpy(payload + offset + 1, vibration, sizeof(vibration));
+        memcpy(payload + offset + 6, vibration, sizeof(vibration));
+        memcpy(payload + offset + 11, vibration, sizeof(vibration));
+    }
+    wr_one(channel, 'r', payload, sizeof(payload));
+}
+
+static bool standalone_feedback_is_active(void) {
+    for (int ch = 0; ch < MAX_CH; ch++) {
+        if (s_ch[ch].used && s_ch[ch].standalone_feedback_active)
+            return true;
+    }
+    return false;
+}
+
+static void pump_standalone_connection_feedback(void) {
+    if (!s_standalone_mode) return;
+    /*
+     * Same audible/tactile cadence as the desktop application:
+     *   80 ms on, 100 ms off, 80 ms on.
+     * Three final zero writes make stopping reliable despite no-response BLE
+     * writes, without changing what the user feels.
+     */
+    static const uint16_t amplitudes[] = {
+        STANDALONE_FEEDBACK_AMPLITUDE, 0,
+        STANDALONE_FEEDBACK_AMPLITUDE, 0, 0, 0
+    };
+    static const uint16_t delays_ms[] = {80, 100, 80, 16, 16, 0};
+    uint32_t now = now_ms();
+    for (int ch = 0; ch < MAX_CH; ch++) {
+        if (!s_ch[ch].used || !s_ch[ch].standalone_feedback_active)
+            continue;
+        if ((int32_t)(now - s_ch[ch].standalone_feedback_next_ms) < 0)
+            continue;
+        uint8_t step = s_ch[ch].standalone_feedback_step;
+        if (step >= sizeof(amplitudes) / sizeof(amplitudes[0])) {
+            s_ch[ch].standalone_feedback_active = false;
+            continue;
+        }
+        send_standalone_vibration(
+            ch,
+            STANDALONE_FEEDBACK_LF_FREQUENCY, amplitudes[step],
+            STANDALONE_FEEDBACK_HF_FREQUENCY, amplitudes[step]
+        );
+        s_ch[ch].standalone_feedback_step++;
+        if (
+            s_ch[ch].standalone_feedback_step >=
+            sizeof(amplitudes) / sizeof(amplitudes[0])
+        ) {
+            s_ch[ch].standalone_feedback_active = false;
+            s_standalone_rumble_next_ms = now;
+        } else {
+            s_ch[ch].standalone_feedback_next_ms =
+                now + delays_ms[step];
+        }
+    }
+}
+
+static void pump_standalone_xinput_rumble(void) {
+    if (!s_standalone_mode) return;
+    /* The short connection cue has priority over a simultaneous game effect. */
+    if (standalone_feedback_is_active()) return;
+    uint8_t large_motor = 0;
+    uint8_t small_motor = 0;
+    bool changed =
+        standalone_xinput_take_rumble(&large_motor, &small_motor);
+    uint32_t now = now_ms();
+    if (changed) {
+        bool was_active =
+            s_standalone_large_motor != 0 ||
+            s_standalone_small_motor != 0;
+        s_standalone_large_motor = large_motor;
+        s_standalone_small_motor = small_motor;
+        bool is_active = large_motor != 0 || small_motor != 0;
+        if (!is_active && was_active)
+            s_standalone_zero_flush =
+                STANDALONE_RUMBLE_ZERO_FLUSH_COUNT;
+        else if (is_active)
+            s_standalone_zero_flush = 0;
+        /* A changed effect must not wait for the periodic refresh deadline. */
+        s_standalone_rumble_next_ms = now;
+    }
+
+    bool active =
+        s_standalone_large_motor != 0 ||
+        s_standalone_small_motor != 0;
+    if (!changed && !active && s_standalone_zero_flush == 0) return;
+    if ((int32_t)(now - s_standalone_rumble_next_ms) < 0) return;
+
+    int channel = -1;
+    for (int i = 0; i < MAX_CH; i++) {
+        if (s_ch[i].ready && s_ch[i].rumble_handle) {
+            channel = i;
+            break;
+        }
+    }
+    if (channel < 0) return;
+
+    /*
+     * One command carries three 5 ms vibration frames.  Keep refreshing the
+     * latest non-zero XInput state: Windows is allowed to send motor output
+     * only when it changes, so treating OUT reports as one-shot effects makes
+     * sustained rumble sound truncated.  Zero is flushed three times so a
+     * dropped BLE write cannot leave the actuator running.
+     */
+    large_motor = s_standalone_large_motor;
+    small_motor = s_standalone_small_motor;
+
+    uint16_t lf_frequency, hf_frequency, max_amplitude;
+    float lf_strength, hf_strength, lf_curve, hf_curve;
+    float lf_to_hf, hf_to_lf;
+    standalone_xinput_get_rumble_config(
+        &lf_frequency, &hf_frequency, &max_amplitude,
+        &lf_strength, &hf_strength, &lf_curve, &hf_curve,
+        &lf_to_hf, &hf_to_lf
+    );
+    float lf_input = large_motor / 255.0f;
+    float hf_input = small_motor / 255.0f;
+    /*
+     * Keep the same integer boundaries as the desktop game-rumble path.
+     * Truncating each component before addition avoids one-count drift in
+     * cross compensation and makes an exported profile deterministic.
+     */
+    uint16_t raw_lf = (uint16_t)(
+        max_amplitude * powf(lf_input, lf_curve)
+    );
+    uint16_t raw_hf = (uint16_t)(
+        max_amplitude * powf(hf_input, hf_curve)
+    );
+    uint32_t lf_value =
+        (uint16_t)(raw_lf * lf_strength) +
+        (uint16_t)(raw_hf * hf_to_lf);
+    uint32_t hf_value =
+        (uint16_t)(raw_hf * hf_strength) +
+        (uint16_t)(raw_lf * lf_to_hf);
+    uint16_t lf_amplitude = (uint16_t)(
+        lf_value > max_amplitude ? max_amplitude : lf_value
+    );
+    uint16_t hf_amplitude = (uint16_t)(
+        hf_value > max_amplitude ? max_amplitude : hf_value
+    );
+    standalone_xinput_set_rumble_ratio(
+        fmaxf((float)lf_amplitude, (float)hf_amplitude) /
+        fmaxf(1.0f, (float)max_amplitude)
+    );
+    send_standalone_vibration(
+        channel, lf_frequency, lf_amplitude,
+        hf_frequency, hf_amplitude
+    );
+    s_standalone_rumble_next_ms =
+        now + STANDALONE_RUMBLE_REFRESH_MS;
+    if (!active && s_standalone_zero_flush > 0)
+        s_standalone_zero_flush--;
+}
+
+static void handle_command(char *cmd) {
+    if (strncmp(cmd, "status", 6) == 0)         { s_request_status = true; }
+    else if (strcmp(cmd, "capabilities") == 0)  { send_capabilities_response(); }
+    else if (strcmp(cmd, "profile status") == 0) { send_profile_status(); }
+    else if (strcmp(cmd, "runtime status") == 0) {
+        char status[512];
+        standalone_xinput_format_runtime_status(status, sizeof(status));
+        send_json(status);
+    }
+    else if (strncmp(cmd, "algorithm test ", 15) == 0) {
+        char result[256];
+        if (standalone_xinput_format_algorithm_test(
+            cmd + 15, result, sizeof(result)
+        )) {
+            send_json(result);
+        } else {
+            send_json(
+                "{\"cmd\":\"algorithm_test\",\"ok\":0,"
+                "\"error\":\"invalid_arguments\"}\n"
+            );
+        }
+    }
+    else if (strncmp(cmd, "gyro test ", 10) == 0) {
+        char result[512];
+        if (standalone_xinput_format_gyro_test(
+            cmd + 10, result, sizeof(result)
+        )) {
+            send_json(result);
+        } else {
+            send_json(
+                "{\"cmd\":\"gyro_test\",\"ok\":0,"
+                "\"error\":\"invalid_arguments\"}\n"
+            );
+        }
+    }
+    else if (strncmp(cmd, "profile begin ", 14) == 0) { do_profile_begin(cmd + 14); }
+    else if (strncmp(cmd, "profile chunk ", 14) == 0) { do_profile_chunk(cmd + 14); }
+    else if (strcmp(cmd, "profile commit") == 0) { do_profile_commit(); }
+    else if (strcmp(cmd, "profile abort") == 0) {
+        profile_reset_staging();
+        send_json("{\"cmd\":\"profile_abort\",\"ok\":1}\n");
+    }
+    else if (strncmp(cmd, "mode ", 5) == 0) { do_mode_command(cmd + 5); }
+    else if (strcmp(cmd, "restart") == 0) { do_restart_command(); }
+    else if (strncmp(cmd, "scan on", 7) == 0)   {
+        // The host sends "scan on" right after "disc <ch>" to re-arm detection.  Never
+        // start the scan synchronously here: a gap_disconnect issued by do_disc is still
+        // in flight on the HCI path and starting a scan on top of it collides and
+        // silently drops the disconnect (symptom: the controller you asked to disconnect
+        // stays connected while an unrelated link drops).  Defer to cdc_task, which only
+        // resumes once GAP is quiet and no disconnect is in flight.
+        s_scan_mode = true;
+        if (now_ms() >= s_gap_busy_until && !s_disc_in_flight && s_disc_mask == 0) {
+            s_resume_scan = false;
+            esp_ble_gap_start_scanning(0);
+        } else {
+            s_resume_scan = true;
+        }
+    }
+    else if (strncmp(cmd, "scan off", 8) == 0)  { s_scan_mode = false; s_resume_scan = false; esp_ble_gap_stop_scanning(); }
+    else if (strncmp(cmd, "ble disconnect", 14) == 0) { do_disc_all(); }
+    else if (strncmp(cmd, "auto", 4) == 0)      { /* host-driven conn only */ }
+    else if (strncmp(cmd, "conn ", 5) == 0)     { do_conn(cmd + 5); }
+    else if (strncmp(cmd, "inputsrc ", 9) == 0) { do_inputsrc(cmd + 9); }
+    else if (strncmp(cmd, "disc ", 5) == 0)     { do_disc(cmd + 5); }
+    else if (strncmp(cmd, "wrpair ", 7) == 0)   { do_wrpair(cmd + 7); }
+    else if (strncmp(cmd, "wr ", 3) == 0)       { do_wr(cmd + 3); }
+    else if (strncmp(cmd, "rs ", 3) == 0)       { do_rs(cmd + 3); }
+}
+
+void tinyusb_cdc_rx_callback(int itf, cdcacm_event_t *event) {
+    if (event->type != CDC_EVENT_RX) return;
+    uint8_t tmp[128]; size_t n = 0;
+    if (tinyusb_cdcacm_read(itf, tmp, sizeof(tmp), &n) != ESP_OK || n == 0) return;
+    for (size_t i = 0; i < n; i++) {
+        char c = (char)tmp[i];
+        if (c == '\r') continue;
+        if (c == '\n') {
+            s_rx_buf[s_rx_len] = '\0';
+            if (s_rx_len > 0 && s_cmd_queue) {
+                line_t L; strncpy(L.text, s_rx_buf, sizeof(L.text) - 1); L.text[sizeof(L.text)-1] = '\0';
+                if (xQueueSend(s_cmd_queue, &L, 0) == pdTRUE && s_cdc_task_h)
+                    xTaskNotifyGive(s_cdc_task_h);
+            }
+            s_rx_len = 0;
+        } else if (s_rx_len < (int)sizeof(s_rx_buf) - 1) {
+            s_rx_buf[s_rx_len++] = c;
+        }
+    }
+}
+static void cdc_task(void *arg) {
+    (void)arg;
+    for (;;) {
+        standalone_xinput_pump();
+        pump_standalone_controller_init();
+        pump_standalone_connection_feedback();
+        pump_standalone_xinput_rumble();
+        if (s_standalone_auto_conn_pending && s_pending_conn < 0) {
+            s_standalone_auto_conn_pending = false;
+            do_conn(s_standalone_auto_conn);
+        }
+        if (s_request_status) { s_request_status = false; send_status_response(); }
+        // Deferred 3rd-link open: the existing links were widened to 15ms in do_conn;
+        // open the 3rd once that has settled (scan is already stopped by then).
+        if (s_pending_conn >= 0 && s_conn_open_after != 0 && now_ms() >= s_conn_open_after)
+            open_pending_conn();
+        // Deferred scan resume: only once the GAP bus is quiet, no open is pending, and
+        // no channel is mid-connect — so it never pre-empts an in-flight disconnect/open.
+        if (s_resume_scan && s_scan_mode && s_pending_conn < 0 && now_ms() >= s_gap_busy_until) {
+            bool connecting = false;
+            for (int i = 0; i < MAX_CH; i++) if (s_ch[i].connecting) connecting = true;
+            if (!connecting) { s_resume_scan = false; esp_ble_gap_start_scanning(0); }
+        }
+        // Safety net: if a DISCONNECT_EVT was missed (very rare), retry the queue
+        // so a stuck disconnect doesn't wedge the bridge until replug.
+        if (!s_disc_in_flight && s_disc_mask && now_ms() >= s_gap_busy_until)
+            kick_disc_queue();
+        // Input shadows are P0: forward the newest controller state before
+        // diagnostics or command traffic.  BLE callbacks wake this task
+        // immediately, removing the old command-queue polling delay (<=2 ms).
+        for (int i = 0; i < MAX_CH; i++) {
+            in_report_t r; bool dirty = false;
+            portENTER_CRITICAL(&s_in_mux);
+            if (s_in_dirty[i]) { r = s_in_shadow[i]; s_in_dirty[i] = false; dirty = true; }
+            portEXIT_CRITICAL(&s_in_mux);
+            if (dirty) {
+                if (!s_standalone_mode) {
+                    if (r.handle) send_notify_handle_frame(r.ch, r.handle, r.data, r.len);
+                    else send_report_frame(r.ch, r.data, r.len, false);
+                }
+            }
+        }
+        in_report_t ack;
+        while (xQueueReceive(s_ack_queue, &ack, 0) == pdTRUE) {
+            if (s_standalone_mode)
+                note_standalone_init_ack(
+                    ack.ch, ack.data, ack.len
+                );
+            else
+                send_report_frame(ack.ch, ack.data, ack.len, true);
+        }
+        in_report_t ntf;
+        while (xQueueReceive(s_notify_queue, &ntf, 0) == pdTRUE) {
+            if (!s_standalone_mode)
+                send_notify_handle_frame(ntf.ch, ntf.handle, ntf.data, ntf.len);
+        }
+        line_t out;
+        while (xQueueReceive(s_out_queue, &out, 0) == pdTRUE)
+            safe_cdc_write((const uint8_t *)out.text, strlen(out.text));
+        line_t L;
+        while (xQueueReceive(s_cmd_queue, &L, 0) == pdTRUE)
+            handle_command(L.text);
+
+        // Notifications make input wakeups immediate.  The timeout only keeps
+        // deferred GAP maintenance deadlines progressing when fully idle.
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2));
+    }
+}
+
+// --- GATT discovery helpers ---
+static void match_and_store_char(int ch, const esp_bt_uuid_t *uuid, uint16_t val_handle) {
+    // Record both input notify characteristics; the actual input_handle is chosen in
+    // SEARCH_CMPL_EVT once discovery is complete (order-independent).
+    // FD2 (ab7de9be…, handle 0x000A, Input Report 0x05) is the canonical Switch 2 input
+    // stream for the Pro 2 / Joy-Cons.  The NSO GameCube controller is the exception: its
+    // usable report is Input Report 0x0A on its own model-specific char (8261cba1…, handle
+    // 0x000E).  Parsing FD2 (0x05) with the GCN 0x0A byte layout puts the right stick on the
+    // trigger byte and reads non-IMU bytes as gyro.  So when the GCN char is present we store
+    // it as the input source and auto-prefer it (prefer_legacy) — matching what the WinRT path
+    // does implicitly by subscribing to every notify char in the SW2 service.
+    // NOTE: 7492866c… (UUID_NOTIFY_LEGACY) is the *Pro Controller's* 0x000E char, not the
+    // GameCube's; it is stored here only for completeness and never auto-preferred.
+    if (memcmp(uuid, &UUID_NOTIFY_FD2, sizeof(*uuid)) == 0)         s_ch[ch].fd2_handle = val_handle;
+    else if (memcmp(uuid, &UUID_NOTIFY_GC, sizeof(*uuid)) == 0) {
+        s_ch[ch].legacy_handle = val_handle;   // GCN model-specific input (Input Report 0x0A)
+        s_ch[ch].prefer_legacy = true;         // the generic FD2 (0x05) is the wrong layout for the GCN
+    }
+    else if (memcmp(uuid, &UUID_NOTIFY_LEGACY, sizeof(*uuid)) == 0) s_ch[ch].legacy_handle = val_handle;
+    else if (memcmp(uuid, &UUID_ACK, sizeof(*uuid)) == 0)      s_ch[ch].ack_handle = val_handle;
+    else if (memcmp(uuid, &UUID_CMD, sizeof(*uuid)) == 0)      s_ch[ch].cmd_handle = val_handle;
+    else if (memcmp(uuid, &UUID_RUMBLE_PRO, sizeof(*uuid)) == 0 ||
+             memcmp(uuid, &UUID_RUMBLE_JOYCON_R, sizeof(*uuid)) == 0 ||
+             memcmp(uuid, &UUID_RUMBLE_JOYCON_L, sizeof(*uuid)) == 0) s_ch[ch].rumble_handle = val_handle;
+}
+// Record a SW2-service NOTIFY characteristic handle for the GCN "enable all CCCDs" pass.
+static void note_notify_handle(int ch, uint16_t handle) {
+    if (handle == 0) return;
+    for (int i = 0; i < s_ch[ch].notify_count; i++)
+        if (s_ch[ch].notify_handles[i] == handle) return;   // dedup
+    const uint8_t cap = (uint8_t)(sizeof(s_ch[ch].notify_handles) / sizeof(s_ch[ch].notify_handles[0]));
+    if (s_ch[ch].notify_count >= cap) { out_debug("notify_handles full; SW2 notify char dropped"); return; }
+    s_ch[ch].notify_handles[s_ch[ch].notify_count++] = handle;
+}
+static void scan_service_chars(int ch, uint16_t start, uint16_t end, bool is_sw2) {
+    uint16_t count = 0;
+    if (esp_ble_gattc_get_attr_count(s_ch[ch].gattc_if, s_ch[ch].conn_id, ESP_GATT_DB_CHARACTERISTIC,
+                                     start, end, 0, &count) != ESP_OK || count == 0) return;
+    esp_gattc_char_elem_t *elems = calloc(count, sizeof(esp_gattc_char_elem_t));
+    if (!elems) return;
+    uint16_t got = count;
+    if (esp_ble_gattc_get_all_char(s_ch[ch].gattc_if, s_ch[ch].conn_id, start, end, elems, &got, 0) == ESP_OK)
+        for (int i = 0; i < got; i++) {
+            match_and_store_char(ch, &elems[i].uuid, elems[i].char_handle);
+            if (is_sw2) {
+                char uuid_s[40];
+                char props[8];
+                int pi = 0;
+                uuid_to_str(&elems[i].uuid, uuid_s, sizeof(uuid_s));
+                if (elems[i].properties & ESP_GATT_CHAR_PROP_BIT_NOTIFY) props[pi++] = 'n';
+                if (elems[i].properties & ESP_GATT_CHAR_PROP_BIT_WRITE_NR) props[pi++] = 'w';
+                if (elems[i].properties & ESP_GATT_CHAR_PROP_BIT_WRITE) props[pi++] = 'W';
+                if (elems[i].properties & ESP_GATT_CHAR_PROP_BIT_READ) props[pi++] = 'r';
+                props[pi] = '\0';
+
+                char msg[220];
+                snprintf(msg, sizeof(msg),
+                         "{\"cmd\":\"gatt_char\",\"channel\":%d,\"service\":\"ab7de9be-89fe-49ad-828f-118f09df7fd0\",\"handle\":%u,\"uuid\":\"%s\",\"props\":\"%s\"}\n",
+                         ch, elems[i].char_handle, uuid_s, props);
+                out_json(msg);
+
+                if (elems[i].properties & ESP_GATT_CHAR_PROP_BIT_NOTIFY)
+                    note_notify_handle(ch, elems[i].char_handle);
+            }
+        }
+    free(elems);
+}
+// Write the next pending CCCD in the GCN notify list, one at a time.  Each completion
+// (WRITE_DESCR_EVT) advances to the next, so we never issue back-to-back descriptor writes.
+static void cccd_drain_step(int ch) {
+    while (s_ch[ch].cccd_idx < s_ch[ch].notify_count) {
+        uint16_t handle = s_ch[ch].notify_handles[s_ch[ch].cccd_idx];
+        if (write_cccd_value(ch, handle, true)) return;
+
+        char dbg[96];
+        snprintf(dbg, sizeof(dbg), "GCN CCCD drain skipped ch=%d handle=0x%04x idx=%u/%u",
+                 ch, handle, s_ch[ch].cccd_idx, s_ch[ch].notify_count);
+        out_debug(dbg);
+        s_ch[ch].cccd_idx++;
+    }
+    s_ch[ch].cccd_draining = false;
+}
+// Begin CCCD-enabling every collected SW2 notify char (GCN).  input_handle is moved to the
+// front so the input stream is enabled first.
+static void start_cccd_drain(int ch) {
+    for (int i = 1; i < s_ch[ch].notify_count; i++) {
+        if (s_ch[ch].notify_handles[i] == s_ch[ch].input_handle) {
+            uint16_t t = s_ch[ch].notify_handles[0];
+            s_ch[ch].notify_handles[0] = s_ch[ch].notify_handles[i];
+            s_ch[ch].notify_handles[i] = t;
+            break;
+        }
+    }
+    s_ch[ch].cccd_idx = 0;
+    s_ch[ch].cccd_draining = true;
+    cccd_drain_step(ch);
+}
+// True for a GameCube channel that uses the "enable every SW2 notify CCCD" path.
+static inline bool ch_uses_notify_all(int ch) {
+    return s_ch[ch].prefer_legacy && s_ch[ch].notify_count > 0;
+}
+static void enable_notifications(int ch) {
+    if (ch_uses_notify_all(ch)) {
+        // GameCube: register for notify on EVERY SW2 notify char (input, ack, and any
+        // model-specific/extra input chars), matching the WinRT GCN subscription.  Then the
+        // sequential drain writes each CCCD in turn.  NOTIFY_EVT still forwards only
+        // input_handle, so the extra streams never reach the host parser.
+        for (int i = 0; i < s_ch[ch].notify_count; i++)
+            esp_ble_gattc_register_for_notify(s_ch[ch].gattc_if, s_ch[ch].bda, s_ch[ch].notify_handles[i]);
+        start_cccd_drain(ch);
+        return;
+    }
+    if (s_ch[ch].ack_handle)   esp_ble_gattc_register_for_notify(s_ch[ch].gattc_if, s_ch[ch].bda, s_ch[ch].ack_handle);
+    if (s_ch[ch].input_handle) esp_ble_gattc_register_for_notify(s_ch[ch].gattc_if, s_ch[ch].bda, s_ch[ch].input_handle);
+}
+
+static void gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
+                     esp_ble_gattc_cb_param_t *param) {
+    if (event == ESP_GATTC_REG_EVT) {
+        int slot = param->reg.app_id;   // app_id == channel index
+        if (param->reg.status == ESP_GATT_OK && slot >= 0 && slot < MAX_CH) {
+            s_ch[slot].gattc_if = gattc_if;
+            ESP_LOGI(TAG, "GATTC app %d registered (if=%d)", slot, gattc_if);
+        }
+        return;
+    }
+
+    // ---- DISCONNECT: route by remote_bda, NOT by gattc_if ----------------------
+    // Bluedroid may deliver DISCONNECT_EVT with ESP_GATT_IF_NONE (broadcast to every
+    // app) or with a *mismatched* gattc_if.  The esp-idf gattc_multi_connect example
+    // proves this: it identifies every DISCONNECT_EVT by memcmp(remote_bda), never by
+    // gattc_if.  Using ch_by_if here would clear the WRONG channel (e.g. disconnecting
+    // controller B drops controller A's slot) and, worse, leave the real channel's
+    // s_disc_in_flight stuck → the sequential disconnect queue wedges and only the
+    // first controller ever disconnects.  So look the channel up by its bonded address.
+    if (event == ESP_GATTC_DISCONNECT_EVT) {
+        int dch = ch_by_bda(param->disconnect.remote_bda);
+        {   // Diagnostic: the BLE disconnect reason is the KEY clue for a failed 3rd link.
+            // Common reasons: 0x08 supervision timeout, 0x13 remote terminated,
+            // 0x16 local terminated, 0x22 LL response timeout, 0x28 LL instant passed,
+            // 0x3B unacceptable conn params, 0x3E connection failed to be established.
+            const uint8_t *d = param->disconnect.remote_bda;
+            int ud, rd; ch_count(&ud, &rd);
+            char dbg[140];
+            snprintf(dbg, sizeof(dbg),
+                "DISCONNECT_EVT bda=%02X:%02X:%02X:%02X:%02X:%02X reason=0x%02x ch=%d ready=%d (used=%d ready_cnt=%d)",
+                d[0],d[1],d[2],d[3],d[4],d[5], param->disconnect.reason, dch,
+                (dch >= 0 ? s_ch[dch].ready : -1), ud, rd);
+            out_debug(dbg);
+        }
+        // Always free the connection control block (conn_id) or it leaks → later opens
+        // fail with 133 and the stack asserts.
+        esp_ble_gattc_close(gattc_if, param->disconnect.conn_id);
+
+        if (dch >= 0) {
+            standalone_xinput_forget_channel(dch);
+            if (!s_ch[dch].ready) {
+                char b[100];
+                snprintf(b, sizeof(b),
+                    "{\"cmd\":\"connect_fail\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\"}\n",
+                    s_ch[dch].bda[0],s_ch[dch].bda[1],s_ch[dch].bda[2],
+                    s_ch[dch].bda[3],s_ch[dch].bda[4],s_ch[dch].bda[5]);
+                out_json(b);
+            } else {
+                char b[80]; snprintf(b, sizeof(b), "{\"cmd\":\"disconnected\",\"channel\":%d}\n", dch);
+                out_json(b);
+            }
+            esp_gatt_if_t keep = s_ch[dch].gattc_if;
+            memset(&s_ch[dch], 0, sizeof(s_ch[dch]));
+            s_ch[dch].gattc_if = keep;
+        }
+        // If a 3rd-link attempt aborted (cancelled before becoming ready) and nothing is
+        // still being established, stop the temporary widen.  Then reconcile intervals:
+        // dropping from 3 links to 2 restores everyone to 7.5ms; an aborted 3rd also
+        // restores the (temporarily widened) existing links to 7.5ms.  reconcile bails on
+        // its own while a connection is still in progress.
+        if (s_widened_mask) {
+            bool connecting = false;
+            for (int i = 0; i < MAX_CH; i++) if (s_ch[i].connecting) connecting = true;
+            if (!connecting && s_pending_conn < 0) s_widened_mask = 0;
+        }
+        reconcile_intervals();
+        // Advance the sequential disconnect queue regardless of whether a channel
+        // matched — an unmatched event (already-cleared slot) must NOT leave the
+        // in-flight flag set, or the queue wedges.
+        portENTER_CRITICAL(&s_disc_mux);
+        s_disc_in_flight = false;
+        bool queue_empty = (s_disc_mask == 0);
+        portEXIT_CRITICAL(&s_disc_mux);
+        if (queue_empty && s_scan_mode) s_resume_scan = true;
+        kick_disc_queue();
+        return;
+    }
+
+    int ch = ch_by_if(gattc_if);
+    if (ch < 0) return;
+
+    switch (event) {
+    case ESP_GATTC_OPEN_EVT:
+        if (!s_ch[ch].used) break;
+
+        if (param->open.status != ESP_GATT_OK) {
+            // Emit connect_fail JSON (mirrors NimBLE's BLE_GAP_EVENT_CONNECT status!=0 path)
+            // so the Python host clears its "connecting" state and stops retrying.
+            // Without this the host retries endlessly → repeated open-fail cycles →
+            // GATTC conn_id leak / BLE controller assert → crash.
+            char b[100];
+            snprintf(b, sizeof(b),
+                "{\"cmd\":\"connect_fail\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\"}\n",
+                s_ch[ch].bda[0],s_ch[ch].bda[1],s_ch[ch].bda[2],
+                s_ch[ch].bda[3],s_ch[ch].bda[4],s_ch[ch].bda[5]);
+            out_json(b);
+            int uo, ro; ch_count(&uo, &ro);
+            char dbg[110];
+            snprintf(dbg, sizeof(dbg),
+                "OPEN_EVT FAIL ch=%d status=%d conn_id=%d (used=%d ready=%d)",
+                ch, param->open.status, param->open.conn_id, uo, ro);
+            out_debug(dbg);
+            // CRUCIAL: a failed open still allocates a GATTC connection control block.
+            // Must esp_ble_gattc_close() to release the conn_id, or it leaks and after a
+            // few attempts esp_ble_gattc_open returns 133 and the stack asserts -> crash.
+            esp_ble_gattc_close(gattc_if, param->open.conn_id);
+            esp_gatt_if_t keep = s_ch[ch].gattc_if;
+            memset(&s_ch[ch], 0, sizeof(s_ch[ch]));
+            s_ch[ch].gattc_if = keep;
+            gap_busy(300);
+            if (s_scan_mode) s_resume_scan = true;
+            break;
+        }
+        s_ch[ch].conn_id = param->open.conn_id;
+        s_ch[ch].connecting = false;
+        {   char dbg[90]; int uo, ro; ch_count(&uo, &ro);
+            snprintf(dbg, sizeof(dbg), "OPEN_EVT OK ch=%d conn_id=%d (used=%d ready=%d) -> discovering",
+                     ch, param->open.conn_id, uo, ro);
+            out_debug(dbg); }
+        esp_ble_gattc_send_mtu_req(gattc_if, param->open.conn_id);
+        esp_ble_gattc_search_service(gattc_if, param->open.conn_id, NULL);
+        break;
+
+    case ESP_GATTC_SEARCH_RES_EVT: {
+        const esp_bt_uuid_t *su = &param->search_res.srvc_id.uuid;
+        bool is_sw2 = (su->len == ESP_UUID_LEN_128 &&
+                       memcmp(su->uuid.uuid128, UUID_SVC_SW2.uuid.uuid128, ESP_UUID_LEN_128) == 0);
+        scan_service_chars(ch, param->search_res.start_handle, param->search_res.end_handle, is_sw2);
+        break;
+    }
+
+    case ESP_GATTC_SEARCH_CMPL_EVT: {
+        // Choose the input stream now that all characteristics are known.  The NSO
+        // GameCube controller (prefer_legacy) uses the LEGACY characteristic; every
+        // other SW2 controller uses FD2.  Fall back to whichever is present.
+        s_ch[ch].input_handle = choose_input_handle(ch, s_ch[ch].prefer_legacy, &s_ch[ch].input_src);
+        char b[176];
+        snprintf(b, sizeof(b), "discovered ch=%d input=0x%04x(src=%u prefer_legacy=%d notify=%u fd2=0x%04x legacy=0x%04x) ack=0x%04x cmd=0x%04x rumble=0x%04x",
+                 ch, s_ch[ch].input_handle, s_ch[ch].input_src, s_ch[ch].prefer_legacy, s_ch[ch].notify_count,
+                 s_ch[ch].fd2_handle, s_ch[ch].legacy_handle,
+                 s_ch[ch].ack_handle, s_ch[ch].cmd_handle, s_ch[ch].rumble_handle);
+        out_debug(b);
+        snprintf(b, sizeof(b), "{\"cmd\":\"gatt_done\",\"channel\":%d}\n", ch);
+        out_json(b);
+        enable_notifications(ch);
+        break;
+    }
+
+    case ESP_GATTC_REG_FOR_NOTIFY_EVT: {
+        uint16_t h = param->reg_for_notify.handle;
+        // Non-GCN: enable this char's CCCD immediately (unchanged).  GCN channels enable every
+        // SW2 notify CCCD via the sequential drain instead (start_cccd_drain), so skip here to
+        // avoid issuing a descriptor write on top of the drain's in-flight write.
+        if (!ch_uses_notify_all(ch)) {
+            esp_gattc_descr_elem_t descr; uint16_t got = 1;
+            if (esp_ble_gattc_get_descr_by_char_handle(gattc_if, s_ch[ch].conn_id, h, UUID_CCCD,
+                                                       &descr, &got) == ESP_OK && got > 0) {
+                uint8_t v[2] = {0x01, 0x00};
+                esp_ble_gattc_write_char_descr(gattc_if, s_ch[ch].conn_id, descr.handle, sizeof(v), v,
+                                               ESP_GATT_WRITE_TYPE_RSP, ESP_GATT_AUTH_REQ_NONE);
+            }
+        }
+        if (h == s_ch[ch].input_handle && !s_ch[ch].ready) {
+            s_ch[ch].ready = true;
+            s_ch[ch].standalone_init_step = 0;
+            s_ch[ch].standalone_init_attempts = 0;
+            s_ch[ch].standalone_init_waiting = false;
+            s_ch[ch].standalone_init_next_ms = now_ms() + 25u;
+            {   // Update interval AFTER GATT discovery, overriding controller's defaults.
+                // Doing this too early (in OPEN_EVT) collides with the Nintendo
+                // controller's own initial parameter update request.
+                uint16_t itvl = s_ch[ch].itvl ? s_ch[ch].itvl : 6;
+                esp_ble_conn_update_params_t cp = {0};
+                memcpy(cp.bda, s_ch[ch].bda, sizeof(esp_bd_addr_t));
+                cp.min_int = itvl; cp.max_int = itvl; cp.latency = 0; cp.timeout = 400;
+                esp_ble_gap_update_conn_params(&cp);
+            }
+            char b[96]; snprintf(b, sizeof(b),
+                "{\"cmd\":\"connected\",\"channel\":%d,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\"}\n",
+                ch, s_ch[ch].bda[0],s_ch[ch].bda[1],s_ch[ch].bda[2],
+                    s_ch[ch].bda[3],s_ch[ch].bda[4],s_ch[ch].bda[5]);
+            out_json(b);
+            // The 3rd link is now established — restore any links we temporarily widened
+            // to 15ms back to 7.5ms.  Maintaining 2x7.5ms + 1x15ms is feasible; it was
+            // only ESTABLISHING the 3rd alongside two 7.5ms anchors that failed.
+            restore_widened_links();
+            if (s_scan_mode) s_resume_scan = true;  // resume scan (deferred) to find the next one
+        }
+        break;
+    }
+
+    case ESP_GATTC_NOTIFY_EVT: {
+        uint8_t len = param->notify.value_len > REPORT_SIZE ? REPORT_SIZE : param->notify.value_len;
+        if (ch_uses_notify_all(ch)) {
+            in_report_t n;
+            n.ch = ch; n.len = len; n.handle = param->notify.handle;
+            memcpy(n.data, param->notify.value, len);
+            if (s_notify_queue && xQueueSend(s_notify_queue, &n, 0) == pdTRUE && s_cdc_task_h)
+                xTaskNotifyGive(s_cdc_task_h);
+        } else if (param->notify.handle == s_ch[ch].input_handle) {
+            if (s_standalone_mode)
+                standalone_xinput_accept_switch_report(
+                    ch, param->notify.value, len
+                );
+            portENTER_CRITICAL(&s_in_mux);
+            s_in_shadow[ch].ch = ch; s_in_shadow[ch].len = len;
+            s_in_shadow[ch].handle = 0;
+            memcpy(s_in_shadow[ch].data, param->notify.value, len);
+            s_in_dirty[ch] = true;
+            portEXIT_CRITICAL(&s_in_mux);
+            if (s_cdc_task_h) xTaskNotifyGive(s_cdc_task_h);
+        } else if (param->notify.handle == s_ch[ch].ack_handle && s_ack_queue) {
+            in_report_t a; a.ch = ch; a.len = len; memcpy(a.data, param->notify.value, len);
+            if (xQueueSend(s_ack_queue, &a, 0) == pdTRUE && s_cdc_task_h)
+                xTaskNotifyGive(s_cdc_task_h);
+        }
+        break;
+    }
+
+    case ESP_GATTC_WRITE_DESCR_EVT:
+        // GCN CCCD drain: one descriptor write completed (ok or not) -> enable the next.
+        if (s_ch[ch].cccd_draining) {
+            s_ch[ch].cccd_idx++;
+            cccd_drain_step(ch);
+        }
+        break;
+
+    // ESP_GATTC_DISCONNECT_EVT is handled above (routed by remote_bda, not gattc_if).
+
+    default: break;
+    }
+}
+
+// --- GAP: scan + report Nintendo controllers ---
+static esp_ble_scan_params_t s_scan_params = {
+    .scan_type          = BLE_SCAN_TYPE_ACTIVE,
+    .own_addr_type      = BLE_ADDR_TYPE_PUBLIC,
+    .scan_filter_policy = BLE_SCAN_FILTER_ALLOW_ALL,
+    // Aligned to the NimBLE build's general-scan params (ble_gap_disc_params):
+    // itvl = window = 0x30 (30 ms, 100% duty cycle).  The previous 0x20/0x08
+    // (20 ms / 5 ms = 25% duty) missed most advertisements.
+    .scan_interval      = 0x30,
+    .scan_window        = 0x30,
+    // Report EVERY advertisement (no controller-side dedup): a controller that fails a
+    // connect (e.g. bonded to another host, reconnecting without sync) must stay
+    // re-discoverable.  Dedup cached its address and hid it forever.  The scan_result
+    // flood is now harmless — it goes through the non-blocking out_queue.
+    .scan_duplicate     = BLE_SCAN_DUPLICATE_DISABLE,
+};
+static bool adv_is_nintendo(uint8_t *adv) {
+    uint8_t mlen = 0;
+    uint8_t *mfg = esp_ble_resolve_adv_data(adv, ESP_BLE_AD_MANUFACTURER_SPECIFIC_TYPE, &mlen);
+    return (mfg && mlen >= 2 && ((uint16_t)mfg[0] | ((uint16_t)mfg[1] << 8)) == NINTENDO_COMPANY_ID);
+}
+static void gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) {
+    switch (event) {
+    case ESP_GAP_BLE_UPDATE_CONN_PARAMS_EVT: {
+        int ch = ch_by_bda(param->update_conn_params.bda);
+        {   char dbg[110];
+            snprintf(dbg, sizeof(dbg),
+                "UPDATE_CONN_PARAMS ch=%d status=%d itvl=%d latency=%d timeout=%d",
+                ch, param->update_conn_params.status, param->update_conn_params.conn_int,
+                param->update_conn_params.latency, param->update_conn_params.timeout);
+            out_debug(dbg); }
+        // Only act on a SUCCESSFUL update (status==0).  A failed update (e.g. status 19
+        // when the controller can't grant 7.5ms while 3 links are active) must NOT be
+        // re-attempted here, or it loops forever re-requesting the same rejected value.
+        // Also skip channels we INTENTIONALLY widened during a 3rd-link setup.
+        if (ch >= 0 && s_ch[ch].used && param->update_conn_params.status == 0
+                && !(s_widened_mask & (1u << ch))) {
+            // Re-assert THIS channel's target interval if the negotiated one deviated
+            // (e.g. a Nintendo L2CAP update request).  Use the per-channel target.
+            uint16_t target = s_ch[ch].itvl ? s_ch[ch].itvl : 6;
+            if (param->update_conn_params.conn_int != target) {
+                esp_ble_conn_update_params_t cp = {0};
+                memcpy(cp.bda, param->update_conn_params.bda, sizeof(esp_bd_addr_t));
+                cp.min_int = target; cp.max_int = target; cp.latency = 0; cp.timeout = 400;
+                esp_ble_gap_update_conn_params(&cp);
+            }
+        }
+        break;
+    }
+    case ESP_GAP_BLE_SCAN_STOP_COMPLETE_EVT:
+        // Immediate open for the 1st/2nd link.  The 3rd-link case (s_conn_open_after set)
+        // is deferred: cdc_task opens it once the temporary widen of the existing links
+        // has settled.
+        if (s_pending_conn >= 0 && s_conn_open_after == 0)
+            open_pending_conn();
+        break;
+    case ESP_GAP_BLE_SCAN_RESULT_EVT: {
+        esp_ble_gap_cb_param_t *r = param;
+        if (r->scan_rst.search_evt != ESP_GAP_SEARCH_INQ_RES_EVT) break;
+        if (!s_scan_mode || !adv_is_nintendo(r->scan_rst.ble_adv)) break;
+        const uint8_t *a = r->scan_rst.bda;
+
+        if (s_standalone_mode && !s_standalone_auto_conn_pending) {
+            int used = 0, ready = 0;
+            ch_count(&used, &ready);
+            if (used == 0 && s_pending_conn < 0) {
+                snprintf(
+                    s_standalone_auto_conn,
+                    sizeof(s_standalone_auto_conn),
+                    "%d %02X:%02X:%02X:%02X:%02X:%02X",
+                    r->scan_rst.ble_addr_type,
+                    a[0], a[1], a[2], a[3], a[4], a[5]
+                );
+                s_standalone_auto_conn_pending = true;
+                if (s_cdc_task_h) xTaskNotifyGive(s_cdc_task_h);
+            }
+        }
+
+        char data_hex[63]; int dl = r->scan_rst.adv_data_len; if (dl > 31) dl = 31;
+        for (int i = 0; i < dl; i++) sprintf(&data_hex[i*2], "%02X", r->scan_rst.ble_adv[i]);
+        data_hex[dl*2] = '\0';
+        char b[256];
+        snprintf(b, sizeof(b),
+            "{\"cmd\":\"scan_result\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"type\":%d,"
+            "\"rssi\":%d,\"data\":\"%s\",\"directed\":0}\n",
+            a[0],a[1],a[2],a[3],a[4],a[5], r->scan_rst.ble_addr_type, r->scan_rst.rssi, data_hex);
+        out_json(b);
+        break;
+    }
+    default: break;
+    }
+}
+
+void app_main(void) {
+    ESP_LOGI(TAG, "Bluedroid bridge %s", APP_FIRMWARE_VERSION);
+    for (int i = 0; i < MAX_CH; i++) s_ch[i].gattc_if = ESP_GATT_IF_NONE;
+
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase()); ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+    s_standalone_mode = standalone_mode_load();
+    s_standalone_usb_hid =
+        s_standalone_mode && standalone_usb_hid_mode_load();
+    bool standalone_profile_loaded = profile_load_active_runtime();
+
+    s_cmd_queue = xQueueCreate(16, sizeof(line_t));
+    s_ack_queue = xQueueCreate(16, sizeof(in_report_t));
+    s_notify_queue = xQueueCreate(32, sizeof(in_report_t));
+    s_out_queue = xQueueCreate(24, sizeof(line_t));
+
+    tinyusb_config_t tusb_cfg = { 0 };
+    standalone_xinput_configure(
+        &tusb_cfg, s_standalone_mode, s_standalone_usb_hid
+    );
+    ESP_ERROR_CHECK(tinyusb_driver_install(&tusb_cfg));
+    tinyusb_config_cdcacm_t acm = {
+        .usb_dev = TINYUSB_USBDEV_0, .cdc_port = TINYUSB_CDC_ACM_0,
+        .rx_unread_buf_sz = 1024, .callback_rx = &tinyusb_cdc_rx_callback,
+    };
+    ESP_ERROR_CHECK(tusb_cdc_acm_init(&acm));
+    /*
+     * Profile commit parses up to 8 KiB of JSON and builds a complete
+     * standalone_runtime_config_t before atomically swapping it in.  The old
+     * 4096-byte stack was marginal once calibration, gyro and mapping data
+     * were all present: the NVS commit could succeed, then the CDC task would
+     * corrupt its stack before returning the acknowledgement.  Keep enough
+     * headroom for cJSON and the full runtime snapshot.
+     */
+    xTaskCreatePinnedToCore(cdc_task, "cdc_task", 8192, NULL, 10, &s_cdc_task_h, 1);
+
+    ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
+    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_bt_controller_init(&bt_cfg));
+    ESP_ERROR_CHECK(esp_bt_controller_enable(ESP_BT_MODE_BLE));
+    ESP_ERROR_CHECK(esp_bluedroid_init());
+    ESP_ERROR_CHECK(esp_bluedroid_enable());
+
+    const uint8_t *mac = esp_bt_dev_get_address();
+    if (mac) snprintf(s_own_mac, sizeof(s_own_mac), "%02X:%02X:%02X:%02X:%02X:%02X",
+                      mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
+
+    ESP_ERROR_CHECK(esp_ble_gap_register_callback(gap_cb));
+    ESP_ERROR_CHECK(esp_ble_gattc_register_callback(gattc_cb));
+    // Register one GATTC app per channel.  Non-fatal: if the Bluedroid app table is
+    // smaller than MAX_CH, the extra channels just stay unusable (gattc_if == NONE).
+    for (int i = 0; i < MAX_CH; i++) {
+        esp_err_t e = esp_ble_gattc_app_register(i);
+        if (e != ESP_OK) ESP_LOGW(TAG, "gattc app %d register failed: %s", i, esp_err_to_name(e));
+    }
+    ESP_ERROR_CHECK(esp_ble_gatt_set_local_mtu(247));
+    esp_ble_gap_set_scan_params(&s_scan_params);
+
+    s_rumble_queue = xQueueCreate(RUMBLE_QUEUE_SIZE, sizeof(rumble_pkt_t));
+    xTaskCreatePinnedToCore(rumble_playout_task, "rumble_task", 4096, NULL, 5, &s_rumble_task_h, 0);
+
+    if (s_standalone_mode) {
+        s_scan_mode = true;
+        s_resume_scan = true;
+    }
+
+    ESP_LOGI(
+        TAG, "Bluedroid up, MAC=%s, %d GATTC apps. Mode=%s, profile=%s.",
+        s_own_mac, MAX_CH,
+        !s_standalone_mode ? "bridge" :
+            (s_standalone_usb_hid ? "standalone_hid" : "standalone")
+        , standalone_profile_loaded ? "loaded" : "defaults"
+    );
+}

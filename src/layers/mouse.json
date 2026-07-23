@@ -37,6 +37,7 @@
       "release_threshold": "0.5",
       "mouse_speed": "900.0",
       "mouse_deadzone": "0.05",
+      "analog_direction": "UP",
       "up": "NONE",
       "up_right": "NONE",
       "right": "NONE",
@@ -44,8 +45,7 @@
       "down": "NONE",
       "down_left": "NONE",
       "left": "NONE",
-      "up_left": "NONE",
-      "analog_direction": "UP"
+      "up_left": "NONE"
     },
     "stick_right": {
       "mode": "映射為滑鼠",
@@ -54,6 +54,7 @@
       "release_threshold": "0.5",
       "mouse_speed": "1600.0",
       "mouse_deadzone": "0.05",
+      "analog_direction": "UP",
       "up": "NONE",
       "up_right": "NONE",
       "right": "NONE",
@@ -61,8 +62,7 @@
       "down": "NONE",
       "down_left": "NONE",
       "left": "NONE",
-      "up_left": "NONE",
-      "analog_direction": "UP"
+      "up_left": "NONE"
     }
   }
 }

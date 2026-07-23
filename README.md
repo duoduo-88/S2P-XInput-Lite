@@ -1,14 +1,14 @@
 # S2P-XInput-Lite
 
-[繁體中文](README_zh-TW.md) · [User Guide](manual/USER_GUIDE.md) · [繁體中文使用手冊](manual/USER_GUIDE_zh-TW.md)
+[繁體中文](README_zh-TW.md)
 
 ![S2P-XInput-Lite banner](image/S2P-XInput-Lite-banner.jpg)
 
 S2P-XInput-Lite provides XInput-compatible controller output for a Switch 2 Pro Controller on Windows. It supports wired USB, an ESP32-S3 USB bridge, and native Windows BLE.
 
-Current release: **v0.5.3**
+Development version: **v0.6.0**
 
-[Release notes](https://github.com/duoduo-88/S2P-XInput-Lite/releases/tag/v0.5.3)
+[Latest published release](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 
 > This is an independent, unofficial community project. It is not affiliated with, endorsed by, sponsored by, or certified by Nintendo, Microsoft, or Espressif Systems.
 
@@ -22,6 +22,8 @@ Current release: **v0.5.3**
 - Per-controller stick calibration and connection-time gyro zero-bias initialization
 - Stick curves, deadzones, smoothing, stabilization, and output-shape adjustment
 - Consistent XInput-to-HD Rumble 2 conversion across USB, ESP32, and native BLE, with latest-only pacing, priority stop frames, and audio-reactive vibration
+- ESP32 standalone profile writing for PC XInput-compatible output or
+  standards-based mobile USB HID without keeping the Windows application open
 - Gyroscope mapping to an XInput stick or mouse
 - Full game profiles for switching stick, gyro, rumble, audio-haptics, and mapping settings together, with automatic UI refresh
 - Traditional Chinese and English interface
@@ -86,9 +88,14 @@ Reusable hardware probes and automated tests are maintained in the development r
 - Windows only
 - One controller at a time
 - No Joy-Con pairing or PS5 controller emulation
+- ESP32 standalone mode does not support Windows keyboard/mouse output, audio
+  haptics, process-based profile switching, phone rumble, or BLE HID output
 - Motion is mapped to a stick or mouse; XInput does not expose raw motion sensors
-- The ESP32 connection requires compatible bridge firmware
-- The packaged release contains the ESP32 flashing tool and the required `0.12.4` firmware binaries under `esp32s3`; the ESP32 source and build directories are not included in the release package
+- The ESP32 connection requires compatible firmware. Standalone profile writing
+  and direct USB controller output require the bundled `0.14.0-dev` development
+  firmware; older bridge-only firmware cannot provide those features.
+- The GitHub repository includes the complete ESP32 source. Packaged releases
+  contain only the flashing tool and required firmware images under `esp32s3`.
 - HidHide is not bundled and is not required for ESP32 or BLE. Without it, wired input still works, but games may detect both the physical HID and virtual XInput controller.
 - If wired status shows Basic mode, fully exit Steam or other controller tools, reconnect the controller, and start this application first
 - Wired USB always requests the controller's complete sensor report; the 6-axis/9-axis label reflects the data actually received rather than a selectable polling mode

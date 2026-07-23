@@ -1,46 +1,23 @@
-# S2P-XInput-Lite ESP32-S3 BLE Bridge
+# S2P-XInput-Lite ESP32-S3 firmware
 
-This directory contains the source for bundled firmware `0.12.4`. It targets an ESP32-S3 and uses a USB CDC connection to bridge controller input and rumble between the Windows host and BLE.
+This directory contains the firmware images and complete corresponding source
+used by S2P-XInput-Lite v0.6.0 development builds.
+
+- `firmware/`: current flash images used by the desktop application
+- `source/`: source, build instructions, checksums, and upstream revision
+- `source/esp32s3_usb_bridge_bluedroid/`: ESP-IDF project
+
+The current `0.14.0-dev` firmware retains bridge compatibility and adds
+profile-backed standalone USB output:
+
+- XInput-compatible output for Windows PCs
+- standards-based USB HID Gamepad output for phones and other compatible hosts
+- controller-side calibration, stick processing, mappings, gyro-to-stick, and
+  rumble processing
+- validated profile transfer with CRC32 and A/B storage slots
 
 The firmware is an independent interoperability implementation and is not
 licensed, certified, approved, or manufactured by Microsoft, Nintendo, or
 Espressif Systems. Product and interface names are used only to describe
-compatibility.
-
-## Build requirements
-
-- ESP-IDF 5.5.4 (the committed dependency lock was generated with this version)
-- An ESP32-S3 board with 16 MB flash
-- The ESP-IDF Component Manager enabled
-
-## Build
-
-From an ESP-IDF command prompt:
-
-```console
-idf.py set-target esp32s3
-idf.py build
-```
-
-`idf_component.yml`, `dependencies.lock`, and `sdkconfig.defaults` define the required managed components and project configuration. Do not commit the generated `build`, `managed_components`, or `sdkconfig` paths.
-
-## Flash with ESP-IDF
-
-```console
-idf.py -p COM_PORT flash
-```
-
-Replace `COM_PORT` with the board's flashing port.
-
-## Bundled application flash layout
-
-S2P-XInput-Lite uses these release files and offsets:
-
-| Offset | File |
-| --- | --- |
-| `0x0000` | `firmware/bootloader.bin` |
-| `0x8000` | `firmware/partition-table.bin` |
-| `0x10000` | `firmware/esp32s3_bluedroid_bridge.bin` |
-
-The Windows application invokes `tools/esptool.exe` with DIO mode, an 80 MHz flash frequency, and a 16 MB flash size. Existing devices already running firmware `0.12.4` do not need to be flashed again for S2P-XInput-Lite v0.5.2.
-
+compatibility. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for
+attribution and license details.

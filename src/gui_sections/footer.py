@@ -164,12 +164,60 @@ def build_status_and_footer(gui, right_frame):
         command=gui.flash_firmware
     ).grid(row=1, column=3, sticky="nsew", padx=3, ipady=5)
 
+    gui.write_esp32_button = ttk.Button(
+        footer_frame,
+        text=f"{gui.tr('寫入 ESP32')} ▼",
+    )
+    gui.write_esp32_menu = tk.Menu(
+        gui.write_esp32_button,
+        tearoff=False,
+    )
+    gui.write_esp32_menu.add_command(
+        label=gui.tr(
+            "寫入並啟用 PC XInput 獨立模式"
+        ),
+        command=lambda: gui.write_current_profile_to_esp32("standalone"),
+    )
+    gui.write_esp32_menu.add_command(
+        label=gui.tr(
+            "寫入並啟用手機 USB HID 模式"
+        ),
+        command=lambda: gui.write_current_profile_to_esp32(
+            "standalone_hid"
+        ),
+    )
+    gui.write_esp32_menu.add_command(
+        label=gui.tr("僅寫入設定"),
+        command=lambda: gui.write_current_profile_to_esp32(None),
+    )
+    gui.write_esp32_menu.add_separator()
+    gui.write_esp32_menu.add_command(
+        label=gui.tr(
+            "切回 ESP32 橋接模式"
+        ),
+        command=gui.set_esp32_bridge_mode,
+    )
+    def show_write_esp32_menu():
+        button = gui.write_esp32_button
+        try:
+            gui.write_esp32_menu.tk_popup(
+                button.winfo_rootx(),
+                button.winfo_rooty() + button.winfo_height(),
+            )
+        finally:
+            gui.write_esp32_menu.grab_release()
+
+    gui.write_esp32_button.configure(command=show_write_esp32_menu)
+    gui.write_esp32_button.grid(
+        row=1, column=4, sticky="nsew", padx=3, ipady=5
+    )
+
     ttk.Button(
         footer_frame,
         text="重啟連線",
         command=gui.restart_main
     ).grid(
-        row=1, column=4, columnspan=2, sticky="nsew", padx=3, ipady=5
+        row=1, column=5, sticky="nsew", padx=3, ipady=5
     )
 
     ttk.Button(

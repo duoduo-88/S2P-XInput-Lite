@@ -32,7 +32,9 @@ def _soft_deadzone(value, deadzone):
 def _apply_gyro_stick_anti_deadzone(x, y, anti_deadzone, existing_magnitude=0.0):
     """Radially cross a game's stick DZ without altering the physical stick."""
     magnitude = math.hypot(float(x), float(y))
-    if magnitude <= 1e-12:
+    # Smoothing approaches zero asymptotically.  Do not amplify its sub-count
+    # tail back to the full anti-deadzone on every subsequent report.
+    if magnitude <= 1e-5:
         return 0.0, 0.0
     anti = max(0.0, min(0.95, float(anti_deadzone)))
     existing = max(0.0, min(1.0, float(existing_magnitude)))
@@ -92,4 +94,3 @@ def _clamp_vector_to_shape(x, y, shape_blend):
         x *= scale
         y *= scale
     return max(-1.0, min(1.0, x)), max(-1.0, min(1.0, y))
-
