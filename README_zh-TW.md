@@ -1,5 +1,7 @@
 # S2P-XInput-Lite
 
+![S2P-XInput-Lite 橫幅](image/S2P-XInput-Lite-banner.jpg)
+
 S2P-XInput-Lite 可在 Windows 將 Switch 2 Pro Controller 轉換為 Xbox 360 相容的 XInput 控制器，支援 USB 有線、ESP32-S3 USB 橋接器及 Windows 原生 BLE。
 
 目前版本：**v0.5.3**
