@@ -1,6 +1,6 @@
 # S2P-XInput-Lite
 
-[English](README.md) · [使用手冊](manual/USER_GUIDE_zh-TW.md)
+[English](README.md) · [使用手冊](manual/USER_GUIDE_zh-TW.md) · [English Guide](manual/USER_GUIDE.md)
 
 ![S2P-XInput-Lite 橫幅](image/S2P-XInput-Lite-banner.jpg)
 
