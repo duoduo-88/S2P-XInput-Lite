@@ -35,7 +35,7 @@ S2P-XInput-Lite 可在 Windows 為 Switch 2 Pro Controller 提供 XInput 相容�
 - Switch 2 Pro Controller
 - ViGEmBus 1.22.0
 - USB 有線模式可選用最新版 [HidHide](https://github.com/nefarius/HidHide/releases/latest)，避免遊戲偵測實體 HID
-- USB-C 資料線、Bluetooth，或相容的 ESP32-S3 橋接器
+- USB-C 資料線、Bluetooth，或相容的 ESP32-S3 N16R8 橋接器
 
 發佈包已包含可攜式 Python 執行環境及所需套件，不必另外安裝 Python。
 
