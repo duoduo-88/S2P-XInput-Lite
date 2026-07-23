@@ -4,25 +4,25 @@
 
 ![S2P-XInput-Lite banner](image/S2P-XInput-Lite-banner.jpg)
 
-S2P-XInput-Lite converts a Switch 2 Pro Controller into an Xbox 360-compatible XInput controller on Windows. It supports wired USB, an ESP32-S3 USB bridge, and native Windows BLE.
+S2P-XInput-Lite provides XInput-compatible controller output for a Switch 2 Pro Controller on Windows. It supports wired USB, an ESP32-S3 USB bridge, and native Windows BLE.
 
 Current release: **v0.5.3**
 
-[Release notes](RELEASE_NOTES_v0.5.3.md)
+[Release notes](https://github.com/duoduo-88/S2P-XInput-Lite/releases/tag/v0.5.3)
 
-> This is an unofficial community project and is not affiliated with Nintendo, Microsoft, or Espressif Systems.
+> This is an independent, unofficial community project. It is not affiliated with, endorsed by, sponsored by, or certified by Nintendo, Microsoft, or Espressif Systems.
 
 ## Features
 
 - Automatic wired USB priority, followed by ESP32-S3 or native BLE, with live 6-axis/9-axis sensor status
-- Xbox 360 virtual controller output through ViGEmBus
+- XInput-compatible virtual controller output through ViGEmBus
 - Low-latency input dispatch that preserves button edges while using the newest stick and motion report
 - Button, keyboard, mouse, stick-direction, linear-trigger, and linear-scroll mapping with shared target validation
 - Global mapping-layer files with hold/toggle activation, per-layer button and stick overrides, import/export, and per-profile enabled/order state
 - Per-controller stick calibration and connection-time gyro zero-bias initialization
 - Stick curves, deadzones, smoothing, stabilization, and output-shape adjustment
 - Consistent XInput-to-HD Rumble 2 conversion across USB, ESP32, and native BLE, with latest-only pacing, priority stop frames, and audio-reactive vibration
-- Gyroscope mapping to an Xbox stick or mouse
+- Gyroscope mapping to an XInput stick or mouse
 - Full game profiles for switching stick, gyro, rumble, audio-haptics, and mapping settings together, with automatic UI refresh
 - Traditional Chinese and English interface
 - Live connection, battery, ESP32, ViGEmBus, WASAPI, and HidHide status
@@ -42,7 +42,7 @@ The packaged release includes a portable Python runtime and all required package
 ## Installation and Use
 
 1. Install ViGEmBus with `driver\Install-ViGEmBus.bat` if it is not already installed.
-2. For wired USB, install HidHide if you want games to see only the virtual Xbox controller. HidHide is optional for ESP32 and native BLE.
+2. For wired USB, install HidHide if you want games to see only the virtual XInput controller. HidHide is optional for ESP32 and native BLE.
 3. Connect the controller before opening Steam or another controller tool. For native BLE, **do not pair it through Windows Bluetooth settings**; turn Bluetooth on and let this application establish the connection. For ESP32, connect a device running compatible firmware.
 4. Run `S2P-XInput-Lite.exe`.
 5. Choose a game profile or adjust settings, then use **Save Profile** or **Save New Profile**.
@@ -98,3 +98,17 @@ Reusable hardware probes and automated tests are maintained in the development r
 Parts of this project are based on or derived from [Switch2Connect](https://github.com/TommyWabg/Switch2Connect) by TommyWabg and have been modified and reorganized for this project.
 
 S2P-XInput-Lite is licensed under the [GNU General Public License v3.0](LICENSE). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for third-party attribution and license information.
+
+## Compatibility and Trademarks
+
+Product names and trademarks are used only to identify compatible hardware,
+software, and interfaces. “XInput-compatible” describes interoperability with
+software that accepts XInput controller input; it does not mean that this
+project or its ESP32 firmware is licensed, certified, approved, or manufactured
+by Microsoft.
+
+The ESP32 development firmware uses a non-retail development VID/PID. It does
+not claim the USB identity of a retail Microsoft or Xbox controller. That
+identifier is intended for development and testing, is not a formally assigned
+production identifier, and may conflict with other development devices that
+use the same value.

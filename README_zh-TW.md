@@ -4,25 +4,25 @@
 
 ![S2P-XInput-Lite 橫幅](image/S2P-XInput-Lite-banner.jpg)
 
-S2P-XInput-Lite 可在 Windows 將 Switch 2 Pro Controller 轉換為 Xbox 360 相容的 XInput 控制器，支援 USB 有線、ESP32-S3 USB 橋接器及 Windows 原生 BLE。
+S2P-XInput-Lite 可在 Windows 為 Switch 2 Pro Controller 提供 XInput 相容控制器輸出，支援 USB 有線、ESP32-S3 USB 橋接器及 Windows 原生 BLE。
 
 目前版本：**v0.5.3**
 
-[版本更新說明](RELEASE_NOTES_v0.5.3.md)
+[版本更新說明](https://github.com/duoduo-88/S2P-XInput-Lite/releases/tag/v0.5.3)
 
-> 本專案是非官方社群作品，與 Nintendo、Microsoft 或 Espressif Systems 無關。
+> 本專案是獨立、非官方的社群作品，未獲 Nintendo、Microsoft 或 Espressif Systems 授權、認證、贊助或背書，亦與這些公司無關。
 
 ## 主要功能
 
 - 自動依序使用 USB 有線、ESP32-S3 或原生 BLE，並即時顯示 6 軸／9 軸感測狀態
-- 透過 ViGEmBus 輸出 Xbox 360 虛擬控制器
+- 透過 ViGEmBus 輸出 XInput 相容虛擬控制器
 - 低延遲輸入處理：保留按鍵邊緣事件，同時使用最新的搖桿與動作感測報告
 - 按鍵、鍵盤、滑鼠、搖桿方向、線性扳機及線性滾輪映射，並共用一致的目標驗證
 - 全域 Mapping Layer 檔案：支援按住／切換啟用、個別按鍵與搖桿覆寫、匯入／匯出，以及各設定檔獨立保存啟用狀態與順序
 - 每支控制器獨立的搖桿校正，以及每次連線時的陀螺儀零偏初始化
 - 搖桿曲線、死區、平滑、穩定化與輸出形狀調整
 - USB、ESP32 與原生 BLE 共用一致的 XInput 至 HD Rumble 2 轉換，包含 latest-only 節流、優先停止訊框及音訊震動
-- 將陀螺儀映射至 Xbox 搖桿或滑鼠
+- 將陀螺儀映射至 XInput 搖桿或滑鼠
 - 完整遊戲設定檔，可一起切換搖桿、陀螺儀、震動、音訊觸覺與映射設定
 - 繁體中文與英文介面
 - 即時顯示連線、電量、ESP32、ViGEmBus、WASAPI 及 HidHide 狀態
@@ -42,7 +42,7 @@ S2P-XInput-Lite 可在 Windows 將 Switch 2 Pro Controller 轉換為 Xbox 360 �
 ## 安裝與使用
 
 1. 若尚未安裝 ViGEmBus，執行 `driver\Install-ViGEmBus.bat`。
-2. USB 有線模式若希望遊戲只看到虛擬 Xbox 控制器，可另外安裝 HidHide；ESP32 與原生 BLE 不需要 HidHide。
+2. USB 有線模式若希望遊戲只看到虛擬 XInput 控制器，可另外安裝 HidHide；ESP32 與原生 BLE 不需要 HidHide。
 3. 請先連接控制器，再開啟 Steam 或其他控制器工具。原生 BLE 模式請勿在 Windows 藍牙設定內手動配對；只需開啟藍牙，讓本程式建立連線。ESP32 模式則接上已燒錄相容韌體的裝置。
 4. 執行 `S2P-XInput-Lite.exe`。
 5. 選擇遊戲設定檔或調整設定，再使用 **儲存設定檔** 或 **另存新設定檔**。
@@ -90,3 +90,13 @@ Mapping Layer 檔案是全域資源，可在按住按鍵組合時暫時覆寫目
 本專案部分內容以 TommyWabg 的 [Switch2Connect](https://github.com/TommyWabg/Switch2Connect) 為基礎或由其衍生，並已為本專案修改與重整。
 
 S2P-XInput-Lite 採用 [GNU General Public License v3.0](LICENSE)。第三方來源及授權資訊請參閱 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+## 相容性與商標
+
+文件中的產品名稱與商標僅用於辨識相容的硬體、軟體及介面。「XInput
+相容」只表示可與接受 XInput 控制器輸入的軟體互通，不表示本專案或其
+ESP32 韌體已獲 Microsoft 授權、認證、核准或製造。
+
+ESP32 開發韌體使用非零售用途的開發 VID/PID，並未宣稱自己是 Microsoft
+或 Xbox 零售控制器。此識別碼供開發與測試使用，並非正式分配的量產
+識別碼，也可能與使用相同數值的其他開發裝置發生衝突。
