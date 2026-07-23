@@ -35,7 +35,7 @@ Detailed setting descriptions are available from the `?` buttons in the applicat
 - Switch 2 Pro Controller
 - ViGEmBus 1.22.0
 - Optional for wired USB: the current [HidHide release](https://github.com/nefarius/HidHide/releases/latest), used to hide the physical HID from games
-- A USB-C data cable, Bluetooth, or a compatible ESP32-S3 bridge
+- A USB-C data cable, Bluetooth, or a compatible ESP32-S3 N16R8 bridge
 
 The packaged release includes a portable Python runtime and all required packages. A separate Python installation is not required.
 
