@@ -138,3 +138,8 @@ Nintendo, Nintendo Switch, Switch 2, Xbox, Microsoft, Espressif, and other third
 These names are mentioned solely for compatibility, interoperability, software attribution, and open-source acknowledgement purposes.
 
 S2P-XInput-Lite is not affiliated with, endorsed by, sponsored by, or officially associated with the companies or third-party projects mentioned above.
+
+“XInput-compatible” describes software and USB interface interoperability only.
+It does not represent Microsoft licensing, certification, approval, or hardware
+identity. The ESP32 development firmware uses a non-retail development VID/PID
+and does not copy the USB VID/PID of a retail Microsoft or Xbox controller.

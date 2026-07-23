@@ -1,6 +1,11 @@
 # S2P-XInput-Lite ESP32-S3 BLE Bridge
 
-This directory contains the source for bundled firmware `0.12.4`. It targets an ESP32-S3 and uses an USB CDC connection to bridge controller input and rumble between the Windows host and BLE.
+This directory contains the source for bundled firmware `0.12.4`. It targets an ESP32-S3 and uses a USB CDC connection to bridge controller input and rumble between the Windows host and BLE.
+
+The firmware is an independent interoperability implementation and is not
+licensed, certified, approved, or manufactured by Microsoft, Nintendo, or
+Espressif Systems. Product and interface names are used only to describe
+compatibility.
 
 ## Build requirements
 
