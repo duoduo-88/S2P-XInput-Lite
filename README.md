@@ -1,5 +1,7 @@
 # S2P-XInput-Lite
 
+[繁體中文](README_zh-TW.md)
+
 ![S2P-XInput-Lite banner](image/S2P-XInput-Lite-banner.jpg)
 
 S2P-XInput-Lite converts a Switch 2 Pro Controller into an Xbox 360-compatible XInput controller on Windows. It supports wired USB, an ESP32-S3 USB bridge, and native Windows BLE.
