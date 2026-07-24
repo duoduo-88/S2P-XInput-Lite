@@ -61,7 +61,7 @@
 
 static const char *TAG = "S3_BLUEDROID";
 
-#define APP_FIRMWARE_VERSION      "0.14.0-dev"
+#define APP_FIRMWARE_VERSION      "0.14.0"
 #define EXPECTED_FIRMWARE_PROFILE "tinyusb_direct"
 #define EXPECTED_FIRMWARE_BUILD   "cdc_bridge_2_lowlatency"
 #define CDC_LINE_STATE_DTR        0x01

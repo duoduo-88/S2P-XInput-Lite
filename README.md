@@ -6,9 +6,9 @@
 
 S2P-XInput-Lite provides XInput-compatible controller output for a Switch 2 Pro Controller on Windows. It supports wired USB, an ESP32-S3 USB bridge, and native Windows BLE.
 
-Development version: **v0.6.0**
+Current version: **v0.6.0**
 
-[Release notes](https://github.com/duoduo-88/S2P-XInput-Lite/releases/tag/v0.5.3)
+[Release notes](https://github.com/duoduo-88/S2P-XInput-Lite/releases/tag/v0.6.0)
 
 > This is an independent, unofficial community project. It is not affiliated with, endorsed by, sponsored by, or certified by Nintendo, Microsoft, or Espressif Systems.
 
@@ -92,8 +92,8 @@ Reusable hardware probes and automated tests are maintained in the development r
   haptics, process-based profile switching, phone rumble, or BLE HID output
 - Motion is mapped to a stick or mouse; XInput does not expose raw motion sensors
 - The ESP32 connection requires compatible firmware. Standalone profile writing
-  and direct USB controller output require the bundled `0.14.0-dev` development
-  firmware; older bridge-only firmware cannot provide those features.
+  and direct USB controller output require the bundled `0.14.0` firmware;
+  older bridge-only firmware cannot provide those features.
 - The GitHub repository includes the complete ESP32 source. Packaged releases
   contain only the flashing tool and required firmware images under `esp32s3`.
 - HidHide is not bundled and is not required for ESP32 or BLE. Without it, wired input still works, but games may detect both the physical HID and virtual XInput controller.

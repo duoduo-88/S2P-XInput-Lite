@@ -6,9 +6,9 @@
 
 S2P-XInput-Lite 可在 Windows 為 Switch 2 Pro Controller 提供 XInput 相容控制器輸出，支援 USB 有線、ESP32-S3 USB 橋接器及 Windows 原生 BLE。
 
-開發版本：**v0.6.0**
+目前版本：**v0.6.0**
 
-[版本更新說明](https://github.com/duoduo-88/S2P-XInput-Lite/releases/tag/v0.5.3)
+[版本更新說明](https://github.com/duoduo-88/S2P-XInput-Lite/releases/tag/v0.6.0)
 
 > 本專案是獨立、非官方的社群作品，未獲 Nintendo、Microsoft 或 Espressif Systems 授權、認證、贊助或背書，亦與這些公司無關。
 
@@ -79,7 +79,7 @@ Mapping Layer 檔案是全域資源，可在按住按鍵組合時暫時覆寫目
   切換設定檔、手機震動或 BLE HID 輸出。
 - XInput 無法輸出原始動作感測資料，因此陀螺儀只能映射至搖桿或滑鼠。
 - ESP32 連線需要相容韌體。寫入獨立模式設定檔及直接 USB 控制器輸出需要
-  隨附的 `0.14.0-dev` 開發韌體；較舊的純橋接韌體不支援這些功能。
+  隨附的 `0.14.0` 韌體；較舊的純橋接韌體不支援這些功能。
 - GitHub 原始碼庫包含完整 ESP32 原始碼；發佈包則只在 `esp32s3` 內提供
   燒錄工具及必要韌體映像。
 - HidHide 不隨附，也不是 ESP32 或 BLE 的必要元件。未安裝時 USB 輸入仍可使用，但遊戲可能同時偵測實體 HID 與虛擬 XInput 控制器。

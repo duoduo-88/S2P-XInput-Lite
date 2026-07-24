@@ -1,7 +1,7 @@
 # S2P-XInput-Lite ESP32-S3 BLE Bridge
 
-This directory contains the stable bridge source plus the in-development
-`0.14.0-dev` standalone compatibility stage. It targets an ESP32-S3. Bridge mode keeps
+This directory contains the stable bridge and standalone `0.14.0` firmware
+source. It targets an ESP32-S3. Bridge mode keeps
 the existing USB CDC transport. Standalone mode can expose either a CDC +
 XInput-compatible composite device for PCs or a CDC + standards-based
 USB HID Gamepad for direct connection to phones.
@@ -34,8 +34,8 @@ with 7.68/9.01 ms p50/p95 intervals. Profile data is validated, stored, and
 applied at runtime. Keyboard/mouse output, Windows audio haptics, process-based
 profile switching, phone rumble, and BLE HID output remain desktop-only or
 unimplemented.
-Do not publish this development binary as a stable standalone release until the
-expanded profile runtime has completed controller-side regression testing.
+The standalone runtime has completed automated, full ESP-IDF build, and
+controller-side reconnect regression testing for the v0.6.0 release.
 
 The Windows client uses these CDC commands:
 
@@ -103,4 +103,4 @@ S2P-XInput-Lite uses these release files and offsets:
 The Windows application invokes `tools/esptool.exe` with DIO mode, an 80 MHz
 flash frequency, and a 16 MB flash size. Existing `0.12.4` devices remain
 usable in bridge mode, but standalone profile storage and direct USB controller
-output require the current `0.14.0-dev` firmware.
+output require the current `0.14.0` firmware.
