@@ -1,7 +1,9 @@
 import unittest
+from dataclasses import replace
 from unittest.mock import patch
 
 from standalone_profile import (
+    CompatibilityIssue,
     STANDALONE_PROFILE_SCHEMA,
     StandaloneTransferError,
     _recover_committed_profile,
@@ -9,6 +11,7 @@ from standalone_profile import (
     analyze_standalone_v2_compatibility,
     compile_standalone_profile,
     set_esp32_mode,
+    write_standalone_profile,
 )
 
 
@@ -30,6 +33,25 @@ def _settings():
 
 
 class StandaloneProfileTests(unittest.TestCase):
+    @patch("standalone_profile.serial.Serial")
+    def test_blocking_issue_prevents_serial_write(self, serial_factory):
+        compiled = compile_standalone_profile("General", _settings())
+        blocked = replace(
+            compiled,
+            issues=(
+                CompatibilityIssue(
+                    "blocking", "keyboard output", "Windows-only target"
+                ),
+            ),
+        )
+
+        with self.assertRaisesRegex(
+            StandaloneTransferError, "blocking compatibility issues"
+        ):
+            write_standalone_profile("COM5", 2_000_000, blocked)
+
+        serial_factory.assert_not_called()
+
     def test_compilation_is_deterministic(self):
         first = compile_standalone_profile("General", _settings())
         second = compile_standalone_profile("General", _settings())

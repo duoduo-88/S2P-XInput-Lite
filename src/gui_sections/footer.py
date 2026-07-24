@@ -137,13 +137,27 @@ def build_status_and_footer(gui, right_frame):
         command=gui.open_profile_folder,
     ).grid(row=0, column=6, sticky="nsew", padx=3, pady=(0, 5), ipady=5)
 
+    language_pin_frame = ttk.Frame(footer_frame)
+    language_pin_frame.grid(
+        row=1, column=0, sticky="nsew", padx=3
+    )
+    language_pin_frame.columnconfigure(0, weight=1, uniform="language_pin")
+    language_pin_frame.columnconfigure(1, weight=1, uniform="language_pin")
     gui.language_button = ttk.Button(
-        footer_frame,
-        text="中 / En",
-        command=gui.toggle_language
+        language_pin_frame,
+        text="En",
+        command=gui.toggle_language,
     )
     gui.language_button.grid(
-        row=1, column=0, sticky="nsew", padx=3, ipady=5
+        row=0, column=0, sticky="nsew", padx=(0, 2), ipady=5
+    )
+    gui.pin_button = ttk.Button(
+        language_pin_frame,
+        text="Pin",
+        command=gui.pin_controller,
+    )
+    gui.pin_button.grid(
+        row=0, column=1, sticky="nsew", padx=(2, 0), ipady=5
     )
 
     ttk.Button(
@@ -172,32 +186,36 @@ def build_status_and_footer(gui, right_frame):
         gui.write_esp32_button,
         tearoff=False,
     )
-    gui.write_esp32_menu.add_command(
-        label=gui.tr(
-            "寫入並啟用 PC XInput 獨立模式"
-        ),
-        command=lambda: gui.write_current_profile_to_esp32("standalone"),
-    )
-    gui.write_esp32_menu.add_command(
-        label=gui.tr(
-            "寫入並啟用手機 USB HID 模式"
-        ),
-        command=lambda: gui.write_current_profile_to_esp32(
-            "standalone_hid"
-        ),
-    )
-    gui.write_esp32_menu.add_command(
-        label=gui.tr("僅寫入設定"),
-        command=lambda: gui.write_current_profile_to_esp32(None),
-    )
-    gui.write_esp32_menu.add_separator()
-    gui.write_esp32_menu.add_command(
-        label=gui.tr(
-            "切回 ESP32 橋接模式"
-        ),
-        command=gui.set_esp32_bridge_mode,
-    )
+    def refresh_write_esp32_menu():
+        menu = gui.write_esp32_menu
+        menu.delete(0, "end")
+        menu.add_command(
+            label=gui.tr("寫入並啟用 PC XInput 獨立模式"),
+            command=lambda: gui.write_current_profile_to_esp32(
+                "standalone"
+            ),
+        )
+        menu.add_command(
+            label=gui.tr("寫入並啟用手機 USB HID 模式"),
+            command=lambda: gui.write_current_profile_to_esp32(
+                "standalone_hid"
+            ),
+        )
+        menu.add_command(
+            label=gui.tr("僅寫入設定"),
+            command=lambda: gui.write_current_profile_to_esp32(None),
+        )
+        menu.add_separator()
+        menu.add_command(
+            label=gui.tr("切回 ESP32 橋接模式"),
+            command=gui.set_esp32_bridge_mode,
+        )
+
+    gui.refresh_write_esp32_menu = refresh_write_esp32_menu
+    refresh_write_esp32_menu()
+
     def show_write_esp32_menu():
+        refresh_write_esp32_menu()
         button = gui.write_esp32_button
         try:
             gui.write_esp32_menu.tk_popup(
@@ -220,11 +238,14 @@ def build_status_and_footer(gui, right_frame):
         row=1, column=5, sticky="nsew", padx=3, ipady=5
     )
 
-    ttk.Button(
+    gui.idle_disconnect_button = ttk.Button(
         footer_frame,
-        text="Pin",
-        command=gui.pin_controller
-    ).grid(row=1, column=6, sticky="nsew", padx=3, ipady=5)
+        text="閒置自動斷線",
+        command=gui.show_idle_disconnect_menu,
+    )
+    gui.idle_disconnect_button.grid(
+        row=1, column=6, sticky="nsew", padx=3, ipady=5
+    )
 
     # 所有元件建立完成後，
     # 再依照實際螢幕可用高度調整視窗。

@@ -2,7 +2,7 @@
 
 This is an opt-in hardware diagnostic, not part of normal unit-test discovery:
 
-    runtime\python.exe tests\standalone_hardware_parity.py --port COM5
+    runtime\\python.exe tests\\standalone_hardware_parity.py --port COM5
 """
 from __future__ import annotations
 

@@ -1399,6 +1399,13 @@ class BluetoothController:
 
         try:
             if self.client.is_connected:
+                self._rumble_pending = None
+                await self._send_pro_rumble_async(
+                    CONNECTION_LF_FREQUENCY,
+                    0,
+                    CONNECTION_HF_FREQUENCY,
+                    0,
+                )
                 await self.client.disconnect()
 
         except Exception:
@@ -1406,6 +1413,17 @@ class BluetoothController:
 
         self.connected = False
         self.client = None
+
+    def disconnect_for_idle(self):
+        """Drop only the controller link; keep discovery alive for wake-up."""
+        loop = self._loop
+        if loop is None or not loop.is_running() or loop.is_closed():
+            return False
+        try:
+            asyncio.run_coroutine_threadsafe(self._disconnect(), loop)
+        except (RuntimeError, asyncio.InvalidStateError):
+            return False
+        return True
 
     def close(
         self

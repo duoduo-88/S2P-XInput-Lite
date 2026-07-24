@@ -43,6 +43,10 @@ from console_i18n import current_language
 from console_i18n import localized_print as print
 from console_i18n import localized_input as input
 from hidhide_manager import reconcile_active_hidhide
+from idle_disconnect import (
+    IdleActivityTracker,
+    load_idle_disconnect_minutes,
+)
 
 COMMAND_PATH = Path(__file__).with_name(
     "controller_command.txt"
@@ -435,6 +439,10 @@ def main():
     gyro_initialization_ready_announced = False
     gyro_initialization_complete_announced = False
     sensor_mode_tracker = SensorModeTracker()
+    idle_tracker = IdleActivityTracker(
+        load_idle_disconnect_minutes(config)
+    )
+    idle_disconnect_requested = False
 
     def on_input(payload):
         nonlocal last_status_stage, last_input_error
@@ -443,6 +451,8 @@ def main():
         )
 
         if state is not None:
+            if connection_mode != "wired":
+                idle_tracker.observe(state)
             sensor_mode = sensor_mode_tracker.update(state)
             try:
                 xinput.update(state)
@@ -596,6 +606,9 @@ def main():
                 raise
 
             config = new_config
+            idle_tracker.configure(
+                load_idle_disconnect_minutes(new_config)
+            )
             xinput = previous_xinput
             audio_haptics = previous_audio
             if connection_mode == "wired":
@@ -613,9 +626,12 @@ def main():
         nonlocal gyro_initialization_announced
         nonlocal gyro_initialization_ready_announced
         nonlocal gyro_initialization_complete_announced
+        nonlocal idle_disconnect_requested
         input_dispatcher.reset()
         sensor_mode_tracker.reset()
         last_status_stage = 0.0
+        idle_disconnect_requested = False
+        idle_tracker.reset()
         set_input_gc_suppressed(True)
         # Settings and shared layer files may change while transport discovery
         # is still running. Refresh once before accepting the first report.
@@ -637,6 +653,7 @@ def main():
                 f"Failed to load latest settings on first connection: {exc}",
             ))
         controller_id = getattr(controller, "controller_id", None)
+        publish_status(controller_id=controller_id)
         try:
             xinput.set_calibration(
                 load_stick_calibration(config, controller_id)
@@ -726,6 +743,7 @@ def main():
         nonlocal last_status_stage
         nonlocal gyro_initialization_tracking
         nonlocal gyro_initialization_announced
+        nonlocal idle_disconnect_requested
         input_dispatcher.reset()
         sensor_mode_tracker.reset()
         last_status_stage = 0.0
@@ -738,7 +756,11 @@ def main():
             xinput.reset_output_state()
         finally:
             publish_status(
-                state="disconnected",
+                state=(
+                    "idle_disconnected"
+                    if idle_disconnect_requested
+                    else "disconnected"
+                ),
                 battery_percent=None,
                 battery_voltage=None,
                 charging=False,
@@ -750,6 +772,7 @@ def main():
                 accel_raw=None,
                 gyro_bias_samples=0,
             )
+        idle_disconnect_requested = False
 
     controller.disconnected_callback = on_disconnected
 
@@ -898,6 +921,29 @@ def main():
             if now - last_heartbeat >= 0.5:
                 publish_status()
                 last_heartbeat = now
+            if (
+                connection_mode != "wired"
+                and not idle_disconnect_requested
+                and controller_is_connected()
+                and idle_tracker.expired()
+            ):
+                idle_disconnect_requested = True
+                try:
+                    xinput.reset_output_state()
+                    controller.disconnect_for_idle()
+                    publish_status(state="idle_disconnected")
+                    print(tr(
+                        "控制器因閒置而中斷無線連線；按任意鍵即可重新連線。",
+                        "Controller disconnected after being idle; press any "
+                        "button to reconnect.",
+                    ))
+                except Exception as exc:
+                    idle_disconnect_requested = False
+                    idle_tracker.reset()
+                    print(tr(
+                        f"閒置自動斷線失敗：{exc}",
+                        f"Idle disconnect failed: {exc}",
+                    ))
             queued_request = next_controller_command()
             try:
                 legacy_command_ready = (

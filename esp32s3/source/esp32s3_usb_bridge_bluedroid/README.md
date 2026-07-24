@@ -22,6 +22,10 @@ The development firmware keeps the existing bridge protocol and adds:
 - XInput large/small motor commands translated to LF/HF controller rumble.
 - mobile USB HID output driven by the same processed buttons, calibrated
   sticks, direction mappings, mapping layers and gyro-to-stick state.
+- standalone scanning waits for GAP scan-parameter setup, recognizes the
+  controller `reconnect_mac`, and completes the SET_MAC/LTK1/LTK2/FINISH
+  sequence after a first-time SYNC connection so later wakeups and ESP32
+  restarts reconnect without pressing SYNC again.
 
 The XInput path compiles and links successfully and has passed Windows
 enumeration and 130+ Hz input tests. The mobile HID personality enumerates as

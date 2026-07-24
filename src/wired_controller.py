@@ -618,6 +618,7 @@ class WiredController:
         # another thread while native read() is still using it can crash the
         # entire Python process instead of raising a catchable exception.
         self.input_callback = None
+        self._send_shutdown_zero()
         self._rumble_stop.set()
         self._rumble_wake.set()
         rumble_thread = self._rumble_thread
@@ -651,6 +652,35 @@ class WiredController:
             ))
         self._thread = manager_thread if manager_alive else None
         self._rumble_thread = rumble_thread if rumble_alive else None
+
+    def _send_shutdown_zero(self):
+        if not self.connected:
+            return False
+        vibration = self._encode_vibration(
+            CONNECTION_LF_FREQUENCY,
+            0,
+            CONNECTION_HF_FREQUENCY,
+            0,
+        )
+        packet_id = 0x50 + (self._rumble_packet_id & 0x0F)
+        self._rumble_packet_id = (self._rumble_packet_id + 1) & 0x0F
+        segment = bytes([packet_id]) + vibration * 3
+        report = _usb_output_report(b"\x00" + segment + segment)
+        with self._rumble_lock:
+            self._rumble_slot = None
+        try:
+            with self._hid_write_lock:
+                with self._device_lock:
+                    device = self._device
+                if device is None:
+                    return False
+                try:
+                    written = device.write(report)
+                except TypeError:
+                    written = device.write(list(report))
+            return written is not None and written > 0
+        except Exception:
+            return False
 
     def _select_entry(self):
         entries = enumerate_wired_controllers(global_fallback=True)

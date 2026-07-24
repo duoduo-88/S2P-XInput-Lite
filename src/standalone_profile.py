@@ -12,6 +12,8 @@ import time
 import zlib
 from typing import Any, Iterable, Mapping
 
+from idle_disconnect import normalize_idle_disconnect_minutes
+
 import serial
 from serial.tools import list_ports
 
@@ -210,6 +212,7 @@ def compile_standalone_profile(
     profile_name: str,
     settings: Mapping[str, Any],
     mapping_layers: Iterable[Mapping[str, Any]] = (),
+    idle_disconnect_minutes: int = 15,
 ) -> CompiledStandaloneProfile:
     """Create the deterministic schema-1 document accepted by the firmware."""
     mapping_layers = tuple(mapping_layers)
@@ -233,6 +236,9 @@ def compile_standalone_profile(
     document = {
         "schema": STANDALONE_PROFILE_SCHEMA,
         "profile_name": str(profile_name).strip() or "Unnamed",
+        "idle_disconnect_minutes": normalize_idle_disconnect_minutes(
+            idle_disconnect_minutes
+        ),
         "stick_curve_left": typed_sections["stick_curve_left"],
         "stick_curve_right": typed_sections["stick_curve_right"],
         "rumble": typed_sections["rumble"],
@@ -390,6 +396,15 @@ def write_standalone_profile(
     target_mode: str | None = None,
 ) -> Mapping[str, Any]:
     """Atomically stage, verify and activate one compiled profile."""
+    if compiled.blocking_issues:
+        details = "; ".join(
+            f"{issue.feature}: {issue.detail}"
+            for issue in compiled.blocking_issues
+        )
+        raise StandaloneTransferError(
+            f"Standalone profile contains blocking compatibility issues: "
+            f"{details}"
+        )
     if target_mode not in (
         None, "bridge", "standalone", "standalone_hid"
     ):

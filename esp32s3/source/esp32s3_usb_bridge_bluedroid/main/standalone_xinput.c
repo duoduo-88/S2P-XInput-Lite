@@ -10,18 +10,21 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "cJSON.h"
 #include "device/usbd_pvt.h"
 #include "FusionAhrs.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "nvs.h"
 #include "tusb.h"
 
 #define STANDALONE_NVS_NAMESPACE "s2p_profile"
 #define STANDALONE_MODE_KEY      "standalone"
 #define STANDALONE_USB_MODE_KEY  "usb_hid"
+#define STANDALONE_OUTPUT_MODE_KEY "output_mode"
 
 #define XINPUT_INTERFACE         2
 #define XINPUT_EP_OUT            0x03
@@ -293,6 +296,17 @@ static uint8_t s_out_buffer[XINPUT_EP_SIZE];
 static uint8_t s_large_motor;
 static uint8_t s_small_motor;
 static bool s_rumble_dirty;
+static bool s_idle_baseline_valid;
+static uint32_t s_idle_buttons;
+static uint16_t s_idle_sticks[4];
+static int16_t s_idle_gyro[3];
+static uint32_t s_last_activity_ms;
+
+static uint32_t idle_now_ms(void) {
+    return (uint32_t)(
+        xTaskGetTickCount() * (TickType_t)portTICK_PERIOD_MS
+    );
+}
 
 static void encode_hid_report(
     const xinput_report_t *source,
@@ -468,6 +482,7 @@ typedef struct {
     mapping_layer_runtime_t layers[STANDALONE_LAYER_MAX];
     int8_t toggle_layer;
     uint32_t previous_source_buttons;
+    uint8_t idle_disconnect_minutes;
     gyro_runtime_t gyro;
 } standalone_runtime_config_t;
 
@@ -486,6 +501,7 @@ static const uint32_t s_source_masks[SOURCE_BUTTON_COUNT] = {
 };
 
 static standalone_runtime_config_t s_runtime = {
+    .idle_disconnect_minutes = 15,
     .sticks = {
         {
             .x = {0.0f,0.25f,0.50f,0.75f,1.0f},
@@ -535,6 +551,14 @@ static standalone_runtime_config_t s_runtime = {
         .y_ratio = 1.0f,
     },
 };
+static standalone_runtime_config_t s_profile_config;
+static bool s_profile_config_initialized;
+
+static void ensure_profile_config_initialized(void) {
+    if (s_profile_config_initialized) return;
+    s_profile_config = s_runtime;
+    s_profile_config_initialized = true;
+}
 
 static float clampf(float value, float low, float high) {
     if (value < low) return low;
@@ -1046,13 +1070,52 @@ static void parse_gyro_config(
     reset_gyro_runtime_state(config);
 }
 
-bool standalone_xinput_apply_profile_json(
-    const uint8_t *json, size_t length
+static bool parse_profile_json(
+    const uint8_t *json,
+    size_t length,
+    standalone_runtime_config_t *parsed
 ) {
-    if (!json || length == 0) return false;
+    if (!json || length == 0 || !parsed) return false;
     cJSON *root = cJSON_ParseWithLength((const char *)json, length);
     if (!root) return false;
-    standalone_runtime_config_t next = s_runtime;
+    const cJSON *schema =
+        cJSON_GetObjectItemCaseSensitive(root, "schema");
+    if (
+        !cJSON_IsObject(root) || !cJSON_IsNumber(schema) ||
+        schema->valueint != 1
+    ) {
+        cJSON_Delete(root);
+        return false;
+    }
+    ensure_profile_config_initialized();
+    /*
+     * Parse from the last committed immutable configuration, never from the
+     * live algorithm state. Stick smoothing, mapping toggles, gyro fusion and
+     * diagnostics mutate s_runtime while input is active.
+     *
+     * parsed is heap-backed by both callers. Build directly in that storage:
+     * a standalone_runtime_config_t is too large for app_main's startup stack
+     * when an existing NVS profile is restored before TinyUSB starts.
+     */
+    *parsed = s_profile_config;
+#define next (*parsed)
+    next.idle_disconnect_minutes = (uint8_t)clampf(
+        (float)json_number(
+            root, "idle_disconnect_minutes",
+            next.idle_disconnect_minutes
+        ),
+        0.0f, 60.0f
+    );
+    if (
+        next.idle_disconnect_minutes != 0 &&
+        next.idle_disconnect_minutes != 5 &&
+        next.idle_disconnect_minutes != 10 &&
+        next.idle_disconnect_minutes != 15 &&
+        next.idle_disconnect_minutes != 30 &&
+        next.idle_disconnect_minutes != 60
+    ) {
+        next.idle_disconnect_minutes = 15;
+    }
 
     const cJSON *buttons =
         cJSON_GetObjectItemCaseSensitive(root, "buttons");
@@ -1193,10 +1256,43 @@ bool standalone_xinput_apply_profile_json(
         }
     }
     parse_gyro_config(root, &next.gyro);
-    portENTER_CRITICAL(&s_state_mux);
-    s_runtime = next;
-    portEXIT_CRITICAL(&s_state_mux);
+#undef next
     cJSON_Delete(root);
+    return true;
+}
+
+bool standalone_xinput_validate_profile_json(
+    const uint8_t *json, size_t length
+) {
+    standalone_runtime_config_t *parsed = malloc(sizeof(*parsed));
+    if (!parsed) return false;
+    bool valid = parse_profile_json(json, length, parsed);
+    free(parsed);
+    return valid;
+}
+
+bool standalone_xinput_apply_profile_json(
+    const uint8_t *json, size_t length
+) {
+    standalone_runtime_config_t *next = malloc(sizeof(*next));
+    if (!next) return false;
+    if (!parse_profile_json(json, length, next)) {
+        free(next);
+        return false;
+    }
+    /*
+     * Profile commits and input processing are serialized by cdc_task. Keep a
+     * pristine committed copy for future partial documents and a separate
+     * mutable copy for the input algorithm.
+     */
+    s_profile_config = *next;
+    s_profile_config_initialized = true;
+    s_runtime = *next;
+    portENTER_CRITICAL(&s_state_mux);
+    s_idle_baseline_valid = false;
+    s_last_activity_ms = idle_now_ms();
+    portEXIT_CRITICAL(&s_state_mux);
+    free(next);
     return true;
 }
 
@@ -1205,7 +1301,6 @@ void standalone_xinput_get_rumble_config(
     uint16_t *max_amplitude, float *lf_strength, float *hf_strength,
     float *lf_curve, float *hf_curve, float *lf_to_hf, float *hf_to_lf
 ) {
-    portENTER_CRITICAL(&s_state_mux);
     if (lf_frequency) *lf_frequency = s_runtime.lf_frequency;
     if (hf_frequency) *hf_frequency = s_runtime.hf_frequency;
     if (max_amplitude) *max_amplitude = s_runtime.max_amplitude;
@@ -1215,18 +1310,14 @@ void standalone_xinput_get_rumble_config(
     if (hf_curve) *hf_curve = s_runtime.hf_curve;
     if (lf_to_hf) *lf_to_hf = s_runtime.lf_to_hf;
     if (hf_to_lf) *hf_to_lf = s_runtime.hf_to_lf;
-    portEXIT_CRITICAL(&s_state_mux);
 }
 
 void standalone_xinput_set_rumble_ratio(float ratio) {
-    portENTER_CRITICAL(&s_state_mux);
     s_runtime.gyro.rumble_ratio = clampf(ratio, 0.0f, 1.0f);
-    portEXIT_CRITICAL(&s_state_mux);
 }
 
 void standalone_xinput_format_runtime_status(char *output, size_t size) {
     if (!output || size == 0) return;
-    portENTER_CRITICAL(&s_state_mux);
     snprintf(
         output, size,
         "{\"cmd\":\"runtime_status\",\"ok\":1,"
@@ -1262,7 +1353,6 @@ void standalone_xinput_format_runtime_status(char *output, size_t size) {
         s_runtime.hf_frequency,
         s_runtime.max_amplitude
     );
-    portEXIT_CRITICAL(&s_state_mux);
 }
 
 static uint32_t read_u32_le(const uint8_t *data) {
@@ -1663,10 +1753,7 @@ bool standalone_xinput_format_algorithm_test(
             raw_x_1 > 4095 || raw_y_1 > 4095 ||
             raw_x_2 > 4095 || raw_y_2 > 4095
         ) return false;
-        stick_runtime_config_t stick;
-        portENTER_CRITICAL(&s_state_mux);
-        stick = s_runtime.sticks[side];
-        portEXIT_CRITICAL(&s_state_mux);
+        stick_runtime_config_t stick = s_runtime.sticks[side];
         stick.smoothing_valid = false;
         stick.smoothing_report_time = 0;
         int16_t first_x, first_y, final_x, final_y;
@@ -1706,10 +1793,7 @@ bool standalone_xinput_format_algorithm_test(
             strcmp(direction_name, "RIGHT") == 0 ? 3 :
             strcmp(direction_name, "UP") == 0 ? 0 : 0xff;
         if (direction == 0xff) return false;
-        stick_runtime_config_t stick;
-        portENTER_CRITICAL(&s_state_mux);
-        stick = s_runtime.sticks[side];
-        portEXIT_CRITICAL(&s_state_mux);
+        stick_runtime_config_t stick = s_runtime.sticks[side];
         float amount = linear_trigger_amount(
             (uint16_t)raw_x_1, (uint16_t)raw_y_1, direction, &stick
         );
@@ -1732,12 +1816,8 @@ bool standalone_xinput_format_algorithm_test(
             side_name == 'L' || side_name == 'l' ? 0 :
             side_name == 'R' || side_name == 'r' ? 1 : -1;
         if (side < 0) return false;
-        stick_runtime_config_t stick;
-        stick_direction_runtime_t direction;
-        portENTER_CRITICAL(&s_state_mux);
-        stick = s_runtime.sticks[side];
-        direction = s_runtime.directions[side];
-        portEXIT_CRITICAL(&s_state_mux);
+        stick_runtime_config_t stick = s_runtime.sticks[side];
+        stick_direction_runtime_t direction = s_runtime.directions[side];
         direction.active_direction = -1;
         uint8_t left_trigger = 0;
         uint8_t right_trigger = 0;
@@ -2815,10 +2895,8 @@ bool standalone_xinput_format_gyro_test(
         strcmp(arguments, "reset") == 0 ||
         sscanf(arguments, "reset %7s", reset_mode) == 1
     ) {
-        portENTER_CRITICAL(&s_state_mux);
         test_gyro = s_runtime.gyro;
         memcpy(test_sticks, s_runtime.sticks, sizeof(test_sticks));
-        portEXIT_CRITICAL(&s_state_mux);
         if (strcmp(reset_mode, "CENTER") == 0)
             test_gyro.tilt_mode = false;
         else if (strcmp(reset_mode, "TILT") == 0)
@@ -2901,45 +2979,44 @@ bool standalone_xinput_format_gyro_test(
     return true;
 }
 
-bool standalone_mode_load(void) {
+standalone_output_mode_t standalone_output_mode_load(void) {
     nvs_handle_t nvs;
-    uint8_t enabled = 0;
-    if (nvs_open(STANDALONE_NVS_NAMESPACE, NVS_READONLY, &nvs) == ESP_OK) {
-        nvs_get_u8(nvs, STANDALONE_MODE_KEY, &enabled);
-        nvs_close(nvs);
-    }
-    return enabled == 1;
-}
-
-esp_err_t standalone_mode_store(bool enabled) {
-    nvs_handle_t nvs;
+    uint8_t stored_mode = STANDALONE_OUTPUT_BRIDGE;
     esp_err_t err = nvs_open(
         STANDALONE_NVS_NAMESPACE, NVS_READWRITE, &nvs
     );
-    if (err != ESP_OK) return err;
-    err = nvs_set_u8(nvs, STANDALONE_MODE_KEY, enabled ? 1 : 0);
-    if (err == ESP_OK) err = nvs_commit(nvs);
+    if (err != ESP_OK) return STANDALONE_OUTPUT_BRIDGE;
+    err = nvs_get_u8(nvs, STANDALONE_OUTPUT_MODE_KEY, &stored_mode);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        uint8_t legacy_standalone = 0;
+        uint8_t legacy_hid = 0;
+        nvs_get_u8(nvs, STANDALONE_MODE_KEY, &legacy_standalone);
+        nvs_get_u8(nvs, STANDALONE_USB_MODE_KEY, &legacy_hid);
+        stored_mode = !legacy_standalone ? STANDALONE_OUTPUT_BRIDGE :
+            (legacy_hid ? STANDALONE_OUTPUT_HID :
+                          STANDALONE_OUTPUT_XINPUT);
+        err = nvs_set_u8(
+            nvs, STANDALONE_OUTPUT_MODE_KEY, stored_mode
+        );
+        if (err == ESP_OK) nvs_erase_key(nvs, STANDALONE_MODE_KEY);
+        if (err == ESP_OK) nvs_erase_key(nvs, STANDALONE_USB_MODE_KEY);
+        if (err == ESP_OK) nvs_commit(nvs);
+    }
     nvs_close(nvs);
-    return err;
+    if (stored_mode > STANDALONE_OUTPUT_HID)
+        return STANDALONE_OUTPUT_BRIDGE;
+    return (standalone_output_mode_t)stored_mode;
 }
 
-bool standalone_usb_hid_mode_load(void) {
-    nvs_handle_t nvs;
-    uint8_t enabled = 0;
-    if (nvs_open(STANDALONE_NVS_NAMESPACE, NVS_READONLY, &nvs) == ESP_OK) {
-        nvs_get_u8(nvs, STANDALONE_USB_MODE_KEY, &enabled);
-        nvs_close(nvs);
-    }
-    return enabled == 1;
-}
-
-esp_err_t standalone_usb_hid_mode_store(bool enabled) {
+esp_err_t standalone_output_mode_store(standalone_output_mode_t mode) {
+    if (mode < STANDALONE_OUTPUT_BRIDGE || mode > STANDALONE_OUTPUT_HID)
+        return ESP_ERR_INVALID_ARG;
     nvs_handle_t nvs;
     esp_err_t err = nvs_open(
         STANDALONE_NVS_NAMESPACE, NVS_READWRITE, &nvs
     );
     if (err != ESP_OK) return err;
-    err = nvs_set_u8(nvs, STANDALONE_USB_MODE_KEY, enabled ? 1 : 0);
+    err = nvs_set_u8(nvs, STANDALONE_OUTPUT_MODE_KEY, (uint8_t)mode);
     if (err == ESP_OK) err = nvs_commit(nvs);
     nvs_close(nvs);
     return err;
@@ -2981,9 +3058,20 @@ void standalone_xinput_accept_switch_report(
     int channel, const uint8_t *payload, size_t length
 ) {
     if (!payload || length < 16) return;
+    bool accepted;
+    bool idle_baseline_valid;
+    uint32_t idle_buttons;
+    uint16_t idle_sticks[4];
+    int16_t idle_gyro[3];
     portENTER_CRITICAL(&s_state_mux);
     if (s_active_channel < 0) s_active_channel = channel;
-    if (channel == s_active_channel) {
+    accepted = channel == s_active_channel;
+    idle_baseline_valid = s_idle_baseline_valid;
+    idle_buttons = s_idle_buttons;
+    memcpy(idle_sticks, s_idle_sticks, sizeof(idle_sticks));
+    memcpy(idle_gyro, s_idle_gyro, sizeof(idle_gyro));
+    portEXIT_CRITICAL(&s_state_mux);
+    if (accepted) {
         uint32_t report_time = read_u32_le(payload);
         uint32_t source = read_u32_le(payload + 4);
         xinput_report_t report = {.report_size = 20};
@@ -3008,6 +3096,37 @@ void standalone_xinput_accept_switch_report(
         uint16_t left_raw_y = stick_y(payload + 10);
         uint16_t right_raw_x = stick_x(payload + 13);
         uint16_t right_raw_y = stick_y(payload + 13);
+        uint16_t raw_sticks[4] = {
+            left_raw_x, left_raw_y, right_raw_x, right_raw_y
+        };
+        int16_t stick_centers[4] = {
+            s_runtime.sticks[0].center_x,
+            s_runtime.sticks[0].center_y,
+            s_runtime.sticks[1].center_x,
+            s_runtime.sticks[1].center_y,
+        };
+        int16_t raw_gyro[3] = {0, 0, 0};
+        if (length >= 60) {
+            for (int i = 0; i < 3; i++)
+                raw_gyro[i] = read_i16_le(payload + 54 + i * 2);
+        }
+        bool activity = !idle_baseline_valid || source != idle_buttons;
+        for (int i = 0; i < 4 && !activity; i++) {
+            bool outside =
+                abs((int)raw_sticks[i] - stick_centers[i]) >= 150;
+            bool was_outside =
+                abs((int)s_idle_sticks[i] - stick_centers[i]) >= 150;
+            if (
+                abs((int)raw_sticks[i] - (int)idle_sticks[i]) >= 24 &&
+                (outside || was_outside)
+            ) activity = true;
+        }
+        for (int i = 0; i < 3 && !activity; i++) {
+            if (
+                abs((int)raw_gyro[i] - (int)idle_gyro[i]) >= 40 &&
+                abs((int)raw_gyro[i]) >= 120
+            ) activity = true;
+        }
         int16_t left_x, left_y, right_x, right_y;
         process_stick(
             left_raw_x, left_raw_y, report_time,
@@ -3044,11 +3163,19 @@ void standalone_xinput_accept_switch_report(
             payload, length, source, &report,
             &s_runtime.gyro, s_runtime.sticks
         );
-        s_pending_report = report;
-        s_report_dirty = true;
-        s_hid_report_dirty = true;
+        portENTER_CRITICAL(&s_state_mux);
+        if (channel == s_active_channel) {
+            s_idle_buttons = source;
+            memcpy(s_idle_sticks, raw_sticks, sizeof(raw_sticks));
+            memcpy(s_idle_gyro, raw_gyro, sizeof(raw_gyro));
+            s_idle_baseline_valid = true;
+            if (activity) s_last_activity_ms = idle_now_ms();
+            s_pending_report = report;
+            s_report_dirty = true;
+            s_hid_report_dirty = true;
+        }
+        portEXIT_CRITICAL(&s_state_mux);
     }
-    portEXIT_CRITICAL(&s_state_mux);
 }
 
 void standalone_xinput_forget_channel(int channel) {
@@ -3059,8 +3186,37 @@ void standalone_xinput_forget_channel(int channel) {
         s_report_dirty = true;
         s_hid_report_dirty = true;
         s_active_channel = -1;
+        s_idle_baseline_valid = false;
+        s_last_activity_ms = idle_now_ms();
     }
     portEXIT_CRITICAL(&s_state_mux);
+}
+
+bool standalone_xinput_idle_disconnect_due(void) {
+    bool due = false;
+    uint32_t now = idle_now_ms();
+    portENTER_CRITICAL(&s_state_mux);
+    if (
+        s_active_channel >= 0 &&
+        s_runtime.idle_disconnect_minutes > 0 &&
+        s_last_activity_ms > 0
+    ) {
+        uint32_t elapsed = now - s_last_activity_ms;
+        due = elapsed >=
+            (uint32_t)s_runtime.idle_disconnect_minutes * 60u * 1000u;
+        if (due) {
+            memset(&s_pending_report, 0, sizeof(s_pending_report));
+            s_pending_report.report_size = 20;
+            s_report_dirty = true;
+            s_hid_report_dirty = true;
+            s_large_motor = 0;
+            s_small_motor = 0;
+            s_rumble_dirty = true;
+            s_last_activity_ms = now;
+        }
+    }
+    portEXIT_CRITICAL(&s_state_mux);
+    return due;
 }
 
 static void arm_out_endpoint(void) {

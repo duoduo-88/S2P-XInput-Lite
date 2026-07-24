@@ -17,6 +17,10 @@ schedule:
 - newest BLE input shadow is forwarded before command and diagnostic queues;
 - BLE callbacks wake the CDC task immediately instead of waiting for its 2 ms
   maintenance timeout;
+- BLE connection setup has a watchdog, checked scan transitions and complete
+  failure recovery;
+- channels become ready only after the input CCCD write succeeds, and queued
+  input, ACK and rumble packets are generation-scoped across reconnects;
 - each CDC report uses one combined header/payload write;
 - rumble uses direct `wr` latest-only output from the host, avoiding the legacy
   five-packet `rs` FIFO.
@@ -26,7 +30,7 @@ on real hardware. The exact upstream revision is linked above for comparison.
 
 | Current file | SHA-256 |
 |---|---|
-| `esp32s3_bluedroid_bridge.bin` | `B27298647584084FC7347755CB693F698E60D5B23AC7B055B1D7B31225335D13` |
+| `esp32s3_bluedroid_bridge.bin` | `F5729862B4CB62A93A62A685AE42BFEAD675758293024B96323A27AD9D32B027` |
 | `bootloader.bin` | `0B371B530D8DE553C9397DBD42B955C6987EF06DC215326ECEA2CFBD5295B7DC` |
 | `partition-table.bin` | `7F00B6C042A89B15B0CAC534F82ED988CAF29278FF5700B0C511EB1B5BB7C820` |
 

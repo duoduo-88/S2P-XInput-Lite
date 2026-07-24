@@ -2,7 +2,7 @@
 
 This is an opt-in hardware diagnostic:
 
-    runtime\python.exe tests\standalone_gyro_hardware_parity.py --port COM5
+    runtime\\python.exe tests\\standalone_gyro_hardware_parity.py --port COM5
 
 The active ESP32 profile must have been written from the selected config file.
 The diagnostic state is isolated from live controller input and does not write

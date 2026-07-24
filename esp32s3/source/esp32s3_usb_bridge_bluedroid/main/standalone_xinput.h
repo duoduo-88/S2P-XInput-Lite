@@ -7,10 +7,14 @@
 #include "esp_err.h"
 #include "tinyusb.h"
 
-bool standalone_mode_load(void);
-esp_err_t standalone_mode_store(bool enabled);
-bool standalone_usb_hid_mode_load(void);
-esp_err_t standalone_usb_hid_mode_store(bool enabled);
+typedef enum {
+    STANDALONE_OUTPUT_BRIDGE = 0,
+    STANDALONE_OUTPUT_XINPUT = 1,
+    STANDALONE_OUTPUT_HID = 2,
+} standalone_output_mode_t;
+
+standalone_output_mode_t standalone_output_mode_load(void);
+esp_err_t standalone_output_mode_store(standalone_output_mode_t mode);
 void standalone_xinput_configure(
     tinyusb_config_t *config, bool enabled, bool usb_hid_mode
 );
@@ -19,9 +23,13 @@ void standalone_xinput_accept_switch_report(
 );
 void standalone_xinput_forget_channel(int channel);
 void standalone_xinput_pump(void);
+bool standalone_xinput_idle_disconnect_due(void);
 bool standalone_xinput_take_rumble(uint8_t *large_motor, uint8_t *small_motor);
 #define STANDALONE_USB_HID_REPORT_SIZE 13
 bool standalone_xinput_apply_profile_json(
+    const uint8_t *json, size_t length
+);
+bool standalone_xinput_validate_profile_json(
     const uint8_t *json, size_t length
 );
 void standalone_xinput_get_rumble_config(

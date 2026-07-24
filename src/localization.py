@@ -325,6 +325,14 @@ EN_TEXT = {
     "陀螺儀校正完成": "Gyro Calibration Complete",
     "陀螺儀校正失敗": "Gyro Calibration Failed",
     "還原預設": "Defaults",
+    "閒置自動斷線": "Idle Disc.",
+    "無有效操作時，先停止震動再中斷無線連線。": (
+        "Stops rumble and disconnects wireless after no effective input."
+    ),
+    "{minutes} 分鐘": "{minutes} min",
+    "無法安全寫入 config.ini。\n\n錯誤資訊：{error}": (
+        "Could not safely write config.ini.\n\nDetails: {error}"
+    ),
     "還原": "Reset",
     "校正搖桿": "Calibrate",
     "刷入相容韌體": "Flash FW",
@@ -999,6 +1007,7 @@ PHRASES = (
     ("啟動中", "Starting"),
     ("搜尋中", "Searching"),
     ("重連中", "Reconnecting"),
+    ("閒置斷線，按任意鍵喚醒", "Idle; press any button to wake"),
     ("連接程式未啟動", "Connector not running"),
     ("未啟動", "Off"),
     ("正在搜尋手把", "Searching for controller"),

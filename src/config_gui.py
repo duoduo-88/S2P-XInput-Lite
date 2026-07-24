@@ -54,10 +54,15 @@ from config_utils import (
     read_profile,
     rename_profile,
     save_profile,
+    select_standalone_calibration_id,
     validate_profile_name,
     config_file_lock,
 )
 from command_queue import enqueue_controller_command
+from idle_disconnect import (
+    IDLE_DISCONNECT_OPTIONS,
+    load_idle_disconnect_minutes,
+)
 from localization import translate_text
 from console_i18n import localized_print as print
 from mapping_layers import (
@@ -1803,6 +1808,9 @@ class ConfigGUI:
         ).strip().lower()
         if self.language not in ("zh", "en"):
             self.language = "zh"
+        self.idle_disconnect_minutes = load_idle_disconnect_minutes(
+            self.config
+        )
         global _GUI_LANGUAGE
         _GUI_LANGUAGE = self.language
 
@@ -1887,8 +1895,8 @@ class ConfigGUI:
 
         if missing_files:
             messagebox.showerror(
-                "缺少刷機檔案",
-                "找不到以下檔案：\n\n"
+                self.tr("缺少刷機檔案"),
+                self.tr("找不到以下檔案：\n\n")
                 + "\n".join(missing_files)
             )
             return
@@ -1938,9 +1946,10 @@ class ConfigGUI:
             flash_port = sorted(new_ports)[0]
 
             messagebox.showinfo(
-                "偵測到刷機連接埠",
-                f"已偵測到刷機連接埠：{flash_port}\n\n"
-                "即將開始刷入韌體。"
+                self.tr("偵測到刷機連接埠"),
+                self.tr("已偵測到刷機連接埠：")
+                + str(flash_port)
+                + self.tr("\n\n即將開始刷入韌體。")
             )
 
             self.start_firmware_flash(
@@ -2017,8 +2026,8 @@ class ConfigGUI:
         except Exception as exc:
             self.flash_process = None
             messagebox.showerror(
-                "刷機失敗",
-                f"無法啟動韌體刷入程序：\n{exc}"
+                self.tr("刷機失敗"),
+                self.tr("無法啟動韌體刷入程序：\n") + str(exc)
             )
 
     def poll_firmware_flash(self, process):
@@ -4006,6 +4015,7 @@ class ConfigGUI:
             "searching": "搜尋中",
             "connected": "已連線",
             "disconnected": "重連中",
+            "idle_disconnected": "閒置斷線，按任意鍵喚醒",
             "stopped": "未啟動",
         }
         mode_text = {
@@ -4100,7 +4110,9 @@ class ConfigGUI:
                     elif data.get("sensor_mode") == "six_axis":
                         text += " · 六軸"
                 color = "#138A36"
-            elif state in ("starting", "searching", "disconnected"):
+            elif state in (
+                "starting", "searching", "disconnected", "idle_disconnected"
+            ):
                 color = "#D97A00"
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             pass
@@ -6240,6 +6252,55 @@ class ConfigGUI:
         self.apply_language()
         self.request_adaptive_window_update()
 
+    def show_idle_disconnect_menu(self):
+        """Show the global wireless idle timeout choices."""
+        menu = tk.Menu(self.root, tearoff=False)
+        selected = tk.IntVar(value=self.idle_disconnect_minutes)
+        for minutes in IDLE_DISCONNECT_OPTIONS:
+            label = (
+                self.tr("關閉")
+                if minutes == 0
+                else self.tr("{minutes} 分鐘").format(minutes=minutes)
+            )
+            menu.add_radiobutton(
+                label=label,
+                value=minutes,
+                variable=selected,
+                command=lambda value=minutes: (
+                    self.set_idle_disconnect_minutes(value)
+                ),
+            )
+        button = self.idle_disconnect_button
+        try:
+            menu.tk_popup(
+                button.winfo_rootx(),
+                button.winfo_rooty() + button.winfo_height(),
+            )
+        finally:
+            menu.grab_release()
+
+    def set_idle_disconnect_minutes(self, minutes):
+        """Persist the timeout globally and apply it to a live connection."""
+        minutes = int(minutes)
+        if minutes not in IDLE_DISCONNECT_OPTIONS:
+            raise ValueError("unsupported idle disconnect timeout")
+        try:
+            with config_file_lock():
+                latest = load_config(CONFIG_PATH)
+                if not latest.has_section("gui"):
+                    latest.add_section("gui")
+                latest.set("gui", "idle_disconnect_minutes", str(minutes))
+                atomic_write_config(latest, CONFIG_PATH)
+            self.config = load_config(CONFIG_PATH)
+            self.idle_disconnect_minutes = minutes
+            enqueue_controller_command("reload_settings")
+        except OSError as exc:
+            messagebox.showerror(
+                self.tr("儲存失敗"),
+                self.tr("無法安全寫入 config.ini。\n\n錯誤資訊：{error}")
+                .format(error=exc),
+            )
+
     def apply_language(self):
         """更新現有元件、頁籤、狀態文字與提示語言。"""
         def update_widget(widget):
@@ -6264,6 +6325,15 @@ class ConfigGUI:
                 update_widget(child)
 
         update_widget(self.root)
+        # The language button advertises the language it switches to.
+        self.language_button.configure(
+            text="En" if self.language == "zh" else "中"
+        )
+        self.write_esp32_button.configure(
+            text=f"{self.tr('寫入 ESP32')} ▼"
+        )
+        if hasattr(self, "refresh_write_esp32_menu"):
+            self.refresh_write_esp32_menu()
         for combo, display_var, side, source_values in (
             self.stick_mode_selectors
         ):
@@ -9290,15 +9360,22 @@ class ConfigGUI:
             return
         try:
             settings = self._current_gui_settings_snapshot(strict=True)
-            calibration_ids = [
-                section.partition(".")[2]
-                for section in self.config.sections()
-                if section.startswith("gyro.") and section.partition(".")[2]
-            ]
-            calibration_id = (
-                calibration_ids[0]
-                if len(set(calibration_ids)) == 1
-                else None
+            try:
+                controller_status = json.loads(
+                    STATUS_PATH.read_text(encoding="utf-8")
+                )
+                if (
+                    controller_status.get("state") != "connected"
+                    or time.time()
+                    - float(controller_status.get("updated_at", 0.0)) > 3.0
+                ):
+                    controller_status = {}
+            except (
+                OSError, ValueError, TypeError, json.JSONDecodeError
+            ):
+                controller_status = {}
+            calibration_id = select_standalone_calibration_id(
+                self.config, controller_status
             )
             # Standalone output cannot read the desktop's per-controller
             # config.ini after writing, so embed the currently selected
@@ -9328,6 +9405,7 @@ class ConfigGUI:
                 self.profile_name_var.get(),
                 settings,
                 self.mapping_layers,
+                idle_disconnect_minutes=self.idle_disconnect_minutes,
             )
         except (
             SettingValidationError,
@@ -9362,9 +9440,14 @@ class ConfigGUI:
                         for issue in blocking
                     ),
                 ))
+                messagebox.showerror(
+                    self.tr(
+                        "?典?閮剖??⊥?撖怠 ESP32"
+                    ),
+                    "\n".join(lines),
+                )
+                return
             if ignored:
-                if lines:
-                    lines.append("")
                 lines.extend((
                     self.tr(
                         "下列 Windows 專用設定將被略過："
@@ -9380,7 +9463,7 @@ class ConfigGUI:
                     "其他相容設定仍可正常寫入。是否確認忽略並繼續？"
                 ),
             ))
-            if not messagebox.askyesno(
+            if ignored and not messagebox.askyesno(
                 self.tr(
                     "部分設定無法寫入 ESP32"
                 ),
@@ -9570,7 +9653,7 @@ class ConfigGUI:
         else:
             messagebox.showerror(
                 self.tr("ESP32 寫入失敗"),
-                message,
+                self.tr(message),
             )
         if restart_after:
             main_path = Path(__file__).with_name("main.py")
