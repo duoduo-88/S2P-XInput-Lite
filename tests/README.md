@@ -18,6 +18,10 @@ The automated suite covers:
 - input-dispatch edge preservation and callback serialization;
 - Windows taskbar minimize/restore repaint behavior;
 - source compilation and module-boundary checks.
+- transport shutdown ordering and blocking standalone writes;
+- standalone A/B fallback, commit ordering, schema validation, and callback
+  fast-path contracts;
+- multi-controller calibration selection.
 
 Desktop-output tests use a fake Windows backend. They do not connect to a
 controller, create a ViGEm target, or send real keyboard or mouse input.
@@ -36,3 +40,21 @@ seconds, and always sends a stop frame when interrupted. Frequency entries are
 raw 9-bit command values stored in 10-bit protocol slots, not certified Hz
 values.
 
+For standalone write/input race coverage and BLE callback P95/P99 latency,
+keep a paired controller awake and moving, then run:
+
+```powershell
+& ".\runtime\python.exe" ".\tests\live_standalone_stress.py" --port COM5
+```
+
+The probe performs repeated A/B commits while input notifications continue,
+then fails if too few callbacks were observed or the configurable max/P95/P99
+limits are exceeded.
+
+Hardware release acceptance still requires three manual checks:
+
+- Windows standalone mode appears as XInput and receives buttons, axes, and
+  bidirectional rumble;
+- Android standalone HID mode receives buttons, axes, triggers, and hat input;
+- wired, Bluetooth, and ESP32 transports pass `run_live_rumble_sweep.bat`,
+  including a zero-amplitude stop after interruption.

@@ -21,6 +21,13 @@ from pathlib import Path
 import serial.tools.list_ports
 import winreg
 from version import APP_TITLE
+from esp32_detection import find_esp32_port
+from standalone_profile import (
+    StandaloneTransferError,
+    compile_standalone_profile,
+    set_esp32_mode,
+    write_standalone_profile,
+)
 from stick_curve import apply_stick_curve
 from switch2_input import SWITCH_BUTTONS
 from config_utils import (
@@ -36,15 +43,26 @@ from config_utils import (
     is_protected_profile,
     list_profiles,
     load_config,
+    load_accelerometer_calibration,
+    load_gyro_bias,
+    load_magnetometer_bias,
+    load_magnetometer_matrix,
+    load_magnetometer_scale,
+    load_stick_calibration,
     parse_output_shape_steps,
     profile_path,
     read_profile,
     rename_profile,
     save_profile,
+    select_standalone_calibration_id,
     validate_profile_name,
     config_file_lock,
 )
 from command_queue import enqueue_controller_command
+from idle_disconnect import (
+    IDLE_DISCONNECT_OPTIONS,
+    load_idle_disconnect_minutes,
+)
 from localization import translate_text
 from console_i18n import localized_print as print
 from mapping_layers import (
@@ -1790,6 +1808,9 @@ class ConfigGUI:
         ).strip().lower()
         if self.language not in ("zh", "en"):
             self.language = "zh"
+        self.idle_disconnect_minutes = load_idle_disconnect_minutes(
+            self.config
+        )
         global _GUI_LANGUAGE
         _GUI_LANGUAGE = self.language
 
@@ -1874,8 +1895,8 @@ class ConfigGUI:
 
         if missing_files:
             messagebox.showerror(
-                "缺少刷機檔案",
-                "找不到以下檔案：\n\n"
+                self.tr("缺少刷機檔案"),
+                self.tr("找不到以下檔案：\n\n")
                 + "\n".join(missing_files)
             )
             return
@@ -1925,9 +1946,10 @@ class ConfigGUI:
             flash_port = sorted(new_ports)[0]
 
             messagebox.showinfo(
-                "偵測到刷機連接埠",
-                f"已偵測到刷機連接埠：{flash_port}\n\n"
-                "即將開始刷入韌體。"
+                self.tr("偵測到刷機連接埠"),
+                self.tr("已偵測到刷機連接埠：")
+                + str(flash_port)
+                + self.tr("\n\n即將開始刷入韌體。")
             )
 
             self.start_firmware_flash(
@@ -2004,8 +2026,8 @@ class ConfigGUI:
         except Exception as exc:
             self.flash_process = None
             messagebox.showerror(
-                "刷機失敗",
-                f"無法啟動韌體刷入程序：\n{exc}"
+                self.tr("刷機失敗"),
+                self.tr("無法啟動韌體刷入程序：\n") + str(exc)
             )
 
     def poll_firmware_flash(self, process):
@@ -3993,6 +4015,7 @@ class ConfigGUI:
             "searching": "搜尋中",
             "connected": "已連線",
             "disconnected": "重連中",
+            "idle_disconnected": "閒置斷線，按任意鍵喚醒",
             "stopped": "未啟動",
         }
         mode_text = {
@@ -4087,7 +4110,9 @@ class ConfigGUI:
                     elif data.get("sensor_mode") == "six_axis":
                         text += " · 六軸"
                 color = "#138A36"
-            elif state in ("starting", "searching", "disconnected"):
+            elif state in (
+                "starting", "searching", "disconnected", "idle_disconnected"
+            ):
                 color = "#D97A00"
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             pass
@@ -6227,6 +6252,55 @@ class ConfigGUI:
         self.apply_language()
         self.request_adaptive_window_update()
 
+    def show_idle_disconnect_menu(self):
+        """Show the global wireless idle timeout choices."""
+        menu = tk.Menu(self.root, tearoff=False)
+        selected = tk.IntVar(value=self.idle_disconnect_minutes)
+        for minutes in IDLE_DISCONNECT_OPTIONS:
+            label = (
+                self.tr("關閉")
+                if minutes == 0
+                else self.tr("{minutes} 分鐘").format(minutes=minutes)
+            )
+            menu.add_radiobutton(
+                label=label,
+                value=minutes,
+                variable=selected,
+                command=lambda value=minutes: (
+                    self.set_idle_disconnect_minutes(value)
+                ),
+            )
+        button = self.idle_disconnect_button
+        try:
+            menu.tk_popup(
+                button.winfo_rootx(),
+                button.winfo_rooty() + button.winfo_height(),
+            )
+        finally:
+            menu.grab_release()
+
+    def set_idle_disconnect_minutes(self, minutes):
+        """Persist the timeout globally and apply it to a live connection."""
+        minutes = int(minutes)
+        if minutes not in IDLE_DISCONNECT_OPTIONS:
+            raise ValueError("unsupported idle disconnect timeout")
+        try:
+            with config_file_lock():
+                latest = load_config(CONFIG_PATH)
+                if not latest.has_section("gui"):
+                    latest.add_section("gui")
+                latest.set("gui", "idle_disconnect_minutes", str(minutes))
+                atomic_write_config(latest, CONFIG_PATH)
+            self.config = load_config(CONFIG_PATH)
+            self.idle_disconnect_minutes = minutes
+            enqueue_controller_command("reload_settings")
+        except OSError as exc:
+            messagebox.showerror(
+                self.tr("儲存失敗"),
+                self.tr("無法安全寫入 config.ini。\n\n錯誤資訊：{error}")
+                .format(error=exc),
+            )
+
     def apply_language(self):
         """更新現有元件、頁籤、狀態文字與提示語言。"""
         def update_widget(widget):
@@ -6251,6 +6325,15 @@ class ConfigGUI:
                 update_widget(child)
 
         update_widget(self.root)
+        # The language button advertises the language it switches to.
+        self.language_button.configure(
+            text="En" if self.language == "zh" else "中"
+        )
+        self.write_esp32_button.configure(
+            text=f"{self.tr('寫入 ESP32')} ▼"
+        )
+        if hasattr(self, "refresh_write_esp32_menu"):
+            self.refresh_write_esp32_menu()
         for combo, display_var, side, source_values in (
             self.stick_mode_selectors
         ):
@@ -9218,6 +9301,366 @@ class ConfigGUI:
         current_layers = json.loads(json.dumps(self.mapping_layers))
         saved_layers = getattr(self, "_layer_disk_baseline", [])
         return current_layers != saved_layers
+
+    def _confirm_saved_profile_before_esp32_action(self):
+        """Ensure ESP32 actions never combine saved and unsaved UI state."""
+        if not self.has_unsaved_changes():
+            return True
+        if not messagebox.askyesno(
+            self.tr("尚未儲存設定"),
+            self.tr(
+                "目前畫面有尚未儲存的變更。\n\n"
+                "為避免 ESP32 寫入內容與畫面不一致，必須先將目前方案"
+                "儲存並套用。\n\n"
+                "是否現在儲存並套用後繼續？"
+            ),
+        ):
+            return False
+        saved = (
+            self.save_profile_as()
+            if is_protected_profile(self.active_profile)
+            else self.save_current_profile(show_message=False)
+        )
+        if not saved:
+            return False
+        if self.has_unsaved_changes():
+            messagebox.showerror(
+                self.tr("尚未儲存設定"),
+                self.tr(
+                    "仍偵測到尚未儲存的變更，已取消 ESP32 操作。"
+                ),
+            )
+            return False
+        return True
+
+    def _confirm_esp32_usb_mode_change(self, target_mode):
+        """Explain USB re-enumeration before changing standalone personality."""
+        if target_mode not in ("standalone", "standalone_hid"):
+            return True
+        mode_name = self.tr(
+            "PC XInput 獨立模式"
+            if target_mode == "standalone"
+            else "手機 USB HID 模式"
+        )
+        return messagebox.askokcancel(
+            self.tr("切換 ESP32 模式"),
+            self.tr(
+                "即將寫入目前方案並切換為「{mode}」。\n\n"
+                "ESP32 會自動重新啟動，USB 裝置將短暫斷線並以新的"
+                "身分重新連接。若裝置沒有重新出現，請拔除後重新插入。"
+                "\n\n是否繼續？"
+            ).format(mode=mode_name),
+        )
+
+    def write_current_profile_to_esp32(self, target_mode="standalone"):
+        """Compile, review and atomically write the visible standalone profile."""
+        if not self._confirm_saved_profile_before_esp32_action():
+            return
+        if not self._confirm_esp32_usb_mode_change(target_mode):
+            return
+        try:
+            settings = self._current_gui_settings_snapshot(strict=True)
+            try:
+                controller_status = json.loads(
+                    STATUS_PATH.read_text(encoding="utf-8")
+                )
+                if (
+                    controller_status.get("state") != "connected"
+                    or time.time()
+                    - float(controller_status.get("updated_at", 0.0)) > 3.0
+                ):
+                    controller_status = {}
+            except (
+                OSError, ValueError, TypeError, json.JSONDecodeError
+            ):
+                controller_status = {}
+            calibration_id = select_standalone_calibration_id(
+                self.config, controller_status
+            )
+            # Standalone output cannot read the desktop's per-controller
+            # config.ini after writing, so embed the currently selected
+            # controller calibration in the atomic profile document.
+            settings["calibration"] = load_stick_calibration(
+                self.config, calibration_id
+            )
+            accel_bias, accel_matrix = load_accelerometer_calibration(
+                self.config, calibration_id
+            )
+            settings["sensor_calibration"] = {
+                "controller_id": calibration_id,
+                "gyro_bias": load_gyro_bias(self.config, calibration_id),
+                "accelerometer_bias": accel_bias,
+                "accelerometer_matrix": accel_matrix,
+                "magnetometer_bias": load_magnetometer_bias(
+                    self.config, calibration_id
+                ),
+                "magnetometer_scale": load_magnetometer_scale(
+                    self.config, calibration_id
+                ),
+                "magnetometer_matrix": load_magnetometer_matrix(
+                    self.config, calibration_id
+                ),
+            }
+            compiled = compile_standalone_profile(
+                self.profile_name_var.get(),
+                settings,
+                self.mapping_layers,
+                idle_disconnect_minutes=self.idle_disconnect_minutes,
+            )
+        except (
+            SettingValidationError,
+            ValueError,
+            TypeError,
+            KeyError,
+            tk.TclError,
+        ) as exc:
+            messagebox.showerror(
+                self.tr("無法建立 ESP32 設定"),
+                str(exc),
+            )
+            return
+
+        if compiled.issues:
+            ignored = [
+                issue for issue in compiled.issues
+                if issue.severity == "ignored"
+            ]
+            blocking = [
+                issue for issue in compiled.issues
+                if issue.severity == "blocking"
+            ]
+            lines = []
+            if blocking:
+                lines.extend((
+                    self.tr(
+                        "下列設定在獨立模式中會改變操作結果："
+                    ),
+                    *(
+                        f"• {issue.feature}：{issue.detail}"
+                        for issue in blocking
+                    ),
+                ))
+                messagebox.showerror(
+                    self.tr(
+                        "?典?閮剖??⊥?撖怠 ESP32"
+                    ),
+                    "\n".join(lines),
+                )
+                return
+            if ignored:
+                lines.extend((
+                    self.tr(
+                        "下列 Windows 專用設定將被略過："
+                    ),
+                    *(
+                        f"• {issue.feature}：{issue.detail}"
+                        for issue in ignored
+                    ),
+                ))
+            lines.extend((
+                "",
+                self.tr(
+                    "其他相容設定仍可正常寫入。是否確認忽略並繼續？"
+                ),
+            ))
+            if ignored and not messagebox.askyesno(
+                self.tr(
+                    "部分設定無法寫入 ESP32"
+                ),
+                "\n".join(lines),
+            ):
+                return
+
+        was_running = bool(
+            self.main_process is not None
+            and self.main_process.poll() is None
+        )
+        if was_running:
+            self.stop_main_process()
+
+        button = getattr(self, "write_esp32_button", None)
+        if button is not None:
+            button.config(state="disabled")
+
+        def start_worker():
+            thread = threading.Thread(
+                target=self._write_esp32_profile_worker,
+                args=(compiled, was_running, target_mode),
+                daemon=True,
+                name="ESP32ProfileWriter",
+            )
+            thread.start()
+
+        # Give the connector process enough time to release the CDC port.
+        self.root.after(500 if was_running else 0, start_worker)
+
+    def _write_esp32_profile_worker(
+        self, compiled, restart_after, target_mode
+    ):
+        """Perform serial detection and transfer without blocking Tk."""
+        try:
+            baudrate = self.config.getint(
+                "serial", "baudrate", fallback=2_000_000
+            )
+            port = find_esp32_port(baudrate)
+            if port is None:
+                raise StandaloneTransferError(
+                    self.tr(
+                        "找不到相容的 ESP32。請確認已連接 OTG 接口，"
+                        "而且沒有其他程式占用連接埠。"
+                    )
+                )
+            result = write_standalone_profile(
+                port,
+                baudrate,
+                compiled,
+                target_mode=target_mode,
+            )
+        except (
+            StandaloneTransferError,
+            serial.SerialException,
+            OSError,
+            ValueError,
+        ) as exc:
+            self.root.after(
+                0,
+                lambda error=str(exc): self._finish_esp32_profile_write(
+                    False, error, restart_after
+                ),
+            )
+            return
+
+        if self.language == "en":
+            summary = (
+                f"The current profile was written safely to ESP32.\n\n"
+                f"Slot: {result.get('slot', '?')}\n"
+                f"Length: {result.get('length', len(compiled.payload))} bytes\n"
+                f"CRC32: {result.get('crc32', f'{compiled.crc32:08x}')}"
+            )
+        else:
+            summary = (
+                f"目前方案已安全寫入 ESP32。\n\n"
+                f"設定槽：{result.get('slot', '?')}\n"
+                f"資料長度：{result.get('length', len(compiled.payload))} bytes\n"
+                f"CRC32：{result.get('crc32', f'{compiled.crc32:08x}')}"
+            )
+        if target_mode == "standalone_hid":
+            summary += self.tr(
+                "\n\n已啟用手機 USB HID 模式。重新插入手機後，"
+                "ESP32 會顯示為「S2P Mobile Gamepad」。\n"
+                "此模式不提供手機遊戲震動；是否支援 Home／Capture "
+                "等額外按鍵取決於手機系統與遊戲。"
+            )
+        if result.get("restart_required", False):
+            summary += self.tr(
+                "\n\nESP32 已自動重新啟動，USB 裝置會短暫消失。"
+                "若數秒後沒有重新出現，請拔除後重新插入 ESP32。"
+            )
+        self.root.after(
+            0,
+            lambda: self._finish_esp32_profile_write(
+                True,
+                summary,
+                restart_after and target_mode not in (
+                    "standalone", "standalone_hid"
+                ),
+            ),
+        )
+
+    def set_esp32_bridge_mode(self):
+        """Return compatible firmware to its desktop bridge personality."""
+        if not self._confirm_saved_profile_before_esp32_action():
+            return
+        if not messagebox.askokcancel(
+            self.tr("切換 ESP32 模式"),
+            self.tr(
+                "即將切回 ESP32 橋接模式。\n\n"
+                "ESP32 會自動重新啟動，USB 裝置將短暫斷線並重新連接。"
+                "若橋接裝置沒有重新出現，請拔除後重新插入 ESP32。"
+                "\n\n是否繼續？"
+            ),
+        ):
+            return
+        was_running = bool(
+            self.main_process is not None
+            and self.main_process.poll() is None
+        )
+        if was_running:
+            self.stop_main_process()
+        button = getattr(self, "write_esp32_button", None)
+        if button is not None:
+            button.config(state="disabled")
+
+        def worker():
+            try:
+                baudrate = self.config.getint(
+                    "serial", "baudrate", fallback=2_000_000
+                )
+                port = find_esp32_port(baudrate)
+                if port is None:
+                    raise StandaloneTransferError(
+                        self.tr(
+                            "找不到相容的 ESP32。"
+                        )
+                    )
+                result = set_esp32_mode(port, baudrate, "bridge")
+            except (
+                StandaloneTransferError,
+                serial.SerialException,
+                OSError,
+                ValueError,
+            ) as exc:
+                self.root.after(
+                    0,
+                    lambda error=str(exc): self._finish_esp32_profile_write(
+                        False, error, was_running
+                    ),
+                )
+                return
+            message = self.tr(
+                "ESP32 已切回橋接模式。"
+            )
+            if result.get("restart_required", False):
+                message += self.tr(
+                    "\n\nESP32 已自動重新啟動，USB 裝置會短暫消失。"
+                    "請等待橋接裝置重新出現；若數秒後仍未出現，"
+                    "請拔除後重新插入 ESP32。"
+                )
+            self.root.after(
+                0,
+                lambda: self._finish_esp32_profile_write(
+                    True,
+                    message,
+                    was_running,
+                ),
+            )
+
+        threading.Thread(
+            target=worker,
+            daemon=True,
+            name="ESP32ModeWriter",
+        ).start()
+
+    def _finish_esp32_profile_write(self, succeeded, message, restart_after):
+        button = getattr(self, "write_esp32_button", None)
+        if button is not None:
+            button.config(state="normal")
+        if succeeded:
+            messagebox.showinfo(
+                self.tr("寫入完成"),
+                message,
+            )
+        else:
+            messagebox.showerror(
+                self.tr("ESP32 寫入失敗"),
+                self.tr(message),
+            )
+        if restart_after:
+            main_path = Path(__file__).with_name("main.py")
+            if main_path.exists():
+                # A USB personality change needs time to disappear and
+                # enumerate again before the connector scans serial ports.
+                self.root.after(1800, lambda: self.start_main(main_path))
 
 
     def restart_main(self):

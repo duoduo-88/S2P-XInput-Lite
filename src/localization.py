@@ -1,6 +1,48 @@
 """Traditional Chinese / English text used by the settings GUI."""
 
 EN_TEXT = {
+    "寫入 ESP32": "ESP32",
+    "寫入 ESP32 ▼": "ESP32 ▼",
+    "寫入並啟用獨立模式": "Write and enable standalone",
+    "寫入並啟用 PC XInput 獨立模式":
+        "Write and enable PC XInput standalone",
+    "寫入並啟用手機 USB HID 模式":
+        "Write and enable mobile USB HID",
+    "僅寫入設定": "Write profile only",
+    "切回 ESP32 橋接模式": "Return to ESP32 bridge mode",
+    "切換 ESP32 模式": "Change ESP32 Mode",
+    "PC XInput 獨立模式": "PC XInput Standalone Mode",
+    "手機 USB HID 模式": "Mobile USB HID Mode",
+    "目前畫面有尚未儲存的變更。\n\n為避免 ESP32 寫入內容與畫面不一致，必須先將目前方案儲存並套用。\n\n是否現在儲存並套用後繼續？":
+        "The current screen contains unsaved changes.\n\nTo prevent the ESP32 profile from differing from the visible settings, the current profile must be saved and applied first.\n\nSave and apply now, then continue?",
+    "仍偵測到尚未儲存的變更，已取消 ESP32 操作。":
+        "Unsaved changes are still present. The ESP32 operation was canceled.",
+    "即將寫入目前方案並切換為「{mode}」。\n\nESP32 會自動重新啟動，USB 裝置將短暫斷線並以新的身分重新連接。若裝置沒有重新出現，請拔除後重新插入。\n\n是否繼續？":
+        "The current profile will be written and ESP32 will switch to “{mode}”.\n\nESP32 will restart automatically. The USB device will disconnect briefly and reconnect with a new identity. If it does not reappear, unplug and reconnect it.\n\nContinue?",
+    "\n\nESP32 已自動重新啟動，USB 裝置會短暫消失。若數秒後沒有重新出現，請拔除後重新插入 ESP32。":
+        "\n\nESP32 restarted automatically and the USB device will disappear briefly. If it does not reappear after a few seconds, unplug and reconnect the ESP32.",
+    "即將切回 ESP32 橋接模式。\n\nESP32 會自動重新啟動，USB 裝置將短暫斷線並重新連接。若橋接裝置沒有重新出現，請拔除後重新插入 ESP32。\n\n是否繼續？":
+        "ESP32 will return to bridge mode.\n\nESP32 will restart automatically and the USB device will disconnect briefly before reconnecting. If the bridge device does not reappear, unplug and reconnect the ESP32.\n\nContinue?",
+    "ESP32 已切回橋接模式。": "ESP32 returned to bridge mode.",
+    "\n\nESP32 已自動重新啟動，USB 裝置會短暫消失。請等待橋接裝置重新出現；若數秒後仍未出現，請拔除後重新插入 ESP32。":
+        "\n\nESP32 restarted automatically and the USB device will disappear briefly. Wait for the bridge device to reappear; if it is still missing after a few seconds, unplug and reconnect the ESP32.",
+    "無法建立 ESP32 設定": "Cannot build ESP32 profile",
+    "下列設定在獨立模式中會改變操作結果：":
+        "These settings change behavior in standalone mode:",
+    "下列 Windows 專用設定將被略過：":
+        "These Windows-only settings will be ignored:",
+    "其他相容設定仍可正常寫入。是否確認忽略並繼續？":
+        "Other compatible settings can still be written. Ignore these items and continue?",
+    "部分設定無法寫入 ESP32": "Some settings cannot be written to ESP32",
+    "找不到相容的 ESP32。請確認已連接 OTG 接口，而且沒有其他程式占用連接埠。":
+        "No compatible ESP32 was found. Check the OTG connection and make sure no other program owns the port.",
+    "找不到相容的 ESP32。": "No compatible ESP32 was found.",
+    "ESP32 已切回橋接模式並重新啟動。":
+        "ESP32 returned to bridge mode and restarted.",
+    "\n\n已啟用手機 USB HID 模式。重新插入手機後，ESP32 會顯示為「S2P Mobile Gamepad」。\n此模式不提供手機遊戲震動；是否支援 Home／Capture 等額外按鍵取決於手機系統與遊戲。":
+        "\n\nMobile USB HID mode is enabled. Reconnect it to the phone and the ESP32 will appear as “S2P Mobile Gamepad”.\nThis mode does not provide mobile-game rumble. Home, Capture, and other extra-button support depends on the phone OS and game.",
+    "寫入完成": "Write complete",
+    "ESP32 寫入失敗": "ESP32 write failed",
     "？": "?",
     "輸入錯誤": "Input Error",
     "輸入曲線控制點": "Enter Curve Point",
@@ -283,6 +325,14 @@ EN_TEXT = {
     "陀螺儀校正完成": "Gyro Calibration Complete",
     "陀螺儀校正失敗": "Gyro Calibration Failed",
     "還原預設": "Defaults",
+    "閒置自動斷線": "Idle Disc.",
+    "無有效操作時，先停止震動再中斷無線連線。": (
+        "Stops rumble and disconnects wireless after no effective input."
+    ),
+    "{minutes} 分鐘": "{minutes} min",
+    "無法安全寫入 config.ini。\n\n錯誤資訊：{error}": (
+        "Could not safely write config.ini.\n\nDetails: {error}"
+    ),
     "還原": "Reset",
     "校正搖桿": "Calibrate",
     "刷入相容韌體": "Flash FW",
@@ -957,6 +1007,7 @@ PHRASES = (
     ("啟動中", "Starting"),
     ("搜尋中", "Searching"),
     ("重連中", "Reconnecting"),
+    ("閒置斷線，按任意鍵喚醒", "Idle; press any button to wake"),
     ("連接程式未啟動", "Connector not running"),
     ("未啟動", "Off"),
     ("正在搜尋手把", "Searching for controller"),

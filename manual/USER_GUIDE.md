@@ -1,8 +1,11 @@
-# S2P-XInput-Lite v0.5.3 User Guide
+# S2P-XInput-Lite v0.6.0 User Guide
 
 [繁體中文](USER_GUIDE_zh-TW.md)
 
-This illustrated guide covers installation, connections, profiles, stick tuning, mapping, gyro controls, rumble, HidHide, and ESP32-S3 setup in S2P-XInput-Lite v0.5.3.
+This guide covers installation, connections, profiles, stick tuning, mapping,
+gyro controls, rumble, HidHide, and ESP32-S3 bridge and standalone operation in
+S2P-XInput-Lite v0.6.0. Existing illustrations remain valid for shared UI that
+has not changed; follow section 8 for the new v0.6.0 ESP32 controls.
 
 The screenshots use the English interface. Select **中 / En** in the lower-left corner of the main window to switch languages without changing the layout.
 
@@ -34,8 +37,8 @@ The screenshots use the English interface. Select **中 / En** in the lower-left
 
 - Windows 10 or Windows 11.
 - A Switch 2 Pro Controller and a data-capable USB-C cable.
-- ViGEmBus 1.22.0 for creating the virtual Xbox 360 controller.
-- HidHide is recommended for wired USB to prevent games from receiving both the physical HID device and the virtual Xbox controller.
+- ViGEmBus 1.22.0 for creating the virtual XInput controller.
+- HidHide is recommended for wired USB to prevent games from receiving both the physical HID device and the virtual XInput controller.
 - A compatible ESP32-S3 board is required for ESP32 bridge mode.
 
 ### 1.2 First launch
@@ -60,6 +63,12 @@ Connect the controller directly to the PC with USB-C. This normally provides low
 
 The controller connects to the ESP32-S3 over BLE. The bridge then sends controller data to the PC over USB.
 
+v0.6.0 also provides two standalone outputs that do not require the Windows
+application to remain open:
+
+- **PC XInput Standalone Mode** — The ESP32 provides XInput-compatible output directly to Windows.
+- **Mobile USB HID Mode** — The ESP32 connects to a phone or other compatible host as a standard USB HID Gamepad.
+
 #### Windows BLE
 
 Pair the controller directly with Windows. This is convenient, but update rate and stability can depend on the Bluetooth adapter and wireless environment.
@@ -81,7 +90,7 @@ Pair the controller directly with Windows. This is convenient, but update rate a
 
 ### 2.1 Status indicators
 
-- **ViGEm: Ready** — The virtual Xbox controller is available.
+- **ViGEm: Ready** — The virtual XInput controller is available.
 - **WASAPI: Ready** — System-output audio capture is available.
 - **HidHide: Ready** — HidHide is installed and configured.
 - **HidHide: Missing** — HidHide is not installed.
@@ -342,7 +351,7 @@ If Audio or Mix produces continuous high-frequency noise:
 
 ### 8.1 HidHide
 
-In wired mode, a game may see both the physical controller HID and the virtual Xbox controller, producing duplicate input. HidHide hides the physical HID while allowing S2P-XInput-Lite to keep reading it.
+In wired mode, a game may see both the physical controller HID and the virtual XInput controller, producing duplicate input. HidHide hides the physical HID while allowing S2P-XInput-Lite to keep reading it.
 
 - **HidHide: Ready** — Installed and configured.
 - **HidHide: Missing** — Not installed. Select the status text to open the download page.
@@ -375,6 +384,81 @@ If you dismiss an automatic reminder, it will not appear on every launch. Select
 3. Hold **SYNC** when a new pairing is required.
 4. The application detects the SYNC connection and writes the ESP32 pairing data.
 5. Confirm that the Pad/ESP32 status changes to connected.
+
+### 8.4 Three ESP32 operating modes
+
+| Mode | Keep application open | Output host | Main use |
+|---|---:|---|---|
+| ESP32 bridge mode | Yes | Windows virtual XInput | Full desktop feature set |
+| PC XInput Standalone Mode | No | XInput-compatible Windows USB | Play directly from the stored profile |
+| Mobile USB HID Mode | No | Standard USB HID Gamepad | USB connection to Android or another compatible host |
+
+Standalone mode runs compatible calibration, stick curves, deadzones, output
+shape, button mappings, Mapping Layers, gyro-to-stick, and game-rumble settings
+on the ESP32. Features that require Windows are not executed.
+
+### 8.5 Writing a profile and enabling standalone mode
+
+1. Select the profile to write.
+2. Finish editing and select **Save/Apply**.
+3. Confirm that the ESP32 is connected and running standalone-capable
+   `0.14.0-dev` firmware.
+4. Select **ESP32 ▼** at the bottom of the window.
+5. Select **Write and enable PC XInput standalone** or
+   **Write and enable Mobile USB HID**.
+6. Review the compatibility report. Cancel and correct Windows-only outputs,
+   or explicitly confirm that unsupported items should be omitted.
+7. Wait for profile transfer, CRC verification, and runtime application.
+8. The ESP32 restarts automatically. Reconnect it if the USB device does not
+   reappear.
+
+If the current controls contain unsaved changes, the application requires them
+to be saved first instead of silently writing the previously saved values.
+**System Default** is read-only; use **Save New** after modifying it.
+
+> [!NOTE]
+> Profile storage uses A/B slots. The active profile remains in one slot while
+> the new profile is written to the other. The ESP32 switches slots only after
+> length, CRC, and parameter validation succeed. A/B slots are an automatic
+> recovery mechanism, not two user-selectable profiles.
+
+### 8.6 Returning to bridge mode
+
+1. Connect the ESP32 to Windows and open S2P-XInput-Lite.
+2. Select **ESP32 ▼**.
+3. Select **Return to ESP32 bridge mode**.
+4. Confirm the warning. The ESP32 restarts and re-enumerates its USB device.
+5. If it is not detected again, reconnect the ESP32 and select
+   **Restart Connection**.
+
+**Restart Connection** only restarts the desktop connection. It does not
+overwrite the profile stored on the ESP32.
+
+### 8.7 Standalone support
+
+Supported:
+
+- Controller-to-controller button mappings, stick swap, and compatible Mapping Layers.
+- Stick calibration, center/outer deadzones, curves, output shape, stabilizer, and smoothing.
+- Linear triggers and compatible stick-direction output.
+- Gyro-to-left/right-stick with activation, sensitivity, deadzone, and smoothing.
+- Game-mode rumble, LF/HF frequencies and strengths, and maximum amplitude.
+
+Not transferred:
+
+- Windows keyboard, mouse, key-combination, or system-shortcut output.
+- Audio or Mix audio haptics.
+- Process-based automatic profile switching.
+- Gyro-to-Windows-mouse output.
+- Phone-game rumble and BLE HID output.
+
+Phone support for Home, Capture, and extra buttons depends on the phone OS and
+game. Mobile USB HID exposes triggers as both analog axes and digital L2/R2
+buttons for broader compatibility.
+iPhone, iPad, and macOS hosts should use standards-based USB HID rather than PC
+XInput standalone mode. Detection, adapter requirements, and game support still
+depend on the device, OS, and game; compatibility with every Apple device is
+not guaranteed.
 
 ---
 
@@ -409,7 +493,8 @@ Hover over the six-band description to display a question-mark cursor and the co
 
 ### 9.5 Restart and Pin
 
-- **Restart** — Restarts the connector and reloads the saved configuration.
+- **Restart Connection** — Restarts the desktop connector and reloads saved settings; it does not write to the ESP32.
+- **ESP32 ▼** — Writes the current profile and selects standalone output, or returns to bridge mode.
 - **Pin** — Makes the currently detected controller the preferred device. A successful action produces a notification rumble.
 
 > [!WARNING]
@@ -425,6 +510,9 @@ Hover over the six-band description to display a question-mark cursor and the co
 | Duplicate game input | Configure HidHide and check whether Steam Input is also remapping the device. |
 | Controller not found | Use a data-capable cable, reconnect the controller, or remove and repeat Windows BLE pairing. |
 | ESP32 remains Searching | Check the OTG port, firmware, USB connection, and controller pairing state. |
+| ESP32 received old settings | Select Save/Apply first. Modified System Default settings must be saved with Save New. |
+| Device is missing after a mode change | Wait for USB re-enumeration, reconnect the ESP32, then use Restart Connection after returning to bridge mode. |
+| Phone detects the controller but a game ignores triggers | Use Mobile USB HID firmware from v0.6.0; it exposes both analog trigger axes and digital L2/R2 buttons. |
 | Audio rumble does not react | Confirm WASAPI is Ready, select Audio or Mix, and check the Windows default output device. |
 | Quiet audio still vibrates | Raise Gate, lower Lvl, and reduce High/Ultra. |
 | Mechanical impact noise | Lower Max Amp, LF/HF Strength, or the band that triggers the noise. |
@@ -469,4 +557,4 @@ Gate → Lvl → six bands → LF/HF Balance → Tail/Decay.
 Keep one verified stable profile and use **Save New** for experimental settings.
 
 > [!NOTE]
-> This guide applies to S2P-XInput-Lite v0.5.3. If a later release changes labels, ranges, or connection behavior, follow the in-app question-mark help and the current release notes.
+> This guide applies to the S2P-XInput-Lite v0.6.0 development version. If labels, ranges, or connection behavior change before release, follow the in-app question-mark help and the latest release notes.

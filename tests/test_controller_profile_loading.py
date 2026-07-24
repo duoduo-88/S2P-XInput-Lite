@@ -7,6 +7,7 @@ from pathlib import Path
 
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC_DIR))
+_injected_modules = {}
 
 if not hasattr(ctypes, "windll"):
     class _DummyUser32:
@@ -33,6 +34,7 @@ except ImportError:
     module.XUSB_BUTTON = _Buttons
     module.VX360Gamepad = lambda: None
     sys.modules["vgamepad"] = module
+    _injected_modules["vgamepad"] = module
 
 try:
     import imufusion  # noqa: F401
@@ -45,9 +47,14 @@ except ImportError:
     module.Settings = lambda *args: args
     module.CONVENTION_NWU = 0
     sys.modules["imufusion"] = module
+    _injected_modules["imufusion"] = module
 
 from settings_schema import read_section_settings
 from xinput_controller import XInputController
+
+for _module_name, _module in _injected_modules.items():
+    if sys.modules.get(_module_name) is _module:
+        del sys.modules[_module_name]
 
 
 class ControllerProfileLoadingTests(unittest.TestCase):

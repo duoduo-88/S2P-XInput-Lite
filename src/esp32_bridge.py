@@ -15,6 +15,10 @@ from rumble_protocol import (
     encode_vibration_frame,
 )
 
+NINTENDO_COMPANY_ID = 0x0553
+NINTENDO_VENDOR_ID = 0x057E
+PRO_CONTROLLER2_PID = 0x2069
+
 
 def _tr(zh, en):
     return en if current_language() == "en" else zh
@@ -149,6 +153,17 @@ class ESP32Bridge:
 
     def close(self):
         self._closing = True
+
+        # Bypass the latest-only worker for shutdown.  Its pending slot is
+        # cleared below, so the stop frame must reach the controller first.
+        if self.running and self.connected_channel is not None:
+            self.send_pro_rumble(
+                CONNECTION_LF_FREQUENCY,
+                0,
+                CONNECTION_HF_FREQUENCY,
+                0,
+            )
+            time.sleep(0.02)
 
         # Stop accepting/sending pending rumble before asking the firmware to
         # disconnect, so no delayed `wr`/`rs` command races that sequence.
@@ -560,6 +575,51 @@ class ESP32Bridge:
             while self.running and time.monotonic() < deadline:
                 time.sleep(0.05)
 
+    def _send_controller_command_wait_ack(
+        self,
+        channel,
+        command_id,
+        subcommand_id,
+        command_data,
+        timeout=2.0,
+    ):
+        payload = (
+            bytes([command_id])
+            + b"\x91\x01"
+            + bytes([subcommand_id])
+            + b"\x00"
+            + bytes([len(command_data)])
+            + b"\x00\x00"
+            + command_data
+        )
+        with self._command_response_lock:
+            self._command_response = None
+        self._command_response_event.clear()
+        if not self.send(f"wr {int(channel)} c {payload.hex()}"):
+            return False
+
+        deadline = time.monotonic() + timeout
+        while (
+            self.running
+            and self.connected_channel == channel
+            and time.monotonic() < deadline
+        ):
+            remaining = max(0.0, deadline - time.monotonic())
+            if not self._command_response_event.wait(remaining):
+                break
+            self._command_response_event.clear()
+            with self._command_response_lock:
+                response = self._command_response
+                self._command_response = None
+            if (
+                response
+                and len(response) >= 4
+                and response[0] == command_id
+                and response[3] == subcommand_id
+            ):
+                return True
+        return False
+
     def pair_controller_to_esp32(self):
         """將 Switch 2 Pro Controller 配對到目前的 ESP32。"""
 
@@ -597,26 +657,6 @@ class ESP32Bridge:
             0x3F, 0x38, 0xA0, 0x73,
         ])
 
-        def send_pair_command(
-            subcommand_id,
-            command_data
-        ):
-            payload = (
-                bytes([0x15])
-                + b"\x91\x01"
-                + bytes([subcommand_id])
-                + b"\x00"
-                + bytes([len(command_data)])
-                + b"\x00\x00"
-                + command_data
-            )
-
-            return self.send(
-                f"wr {int(channel)} c "
-                f"{payload.hex()}"
-            )
-
-        # 1. SET_MAC
         pair_mac_data = (
             b"\x00\x02"
             + mac_value.to_bytes(
@@ -629,36 +669,27 @@ class ESP32Bridge:
             )
         )
 
-        if not send_pair_command(
-            0x01,
-            pair_mac_data
-        ):
-            return False
-
-        # 2. LTK1
-        if not send_pair_command(
-            0x04,
-            ltk1
-        ):
-            return False
-
-        time.sleep(0.1)
-
-        # 3. LTK2
-        if not send_pair_command(
-            0x02,
-            ltk2
-        ):
-            return False
-
-        time.sleep(0.1)
-
-        # 4. FINISH
-        if not send_pair_command(
-            0x03,
-            b"\x00"
-        ):
-            return False
+        commands = (
+            (0x01, pair_mac_data),
+            (0x04, ltk1),
+            (0x02, ltk2),
+            (0x03, b"\x00"),
+        )
+        for subcommand_id, command_data in commands:
+            if not self._send_controller_command_wait_ack(
+                channel,
+                0x15,
+                subcommand_id,
+                command_data,
+            ):
+                print(_tr(
+                    "ESP32 配對命令未收到回應："
+                    f"0x15/0x{subcommand_id:02X}",
+                    "ESP32 pairing command was not acknowledged: "
+                    f"0x15/0x{subcommand_id:02X}",
+                ))
+                return False
+            time.sleep(0.02)
 
         print(
             "ESP32 配對資料已送出。"
@@ -701,35 +732,12 @@ class ESP32Bridge:
         for command_id, subcommand_id, command_data in commands:
             if not self.running or self.connected_channel != channel:
                 return False
-            payload = (
-                bytes([command_id])
-                + b"\x91\x01"
-                + bytes([subcommand_id])
-                + b"\x00"
-                + bytes([len(command_data)])
-                + b"\x00\x00"
-                + command_data
-            )
-            with self._command_response_lock:
-                self._command_response = None
-            self._command_response_event.clear()
-            if not self.send(f"wr {int(channel)} c {payload.hex()}"):
-                return False
-
-            deadline = time.monotonic() + 2.0
-            acknowledged = False
-            while self.running and time.monotonic() < deadline:
-                remaining = max(0.0, deadline - time.monotonic())
-                if not self._command_response_event.wait(remaining):
-                    break
-                self._command_response_event.clear()
-                with self._command_response_lock:
-                    response = self._command_response
-                    self._command_response = None
-                if response and response[0] == command_id:
-                    acknowledged = True
-                    break
-            if not acknowledged:
+            if not self._send_controller_command_wait_ack(
+                channel,
+                command_id,
+                subcommand_id,
+                command_data,
+            ):
                 print(
                     "控制器初始化命令未收到回應："
                     f"0x{command_id:02X}/0x{subcommand_id:02X}"
@@ -859,20 +867,36 @@ class ESP32Bridge:
     def _parse_reconnect_mac(self, data_hex):
         try:
             data = bytes.fromhex(data_hex)
+            index = 0
 
-            # ESP32 scan_result.data 包含完整 BLE AD structure：
-            #
-            # 02 01 06
-            # 1B FF 53 05 ...
-            #
-            # reconnect MAC 位於完整廣播資料的 byte 17～22
-            if len(data) < 23:
-                return None
+            while index < len(data):
+                field_len = data[index]
+                if field_len == 0:
+                    break
+                field_end = index + field_len + 1
+                if field_end > len(data) or index + 1 >= len(data):
+                    break
 
-            return int.from_bytes(
-                data[17:23],
-                byteorder="little"
-            )
+                ad_type = data[index + 1]
+                if ad_type == 0xFF:
+                    manufacturer = data[index + 2:field_end]
+                    if (
+                        len(manufacturer) >= 18
+                        and int.from_bytes(manufacturer[0:2], "little")
+                        == NINTENDO_COMPANY_ID
+                        and int.from_bytes(manufacturer[5:7], "little")
+                        == NINTENDO_VENDOR_ID
+                        and int.from_bytes(manufacturer[7:9], "little")
+                        == PRO_CONTROLLER2_PID
+                    ):
+                        return int.from_bytes(
+                            manufacturer[12:18],
+                            byteorder="little",
+                        )
+
+                index = field_end
+
+            return None
 
         except Exception:
             return None
@@ -883,6 +907,19 @@ class ESP32Bridge:
         self.send("ble disconnect")
         self.send("status lite")
         self.send("scan on")
+
+    def disconnect_for_idle(self):
+        """Stop physical output and drop BLE while leaving scan enabled."""
+        if not self.running:
+            return False
+        try:
+            self.send_pro_rumble_latest(
+                225, 0, 481, 0, priority=True, force_zero=True
+            )
+        except (OSError, serial.SerialException):
+            pass
+        self.send("ble disconnect")
+        return True
 
     def _read_loop(self):
         # Match Tommy's low-latency serial strategy: wait for the first byte
@@ -1185,19 +1222,17 @@ class ESP32Bridge:
                     )
                 )
 
-                if self._pending_pair:
-                    print(
-                        "偵測到 SYNC 配對連線，"
-                        "開始寫入 ESP32 配對資料..."
-                    )
-
-                    if not self.pair_controller_to_esp32():
-                        return
-
                 # BLE notifications are already active at this point.  Run the
-                # command sequence outside the serial read thread so ACK/input
-                # frames continue to be drained while initialization is sent.
+                # pairing and initialization sequences outside the serial read
+                # thread so their stepwise ACKs can continue to be drained.
                 def prepare_connected_controller():
+                    if self._pending_pair:
+                        print(
+                            "偵測到 SYNC 配對連線，"
+                            "開始寫入 ESP32 配對資料..."
+                        )
+                        if not self.pair_controller_to_esp32():
+                            return
                     if not self.initialize_controller_features():
                         print("控制器功能初始化失敗，陀螺儀資料可能無法使用。")
                         return

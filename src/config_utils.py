@@ -142,6 +142,29 @@ def resolve_wired_calibration_id(config, wired_id):
     return next(iter(candidates)) if len(candidates) == 1 else normalized
 
 
+def select_standalone_calibration_id(config, controller_status=None):
+    """Select the connected controller profile or reject an ambiguous export."""
+    status = controller_status if isinstance(controller_status, dict) else {}
+    connected_id = normalize_controller_id(status.get("controller_id"))
+    if connected_id:
+        return connected_id
+
+    candidates = set()
+    for section in config.sections():
+        prefix, separator, suffix = section.partition(".")
+        candidate = normalize_controller_id(suffix) if separator else None
+        if prefix in ("sticks", "gyro") and candidate:
+            candidates.add(candidate)
+    if len(candidates) == 1:
+        return next(iter(candidates))
+    if len(candidates) > 1:
+        raise ValueError(
+            "Multiple controller calibrations exist. Connect the controller "
+            "whose calibration should be embedded before writing to ESP32."
+        )
+    return None
+
+
 def read_pair(config, section, key):
     value = config.get(section, key)
     x, y = value.split(",", 1)

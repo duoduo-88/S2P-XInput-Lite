@@ -32,6 +32,57 @@ class DummyLabel:
 
 
 class GuiPersistenceTests(unittest.TestCase):
+    def test_esp32_write_requires_unsaved_profile_to_be_saved_first(self):
+        gui = object.__new__(config_gui.ConfigGUI)
+        gui.active_profile = "General"
+        gui.tr = lambda text: text
+        states = iter((True, False))
+        gui.has_unsaved_changes = lambda: next(states)
+        gui.save_current_profile = unittest.mock.Mock(return_value=True)
+
+        with patch.object(
+            config_gui.messagebox, "askyesno", return_value=True
+        ) as prompt:
+            self.assertTrue(
+                gui._confirm_saved_profile_before_esp32_action()
+            )
+
+        prompt.assert_called_once()
+        gui.save_current_profile.assert_called_once_with(show_message=False)
+
+    def test_esp32_write_stops_when_unsaved_save_is_declined(self):
+        gui = object.__new__(config_gui.ConfigGUI)
+        gui.active_profile = "General"
+        gui.tr = lambda text: text
+        gui.has_unsaved_changes = lambda: True
+        gui.save_current_profile = unittest.mock.Mock(return_value=True)
+
+        with patch.object(
+            config_gui.messagebox, "askyesno", return_value=False
+        ):
+            self.assertFalse(
+                gui._confirm_saved_profile_before_esp32_action()
+            )
+
+        gui.save_current_profile.assert_not_called()
+
+    def test_esp32_write_saves_read_only_profile_as_new_profile(self):
+        gui = object.__new__(config_gui.ConfigGUI)
+        gui.active_profile = "System Default"
+        gui.tr = lambda text: text
+        states = iter((True, False))
+        gui.has_unsaved_changes = lambda: next(states)
+        gui.save_profile_as = unittest.mock.Mock(return_value=True)
+
+        with patch.object(
+            config_gui.messagebox, "askyesno", return_value=True
+        ):
+            self.assertTrue(
+                gui._confirm_saved_profile_before_esp32_action()
+            )
+
+        gui.save_profile_as.assert_called_once_with()
+
     def test_declining_missing_hidhide_prompt_is_remembered(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.ini"
