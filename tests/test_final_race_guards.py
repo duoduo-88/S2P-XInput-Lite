@@ -84,7 +84,7 @@ class CallbackCommitTests(unittest.TestCase):
         bridge.connected_channel = 2
         bridge._connection_generation = 5
         bridge.initialize_controller_features = lambda *_args: True
-        bridge.connection_rumble = lambda: None
+        bridge.connection_rumble = lambda **_kwargs: None
         events = []
 
         def connected():
@@ -212,7 +212,7 @@ class ESP32ShutdownTests(unittest.TestCase):
                 "close": lambda self: setattr(self, "is_open", False),
             },
         )()
-        bridge._send_final_zero_rumble = lambda: True
+        bridge._send_final_zero_rumble = lambda **_kwargs: True
         events = []
 
         def send(command):
@@ -263,6 +263,56 @@ class ESP32ShutdownTests(unittest.TestCase):
 
         self.assertEqual(bridge.connected_channel, 2)
         self.assertEqual(bridge._channel_missing_count, 0)
+
+    def test_clean_close_disconnect_event_does_not_call_callback(self):
+        bridge = ESP32Bridge("COM1")
+        bridge.running = True
+        bridge._closing = True
+        bridge.connected_channel = 2
+        bridge._ready_channel = 2
+        bridge._connection_generation = 3
+        events = []
+        bridge.disconnected_callback = lambda: events.append("callback")
+        bridge._restart_scan = lambda: events.append("restart")
+
+        bridge._handle_text(b'{"cmd":"disconnected"}')
+
+        self.assertEqual(events, ["restart"])
+        self.assertIsNone(bridge.connected_channel)
+        self.assertTrue(bridge._disconnect_event.is_set())
+
+    @patch("esp32_bridge.time.sleep")
+    def test_failed_idle_disconnect_restores_rumble_gate(self, _sleep):
+        bridge = ESP32Bridge("COM1")
+        bridge.running = True
+        bridge.connected_channel = 2
+        bridge._ready_channel = 2
+        bridge._connection_generation = 3
+        bridge._rumble_worker_running = True
+        bridge._rumble_accepting = True
+        bridge._send_final_zero_rumble = lambda **_kwargs: True
+        bridge.send = lambda _command: False
+
+        self.assertFalse(bridge.disconnect_for_idle())
+        self.assertTrue(bridge._rumble_accepting)
+
+    def test_final_zero_send_lock_obeys_timeout(self):
+        bridge = ESP32Bridge("COM1")
+        bridge.running = True
+        bridge.connected_channel = 2
+        bridge._ready_channel = 2
+        bridge._connection_generation = 3
+        bridge._rumble_send_lock.acquire()
+        try:
+            started = time.perf_counter()
+            self.assertFalse(
+                bridge._send_final_zero_rumble(timeout=0.05)
+            )
+            elapsed = time.perf_counter() - started
+        finally:
+            bridge._rumble_send_lock.release()
+
+        self.assertLess(elapsed, 0.2)
 
 
 class WiredShutdownTests(unittest.TestCase):
@@ -337,6 +387,33 @@ class WiredShutdownTests(unittest.TestCase):
         self.assertIs(controller._thread, worker)
         self.assertIs(controller._device, device)
 
+    def test_stale_ordinary_rumble_slot_is_discarded(self):
+        class Device:
+            def __init__(self):
+                self.reports = []
+
+            def write(self, report):
+                self.reports.append(bytes(report))
+                return len(report)
+
+        controller = WiredController()
+        controller.running = True
+        controller.connected = True
+        controller._application_ready = True
+        controller._rumble_accepting = True
+        device = Device()
+        controller._device = device
+
+        self.assertTrue(controller.send_pro_rumble(80, 800, 160, 800))
+        controller._connection_generation += 1
+        controller._start_rumble_thread()
+        time.sleep(0.05)
+        controller._rumble_stop.set()
+        controller._rumble_wake.set()
+        controller._rumble_thread.join(1.0)
+
+        self.assertEqual(device.reports, [])
+
 
 class RuntimeCleanupTests(unittest.TestCase):
     def test_readiness_requires_application_ready(self):
@@ -382,6 +459,20 @@ class RuntimeCleanupTests(unittest.TestCase):
         self.assertEqual(dispatcher.calls, [0.01, 0.02])
         self.assertFalse(xinput.closed)
         self.assertEqual(xinput.rumble_stops, [0.02])
+
+    def test_xinput_close_failure_is_propagated(self):
+        class Dispatcher:
+            def stop(self, timeout):
+                return True
+
+        class XInput:
+            def close(self):
+                return False
+
+        self.assertFalse(close_xinput_after_dispatcher(
+            Dispatcher(),
+            XInput(),
+        ))
 
 
 if __name__ == "__main__":

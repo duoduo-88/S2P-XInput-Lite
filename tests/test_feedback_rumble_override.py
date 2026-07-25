@@ -92,6 +92,85 @@ class FeedbackRumbleOverrideTests(unittest.TestCase):
             bridge.send_pro_rumble_latest(90, 300, 180, 300)
         )
 
+    @patch("esp32_bridge.time.sleep")
+    def test_esp32_old_feedback_cannot_cross_generation(self, _sleep):
+        bridge = ESP32Bridge("TEST")
+        bridge.running = True
+        bridge.connected_channel = 0
+        bridge._ready_channel = 0
+        bridge._connection_generation = 1
+        bridge._rumble_worker_running = True
+        bridge._rumble_accepting = True
+        bridge.serial = type("Serial", (), {"is_open": True})()
+        commands = []
+
+        def send(command):
+            commands.append(command)
+            bridge._connection_generation = 2
+            return True
+
+        bridge.send = send
+
+        self.assertFalse(bridge._play_fixed_feedback(
+            CONNECTION_FEEDBACK_PATTERN,
+            CONNECTION_LF_FREQUENCY,
+            CONNECTION_HF_FREQUENCY,
+        ))
+        self.assertEqual(len(commands), 1)
+
+    @patch("wired_controller.time.sleep")
+    def test_wired_old_feedback_cannot_cross_generation(self, _sleep):
+        controller = WiredController()
+        controller.running = True
+        controller.connected = True
+        controller._rumble_accepting = True
+
+        class Device:
+            def __init__(self):
+                self.reports = []
+
+            def write(inner_self, report):
+                inner_self.reports.append(bytes(report))
+                controller._connection_generation += 1
+                return len(report)
+
+        device = Device()
+        controller._device = device
+
+        self.assertFalse(controller._play_fixed_feedback(
+            CONNECTION_FEEDBACK_PATTERN,
+            CONNECTION_LF_FREQUENCY,
+            CONNECTION_HF_FREQUENCY,
+        ))
+        self.assertEqual(len(device.reports), 1)
+
+    @patch("wired_controller.time.sleep")
+    def test_only_latest_wired_feedback_reservation_runs(self, _sleep):
+        controller = WiredController()
+        controller.running = True
+        controller.connected = True
+        controller._rumble_accepting = True
+        device = _HidDevice(controller)
+        controller._device = device
+        older = controller._reserve_feedback()
+        latest = controller._reserve_feedback()
+
+        self.assertIsNotNone(older)
+        self.assertIsNotNone(latest)
+        self.assertFalse(controller._play_fixed_feedback(
+            CONNECTION_FEEDBACK_PATTERN,
+            CONNECTION_LF_FREQUENCY,
+            CONNECTION_HF_FREQUENCY,
+            *older,
+        ))
+        self.assertEqual(device.reports, [])
+        self.assertTrue(controller._play_fixed_feedback(
+            CONNECTION_FEEDBACK_PATTERN,
+            CONNECTION_LF_FREQUENCY,
+            CONNECTION_HF_FREQUENCY,
+            *latest,
+        ))
+
 
 class BluetoothFeedbackOverrideTests(unittest.IsolatedAsyncioTestCase):
     async def test_native_ble_fixed_cue_cannot_be_overwritten_by_audio(self):

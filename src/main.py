@@ -636,7 +636,13 @@ def main():
                     ).strip().upper() in ("AUDIO", "MIX")
                 )
 
-        input_dispatcher.run_exclusive(replace_settings)
+        if not input_dispatcher.run_exclusive(
+            replace_settings,
+            timeout=1.0,
+        ):
+            raise TimeoutError(
+                "Input processing did not quiesce for settings reload."
+            )
 
     def on_connected():
         nonlocal last_status_stage
@@ -645,7 +651,10 @@ def main():
         nonlocal gyro_initialization_ready_announced
         nonlocal gyro_initialization_complete_announced
         nonlocal idle_disconnect_requested
-        input_dispatcher.reset()
+        if not input_dispatcher.reset(timeout=1.0):
+            raise TimeoutError(
+                "Input processing did not quiesce during connection startup."
+            )
         sensor_mode_tracker.reset()
         last_status_stage = 0.0
         idle_disconnect_requested = False
@@ -762,7 +771,7 @@ def main():
         nonlocal gyro_initialization_tracking
         nonlocal gyro_initialization_announced
         nonlocal idle_disconnect_requested
-        input_dispatcher.reset()
+        dispatcher_reset = input_dispatcher.reset(timeout=1.0)
         sensor_mode_tracker.reset()
         last_status_stage = 0.0
         gyro_initialization_tracking = False
@@ -772,7 +781,13 @@ def main():
         # No release report arrives after a disconnect, so explicitly clear
         # the last virtual-gamepad and keyboard state.
         try:
-            xinput.reset_output_state()
+            if dispatcher_reset:
+                xinput.reset_output_state()
+            else:
+                print(tr(
+                    "輸入處理仍在執行；略過可能與回呼競爭的輸出重設。",
+                    "Input processing is still active; skipped an unsafe output reset.",
+                ))
         finally:
             # Idle status is committed by perform_idle_disconnect() only after
             # its synchronous transport result confirms the physical link is
@@ -805,10 +820,16 @@ def main():
         stop_requested = True
         gyro_initialization_tracking = False
         gyro_initialization_announced.clear()
-        input_dispatcher.reset()
+        dispatcher_reset = input_dispatcher.reset(timeout=1.0)
         sensor_mode_tracker.reset()
         try:
-            xinput.reset_output_state()
+            if dispatcher_reset:
+                xinput.reset_output_state()
+            else:
+                print(tr(
+                    "輸入處理仍在執行；略過可能與回呼競爭的輸出重設。",
+                    "Input processing is still active; skipped an unsafe output reset.",
+                ))
         finally:
             publish_status(
                 state="stopped",

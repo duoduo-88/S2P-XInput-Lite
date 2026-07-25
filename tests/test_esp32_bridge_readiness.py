@@ -29,7 +29,7 @@ class ESP32BridgeReadinessTests(unittest.TestCase):
         bridge.connected_callback = None
         bridge.send = lambda _command: True
         bridge._restart_scan = lambda: None
-        bridge.connection_rumble = lambda: None
+        bridge.connection_rumble = lambda **_kwargs: None
         return bridge
 
     @patch("esp32_bridge.threading.Thread")
@@ -65,7 +65,9 @@ class ESP32BridgeReadinessTests(unittest.TestCase):
         bridge.connected_callback = lambda: events.append(
             ("connected", bridge.is_ready)
         )
-        bridge.connection_rumble = lambda: events.append("rumble")
+        bridge.connection_rumble = (
+            lambda **_kwargs: events.append("rumble")
+        )
 
         bridge._prepare_connected_controller(2, 7, False)
 

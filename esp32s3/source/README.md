@@ -5,7 +5,7 @@ ESP32-S3 bridge firmware.
 
 - Upstream: https://github.com/TommyWabg/Switch2Connect
 - Base commit: `d63b044e66cfb93f8377a3596e3f00c82715b029`
-- Firmware build version: `0.14.0-dev`
+- Firmware build version: `0.14.0`
 - Bridge command compatibility: `0.12.4`
 - Lite build: `cdc_bridge_2_lowlatency`
 - Target: ESP32-S3
@@ -30,8 +30,8 @@ on real hardware. The exact upstream revision is linked above for comparison.
 
 | Current file | SHA-256 |
 |---|---|
-| `esp32s3_bluedroid_bridge.bin` | `F5729862B4CB62A93A62A685AE42BFEAD675758293024B96323A27AD9D32B027` |
-| `bootloader.bin` | `0B371B530D8DE553C9397DBD42B955C6987EF06DC215326ECEA2CFBD5295B7DC` |
+| `esp32s3_bluedroid_bridge.bin` | `D8503D233C4305F613645FC3B277F97A1B412C0C93AC50E87644F82FBB4B3BE4` |
+| `bootloader.bin` | `9F1BE89EECD1C24A562C0C570894F6F625405041508E55A2B1AA3875B74D237A` |
 | `partition-table.bin` | `7F00B6C042A89B15B0CAC534F82ED988CAF29278FF5700B0C511EB1B5BB7C820` |
 
 Real-controller A/B testing improved the normal host arrival interval from

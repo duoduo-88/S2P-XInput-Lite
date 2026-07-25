@@ -80,6 +80,7 @@ class ESP32Bridge:
         self._rumble_send_lock = threading.Lock()
         self._feedback_lock = threading.Lock()
         self._feedback_active = False
+        self._feedback_sequence = 0
         self._rumble_pending = None
         self._rumble_last_send = 0.0
         self._rumble_worker_running = False
@@ -211,7 +212,9 @@ class ESP32Bridge:
             has_connection = self.connected_channel is not None
         zero_sent = not has_connection
         if self.running and has_connection and not rumble_alive:
-            zero_sent = bool(self._send_final_zero_rumble())
+            zero_sent = bool(self._send_final_zero_rumble(
+                timeout=max(0.0, deadline - time.perf_counter())
+            ))
             time.sleep(0.02)
 
         # Ask the firmware to release the physical BLE link before dropping
@@ -348,10 +351,22 @@ class ESP32Bridge:
         lf_amp,
         hf_freq,
         hf_amp,
+        channel=None,
+        generation=None,
     ):
         """Synchronously send rumble, bypassing the accepting gate."""
         with self._state_lock:
-            channel = self.connected_channel
+            current_channel = self.connected_channel
+            current_generation = self._connection_generation
+            if channel is None:
+                channel = current_channel
+            if generation is None:
+                generation = current_generation
+            if (
+                current_channel != channel
+                or current_generation != generation
+            ):
+                return False
 
         if channel is None:
             return False
@@ -383,7 +398,13 @@ class ESP32Bridge:
             f"r {payload.hex()}"
         )
 
-        return self.send(command)
+        with self._state_lock:
+            if (
+                self.connected_channel != channel
+                or self._connection_generation != generation
+            ):
+                return False
+            return self.send(command)
 
     def _queue_latest_rumble(
         self,
@@ -513,7 +534,13 @@ class ESP32Bridge:
             command = f"wr {int(channel)} r {payload.hex()}"
         else:
             command = f"rs {int(channel)} {payload.hex()}"
-        return self.send(command)
+        with self._state_lock:
+            if (
+                self.connected_channel != channel
+                or self._connection_generation != generation
+            ):
+                return False
+            return self.send(command)
 
     def _rumble_output_loop(self):
         """Send the newest state using a high-resolution deadline wait.
@@ -614,15 +641,25 @@ class ESP32Bridge:
                 else:
                     self._rumble_send_failures += 1
 
-    def _send_final_zero_rumble(self):
+    def _send_final_zero_rumble(self, timeout=None):
         """Send a zero frame after all accepted worker output."""
-        with self._rumble_send_lock:
+        if timeout is None:
+            acquired = self._rumble_send_lock.acquire()
+        else:
+            acquired = self._rumble_send_lock.acquire(
+                timeout=max(0.0, float(timeout))
+            )
+        if not acquired:
+            return False
+        try:
             return self._send_pro_rumble_now(
                 CONNECTION_LF_FREQUENCY,
                 0,
                 CONNECTION_HF_FREQUENCY,
                 0,
             )
+        finally:
+            self._rumble_send_lock.release()
 
     def get_rumble_diagnostics(self):
         """Return a thread-safe snapshot of low-latency output diagnostics."""
@@ -945,29 +982,101 @@ class ESP32Bridge:
 
         return False
 
+    def _reserve_feedback(self, expected_generation=None):
+        """Reserve one cue for exactly one ready connection generation."""
+        with self._rumble_send_lock:
+            with self._state_lock:
+                channel = self.connected_channel
+                generation = self._connection_generation
+                ready = (
+                    channel is not None
+                    and self._ready_channel == channel
+                    and not self._closing
+                )
+                if (
+                    not ready
+                    or (
+                        expected_generation is not None
+                        and generation != expected_generation
+                    )
+                ):
+                    return None
+                with self._rumble_condition:
+                    if not self._rumble_accepting:
+                        return None
+                    self._feedback_sequence += 1
+                    token = self._feedback_sequence
+                    self._feedback_active = True
+                    self._rumble_pending = None
+                    self._rumble_condition.notify_all()
+        return channel, generation, token
+
     def _send_feedback_rumble_now(
-        self, lf_freq, lf_amp, hf_freq, hf_amp
+        self,
+        lf_freq,
+        lf_amp,
+        hf_freq,
+        hf_amp,
+        channel,
+        generation,
+        token,
     ):
         with self._rumble_send_lock:
+            with self._state_lock:
+                if (
+                    self.connected_channel != channel
+                    or self._ready_channel != channel
+                    or self._connection_generation != generation
+                    or self._closing
+                ):
+                    return False
             with self._rumble_condition:
                 if (
                     not self._rumble_accepting
                     or not self._feedback_active
+                    or token != self._feedback_sequence
                 ):
                     return False
             return self._send_pro_rumble_now(
-                lf_freq, lf_amp, hf_freq, hf_amp
+                lf_freq,
+                lf_amp,
+                hf_freq,
+                hf_amp,
+                channel=channel,
+                generation=generation,
             )
 
-    def _play_fixed_feedback(self, pattern, lf_frequency, hf_frequency):
+    def _play_fixed_feedback(
+        self,
+        pattern,
+        lf_frequency,
+        hf_frequency,
+        channel=None,
+        generation=None,
+        token=None,
+    ):
         """Override mixed/audio updates until the fixed cue reaches zero."""
+        if channel is None or generation is None or token is None:
+            reservation = self._reserve_feedback()
+            if reservation is None:
+                return False
+            channel, generation, token = reservation
         with self._feedback_lock:
+            with self._state_lock:
+                current = (
+                    self.connected_channel == channel
+                    and self._ready_channel == channel
+                    and self._connection_generation == generation
+                    and not self._closing
+                )
             with self._rumble_condition:
-                if not self._rumble_accepting:
+                if (
+                    not current
+                    or not self._rumble_accepting
+                    or not self._feedback_active
+                    or token != self._feedback_sequence
+                ):
                     return False
-                self._feedback_active = True
-                self._rumble_pending = None
-                self._rumble_condition.notify_all()
             completed = True
             try:
                 for lf_amp, hf_amp, duration in pattern:
@@ -976,6 +1085,9 @@ class ESP32Bridge:
                         lf_amp,
                         hf_frequency,
                         hf_amp,
+                        channel,
+                        generation,
+                        token,
                     ):
                         completed = False
                         break
@@ -983,25 +1095,39 @@ class ESP32Bridge:
                         time.sleep(duration)
             finally:
                 self._send_feedback_rumble_now(
-                    lf_frequency, 0, hf_frequency, 0
+                    lf_frequency,
+                    0,
+                    hf_frequency,
+                    0,
+                    channel,
+                    generation,
+                    token,
                 )
                 with self._rumble_condition:
-                    self._feedback_active = False
-                    self._rumble_condition.notify_all()
+                    if token == self._feedback_sequence:
+                        self._feedback_active = False
+                        self._rumble_condition.notify_all()
             return completed
 
-    def connection_rumble(self):
+    def connection_rumble(self, expected_generation=None):
         """Play the fixed game-style two-pulse connection cue."""
-        if not self.is_ready:
-            return
+        reservation = self._reserve_feedback(expected_generation)
+        if reservation is None:
+            return False
+        channel, generation, token = reservation
 
         def worker():
             self._play_fixed_feedback(
                 CONNECTION_FEEDBACK_PATTERN,
                 CONNECTION_LF_FREQUENCY,
                 CONNECTION_HF_FREQUENCY,
+                channel,
+                generation,
+                token,
             )
 
+            if not self._connection_is_current(channel, generation):
+                return
             if self.calibration_mode:
                 if self.ready_callback is not None:
                     try:
@@ -1032,20 +1158,24 @@ class ESP32Bridge:
                 print()
 
         threading.Thread(target=worker, daemon=True).start()
+        return True
 
     def pin_rumble(self):
         """Play the same fixed game-style identification cue."""
-        if not self.is_ready:
-            return
+        reservation = self._reserve_feedback()
+        if reservation is None:
+            return False
         threading.Thread(
             target=self._play_fixed_feedback,
             args=(
                 PIN_FEEDBACK_PATTERN,
                 PIN_LF_FREQUENCY,
                 PIN_HF_FREQUENCY,
+                *reservation,
             ),
             daemon=True,
         ).start()
+        return True
 
     def _parse_reconnect_mac(self, data_hex):
         try:
@@ -1095,25 +1225,69 @@ class ESP32Bridge:
         """Stop output and confirm that the physical BLE link was dropped."""
         if not self.running:
             return False
+        with self._state_lock:
+            channel = self.connected_channel
+            generation = self._connection_generation
+            ready = (
+                channel is not None
+                and self._ready_channel == channel
+            )
+        if channel is None:
+            return True
         self._disconnect_event.clear()
         with self._rumble_condition:
             self._rumble_accepting = False
             self._feedback_active = False
             self._rumble_pending = None
             self._rumble_condition.notify_all()
-        with self._state_lock:
-            has_connection = self.connected_channel is not None
-        if not has_connection:
-            return True
-        if has_connection:
-            try:
-                self._send_final_zero_rumble()
-                time.sleep(0.02)
-            except (OSError, serial.SerialException):
-                pass
-        if not self.send("ble disconnect"):
+
+        try:
+            zero_sent = self._send_final_zero_rumble(timeout=0.5)
+        except (OSError, serial.SerialException):
+            zero_sent = False
+        if not zero_sent:
+            self._restore_rumble_after_idle_failure(
+                channel, generation, ready
+            )
             return False
-        return self._disconnect_event.wait(timeout=2.0)
+        time.sleep(0.02)
+        if not self.send("ble disconnect"):
+            self._restore_rumble_after_idle_failure(
+                channel, generation, ready
+            )
+            return False
+        disconnected = self._disconnect_event.wait(timeout=2.0)
+        if not disconnected:
+            self._restore_rumble_after_idle_failure(
+                channel, generation, ready
+            )
+        return disconnected
+
+    def _restore_rumble_after_idle_failure(
+        self,
+        channel,
+        generation,
+        was_ready,
+    ):
+        """Reopen output only if the failed idle request left the same link."""
+        if not was_ready:
+            return False
+        with self._state_lock:
+            current = (
+                self.running
+                and not self._closing
+                and self.connected_channel == channel
+                and self._ready_channel == channel
+                and self._connection_generation == generation
+            )
+            if not current:
+                return False
+            with self._rumble_condition:
+                if not self._rumble_worker_running:
+                    return False
+                self._rumble_accepting = True
+                self._rumble_condition.notify_all()
+        return True
 
     @staticmethod
     def _limit_receive_buffer(buf):
@@ -1251,6 +1425,7 @@ class ESP32Bridge:
             with self._state_lock:
                 should_restart = (
                     self.running
+                    and not self._closing
                     and self.connected_channel is None
                     and not self._connecting
                 )
@@ -1357,7 +1532,7 @@ class ESP32Bridge:
 
         time.sleep(0.2)
         if self._connection_is_current(channel, generation):
-            self.connection_rumble()
+            self.connection_rumble(expected_generation=generation)
 
 
     def _handle_text(self, line):
@@ -1433,6 +1608,7 @@ class ESP32Bridge:
                         print("ESP32 狀態連續三次未包含控制器通道。")
                         if (
                             was_ready
+                            and not self._closing
                             and self.disconnected_callback is not None
                         ):
                             try:
@@ -1626,6 +1802,7 @@ class ESP32Bridge:
                         self.connected_channel is not None
                         and self._ready_channel == self.connected_channel
                     )
+                    notify_disconnected = was_ready and not self._closing
                     self.connected_channel = None
                     self._ready_channel = None
                     self._connection_generation += 1
@@ -1639,7 +1816,7 @@ class ESP32Bridge:
                     self._rumble_pending = None
                     self._rumble_condition.notify_all()
 
-                if was_ready:
+                if notify_disconnected:
                     print(_tr("控制器已中斷連線。", "Controller disconnected."))
 
                     if self.disconnected_callback is not None:

@@ -581,6 +581,7 @@ class WiredController:
         self._rumble_accepting = False
         self._feedback_lock = threading.Lock()
         self._feedback_active = False
+        self._feedback_sequence = 0
         self._rumble_wake = threading.Event()
         self._rumble_stop = threading.Event()
         self._rumble_thread = None
@@ -961,7 +962,7 @@ class WiredController:
         def worker():
             time.sleep(1.2)
             if self.running and self.connected and generation == self._connection_generation:
-                self.connection_rumble()
+                self.connection_rumble(expected_generation=generation)
         threading.Thread(
             target=worker, daemon=True, name="WiredConnectionRumble"
         ).start()
@@ -988,8 +989,10 @@ class WiredController:
         self, lf_freq, lf_amp, hf_freq, hf_amp,
         priority=False, force_zero=False,
     ):
-        if not self.connected:
-            return False
+        with self._state_lock:
+            if not self.connected:
+                return False
+            generation = self._connection_generation
         vibration = self._encode_vibration(lf_freq, lf_amp, hf_freq, hf_amp)
         packet_id = 0x50 + (self._rumble_packet_id & 0x0F)
         self._rumble_packet_id = (self._rumble_packet_id + 1) & 0x0F
@@ -1009,20 +1012,63 @@ class WiredController:
                 self._rumble_overwritten += 1
                 pending_since = self._rumble_slot[2]
             self._rumble_slot = (
-                payload, submitted_at, pending_since, priority, is_zero
+                payload,
+                submitted_at,
+                pending_since,
+                priority,
+                is_zero,
+                generation,
             )
         self._rumble_wake.set()
         return True
 
+    def _reserve_feedback(self, expected_generation=None):
+        """Reserve the newest cue for one physical USB generation."""
+        with self._rumble_send_lock:
+            with self._state_lock:
+                generation = self._connection_generation
+                if (
+                    not self.connected
+                    or (
+                        expected_generation is not None
+                        and generation != expected_generation
+                    )
+                ):
+                    return None
+                with self._rumble_lock:
+                    if (
+                        not self._rumble_accepting
+                        or self._rumble_stop.is_set()
+                    ):
+                        return None
+                    self._feedback_sequence += 1
+                    token = self._feedback_sequence
+                    self._feedback_active = True
+                    self._rumble_slot = None
+        return generation, token
+
     def _send_feedback_rumble_now(
-        self, lf_freq, lf_amp, hf_freq, hf_amp
+        self,
+        lf_freq,
+        lf_amp,
+        hf_freq,
+        hf_amp,
+        generation,
+        token,
     ):
         """Write one fixed cue frame outside the normal latest-only slot."""
         with self._rumble_send_lock:
+            with self._state_lock:
+                if (
+                    not self.connected
+                    or self._connection_generation != generation
+                ):
+                    return False
             with self._rumble_lock:
                 if (
                     not self._rumble_accepting
                     or not self._feedback_active
+                    or token != self._feedback_sequence
                     or self._rumble_stop.is_set()
                 ):
                     return False
@@ -1039,6 +1085,12 @@ class WiredController:
             )
             try:
                 with self._hid_write_lock:
+                    with self._state_lock:
+                        if (
+                            not self.connected
+                            or self._connection_generation != generation
+                        ):
+                            return False
                     with self._device_lock:
                         device = self._device
                     if device is None:
@@ -1051,14 +1103,35 @@ class WiredController:
             except Exception:
                 return False
 
-    def _play_fixed_feedback(self, pattern, lf_frequency, hf_frequency):
+    def _play_fixed_feedback(
+        self,
+        pattern,
+        lf_frequency,
+        hf_frequency,
+        generation=None,
+        token=None,
+    ):
         """Temporarily override game/audio output with a fixed cue."""
+        if generation is None or token is None:
+            reservation = self._reserve_feedback()
+            if reservation is None:
+                return False
+            generation, token = reservation
         with self._feedback_lock:
+            with self._state_lock:
+                current = (
+                    self.connected
+                    and self._connection_generation == generation
+                )
             with self._rumble_lock:
-                if not self._rumble_accepting:
+                if (
+                    not current
+                    or not self._rumble_accepting
+                    or not self._feedback_active
+                    or token != self._feedback_sequence
+                    or self._rumble_stop.is_set()
+                ):
                     return False
-                self._feedback_active = True
-                self._rumble_slot = None
             completed = True
             try:
                 for lf_amp, hf_amp, duration in pattern:
@@ -1067,6 +1140,8 @@ class WiredController:
                         lf_amp,
                         hf_frequency,
                         hf_amp,
+                        generation,
+                        token,
                     ):
                         completed = False
                         break
@@ -1076,35 +1151,51 @@ class WiredController:
                 # The protocol pattern already ends in zero, but repeat it if
                 # the cue was interrupted between active frames.
                 self._send_feedback_rumble_now(
-                    lf_frequency, 0, hf_frequency, 0
+                    lf_frequency,
+                    0,
+                    hf_frequency,
+                    0,
+                    generation,
+                    token,
                 )
                 with self._rumble_lock:
-                    self._feedback_active = False
+                    if token == self._feedback_sequence:
+                        self._feedback_active = False
             return completed
 
-    def connection_rumble(self):
+    def connection_rumble(self, expected_generation=None):
         """Play the fixed two-pulse cue regardless of output mix mode."""
+        reservation = self._reserve_feedback(expected_generation)
+        if reservation is None:
+            return False
         threading.Thread(
             target=self._play_fixed_feedback,
             args=(
                 CONNECTION_FEEDBACK_PATTERN,
                 CONNECTION_LF_FREQUENCY,
                 CONNECTION_HF_FREQUENCY,
+                *reservation,
             ),
             daemon=True,
         ).start()
+        return True
 
     def pin_rumble(self):
         """Play the same fixed two-pulse controller-identification cue."""
+        reservation = self._reserve_feedback()
+        if reservation is None:
+            return False
         threading.Thread(
             target=self._play_fixed_feedback,
             args=(
                 PIN_FEEDBACK_PATTERN,
                 PIN_LF_FREQUENCY,
                 PIN_HF_FREQUENCY,
+                *reservation,
             ),
             daemon=True,
         ).start()
+        return True
 
     def _start_rumble_thread(self):
         if self._rumble_thread and self._rumble_thread.is_alive():
@@ -1138,7 +1229,20 @@ class WiredController:
                     state, self._rumble_slot = self._rumble_slot, None
                 if state is None:
                     continue
-                data, submitted_at, pending_since, priority, is_zero = state
+                (
+                    data,
+                    submitted_at,
+                    pending_since,
+                    priority,
+                    is_zero,
+                    generation,
+                ) = state
+                with self._state_lock:
+                    if (
+                        not self.connected
+                        or self._connection_generation != generation
+                    ):
+                        continue
                 active = _rumble_active(data)
                 inactive = 0 if active else inactive + 1
                 if inactive > 3:
@@ -1171,8 +1275,15 @@ class WiredController:
                         )
                     self._rumble_send_attempts += 1
                 with self._rumble_send_lock:
+                    with self._state_lock:
+                        current_generation = (
+                            self.connected
+                            and self._connection_generation == generation
+                        )
                     with self._rumble_lock:
                         accepting = (
+                            current_generation
+                            and
                             self._rumble_accepting
                             and not self._feedback_active
                             and not self._rumble_stop.is_set()
@@ -1181,6 +1292,13 @@ class WiredController:
                         continue
                     try:
                         with self._hid_write_lock:
+                            with self._state_lock:
+                                if (
+                                    not self.connected
+                                    or self._connection_generation
+                                    != generation
+                                ):
+                                    continue
                             with self._device_lock:
                                 device = self._device
                             if device is None:

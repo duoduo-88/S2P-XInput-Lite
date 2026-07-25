@@ -21,8 +21,7 @@ def close_xinput_after_dispatcher(
                 timeout=grace_timeout
             )
     if dispatcher_stopped:
-        xinput.close()
-        return True
+        return xinput.close() is not False
 
     # Stop the physical-rumble producer, but leave virtual-pad state intact:
     # the timed-out input callback may still be inside handle_input().

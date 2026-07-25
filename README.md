@@ -37,7 +37,7 @@ Detailed setting descriptions are available from the `?` buttons in the applicat
 - Switch 2 Pro Controller
 - ViGEmBus 1.22.0
 - Optional for wired USB: the current [HidHide release](https://github.com/nefarius/HidHide/releases/latest), used to hide the physical HID from games
-- A USB-C data cable, Bluetooth, or a compatible ESP32-S3 bridge
+- A USB-C data cable, Bluetooth, or a compatible ESP32-S3 N16R8 bridge
 
 The packaged release includes a portable Python runtime and all required packages. A separate Python installation is not required.
 
@@ -92,8 +92,8 @@ Reusable hardware probes and automated tests are maintained in the development r
   haptics, process-based profile switching, phone rumble, or BLE HID output
 - Motion is mapped to a stick or mouse; XInput does not expose raw motion sensors
 - The ESP32 connection requires compatible firmware. Standalone profile writing
-  and direct USB controller output require the bundled `0.14.0-dev` development
-  firmware; older bridge-only firmware cannot provide those features.
+  and direct USB controller output require the bundled `0.14.0` firmware;
+  older bridge-only firmware cannot provide those features.
 - The GitHub repository includes the complete ESP32 source. Packaged releases
   contain only the flashing tool and required firmware images under `esp32s3`.
 - HidHide is not bundled and is not required for ESP32 or BLE. Without it, wired input still works, but games may detect both the physical HID and virtual XInput controller.

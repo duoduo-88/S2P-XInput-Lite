@@ -63,6 +63,7 @@ class InputDispatcher:
         # already executing.  The callback ownership itself is controlled by
         # _processing so the reader and worker cannot run concurrently.
         self._callback_lock = threading.RLock()
+        self._callback_owner_ident = None
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._generation = 0
@@ -209,10 +210,22 @@ class InputDispatcher:
 
         self._wake.set()
 
-    def reset(self):
+    def _acquire_callback_lock(self, deadline):
+        remaining = max(0.0, deadline - time.perf_counter())
+        return self._callback_lock.acquire(timeout=remaining)
+
+    def reset(self, timeout=1.0):
         """Discard reports belonging to the previous connection generation."""
-        with self._callback_lock:
+        deadline = time.perf_counter() + max(0.0, float(timeout))
+        if not self._acquire_callback_lock(deadline):
+            return False
+        try:
+            # RLock acquisition is re-entrant.  A reset requested by the
+            # callback itself is not quiescent and must not be reported as
+            # complete while that callback can still touch the old state.
             with self._lock:
+                if self._callback_owner_ident is not None:
+                    return False
                 self._generation += 1
                 self._queue.clear()
                 self._last_buttons = None
@@ -228,19 +241,27 @@ class InputDispatcher:
                 self._rate_generation = None
                 # submit() is excluded by the same lock while this is cleared.
                 self._wake.clear()
+            return True
+        finally:
+            self._callback_lock.release()
 
-    def run_exclusive(self, callback):
+    def run_exclusive(self, callback, timeout=1.0):
         """Run a short reconfiguration between input callbacks.
 
         Reports already queued under the old settings are discarded. Reports
         arriving during the callback receive the new generation and resume as
         soon as the callback releases the existing callback lock.
         """
+        deadline = time.perf_counter() + max(0.0, float(timeout))
         with self._lock:
             self._reconfiguring = True
         try:
-            with self._callback_lock:
+            if not self._acquire_callback_lock(deadline):
+                return False
+            try:
                 with self._lock:
+                    if self._callback_owner_ident is not None:
+                        return False
                     self._generation += 1
                     self._queue.clear()
                     self._last_buttons = None
@@ -249,7 +270,10 @@ class InputDispatcher:
                     self._rate_deltas.clear()
                     self._rate_last_processed = None
                     self._wake.clear()
-                return callback()
+                callback()
+                return True
+            finally:
+                self._callback_lock.release()
         finally:
             with self._lock:
                 self._reconfiguring = False
@@ -264,22 +288,24 @@ class InputDispatcher:
         with self._lock:
             self._queue.clear()
 
-        remaining = max(0.0, deadline - time.perf_counter())
-        callback_acquired = self._callback_lock.acquire(timeout=remaining)
+        callback_acquired = self._acquire_callback_lock(deadline)
+        callback_quiesced = False
         if callback_acquired:
             try:
                 with self._lock:
-                    self._generation += 1
-                    self._queue.clear()
+                    callback_quiesced = self._callback_owner_ident is None
+                    if callback_quiesced:
+                        self._generation += 1
+                        self._queue.clear()
             finally:
                 self._callback_lock.release()
         self._wake.set()
 
         if threading.current_thread() is self._thread:
-            return True
+            return False
         remaining = max(0.0, deadline - time.perf_counter())
         self._thread.join(timeout=remaining)
-        return not self._thread.is_alive()
+        return callback_quiesced and not self._thread.is_alive()
 
     def _update_rate(self, generation, now):
         if self._rate_generation != generation:
@@ -309,11 +335,16 @@ class InputDispatcher:
                     )
                 if valid:
                     self._update_rate(generation, started)
+                    with self._lock:
+                        self._callback_owner_ident = threading.get_ident()
                     try:
                         self.callback(payload)
                     except Exception as exc:
                         if self.error_callback is not None:
                             self.error_callback(exc)
+                    finally:
+                        with self._lock:
+                            self._callback_owner_ident = None
         finally:
             elapsed = time.perf_counter() - started
             with self._lock:

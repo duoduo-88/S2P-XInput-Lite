@@ -62,7 +62,7 @@ class TransportShutdownTests(unittest.TestCase):
         bridge._command_response_event = threading.Event()
         bridge.serial = _Serial(events)
         bridge._send_final_zero_rumble = (
-            lambda: events.append("zero_rumble")
+            lambda **_kwargs: events.append("zero_rumble") or True
         )
         bridge.send = lambda command: events.append(command)
         bridge._release_preferred_connection_request = lambda: None
@@ -83,12 +83,17 @@ class TransportShutdownTests(unittest.TestCase):
         bridge.running = True
         bridge._state_lock = threading.RLock()
         bridge.connected_channel = 0
+        bridge._ready_channel = 0
+        bridge._connection_generation = 1
+        bridge._closing = False
         bridge._disconnect_event = threading.Event()
         bridge._rumble_condition = threading.Condition()
+        bridge._rumble_worker_running = True
         bridge._rumble_accepting = True
+        bridge._feedback_active = False
         bridge._rumble_pending = object()
         bridge._send_final_zero_rumble = (
-            lambda: events.append("zero_rumble")
+            lambda **_kwargs: events.append("zero_rumble") or True
         )
         def send(command):
             events.append(command)

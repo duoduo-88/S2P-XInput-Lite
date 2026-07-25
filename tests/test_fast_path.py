@@ -199,6 +199,83 @@ class DispatcherTests(unittest.TestCase):
             release.set()
             dispatcher.stop()
 
+    def test_stop_does_not_report_success_while_inline_callback_runs(self):
+        entered = threading.Event()
+        release = threading.Event()
+
+        def callback(_payload):
+            entered.set()
+            release.wait(1.0)
+
+        dispatcher = InputDispatcher(callback, inline_fast_path=True)
+        submitter = threading.Thread(
+            target=dispatcher.submit,
+            args=(self.report(0, 1),),
+        )
+        submitter.start()
+        self.assertTrue(entered.wait(1.0))
+
+        started = time.perf_counter()
+        self.assertFalse(dispatcher.stop(timeout=0.05))
+        self.assertLess(time.perf_counter() - started, 0.2)
+
+        release.set()
+        submitter.join(1.0)
+        self.assertTrue(dispatcher.stop(timeout=0.5))
+
+    def test_reset_obeys_timeout_while_callback_runs(self):
+        entered = threading.Event()
+        release = threading.Event()
+
+        def callback(_payload):
+            entered.set()
+            release.wait(1.0)
+
+        dispatcher = InputDispatcher(callback, inline_fast_path=True)
+        submitter = threading.Thread(
+            target=dispatcher.submit,
+            args=(self.report(0, 1),),
+        )
+        submitter.start()
+        try:
+            self.assertTrue(entered.wait(1.0))
+            started = time.perf_counter()
+            self.assertFalse(dispatcher.reset(timeout=0.05))
+            self.assertLess(time.perf_counter() - started, 0.2)
+        finally:
+            release.set()
+            submitter.join(1.0)
+            dispatcher.stop()
+
+    def test_run_exclusive_obeys_timeout_while_callback_runs(self):
+        entered = threading.Event()
+        release = threading.Event()
+        reconfigured = threading.Event()
+
+        def callback(_payload):
+            entered.set()
+            release.wait(1.0)
+
+        dispatcher = InputDispatcher(callback, inline_fast_path=True)
+        submitter = threading.Thread(
+            target=dispatcher.submit,
+            args=(self.report(0, 1),),
+        )
+        submitter.start()
+        try:
+            self.assertTrue(entered.wait(1.0))
+            started = time.perf_counter()
+            self.assertFalse(dispatcher.run_exclusive(
+                reconfigured.set,
+                timeout=0.05,
+            ))
+            self.assertLess(time.perf_counter() - started, 0.2)
+            self.assertFalse(reconfigured.is_set())
+        finally:
+            release.set()
+            submitter.join(1.0)
+            dispatcher.stop()
+
 
 class XusbReportTests(unittest.TestCase):
     def test_in_place_report_matches_vgamepad_helpers(self):

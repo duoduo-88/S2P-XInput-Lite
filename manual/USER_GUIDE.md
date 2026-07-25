@@ -402,7 +402,7 @@ on the ESP32. Features that require Windows are not executed.
 1. Select the profile to write.
 2. Finish editing and select **Save/Apply**.
 3. Confirm that the ESP32 is connected and running standalone-capable
-   `0.14.0-dev` firmware.
+   `0.14.0` firmware.
 4. Select **ESP32 ▼** at the bottom of the window.
 5. Select **Write and enable PC XInput standalone** or
    **Write and enable Mobile USB HID**.
@@ -557,4 +557,4 @@ Gate → Lvl → six bands → LF/HF Balance → Tail/Decay.
 Keep one verified stable profile and use **Save New** for experimental settings.
 
 > [!NOTE]
-> This guide applies to the S2P-XInput-Lite v0.6.0 development version. If labels, ranges, or connection behavior change before release, follow the in-app question-mark help and the latest release notes.
+> This guide applies to S2P-XInput-Lite v0.6.0. For later releases, follow the in-app question-mark help and the latest release notes.
