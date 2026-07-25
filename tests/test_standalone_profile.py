@@ -172,6 +172,40 @@ class StandaloneProfileTests(unittest.TestCase):
         )
 
 
+    def test_v2_rejects_mapping_layer_windows_direction_targets(self):
+        settings = _settings()
+        layer = {
+            "name": "Aim",
+            "enabled": True,
+            "buttons": {},
+            "stick_left": {
+                "mode": "8WAY",
+                "up": "KEYBOARD:W",
+                "up_right": "A",
+            },
+            "stick_right": {
+                "mode": "4WAY",
+                "down": "MOUSE:WHEEL_DOWN",
+            },
+        }
+
+        issues = analyze_standalone_v2_compatibility(settings, [layer])
+
+        direction_issues = [
+            issue for issue in issues
+            if issue.feature == "映射層方向輸出"
+        ]
+        self.assertEqual(len(direction_issues), 2)
+        self.assertTrue(
+            all(issue.severity == "blocking" for issue in direction_issues)
+        )
+        self.assertTrue(
+            any("LEFT UP" in issue.detail for issue in direction_issues)
+        )
+        self.assertTrue(
+            any("RIGHT DOWN" in issue.detail for issue in direction_issues)
+        )
+
     @patch("standalone_profile._send_and_expect")
     @patch("standalone_profile.serial.Serial")
     def test_lost_commit_ack_is_recovered_by_crc(

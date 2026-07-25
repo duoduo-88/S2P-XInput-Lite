@@ -76,6 +76,28 @@ class InputDispatcherTests(unittest.TestCase):
             gate.set()
             dispatcher.stop()
 
+    def test_stop_uses_one_wall_clock_deadline(self):
+        entered = threading.Event()
+        release = threading.Event()
+
+        def callback(_payload):
+            entered.set()
+            release.wait(1.0)
+
+        dispatcher = InputDispatcher(callback, inline_fast_path=False)
+        dispatcher.submit(report(0, 1))
+        self.assertTrue(entered.wait(1.0))
+
+        started = time.perf_counter()
+        stopped = dispatcher.stop(timeout=0.05)
+        elapsed = time.perf_counter() - started
+
+        self.assertFalse(stopped)
+        self.assertLess(elapsed, 0.15)
+        release.set()
+        dispatcher._thread.join(1.0)
+        self.assertFalse(dispatcher._thread.is_alive())
+
 
 if __name__ == "__main__":
     unittest.main()

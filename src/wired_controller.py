@@ -561,7 +561,9 @@ class WiredController:
         self.input_callback = None
         self.connected_callback = None
         self.disconnected_callback = None
+        self._state_lock = threading.RLock()
         self.connected = False
+        self._application_ready = False
         self.running = False
         self.controller_id = None
         self.polling_rate_hz = None
@@ -575,6 +577,10 @@ class WiredController:
         self._rumble_packet_id = 0
         self._rumble_slot = None
         self._rumble_lock = threading.Lock()
+        self._rumble_send_lock = threading.Lock()
+        self._rumble_accepting = False
+        self._feedback_lock = threading.Lock()
+        self._feedback_active = False
         self._rumble_wake = threading.Event()
         self._rumble_stop = threading.Event()
         self._rumble_thread = None
@@ -595,9 +601,19 @@ class WiredController:
         self._recover_requested = threading.Event()
         self._connection_generation = 0
 
+    @property
+    def is_ready(self):
+        with self._state_lock:
+            return self.connected and self._application_ready
+
     def open(self):
         if self.running:
             return
+        if self._thread is not None and self._thread.is_alive():
+            raise RuntimeError(tr(
+                "先前的 USB 執行緒仍在結束中。",
+                "The previous USB worker is still stopping.",
+            ))
         if not wired_dependencies_available():
             raise RuntimeError(tr(
                 "缺少 hidapi，無法啟動 USB 有線連線。",
@@ -612,13 +628,20 @@ class WiredController:
         )
         self._thread.start()
 
-    def close(self):
+    def close(self, timeout=2.5):
         # Stop producers first, then let the HID reader leave its timed read and
         # close the handle from the manager thread. Closing a hidapi handle from
         # another thread while native read() is still using it can crash the
         # entire Python process instead of raising a catchable exception.
+        deadline = time.perf_counter() + max(0.0, float(timeout))
         self.input_callback = None
-        self._send_shutdown_zero()
+        with self._state_lock:
+            zero_required = self.connected
+            self._application_ready = False
+        with self._rumble_lock:
+            self._rumble_accepting = False
+            self._feedback_active = False
+            self._rumble_slot = None
         self._rumble_stop.set()
         self._rumble_wake.set()
         rumble_thread = self._rumble_thread
@@ -628,7 +651,16 @@ class WiredController:
             and rumble_thread.is_alive()
             and threading.current_thread() is not rumble_thread
         ):
-            rumble_thread.join(timeout=1.0)
+            rumble_thread.join(
+                timeout=max(0.0, deadline - time.perf_counter())
+            )
+        zero_sent = (
+            self._send_shutdown_zero(
+                timeout=max(0.0, deadline - time.perf_counter())
+            )
+            if zero_required
+            else True
+        )
         # Keep the reader draining input until the output writer has stopped;
         # the manager may close the shared HID handle as soon as running is
         # cleared.
@@ -638,11 +670,13 @@ class WiredController:
             and manager_thread.is_alive()
             and threading.current_thread() is not manager_thread
         ):
-            manager_thread.join(timeout=1.5)
+            manager_thread.join(
+                timeout=max(0.0, deadline - time.perf_counter())
+            )
 
         manager_alive = bool(manager_thread and manager_thread.is_alive())
         rumble_alive = bool(rumble_thread and rumble_thread.is_alive())
-        if not manager_alive:
+        if not manager_alive and not rumble_alive:
             # Normally the manager's finally block already performed this.
             self._close_device()
         else:
@@ -652,8 +686,9 @@ class WiredController:
             ))
         self._thread = manager_thread if manager_alive else None
         self._rumble_thread = rumble_thread if rumble_alive else None
+        return bool(not manager_alive and not rumble_alive and zero_sent)
 
-    def _send_shutdown_zero(self):
+    def _send_shutdown_zero(self, timeout=None):
         if not self.connected:
             return False
         vibration = self._encode_vibration(
@@ -668,19 +703,30 @@ class WiredController:
         report = _usb_output_report(b"\x00" + segment + segment)
         with self._rumble_lock:
             self._rumble_slot = None
-        try:
-            with self._hid_write_lock:
-                with self._device_lock:
-                    device = self._device
-                if device is None:
-                    return False
-                try:
-                    written = device.write(report)
-                except TypeError:
-                    written = device.write(list(report))
-            return written is not None and written > 0
-        except Exception:
+        if timeout is None:
+            acquired = self._rumble_send_lock.acquire()
+        else:
+            acquired = self._rumble_send_lock.acquire(
+                timeout=max(0.0, float(timeout))
+            )
+        if not acquired:
             return False
+        try:
+            try:
+                with self._hid_write_lock:
+                    with self._device_lock:
+                        device = self._device
+                    if device is None:
+                        return False
+                    try:
+                        written = device.write(report)
+                    except TypeError:
+                        written = device.write(list(report))
+                return written is not None and written > 0
+            except Exception:
+                return False
+        finally:
+            self._rumble_send_lock.release()
 
     def _select_entry(self):
         entries = enumerate_wired_controllers(global_fallback=True)
@@ -731,13 +777,17 @@ class WiredController:
                         f"Wired USB controller disconnected: {exc}",
                     ))
             finally:
-                was_connected = self.connected
-                self.connected = False
-                self._connection_generation += 1
+                with self._state_lock:
+                    was_ready = self.connected and self._application_ready
+                    self._application_ready = False
+                    self.connected = False
+                    self._connection_generation += 1
                 with self._rumble_lock:
+                    self._rumble_accepting = False
+                    self._feedback_active = False
                     self._rumble_slot = None
                 self._close_device()
-                if was_connected and self.running and self.disconnected_callback is not None:
+                if was_ready and self.running and self.disconnected_callback is not None:
                     try:
                         self.disconnected_callback()
                     except Exception:
@@ -782,13 +832,41 @@ class WiredController:
         initialized = initialize_usb_reports()
         if not initialized:
             initialized = self._send_startup_reports_hid(device)
-        self._connection_generation += 1
-        generation = self._connection_generation
+        with self._state_lock:
+            self._connection_generation += 1
+            generation = self._connection_generation
+            self.connected = True
+            self._application_ready = False
         self._start_delayed_reinit(generation)
-        self.connected = True
+        with self._rumble_lock:
+            self._rumble_accepting = False
+            self._feedback_active = False
+        callback_started = False
+        try:
+            if self.connected_callback is not None:
+                callback_started = True
+                self.connected_callback()
+            with self._state_lock:
+                if (
+                    not self.running
+                    or not self.connected
+                    or generation != self._connection_generation
+                ):
+                    raise RuntimeError("USB connection changed during startup")
+                self._application_ready = True
+        except Exception:
+            with self._state_lock:
+                self._application_ready = False
+                self.connected = False
+            if callback_started and self.disconnected_callback is not None:
+                try:
+                    self.disconnected_callback()
+                except Exception:
+                    pass
+            raise
+        with self._rumble_lock:
+            self._rumble_accepting = True
         self._start_rumble_thread()
-        if self.connected_callback is not None:
-            self.connected_callback()
         print(tr(
             "Switch 2 Pro Controller USB 有線輸入已啟動。",
             "Switch 2 Pro Controller wired USB input started.",
@@ -921,6 +999,10 @@ class WiredController:
         is_zero = int(lf_amp) <= 0 and int(hf_amp) <= 0
         priority = bool(priority or force_zero or is_zero)
         with self._rumble_lock:
+            if not self._rumble_accepting:
+                return False
+            if self._feedback_active:
+                return False
             self._rumble_submitted += 1
             pending_since = submitted_at
             if self._rumble_slot is not None:
@@ -932,33 +1014,97 @@ class WiredController:
         self._rumble_wake.set()
         return True
 
-    def connection_rumble(self):
-        """Match the native BLE/ESP32 two-pulse connection haptic."""
-        def worker():
-            for lf_amp, hf_amp, duration in CONNECTION_FEEDBACK_PATTERN:
-                self.send_pro_rumble(
-                    CONNECTION_LF_FREQUENCY,
-                    lf_amp,
-                    CONNECTION_HF_FREQUENCY,
-                    hf_amp,
+    def _send_feedback_rumble_now(
+        self, lf_freq, lf_amp, hf_freq, hf_amp
+    ):
+        """Write one fixed cue frame outside the normal latest-only slot."""
+        with self._rumble_send_lock:
+            with self._rumble_lock:
+                if (
+                    not self._rumble_accepting
+                    or not self._feedback_active
+                    or self._rumble_stop.is_set()
+                ):
+                    return False
+                packet_id = 0x50 + (self._rumble_packet_id & 0x0F)
+                self._rumble_packet_id = (
+                    self._rumble_packet_id + 1
+                ) & 0x0F
+            vibration = self._encode_vibration(
+                lf_freq, lf_amp, hf_freq, hf_amp
+            )
+            segment = bytes([packet_id]) + vibration * 3
+            report = _usb_output_report(
+                b"\x00" + segment + segment
+            )
+            try:
+                with self._hid_write_lock:
+                    with self._device_lock:
+                        device = self._device
+                    if device is None:
+                        return False
+                    try:
+                        written = device.write(report)
+                    except TypeError:
+                        written = device.write(list(report))
+                return written is not None and written > 0
+            except Exception:
+                return False
+
+    def _play_fixed_feedback(self, pattern, lf_frequency, hf_frequency):
+        """Temporarily override game/audio output with a fixed cue."""
+        with self._feedback_lock:
+            with self._rumble_lock:
+                if not self._rumble_accepting:
+                    return False
+                self._feedback_active = True
+                self._rumble_slot = None
+            completed = True
+            try:
+                for lf_amp, hf_amp, duration in pattern:
+                    if not self._send_feedback_rumble_now(
+                        lf_frequency,
+                        lf_amp,
+                        hf_frequency,
+                        hf_amp,
+                    ):
+                        completed = False
+                        break
+                    if duration:
+                        time.sleep(duration)
+            finally:
+                # The protocol pattern already ends in zero, but repeat it if
+                # the cue was interrupted between active frames.
+                self._send_feedback_rumble_now(
+                    lf_frequency, 0, hf_frequency, 0
                 )
-                if duration:
-                    time.sleep(duration)
-        threading.Thread(target=worker, daemon=True).start()
+                with self._rumble_lock:
+                    self._feedback_active = False
+            return completed
+
+    def connection_rumble(self):
+        """Play the fixed two-pulse cue regardless of output mix mode."""
+        threading.Thread(
+            target=self._play_fixed_feedback,
+            args=(
+                CONNECTION_FEEDBACK_PATTERN,
+                CONNECTION_LF_FREQUENCY,
+                CONNECTION_HF_FREQUENCY,
+            ),
+            daemon=True,
+        ).start()
 
     def pin_rumble(self):
-        """Play the quiet controller-identification cue."""
-        def worker():
-            for lf_amp, hf_amp, duration in PIN_FEEDBACK_PATTERN:
-                self.send_pro_rumble(
-                    PIN_LF_FREQUENCY,
-                    lf_amp,
-                    PIN_HF_FREQUENCY,
-                    hf_amp,
-                )
-                if duration:
-                    time.sleep(duration)
-        threading.Thread(target=worker, daemon=True).start()
+        """Play the same fixed two-pulse controller-identification cue."""
+        threading.Thread(
+            target=self._play_fixed_feedback,
+            args=(
+                PIN_FEEDBACK_PATTERN,
+                PIN_LF_FREQUENCY,
+                PIN_HF_FREQUENCY,
+            ),
+            daemon=True,
+        ).start()
 
     def _start_rumble_thread(self):
         if self._rumble_thread and self._rumble_thread.is_alive():
@@ -1024,18 +1170,27 @@ class WiredController:
                             (started - submitted_at) * 1000.0
                         )
                     self._rumble_send_attempts += 1
-                try:
-                    with self._hid_write_lock:
-                        with self._device_lock:
-                            device = self._device
-                        if device is None:
-                            continue
-                        try:
-                            written = device.write(report)
-                        except TypeError:
-                            written = device.write(list(report))
-                except Exception:
-                    written = None
+                with self._rumble_send_lock:
+                    with self._rumble_lock:
+                        accepting = (
+                            self._rumble_accepting
+                            and not self._feedback_active
+                            and not self._rumble_stop.is_set()
+                        )
+                    if not accepting:
+                        continue
+                    try:
+                        with self._hid_write_lock:
+                            with self._device_lock:
+                                device = self._device
+                            if device is None:
+                                continue
+                            try:
+                                written = device.write(report)
+                            except TypeError:
+                                written = device.write(list(report))
+                    except Exception:
+                        written = None
                 finished = time.perf_counter()
                 elapsed = finished - started
                 # Pace write *starts*. A slow HID call already consumes the

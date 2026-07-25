@@ -73,9 +73,16 @@ class BluetoothController:
         self.bluetooth_unavailable_callback = None
         self.calibration_mode = False
 
+        self._state_lock = threading.RLock()
         self.connected = False
+        self._application_ready = False
+        self._connection_generation = 0
+        self._rumble_accepting = False
+        self._feedback_active = False
+        self._disconnect_notification_pending = False
         self.running = False
         self._closing = False
+        self._transport_failure_reported = False
 
         self._preferred_connection_request = None
         self.throughput_request_status = None
@@ -85,6 +92,8 @@ class BluetoothController:
         self._rumble_write_lock = None
         self._rumble_pending = None
         self._rumble_send_task = None
+        self._feedback_lock = None
+        self._feedback_task = None
         # WinRT throughput_optimized is fixed at 12 BLE units = 15 ms.
         # Pace write starts to that interval so response=False cannot build an
         # opaque queue of stale vibration frames inside the Windows BLE stack.
@@ -103,7 +112,7 @@ class BluetoothController:
         self._thread = None
 
         self._response_future = None
-        self._expected_command_id = None
+        self._expected_command = None
 
         self._rumble_packet_id = 0
         
@@ -118,6 +127,61 @@ class BluetoothController:
     @property
     def controller_id(self):
         return getattr(self.device, "address", None)
+
+    @property
+    def is_ready(self):
+        with self._state_lock:
+            return self.connected and self._application_ready
+
+    def _connection_is_current(self, generation):
+        with self._state_lock:
+            return (
+                self.running
+                and self.connected
+                and self._connection_generation == generation
+                and self.client is not None
+                and self.client.is_connected
+            )
+
+    def _commit_application_ready(self, generation):
+        """Run the connected callback, then expose input/rumble readiness."""
+        callback_started = False
+        callback_error = None
+        rollback_required = False
+        with self._state_lock:
+            if not self._connection_is_current(generation):
+                return False
+            if self.connected_callback is not None:
+                callback_started = True
+                try:
+                    self.connected_callback()
+                except Exception as exc:
+                    callback_error = exc
+            if (
+                callback_error is not None
+                or not self._connection_is_current(generation)
+            ):
+                rollback_required = callback_started
+            else:
+                self._application_ready = True
+                self._rumble_accepting = True
+                self._feedback_active = False
+                return True
+
+        if callback_error is not None:
+            print(tr(
+                f"控制器連線回呼錯誤：{callback_error}",
+                f"Bluetooth connected callback failed: {callback_error}",
+            ))
+        if rollback_required and self.disconnected_callback is not None:
+            try:
+                self.disconnected_callback()
+            except Exception as exc:
+                print(tr(
+                    f"控制器連線回滾失敗：{exc}",
+                    f"Bluetooth connected rollback failed: {exc}",
+                ))
+        return False
 
     async def _request_throughput_optimized(self):
         """Request the fastest supported interval without assuming Bleak internals."""
@@ -254,8 +318,14 @@ class BluetoothController:
     def open(self):
         if self.running:
             return
+        if self._thread is not None and self._thread.is_alive():
+            raise RuntimeError(tr(
+                "先前的原生藍牙執行緒仍在結束中。",
+                "The previous native Bluetooth worker is still stopping.",
+            ))
 
         self._closing = False
+        self._transport_failure_reported = False
         self.running = True
 
         self._thread = threading.Thread(
@@ -275,8 +345,10 @@ class BluetoothController:
         )
 
         self._rumble_write_lock = asyncio.Lock()
+        self._feedback_lock = asyncio.Lock()
         self._rumble_pending = None
         self._rumble_send_task = None
+        self._feedback_task = None
         with self._rumble_diag_lock:
             self._rumble_submitted = 0
             self._rumble_overwritten = 0
@@ -332,6 +404,43 @@ class BluetoothController:
     # 主流程
     # =========================
 
+    def _report_transport_failure(self, message):
+        if self._transport_failure_reported:
+            return
+        self._transport_failure_reported = True
+        print(message)
+        if self._closing:
+            return
+        if self.bluetooth_unavailable_callback is not None:
+            try:
+                self.bluetooth_unavailable_callback()
+            except Exception as exc:
+                print(f"藍牙停止回呼錯誤：{exc}")
+
+    async def _disconnect_with_retry(
+        self,
+        attempts=3,
+        delay=0.2,
+    ):
+        """Do not permit a new client while an old physical link survives."""
+        for attempt in range(1, max(1, int(attempts)) + 1):
+            if await self._disconnect():
+                return True
+            if attempt < attempts:
+                print(tr(
+                    f"原生藍牙斷線失敗，正在重試（{attempt}/{attempts}）。",
+                    "Native Bluetooth disconnect failed; retrying "
+                    f"({attempt}/{attempts}).",
+                ))
+                await asyncio.sleep(delay)
+        self.running = False
+        self._report_transport_failure(tr(
+            "原生藍牙無法安全中斷；已停止連線模組，避免建立第二條連線。",
+            "Native Bluetooth could not disconnect safely; the transport "
+            "was stopped to prevent a second connection.",
+        ))
+        return False
+
     async def _run(
         self
     ):
@@ -355,8 +464,17 @@ class BluetoothController:
             while self.running:
 
                 try:
+                    if (
+                        self.client is not None
+                        and not await self._disconnect_with_retry()
+                    ):
+                        break
                     # 每一輪重新清除狀態
-                    self.connected = False
+                    with self._state_lock:
+                        self.connected = False
+                        self._application_ready = False
+                        self._rumble_accepting = False
+                        self._feedback_active = False
                     self.device = None
                     self._search_message_shown = False
 
@@ -407,7 +525,14 @@ class BluetoothController:
                             "Native Bluetooth connection failed.",
                         ))
 
-                    self.connected = True
+                    with self._state_lock:
+                        self.connected = True
+                        self._application_ready = False
+                        self._rumble_accepting = False
+                        self._feedback_active = False
+                        self._connection_generation += 1
+                        generation = self._connection_generation
+                        self._disconnect_notification_pending = False
 
                     print(
                         "Switch 2 Pro Controller "
@@ -448,7 +573,12 @@ class BluetoothController:
 
                     await self._start_notify_with_retry(
                         self.command_response_uuid,
-                        self._on_command_response
+                        lambda sender, data, connection_generation=generation:
+                            self._on_command_response(
+                                sender,
+                                data,
+                                generation=connection_generation,
+                            )
                     )
 
                     # =========================
@@ -456,13 +586,13 @@ class BluetoothController:
                     # =========================
 
                     if self.pairing_required:
-                        await self._pair_controller()
+                        await self._pair_controller(generation)
 
                     # =========================
                     # 初始化控制器
                     # =========================
 
-                    await self._initialize_controller()
+                    await self._initialize_controller(generation)
 
                     # =========================
                     # 訂閱 Input Report
@@ -470,14 +600,21 @@ class BluetoothController:
 
                     await self._start_notify_with_retry(
                         INPUT_REPORT_UUID,
-                        self._on_input_report
+                        lambda sender, data, connection_generation=generation:
+                            self._on_input_report(
+                                sender,
+                                data,
+                                generation=connection_generation,
+                            )
                     )
 
-                    if self.connected_callback is not None:
-                        try:
-                            self.connected_callback()
-                        except Exception as exc:
-                            print(f"控制器連線回呼錯誤：{exc}")
+                    # The callback observes is_ready == False.  Disconnect and
+                    # readiness are linearized by the same lock, so a stale
+                    # generation can never publish a connected state.
+                    if not self._commit_application_ready(generation):
+                        raise RuntimeError(
+                            "BLE connection changed during connected callback."
+                        )
 
                     print()
                     print(
@@ -539,7 +676,8 @@ class BluetoothController:
                         break
 
                     # 先清理已失效的 GATT Client，避免待處理工作影響下一輪。
-                    await self._disconnect()
+                    if not await self._disconnect_with_retry():
+                        break
 
                     print()
                     if self._is_windows_cancelled_error(exc):
@@ -561,7 +699,8 @@ class BluetoothController:
                 # 每輪結束都清理舊連線
                 # =========================
 
-                await self._disconnect()
+                if not await self._disconnect_with_retry():
+                    break
 
                 # close() 時不要再進下一輪
                 if not self.running:
@@ -584,7 +723,8 @@ class BluetoothController:
             traceback.print_exc()
 
         finally:
-            await self._disconnect()
+            if self.client is not None:
+                await self._disconnect_with_retry()
 
     # =========================
     # 掃描控制器
@@ -789,7 +929,26 @@ class BluetoothController:
                 key=lambda char: char.handle
             )
 
-            if len(write_chars) >= 2:
+            exact_write = next(
+                (
+                    char for char in write_chars
+                    if str(char.uuid).lower()
+                    == COMMAND_WRITE_UUID.lower()
+                ),
+                None,
+            )
+            exact_response = next(
+                (
+                    char for char in notify_chars
+                    if str(char.uuid).lower()
+                    == COMMAND_RESPONSE_UUID.lower()
+                ),
+                None,
+            )
+
+            if exact_write is not None:
+                self.command_write_uuid = exact_write.uuid
+            elif len(write_chars) >= 2:
                 self.command_write_uuid = (
                     write_chars[1].uuid
                 )
@@ -799,7 +958,9 @@ class BluetoothController:
                     write_chars[0].uuid
                 )
 
-            if len(notify_chars) >= 3:
+            if exact_response is not None:
+                self.command_response_uuid = exact_response.uuid
+            elif len(notify_chars) >= 3:
                 self.command_response_uuid = (
                     notify_chars[2].uuid
                 )
@@ -820,7 +981,8 @@ class BluetoothController:
     def _on_command_response(
         self,
         sender,
-        data
+        data,
+        generation=None,
     ):
         future = (
             self._response_future
@@ -832,16 +994,23 @@ class BluetoothController:
         ):
             return
 
-        if not data:
+        if not data or len(data) < 4:
             return
 
-        expected = (
-            self._expected_command_id
-        )
+        with self._state_lock:
+            current_generation = self._connection_generation
+        if generation is None:
+            generation = current_generation
+        expected = self._expected_command
 
         if (
             expected is not None
-            and data[0] != expected
+            and (
+                generation != current_generation
+                or generation != expected[0]
+                or data[0] != expected[1]
+                or data[3] != expected[2]
+            )
         ):
             return
 
@@ -877,11 +1046,16 @@ class BluetoothController:
         command_id,
         subcommand_id,
         command_data=b"",
-        timeout=2.0
+        timeout=2.0,
+        generation=None,
     ):
+        with self._state_lock:
+            if generation is None:
+                generation = self._connection_generation
         if (
             self.client is None
             or not self.client.is_connected
+            or not self._connection_is_current(generation)
         ):
             raise RuntimeError(tr(
                 "控制器尚未連線。",
@@ -904,8 +1078,10 @@ class BluetoothController:
             + command_data
         )
 
-        self._expected_command_id = (
-            command_id
+        self._expected_command = (
+            generation,
+            command_id,
+            subcommand_id,
         )
 
         self._response_future = (
@@ -926,11 +1102,12 @@ class BluetoothController:
 
         finally:
             self._response_future = None
-            self._expected_command_id = None
+            self._expected_command = None
 
         if (
             len(response) < 8
             or response[0] != command_id
+            or response[3] != subcommand_id
         ):
             raise RuntimeError(tr(
                 f"控制器命令回應格式錯誤：{response.hex()}",
@@ -940,7 +1117,8 @@ class BluetoothController:
         return response[8:]
 
     async def _pair_controller(
-        self
+        self,
+        generation,
     ):
         if self.host_mac_value is None:
             raise RuntimeError(tr(
@@ -955,11 +1133,18 @@ class BluetoothController:
             0x15, 0x01,
             b"\x00\x02"
             + mac_value.to_bytes(6, "little")
-            + mac_value.to_bytes(6, "little")
+            + mac_value.to_bytes(6, "little"),
+            generation=generation,
         )
-        await self._write_command(0x15, 0x04, PAIR_LTK1)
-        await self._write_command(0x15, 0x02, PAIR_LTK2)
-        await self._write_command(0x15, 0x03, b"\x00")
+        await self._write_command(
+            0x15, 0x04, PAIR_LTK1, generation=generation
+        )
+        await self._write_command(
+            0x15, 0x02, PAIR_LTK2, generation=generation
+        )
+        await self._write_command(
+            0x15, 0x03, b"\x00", generation=generation
+        )
 
         self.pairing_required = False
         print("配對資料已寫入手把；之後按任意按鍵即可喚醒重連。")
@@ -969,7 +1154,8 @@ class BluetoothController:
     # =========================
 
     async def _initialize_controller(
-        self
+        self,
+        generation,
     ):
         print(
             "正在準備控制器..."
@@ -1054,45 +1240,45 @@ class BluetoothController:
         ]
 
 
-        consecutive_failures = 0
-
         for (
             command_id,
             subcommand_id,
             data
         ) in commands:
-
-            try:
-                await self._write_command(
-                    command_id,
-                    subcommand_id,
-                    data
-                )
-
-                consecutive_failures = 0
-
-                await asyncio.sleep(
-                    0.01
-                )
-
-            except Exception as exc:
-                consecutive_failures += 1
-
-                print(
-                    "初始化命令失敗："
-                    f"{command_id:02X}:"
-                    f"{subcommand_id:02X} "
-                    f"{exc}"
-                )
-
-                if (
-                    consecutive_failures
-                    >= 3
-                ):
+            last_error = None
+            for attempt in range(1, 4):
+                if not self._connection_is_current(generation):
                     raise RuntimeError(tr(
-                        "Switch 2 Pro 初始化連續失敗。",
-                        "Switch 2 Pro initialization failed repeatedly.",
+                        "控制器在初始化期間已中斷。",
+                        "The controller disconnected during initialization.",
                     ))
+                try:
+                    await self._write_command(
+                        command_id,
+                        subcommand_id,
+                        data,
+                        generation=generation,
+                    )
+                    last_error = None
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    print(
+                        "初始化命令失敗："
+                        f"{command_id:02X}:"
+                        f"{subcommand_id:02X} "
+                        f"({attempt}/3) {exc}"
+                    )
+                    if attempt < 3:
+                        await asyncio.sleep(0.05)
+            if last_error is not None:
+                raise RuntimeError(tr(
+                    "Switch 2 Pro 必要初始化命令失敗："
+                    f"{command_id:02X}:{subcommand_id:02X}",
+                    "Mandatory Switch 2 Pro initialization command failed: "
+                    f"{command_id:02X}:{subcommand_id:02X}",
+                )) from last_error
+            await asyncio.sleep(0.01)
 
     # =========================
     # Input Report
@@ -1101,9 +1287,20 @@ class BluetoothController:
     def _on_input_report(
         self,
         sender,
-        data
+        data,
+        generation=None,
     ):
         if not data:
+            return
+        with self._state_lock:
+            if generation is None:
+                generation = self._connection_generation
+            ready = (
+                self.connected
+                and self._application_ready
+                and self._connection_generation == generation
+            )
+        if not ready:
             return
 
         if (
@@ -1123,25 +1320,39 @@ class BluetoothController:
     def send_pro_rumble(
         self, lf_freq, lf_amp, hf_freq, hf_amp
     ):
-        if (
-            not self.connected
-            or self.client is None
-            or self._loop is None
-            or not self._loop.is_running()
-        ):
-            return False
+        with self._state_lock:
+            if (
+                not self.connected
+                or not self._application_ready
+                or not self._rumble_accepting
+                or self._feedback_active
+                or self.client is None
+                or self._loop is None
+                or not self._loop.is_running()
+            ):
+                return False
+            generation = self._connection_generation
 
         submitted_at = time.perf_counter()
         state = (
             (lf_freq, lf_amp, hf_freq, hf_amp),
             submitted_at,
             int(lf_amp) <= 0 and int(hf_amp) <= 0,
+            generation,
         )
         loop = self._loop
 
         def publish_latest():
             # Keep only the newest not-yet-sent state. A slow BLE write must
             # never turn real-time audio into an increasingly stale queue.
+            with self._state_lock:
+                if (
+                    not self._rumble_accepting
+                    or not self._application_ready
+                    or self._feedback_active
+                    or self._connection_generation != generation
+                ):
+                    return
             with self._rumble_diag_lock:
                 self._rumble_submitted += 1
                 if self._rumble_pending is not None:
@@ -1159,79 +1370,167 @@ class BluetoothController:
             return False
         return True
 
-    def connection_rumble(self):
-        """連線成功時播放兩次短震動提示。"""
-        if not self.connected:
-            return
+    async def _play_fixed_feedback_async(
+        self,
+        pattern,
+        lf_frequency,
+        hf_frequency,
+        generation,
+    ):
+        """Override game/audio output until the fixed cue reaches zero."""
+        async with self._feedback_lock:
+            with self._state_lock:
+                if (
+                    not self._connection_is_current(generation)
+                    or not self._application_ready
+                ):
+                    return False
+                self._feedback_active = True
+            with self._rumble_diag_lock:
+                self._rumble_pending = None
 
-        def worker():
-            for lf_amp, hf_amp, duration in CONNECTION_FEEDBACK_PATTERN:
-                self.send_pro_rumble(
-                    CONNECTION_LF_FREQUENCY,
-                    lf_amp,
-                    CONNECTION_HF_FREQUENCY,
-                    hf_amp,
-                )
-                if duration:
-                    time.sleep(duration)
+            normal_task = self._rumble_send_task
+            if (
+                normal_task is not None
+                and not normal_task.done()
+                and normal_task is not asyncio.current_task()
+            ):
+                normal_task.cancel()
+                await asyncio.gather(normal_task, return_exceptions=True)
+            self._rumble_send_task = None
 
-            if self.calibration_mode:
-                if self.ready_callback is not None:
-                    try:
-                        self.ready_callback()
-                    except Exception as exc:
-                        print(
-                            f"控制器準備完成回呼錯誤：{exc}"
+            completed = True
+            try:
+                for lf_amp, hf_amp, duration in pattern:
+                    with self._state_lock:
+                        current = (
+                            self._connection_is_current(generation)
+                            and self._feedback_active
                         )
+                    if not current:
+                        completed = False
+                        break
+                    if not await self._send_pro_rumble_async(
+                        lf_frequency,
+                        lf_amp,
+                        hf_frequency,
+                        hf_amp,
+                    ):
+                        completed = False
+                        break
+                    if duration:
+                        await asyncio.sleep(duration)
+            finally:
+                with self._state_lock:
+                    can_zero = self._connection_is_current(generation)
+                if can_zero:
+                    try:
+                        await self._send_pro_rumble_async(
+                            lf_frequency, 0, hf_frequency, 0
+                        )
+                    except Exception:
+                        completed = False
+                with self._state_lock:
+                    if self._connection_generation == generation:
+                        self._feedback_active = False
+            return completed
 
-            else:
-                print()
-                print(
-                    tr(
-                        "控制器連線與基本輸入已準備完成。",
-                        "Controller connection and basic input are ready.",
+    def _start_fixed_feedback(
+        self,
+        pattern,
+        lf_frequency,
+        hf_frequency,
+        completed_callback=None,
+    ):
+        loop = self._loop
+        with self._state_lock:
+            if (
+                not self.connected
+                or not self._application_ready
+                or loop is None
+                or not loop.is_running()
+            ):
+                return False
+            generation = self._connection_generation
+
+        def schedule():
+            task = self._feedback_task
+            if task is not None and not task.done():
+                return
+            task = loop.create_task(
+                self._play_fixed_feedback_async(
+                    pattern,
+                    lf_frequency,
+                    hf_frequency,
+                    generation,
+                )
+            )
+            self._feedback_task = task
+
+            def finished(done):
+                if self._feedback_task is done:
+                    self._feedback_task = None
+                try:
+                    done.result()
+                except asyncio.CancelledError:
+                    return
+                except Exception:
+                    return
+                if completed_callback is not None and self.is_ready:
+                    completed_callback()
+
+            task.add_done_callback(finished)
+
+        try:
+            loop.call_soon_threadsafe(schedule)
+        except RuntimeError:
+            return False
+        return True
+
+    def _finish_connection_feedback(self):
+        if self.calibration_mode:
+            if self.ready_callback is not None:
+                try:
+                    self.ready_callback()
+                except Exception as exc:
+                    print(
+                        f"控制器準備完成回呼錯誤：{exc}"
                     )
+        else:
+            print()
+            print(
+                tr(
+                    "控制器連線與基本輸入已準備完成。",
+                    "Controller connection and basic input are ready.",
                 )
-                print()
-                print(
-                    "提醒：連線期間請勿關閉此視窗。"
-                )
-                print(
-                    "若需要中斷連線，請關閉此視窗。"
-                )
-                print()
-                print(
-                    "如需校正搖桿，請先關閉本程式，"
-                    "再按下「校正搖桿」按鈕。"
-                )
-                print(
-                    "接著依照校正程序的畫面提示"
-                    "操作即可。"
-                )
-                print()
+            )
+            print()
+            print("提醒：連線期間請勿關閉此視窗。")
+            print("若需要中斷連線，請關閉此視窗。")
+            print()
+            print(
+                "如需校正搖桿，請先關閉本程式，"
+                "再按下「校正搖桿」按鈕。"
+            )
+            print("接著依照校正程序的畫面提示操作即可。")
+            print()
 
-        threading.Thread(
-            target=worker,
-            daemon=True
-        ).start()
+    def connection_rumble(self):
+        """Play the fixed game-style two-pulse connection cue."""
+        return self._start_fixed_feedback(
+            CONNECTION_FEEDBACK_PATTERN,
+            CONNECTION_LF_FREQUENCY,
+            CONNECTION_HF_FREQUENCY,
+            completed_callback=self._finish_connection_feedback,
+        )
 
     def pin_rumble(self):
-        """Play the quiet controller-identification cue."""
-        if not self.connected:
-            return
-
-        def worker():
-            for lf_amp, hf_amp, duration in PIN_FEEDBACK_PATTERN:
-                self.send_pro_rumble(
-                    PIN_LF_FREQUENCY,
-                    lf_amp,
-                    PIN_HF_FREQUENCY,
-                    hf_amp,
-                )
-                if duration:
-                    time.sleep(duration)
-
-        threading.Thread(target=worker, daemon=True).start()
+        """Play the same fixed game-style identification cue."""
+        return self._start_fixed_feedback(
+            PIN_FEEDBACK_PATTERN,
+            PIN_LF_FREQUENCY,
+            PIN_HF_FREQUENCY,
+        )
 
 
     @staticmethod
@@ -1244,7 +1543,14 @@ class BluetoothController:
     async def _rumble_send_latest_loop(self):
         """Pace BLE writes while discarding superseded rumble states."""
         try:
-            while self.connected:
+            while True:
+                with self._state_lock:
+                    if (
+                        not self.connected
+                        or not self._rumble_accepting
+                        or self._feedback_active
+                    ):
+                        return
                 if self._rumble_pending is None:
                     return
                 with self._rumble_diag_lock:
@@ -1264,7 +1570,15 @@ class BluetoothController:
                 self._rumble_pending = None
                 if state is None:
                     return
-                values, submitted_at, is_zero = state
+                values, submitted_at, is_zero, generation = state
+                with self._state_lock:
+                    if (
+                        not self._rumble_accepting
+                        or not self._application_ready
+                        or self._feedback_active
+                        or generation != self._connection_generation
+                    ):
+                        continue
                 started = time.perf_counter()
                 with self._rumble_diag_lock:
                     if self._rumble_last_send > 0.0:
@@ -1369,11 +1683,23 @@ class BluetoothController:
         self,
         client
     ):
-        self.connected = False
+        with self._state_lock:
+            if client is not self.client:
+                return
+            should_notify = (
+                self._application_ready
+                or self._disconnect_notification_pending
+            )
+            self.connected = False
+            self._application_ready = False
+            self._rumble_accepting = False
+            self._feedback_active = False
+            self._disconnect_notification_pending = False
+            self._connection_generation += 1
         self._release_preferred_connection_request()
 
         # 使用者主動關閉模式時，不當成意外斷線
-        if self._closing:
+        if self._closing or not should_notify:
             return
 
         print()
@@ -1394,25 +1720,73 @@ class BluetoothController:
         self
     ):
         self._release_preferred_connection_request()
-        if self.client is None:
-            return
+        with self._state_lock:
+            client = self.client
+            was_ready = self._application_ready
+            self._rumble_accepting = False
+            self._feedback_active = False
+            self._application_ready = False
+            self.connected = False
+            self._disconnect_notification_pending = (
+                self._disconnect_notification_pending or was_ready
+            )
+            self._connection_generation += 1
+        if client is None:
+            return True
 
-        try:
-            if self.client.is_connected:
-                self._rumble_pending = None
+        with self._rumble_diag_lock:
+            self._rumble_pending = None
+        feedback_task = self._feedback_task
+        if (
+            feedback_task is not None
+            and not feedback_task.done()
+            and feedback_task is not asyncio.current_task()
+        ):
+            feedback_task.cancel()
+            await asyncio.gather(feedback_task, return_exceptions=True)
+        self._feedback_task = None
+        rumble_task = self._rumble_send_task
+        if (
+            rumble_task is not None
+            and not rumble_task.done()
+            and rumble_task is not asyncio.current_task()
+        ):
+            rumble_task.cancel()
+            await asyncio.gather(rumble_task, return_exceptions=True)
+        self._rumble_send_task = None
+
+        if client.is_connected:
+            try:
                 await self._send_pro_rumble_async(
                     CONNECTION_LF_FREQUENCY,
                     0,
                     CONNECTION_HF_FREQUENCY,
                     0,
                 )
-                await self.client.disconnect()
+            except Exception:
+                pass
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+        success = not client.is_connected
 
-        except Exception:
-            pass
-
-        self.connected = False
-        self.client = None
+        if success and not client.is_connected:
+            # Some Bleak backends schedule the callback after disconnect()
+            # returns.  Deliver it here while this client is still current;
+            # the eventual duplicate callback is ignored once client is None.
+            self._on_disconnected(client)
+        with self._state_lock:
+            if (
+                self.client is client
+                and (success or not client.is_connected)
+            ):
+                self.client = None
+            self.connected = False
+            self._application_ready = False
+            self._rumble_accepting = False
+            self._feedback_active = False
+        return success
 
     def disconnect_for_idle(self):
         """Drop only the controller link; keep discovery alive for wake-up."""
@@ -1420,16 +1794,21 @@ class BluetoothController:
         if loop is None or not loop.is_running() or loop.is_closed():
             return False
         try:
-            asyncio.run_coroutine_threadsafe(self._disconnect(), loop)
-        except (RuntimeError, asyncio.InvalidStateError):
+            future = asyncio.run_coroutine_threadsafe(self._disconnect(), loop)
+            return bool(future.result(timeout=3.0))
+        except (
+            RuntimeError,
+            asyncio.InvalidStateError,
+            TimeoutError,
+        ):
             return False
-        return True
 
     def close(
         self
     ):
         self._closing = True
         self.running = False
+        disconnect_ok = True
 
         loop = self._loop
         thread = self._thread
@@ -1447,10 +1826,10 @@ class BluetoothController:
                     loop
                 )
 
-                future.result(timeout=2.0)
+                disconnect_ok = bool(future.result(timeout=2.0))
 
             except Exception:
-                pass
+                disconnect_ok = False
 
         # 等待背景執行緒真正結束
         if (
@@ -1460,5 +1839,15 @@ class BluetoothController:
         ):
             thread.join(timeout=6.0)
 
+        thread_alive = bool(thread is not None and thread.is_alive())
+        if thread_alive:
+            print(tr(
+                "原生藍牙執行緒未在期限內結束；保留執行緒與 event loop reference。",
+                "The native Bluetooth worker did not stop before the deadline; "
+                "its thread and event-loop references were retained.",
+            ))
+            return False
+
         self._thread = None
         self._loop = None
+        return disconnect_ok

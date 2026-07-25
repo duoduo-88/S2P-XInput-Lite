@@ -2,6 +2,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -32,6 +33,92 @@ class DummyLabel:
 
 
 class GuiPersistenceTests(unittest.TestCase):
+    def test_parameter_mousewheel_scrolls_canvas_and_stops_value_binding(self):
+        class Widget:
+            def __init__(self, widget_class, master=None):
+                self.widget_class = widget_class
+                self.master = master
+                self.scrolls = []
+
+            def winfo_class(self):
+                return self.widget_class
+
+            def yview_scroll(self, units, mode):
+                self.scrolls.append((units, mode))
+
+        canvas = Widget("Canvas")
+        scale = Widget("TScale", master=canvas)
+        gui = object.__new__(config_gui.ConfigGUI)
+
+        result = gui._on_parameter_control_mousewheel(
+            SimpleNamespace(widget=scale, delta=-120)
+        )
+
+        self.assertEqual(result, "break")
+        self.assertEqual(canvas.scrolls, [(1, "units")])
+
+    def test_parameter_controls_receive_widget_level_wheel_guard(self):
+        class Widget:
+            master = None
+
+            def __init__(self):
+                self.bindings = []
+
+            def winfo_class(self):
+                return "TCombobox"
+
+            def bind(self, sequence, callback, add=None):
+                self.bindings.append((sequence, callback, add))
+
+            def __str__(self):
+                return ".parameter"
+
+        gui = object.__new__(config_gui.ConfigGUI)
+        gui.profile_combo = None
+        gui._parameter_wheel_bound_widgets = set()
+        gui._parameter_reset_bound_widgets = set()
+        gui.parameter_binding_for_widget = lambda _widget: None
+        widget = Widget()
+
+        gui._bind_parameter_reset_widget(widget)
+
+        self.assertEqual(len(widget.bindings), 1)
+        sequence, callback, add = widget.bindings[0]
+        self.assertEqual(sequence, "<MouseWheel>")
+        self.assertEqual(callback, gui._on_parameter_control_mousewheel)
+        self.assertEqual(add, "+")
+
+    def test_combobox_popdown_list_ignores_mousewheel(self):
+        calls = []
+
+        class Tcl:
+            def call(self, *args):
+                calls.append(args)
+                if args[0] == "ttk::combobox::PopdownWindow":
+                    return ".parameter.popdown"
+                return ""
+
+        gui = object.__new__(config_gui.ConfigGUI)
+        gui.root = SimpleNamespace(tk=Tcl())
+
+        gui._bind_combobox_popdown_mousewheel_guard(".parameter")
+
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "ttk::combobox::PopdownWindow",
+                    ".parameter",
+                ),
+                (
+                    "bind",
+                    ".parameter.popdown.f.l",
+                    "<MouseWheel>",
+                    "break",
+                ),
+            ],
+        )
+
     def test_esp32_write_requires_unsaved_profile_to_be_saved_first(self):
         gui = object.__new__(config_gui.ConfigGUI)
         gui.active_profile = "General"

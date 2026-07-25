@@ -897,18 +897,35 @@ class XInputController:
                         timeout=0.015 if output_active else None
                     )
 
-    def close(self):
-        """Stop the dispatcher after sending the final zero frame."""
-        self.reset_output_state()
+    def stop_rumble_dispatcher(self, timeout=1.0):
+        """Stop producing physical rumble without touching virtual-pad state."""
+        deadline = time.perf_counter() + max(0.0, float(timeout))
+        with self._rumble_condition:
+            self._game_rumble = (0, 0)
+            self._audio_rumble = (0, 0)
+            self._rumble_force_zero = True
+            self._rumble_priority = True
+            self._rumble_sequence += 1
+            self._rumble_condition.notify_all()
         time.sleep(0.02)
         with self._rumble_condition:
             self._rumble_running = False
             self._rumble_condition.notify_all()
+        rumble_thread = self._rumble_thread
         if (
-            self._rumble_thread.is_alive()
-            and threading.current_thread() is not self._rumble_thread
+            rumble_thread is not None
+            and rumble_thread.is_alive()
+            and threading.current_thread() is not rumble_thread
         ):
-            self._rumble_thread.join(timeout=1.0)
+            rumble_thread.join(
+                timeout=max(0.0, deadline - time.perf_counter())
+            )
+        return rumble_thread is None or not rumble_thread.is_alive()
+
+    def close(self):
+        """Stop the dispatcher after sending the final zero frame."""
+        self.reset_output_state()
+        return self.stop_rumble_dispatcher(timeout=1.0)
 
     def _vibration_callback(
         self,

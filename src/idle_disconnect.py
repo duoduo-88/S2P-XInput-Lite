@@ -30,6 +30,27 @@ def load_idle_disconnect_minutes(config) -> int:
     )
 
 
+def perform_idle_disconnect(controller, xinput, publish_status) -> bool:
+    """Publish idle-disconnected only after the transport confirms success."""
+    xinput.reset_output_state()
+    if not controller.disconnect_for_idle():
+        return False
+    publish_status(
+        state="idle_disconnected",
+        battery_percent=None,
+        battery_voltage=None,
+        charging=False,
+        wired_full_report=None,
+        wired_polling_rate=None,
+        wired_processing_rate=None,
+        sensor_mode=None,
+        gyro_raw=None,
+        accel_raw=None,
+        gyro_bias_samples=0,
+    )
+    return True
+
+
 class IdleActivityTracker:
     """Detect deliberate input changes while rejecting stick/gyro noise."""
 

@@ -258,14 +258,28 @@ class InputDispatcher:
                 self._wake.set()
 
     def stop(self, timeout=1.0):
+        deadline = time.perf_counter() + max(0.0, float(timeout))
         self._stop.set()
-        with self._callback_lock:
-            with self._lock:
-                self._generation += 1
-                self._queue.clear()
         self._wake.set()
-        if threading.current_thread() is not self._thread:
-            self._thread.join(timeout=timeout)
+        with self._lock:
+            self._queue.clear()
+
+        remaining = max(0.0, deadline - time.perf_counter())
+        callback_acquired = self._callback_lock.acquire(timeout=remaining)
+        if callback_acquired:
+            try:
+                with self._lock:
+                    self._generation += 1
+                    self._queue.clear()
+            finally:
+                self._callback_lock.release()
+        self._wake.set()
+
+        if threading.current_thread() is self._thread:
+            return True
+        remaining = max(0.0, deadline - time.perf_counter())
+        self._thread.join(timeout=remaining)
+        return not self._thread.is_alive()
 
     def _update_rate(self, generation, now):
         if self._rate_generation != generation:

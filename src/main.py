@@ -46,6 +46,11 @@ from hidhide_manager import reconcile_active_hidhide
 from idle_disconnect import (
     IdleActivityTracker,
     load_idle_disconnect_minutes,
+    perform_idle_disconnect,
+)
+from runtime_cleanup import (
+    close_xinput_after_dispatcher,
+    controller_application_ready,
 )
 
 COMMAND_PATH = Path(__file__).with_name(
@@ -54,6 +59,7 @@ COMMAND_PATH = Path(__file__).with_name(
 STATUS_PATH = Path(__file__).with_name("controller_status.json")
 def tr(zh, en):
     return en if current_language() == "en" else zh
+
 
 def _enable_console_colors():
     """Enable ANSI colors in Windows CMD; retain symbol fallback elsewhere."""
@@ -400,22 +406,34 @@ def main():
             except Exception as exc:
                 print(tr(f"音訊模組清理失敗：{exc}", f"Audio module cleanup failed: {exc}"))
 
-        # Stop the physical input producer before destroying the virtual pad.
-        # Otherwise a final HID/BLE/serial callback can race xinput.close().
-        try:
-            controller.input_callback = None
-            controller.close()
-        except Exception as exc:
-            print(tr(f"控制器連線清理失敗：{exc}", f"Controller connection cleanup failed: {exc}"))
-
-        if input_dispatcher is not None:
-            input_dispatcher.stop()
+        # First stop every producer that can still submit input or rumble.
+        controller.input_callback = None
         set_input_gc_suppressed(False)
 
         try:
-            xinput.close()
+            if not close_xinput_after_dispatcher(
+                input_dispatcher,
+                xinput,
+            ):
+                print(tr(
+                    "輸入處理執行緒未能停止；已保留虛擬控制器狀態，避免與仍在執行的 callback 競爭。",
+                    "The input worker did not stop; virtual controller state "
+                    "was retained to avoid racing an active callback.",
+                ))
         except Exception as exc:
             print(tr(f"虛擬控制器清理失敗：{exc}", f"Virtual controller cleanup failed: {exc}"))
+
+        # Keep the physical transport alive until the virtual/audio rumble
+        # producers have stopped.  Its own close path then sends the final zero.
+        try:
+            if controller.close() is False:
+                print(tr(
+                    "控制器連線未能在期限內完整關閉；仍存活的 worker reference 已保留。",
+                    "The controller transport did not fully stop before its "
+                    "deadline; live worker references were retained.",
+                ))
+        except Exception as exc:
+            print(tr(f"控制器連線清理失敗：{exc}", f"Controller connection cleanup failed: {exc}"))
 
         publish_status(
             state="stopped",
@@ -750,29 +768,32 @@ def main():
         gyro_initialization_tracking = False
         gyro_initialization_announced.clear()
         set_input_gc_suppressed(False)
+        idle_request_in_progress = idle_disconnect_requested
         # No release report arrives after a disconnect, so explicitly clear
         # the last virtual-gamepad and keyboard state.
         try:
             xinput.reset_output_state()
         finally:
-            publish_status(
-                state=(
-                    "idle_disconnected"
-                    if idle_disconnect_requested
-                    else "disconnected"
-                ),
-                battery_percent=None,
-                battery_voltage=None,
-                charging=False,
-                wired_full_report=None,
-                wired_polling_rate=None,
-                wired_processing_rate=None,
-                sensor_mode=None,
-                gyro_raw=None,
-                accel_raw=None,
-                gyro_bias_samples=0,
-            )
-        idle_disconnect_requested = False
+            # Idle status is committed by perform_idle_disconnect() only after
+            # its synchronous transport result confirms the physical link is
+            # gone.  A callback arriving during a failed attempt must not
+            # publish a false idle_disconnected state.
+            if not idle_request_in_progress:
+                publish_status(
+                    state="disconnected",
+                    battery_percent=None,
+                    battery_voltage=None,
+                    charging=False,
+                    wired_full_report=None,
+                    wired_polling_rate=None,
+                    wired_processing_rate=None,
+                    sensor_mode=None,
+                    gyro_raw=None,
+                    accel_raw=None,
+                    gyro_bias_samples=0,
+                )
+        if not idle_request_in_progress:
+            idle_disconnect_requested = False
 
     controller.disconnected_callback = on_disconnected
 
@@ -809,9 +830,7 @@ def main():
         controller.bluetooth_unavailable_callback = on_transport_unavailable
 
     def controller_is_connected():
-        if connection_mode == "esp32":
-            return controller.connected_channel is not None
-        return bool(controller.connected)
+        return controller_application_ready(controller)
 
     if connection_mode == "wired":
         print(tr(
@@ -929,9 +948,15 @@ def main():
             ):
                 idle_disconnect_requested = True
                 try:
-                    xinput.reset_output_state()
-                    controller.disconnect_for_idle()
-                    publish_status(state="idle_disconnected")
+                    if not perform_idle_disconnect(
+                        controller,
+                        xinput,
+                        publish_status,
+                    ):
+                        raise RuntimeError(tr(
+                            "控制器未確認中斷。",
+                            "The controller did not confirm disconnection.",
+                        ))
                     print(tr(
                         "控制器因閒置而中斷無線連線；按任意鍵即可重新連線。",
                         "Controller disconnected after being idle; press any "

@@ -27,6 +27,8 @@ EN_TEXT = {
     "\n\nESP32 已自動重新啟動，USB 裝置會短暫消失。請等待橋接裝置重新出現；若數秒後仍未出現，請拔除後重新插入 ESP32。":
         "\n\nESP32 restarted automatically and the USB device will disappear briefly. Wait for the bridge device to reappear; if it is still missing after a few seconds, unplug and reconnect the ESP32.",
     "無法建立 ESP32 設定": "Cannot build ESP32 profile",
+    "獨立模式設定無法寫入 ESP32":
+        "Standalone settings cannot be written to ESP32",
     "下列設定在獨立模式中會改變操作結果：":
         "These settings change behavior in standalone mode:",
     "下列 Windows 專用設定將被略過：":

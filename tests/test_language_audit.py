@@ -2,6 +2,7 @@ import ast
 import re
 import sys
 import unittest
+import unicodedata
 from pathlib import Path
 
 
@@ -27,6 +28,30 @@ def literal_template(node):
 
 
 class LanguageAuditTests(unittest.TestCase):
+    def test_python_sources_have_no_replacement_or_private_use_characters(self):
+        invalid = []
+        firmware_main = (
+            ROOT
+            / "esp32s3"
+            / "source"
+            / "esp32s3_usb_bridge_bluedroid"
+            / "main"
+        )
+        paths = list(SRC.rglob("*.py"))
+        paths.extend(
+            path
+            for path in firmware_main.rglob("*")
+            if path.suffix.lower() in {".c", ".h", ".cpp", ".hpp"}
+        )
+        for path in paths:
+            source = path.read_text(encoding="utf-8")
+            for index, character in enumerate(source):
+                if character == "\ufffd" or unicodedata.category(character) == "Co":
+                    invalid.append(
+                        f"{path.relative_to(ROOT)}:{index}: U+{ord(character):04X}"
+                    )
+        self.assertEqual(invalid, [])
+
     def test_static_widget_labels_do_not_leak_chinese_in_english(self):
         leaks = []
         paths = [SRC / "config_gui.py", *sorted((SRC / "gui_sections").glob("*.py"))]
@@ -159,6 +184,7 @@ class LanguageAuditTests(unittest.TestCase):
     def test_recent_dialog_text_has_complete_english_translation(self):
         texts = (
             "輸入錯誤",
+            "獨立模式設定無法寫入 ESP32",
             "還原陀螺儀預設",
             "確定要將所有可調設定恢復為預設值嗎？\n\n"
             "搖桿校正資料不會被修改。\n"

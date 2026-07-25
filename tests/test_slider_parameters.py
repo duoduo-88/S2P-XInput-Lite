@@ -2,6 +2,8 @@ import sys
 import unittest
 import math
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +18,81 @@ from gui_sections.audio_haptics import (
 
 
 class SliderParameterTests(unittest.TestCase):
+    def test_disabled_numeric_scrubber_cannot_change_or_open_parameter(self):
+        class FakeVariable:
+            def __init__(self):
+                self.value = "0.50"
+                self.set_calls = []
+
+            def get(self):
+                return self.value
+
+            def set(self, value):
+                self.value = value
+                self.set_calls.append(value)
+
+        class FakeWidget:
+            def __init__(self):
+                self.callbacks = {}
+
+            def configure(self, **_options):
+                return None
+
+            def bind(self, sequence, callback):
+                self.callbacks[sequence] = callback
+
+            def instate(self, states):
+                return "disabled" in states
+
+        gui = ConfigGUI.__new__(ConfigGUI)
+        widget = FakeWidget()
+        variable = FakeVariable()
+        open_editor = Mock()
+        gui.bind_numeric_scrubber(
+            widget,
+            variable,
+            0.0,
+            1.0,
+            step=0.05,
+            click_command=open_editor,
+        )
+        start = SimpleNamespace(x_root=10, y_root=10)
+        moved = SimpleNamespace(x_root=50, y_root=10)
+
+        self.assertEqual(
+            widget.callbacks["<ButtonPress-1>"](start),
+            "break",
+        )
+        self.assertEqual(
+            widget.callbacks["<B1-Motion>"](moved),
+            "break",
+        )
+        self.assertEqual(
+            widget.callbacks["<ButtonRelease-1>"](moved),
+            "break",
+        )
+        self.assertEqual(variable.set_calls, [])
+        open_editor.assert_not_called()
+
+    def test_disabled_parameter_has_no_reset_context_menu(self):
+        class FakeWidget:
+            def instate(self, states):
+                return "disabled" in states
+
+        gui = ConfigGUI.__new__(ConfigGUI)
+        event = SimpleNamespace(widget=FakeWidget())
+        gui.parameter_binding_for_widget = Mock(
+            side_effect=AssertionError("disabled binding should not resolve")
+        )
+
+        with patch("config_gui.tk.Menu") as menu:
+            self.assertEqual(
+                gui.show_parameter_reset_context_menu(event),
+                "break",
+            )
+
+        menu.assert_not_called()
+
     def test_disabled_parameter_is_registered_for_later_context_menu(self):
         class FakeVariable:
             def __str__(self):

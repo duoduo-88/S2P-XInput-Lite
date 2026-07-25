@@ -25,6 +25,16 @@ STANDALONE_PROFILE_SCHEMA = 1
 STANDALONE_PROFILE_MAX_BYTES = 8192
 STANDALONE_CHUNK_BYTES = 96
 SUPPORTED_BUTTON_TARGETS = frozenset(XINPUT_BUTTON_TARGETS) | {"NONE"}
+STICK_DIRECTION_KEYS = (
+    "up",
+    "up_right",
+    "right",
+    "down_right",
+    "down",
+    "down_left",
+    "left",
+    "up_left",
+)
 
 
 @dataclass(frozen=True)
@@ -195,9 +205,8 @@ def analyze_standalone_v2_compatibility(
                     f"{name}: {str(source).upper()} → {target}",
                 )
         for side in ("left", "right"):
-            mode = str(
-                layer.get(f"stick_{side}", {}).get("mode", "4WAY")
-            ).upper()
+            stick = layer.get(f"stick_{side}", {})
+            mode = str(stick.get("mode", "4WAY")).upper()
             if "MOUSE" in mode or mode not in (
                 "4WAY", "8WAY", "XINPUT_LT_LINEAR", "XINPUT_RT_LINEAR",
             ):
@@ -205,6 +214,20 @@ def analyze_standalone_v2_compatibility(
                     issues, "blocking", "映射層 Windows 輸出",
                     f"{name}: {side.upper()} 使用 {mode}。",
                 )
+            for direction in STICK_DIRECTION_KEYS:
+                target = str(
+                    stick.get(direction, "NONE")
+                ).strip().upper()
+                if target not in SUPPORTED_BUTTON_TARGETS:
+                    _issue(
+                        issues,
+                        "blocking",
+                        "映射層方向輸出",
+                        (
+                            f"{name}: {side.upper()} "
+                            f"{direction.upper()} → {target}"
+                        ),
+                    )
     return tuple(issues)
 
 

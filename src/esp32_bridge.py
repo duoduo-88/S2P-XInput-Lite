@@ -18,6 +18,7 @@ from rumble_protocol import (
 NINTENDO_COMPANY_ID = 0x0553
 NINTENDO_VENDOR_ID = 0x057E
 PRO_CONTROLLER2_PID = 0x2069
+SERIAL_RECEIVE_BUFFER_LIMIT = 64 * 1024
 
 
 def _tr(zh, en):
@@ -54,7 +55,10 @@ class ESP32Bridge:
         self.bridge_disconnected_callback = None
         self.calibration_mode = False
         self.running = False
+        self._state_lock = threading.RLock()
         self.connected_channel = None
+        self._ready_channel = None
+        self._connection_generation = 0
         self._connecting = False
         self._write_lock = threading.Lock()
         self._rumble_packet_id = 0
@@ -73,9 +77,13 @@ class ESP32Bridge:
         self._rumble_priority_interval = 0.0075
         self._rumble_shadow_interval = 0.016
         self._rumble_condition = threading.Condition()
+        self._rumble_send_lock = threading.Lock()
+        self._feedback_lock = threading.Lock()
+        self._feedback_active = False
         self._rumble_pending = None
         self._rumble_last_send = 0.0
         self._rumble_worker_running = False
+        self._rumble_accepting = False
         self._rumble_thread = None
         self._rumble_submitted = 0
         self._rumble_overwritten = 0
@@ -94,8 +102,10 @@ class ESP32Bridge:
         self._read_thread = None
         self._heartbeat_thread = None
         self._status_event = threading.Event()
+        self._disconnect_event = threading.Event()
         self._command_response_event = threading.Event()
         self._command_response_lock = threading.Lock()
+        self._command_wait_lock = threading.Lock()
         self._command_response = None
         self._status_misses = 0
         self._channel_missing_count = 0
@@ -105,7 +115,25 @@ class ESP32Bridge:
         self._bridge_failure_reported = False
         self._last_foreign_pairing_notice = None
 
+    @property
+    def is_ready(self):
+        """Whether the current BLE link completed controller initialization."""
+        with self._state_lock:
+            return (
+                self.connected_channel is not None
+                and self._ready_channel == self.connected_channel
+            )
+
     def open(self):
+        stale_threads = (
+            self._read_thread,
+            self._heartbeat_thread,
+            self._rumble_thread,
+        )
+        if any(thread is not None and thread.is_alive() for thread in stale_threads):
+            raise RuntimeError(
+                "Previous ESP32 bridge workers are still running."
+            )
         self.serial = serial.Serial(
             self.port,
             self.baudrate,
@@ -123,6 +151,8 @@ class ESP32Bridge:
             self._rumble_pending = None
             self._rumble_last_send = 0.0
             self._rumble_worker_running = True
+            self._rumble_accepting = False
+            self._feedback_active = False
             self._rumble_submitted = 0
             self._rumble_overwritten = 0
             self._rumble_send_attempts = 0
@@ -151,40 +181,58 @@ class ESP32Bridge:
         self._heartbeat_thread.start()
         self._rumble_thread.start()
 
-    def close(self):
+    def close(self, timeout=2.5):
+        deadline = time.perf_counter() + max(0.0, float(timeout))
         self._closing = True
 
-        # Bypass the latest-only worker for shutdown.  Its pending slot is
-        # cleared below, so the stop frame must reach the controller first.
-        if self.running and self.connected_channel is not None:
-            self.send_pro_rumble(
-                CONNECTION_LF_FREQUENCY,
-                0,
-                CONNECTION_HF_FREQUENCY,
-                0,
-            )
-            time.sleep(0.02)
-
-        # Stop accepting/sending pending rumble before asking the firmware to
-        # disconnect, so no delayed `wr`/`rs` command races that sequence.
+        # Stop accepting work before sending the final zero frame.  The send
+        # lock orders an already-claimed worker state before that zero frame,
+        # so no delayed non-zero state can follow it.
         with self._rumble_condition:
+            self._rumble_accepting = False
+            self._feedback_active = False
             self._rumble_worker_running = False
             self._rumble_pending = None
             self._rumble_condition.notify_all()
+        rumble_thread = self._rumble_thread
+        heartbeat_thread = self._heartbeat_thread
+        read_thread = self._read_thread
         if (
-            self._rumble_thread is not None
-            and self._rumble_thread.is_alive()
-            and threading.current_thread() is not self._rumble_thread
+            rumble_thread is not None
+            and rumble_thread.is_alive()
+            and threading.current_thread() is not rumble_thread
         ):
-            self._rumble_thread.join(timeout=1.0)
-        self._rumble_thread = None
+            rumble_thread.join(
+                timeout=max(0.0, deadline - time.perf_counter())
+            )
+        rumble_alive = bool(rumble_thread and rumble_thread.is_alive())
+
+        with self._state_lock:
+            has_connection = self.connected_channel is not None
+        zero_sent = not has_connection
+        if self.running and has_connection and not rumble_alive:
+            zero_sent = bool(self._send_final_zero_rumble())
+            time.sleep(0.02)
 
         # Ask the firmware to release the physical BLE link before dropping
         # USB CDC.  Otherwise the controller can remain attached to the ESP32.
+        disconnect_confirmed = not has_connection
         if self.running:
             self.send("auto off")
-            self.send("ble disconnect")
-            time.sleep(0.10)
+            self._disconnect_event.clear()
+            disconnect_requested = self.send("ble disconnect")
+            if has_connection and disconnect_requested:
+                disconnect_confirmed = self._disconnect_event.wait(
+                    timeout=min(
+                        0.75,
+                        max(0.0, deadline - time.perf_counter()),
+                    )
+                )
+            if has_connection and not disconnect_confirmed:
+                print(_tr(
+                    "ESP32 未在關閉期限內確認 BLE 已中斷。",
+                    "ESP32 did not confirm BLE disconnection before shutdown.",
+                ))
 
         self.running = False
         self._status_event.set()
@@ -204,19 +252,39 @@ class ESP32Bridge:
             pass
 
         self.serial = None
-        self.connected_channel = None
-        self.controller_id = None
-        self._connecting = False
-        self._pending_pair = False
-        for thread in (self._heartbeat_thread, self._read_thread):
+        with self._state_lock:
+            self.connected_channel = None
+            self._ready_channel = None
+            self._connection_generation += 1
+            self.controller_id = None
+            self._connecting = False
+            self._pending_pair = False
+        self._disconnect_event.set()
+        for thread in (heartbeat_thread, read_thread):
             if (
                 thread is not None
                 and thread.is_alive()
                 and threading.current_thread() is not thread
             ):
-                thread.join(timeout=1.0)
-        self._heartbeat_thread = None
-        self._read_thread = None
+                thread.join(
+                    timeout=max(0.0, deadline - time.perf_counter())
+                )
+        heartbeat_alive = bool(
+            heartbeat_thread and heartbeat_thread.is_alive()
+        )
+        read_alive = bool(read_thread and read_thread.is_alive())
+        self._rumble_thread = rumble_thread if rumble_alive else None
+        self._heartbeat_thread = (
+            heartbeat_thread if heartbeat_alive else None
+        )
+        self._read_thread = read_thread if read_alive else None
+        return bool(
+            not rumble_alive
+            and not heartbeat_alive
+            and not read_alive
+            and zero_sent
+            and disconnect_confirmed
+        )
         
     def send(self, command):
         if (
@@ -260,7 +328,30 @@ class ESP32Bridge:
         hf_freq,
         hf_amp
     ):
-        channel = self.connected_channel
+        with self._rumble_send_lock:
+            with self._rumble_condition:
+                if (
+                    not self._rumble_accepting
+                    or self._feedback_active
+                ):
+                    return False
+            return self._send_pro_rumble_now(
+                lf_freq,
+                lf_amp,
+                hf_freq,
+                hf_amp,
+            )
+
+    def _send_pro_rumble_now(
+        self,
+        lf_freq,
+        lf_amp,
+        hf_freq,
+        hf_amp,
+    ):
+        """Synchronously send rumble, bypassing the accepting gate."""
+        with self._state_lock:
+            channel = self.connected_channel
 
         if channel is None:
             return False
@@ -305,7 +396,9 @@ class ESP32Bridge:
         force_zero=False,
     ):
         """Replace the unsent rumble state for the selected output route."""
-        channel = self.connected_channel
+        with self._state_lock:
+            channel = self.connected_channel
+            generation = self._connection_generation
         if (
             not self.running
             or self.serial is None
@@ -329,16 +422,24 @@ class ESP32Bridge:
             bool(force_zero or is_zero),
             submitted_at,
             submitted_at,
+            generation,
         )
         with self._rumble_condition:
-            if not self._rumble_worker_running:
+            if (
+                not self._rumble_worker_running
+                or not self._rumble_accepting
+                or self._feedback_active
+            ):
                 return False
             self._rumble_submitted += 1
             if self._rumble_pending is not None:
                 self._rumble_overwritten += 1
                 # Preserve when this continuously pending run began.  The
                 # latest submission time remains separate for zero latency.
-                state = state[:-1] + (self._rumble_pending[9],)
+                state = state[:9] + (
+                    self._rumble_pending[9],
+                    generation,
+                )
             self._rumble_pending = state
             self._rumble_condition.notify_all()
         return True
@@ -392,9 +493,14 @@ class ESP32Bridge:
         (
             route, channel, lf_freq, lf_amp, hf_freq, hf_amp,
             _priority, _force_zero, _submitted_at, _pending_since,
+            generation,
         ) = state
-        if self.connected_channel != channel:
-            return False
+        with self._state_lock:
+            if (
+                self.connected_channel != channel
+                or self._connection_generation != generation
+            ):
+                return False
 
         vibration = self._encode_vibration(
             lf_freq, lf_amp, hf_freq, hf_amp
@@ -488,13 +594,35 @@ class ESP32Bridge:
                 continue
 
             # Keep serial I/O outside the condition so producers never block.
-            sent = self._send_rumble_state_now(state)
+            # Recheck the accepting gate after acquiring the send lock.  This
+            # lets shutdown/idle disconnect make a zero frame the last output.
+            with self._rumble_send_lock:
+                with self._rumble_condition:
+                    accepting = (
+                        self._rumble_accepting
+                        and not self._feedback_active
+                    )
+                sent = (
+                    self._send_rumble_state_now(state)
+                    if accepting
+                    else False
+                )
             with self._rumble_condition:
                 self._rumble_send_attempts += 1
                 if sent:
                     self._rumble_send_successes += 1
                 else:
                     self._rumble_send_failures += 1
+
+    def _send_final_zero_rumble(self):
+        """Send a zero frame after all accepted worker output."""
+        with self._rumble_send_lock:
+            return self._send_pro_rumble_now(
+                CONNECTION_LF_FREQUENCY,
+                0,
+                CONNECTION_HF_FREQUENCY,
+                0,
+            )
 
     def get_rumble_diagnostics(self):
         """Return a thread-safe snapshot of low-latency output diagnostics."""
@@ -534,8 +662,17 @@ class ESP32Bridge:
             return
         self._bridge_failure_reported = True
         self.running = False
-        self.connected_channel = None
-        self._connecting = False
+        with self._state_lock:
+            self.connected_channel = None
+            self._ready_channel = None
+            self._connection_generation += 1
+            self._connecting = False
+        self._disconnect_event.set()
+        with self._rumble_condition:
+            self._rumble_accepting = False
+            self._feedback_active = False
+            self._rumble_pending = None
+            self._rumble_condition.notify_all()
         print("ESP32 狀態連續三次無回應，判定橋接已中斷。")
         if self.bridge_disconnected_callback is not None:
             try:
@@ -578,6 +715,7 @@ class ESP32Bridge:
     def _send_controller_command_wait_ack(
         self,
         channel,
+        generation,
         command_id,
         subcommand_id,
         command_data,
@@ -592,40 +730,45 @@ class ESP32Bridge:
             + b"\x00\x00"
             + command_data
         )
-        with self._command_response_lock:
-            self._command_response = None
-        self._command_response_event.clear()
-        if not self.send(f"wr {int(channel)} c {payload.hex()}"):
-            return False
-
-        deadline = time.monotonic() + timeout
-        while (
-            self.running
-            and self.connected_channel == channel
-            and time.monotonic() < deadline
-        ):
-            remaining = max(0.0, deadline - time.monotonic())
-            if not self._command_response_event.wait(remaining):
-                break
+        # There is one firmware command-response stream.  Serialize waiters so
+        # an old preparation cannot clear or consume the ACK of a new link that
+        # happens to reuse the same channel number.
+        with self._command_wait_lock:
+            if not self._connection_is_current(channel, generation):
+                return False
             self._command_response_event.clear()
             with self._command_response_lock:
-                response = self._command_response
                 self._command_response = None
-            if (
-                response
-                and len(response) >= 4
-                and response[0] == command_id
-                and response[3] == subcommand_id
+            if not self.send(f"wr {int(channel)} c {payload.hex()}"):
+                return False
+
+            deadline = time.monotonic() + timeout
+            while (
+                self._connection_is_current(channel, generation)
+                and time.monotonic() < deadline
             ):
-                return True
+                remaining = max(0.0, deadline - time.monotonic())
+                if not self._command_response_event.wait(remaining):
+                    break
+                self._command_response_event.clear()
+                with self._command_response_lock:
+                    response_entry = self._command_response
+                    self._command_response = None
+                if response_entry is None:
+                    continue
+                response_generation, response = response_entry
+                if (
+                    response_generation == generation
+                    and len(response) >= 4
+                    and response[0] == command_id
+                    and response[3] == subcommand_id
+                ):
+                    return True
         return False
 
-    def pair_controller_to_esp32(self):
+    def pair_controller_to_esp32(self, channel, generation):
         """將 Switch 2 Pro Controller 配對到目前的 ESP32。"""
-
-        channel = self.connected_channel
-
-        if channel is None:
+        if not self._connection_is_current(channel, generation):
             print("無法配對：控制器尚未連線。")
             return False
 
@@ -676,8 +819,11 @@ class ESP32Bridge:
             (0x03, b"\x00"),
         )
         for subcommand_id, command_data in commands:
+            if not self._connection_is_current(channel, generation):
+                return False
             if not self._send_controller_command_wait_ack(
                 channel,
+                generation,
                 0x15,
                 subcommand_id,
                 command_data,
@@ -695,14 +841,15 @@ class ESP32Bridge:
             "ESP32 配對資料已送出。"
         )
 
-        self._pending_pair = False
+        with self._state_lock:
+            if self._connection_is_current(channel, generation):
+                self._pending_pair = False
 
         return True
 
-    def initialize_controller_features(self):
+    def initialize_controller_features(self, channel, generation):
         """Enable the normal Switch 2 input stream, including motion data."""
-        channel = self.connected_channel
-        if channel is None:
+        if not self._connection_is_current(channel, generation):
             return False
 
         # Keep this sequence aligned with BluetoothController's known-good
@@ -730,10 +877,11 @@ class ESP32Bridge:
         )
 
         for command_id, subcommand_id, command_data in commands:
-            if not self.running or self.connected_channel != channel:
+            if not self._connection_is_current(channel, generation):
                 return False
             if not self._send_controller_command_wait_ack(
                 channel,
+                generation,
                 command_id,
                 subcommand_id,
                 command_data,
@@ -754,7 +902,8 @@ class ESP32Bridge:
 
     def set_player_led_1(self):
         """將 Switch 2 Pro Controller 設定為 Player 1 LED。"""
-        channel = self.connected_channel
+        with self._state_lock:
+            channel = self.connected_channel
         if channel is None:
             return False
 
@@ -796,22 +945,63 @@ class ESP32Bridge:
 
         return False
 
+    def _send_feedback_rumble_now(
+        self, lf_freq, lf_amp, hf_freq, hf_amp
+    ):
+        with self._rumble_send_lock:
+            with self._rumble_condition:
+                if (
+                    not self._rumble_accepting
+                    or not self._feedback_active
+                ):
+                    return False
+            return self._send_pro_rumble_now(
+                lf_freq, lf_amp, hf_freq, hf_amp
+            )
+
+    def _play_fixed_feedback(self, pattern, lf_frequency, hf_frequency):
+        """Override mixed/audio updates until the fixed cue reaches zero."""
+        with self._feedback_lock:
+            with self._rumble_condition:
+                if not self._rumble_accepting:
+                    return False
+                self._feedback_active = True
+                self._rumble_pending = None
+                self._rumble_condition.notify_all()
+            completed = True
+            try:
+                for lf_amp, hf_amp, duration in pattern:
+                    if not self._send_feedback_rumble_now(
+                        lf_frequency,
+                        lf_amp,
+                        hf_frequency,
+                        hf_amp,
+                    ):
+                        completed = False
+                        break
+                    if duration:
+                        time.sleep(duration)
+            finally:
+                self._send_feedback_rumble_now(
+                    lf_frequency, 0, hf_frequency, 0
+                )
+                with self._rumble_condition:
+                    self._feedback_active = False
+                    self._rumble_condition.notify_all()
+            return completed
+
     def connection_rumble(self):
-        """連線成功時播放兩次短震動提示。"""
-        if self.connected_channel is None:
+        """Play the fixed game-style two-pulse connection cue."""
+        if not self.is_ready:
             return
 
         def worker():
-            for lf_amp, hf_amp, duration in CONNECTION_FEEDBACK_PATTERN:
-                self.send_pro_rumble(
-                    CONNECTION_LF_FREQUENCY,
-                    lf_amp,
-                    CONNECTION_HF_FREQUENCY,
-                    hf_amp,
-                )
-                if duration:
-                    time.sleep(duration)
-            
+            self._play_fixed_feedback(
+                CONNECTION_FEEDBACK_PATTERN,
+                CONNECTION_LF_FREQUENCY,
+                CONNECTION_HF_FREQUENCY,
+            )
+
             if self.calibration_mode:
                 if self.ready_callback is not None:
                     try:
@@ -841,28 +1031,21 @@ class ESP32Bridge:
                 ))
                 print()
 
-        threading.Thread(
-            target=worker,
-            daemon=True
-        ).start()
+        threading.Thread(target=worker, daemon=True).start()
 
     def pin_rumble(self):
-        """Play the quiet controller-identification cue."""
-        if self.connected_channel is None:
+        """Play the same fixed game-style identification cue."""
+        if not self.is_ready:
             return
-
-        def worker():
-            for lf_amp, hf_amp, duration in PIN_FEEDBACK_PATTERN:
-                self.send_pro_rumble(
-                    PIN_LF_FREQUENCY,
-                    lf_amp,
-                    PIN_HF_FREQUENCY,
-                    hf_amp,
-                )
-                if duration:
-                    time.sleep(duration)
-
-        threading.Thread(target=worker, daemon=True).start()
+        threading.Thread(
+            target=self._play_fixed_feedback,
+            args=(
+                PIN_FEEDBACK_PATTERN,
+                PIN_LF_FREQUENCY,
+                PIN_HF_FREQUENCY,
+            ),
+            daemon=True,
+        ).start()
 
     def _parse_reconnect_mac(self, data_hex):
         try:
@@ -909,17 +1092,42 @@ class ESP32Bridge:
         self.send("scan on")
 
     def disconnect_for_idle(self):
-        """Stop physical output and drop BLE while leaving scan enabled."""
+        """Stop output and confirm that the physical BLE link was dropped."""
         if not self.running:
             return False
-        try:
-            self.send_pro_rumble_latest(
-                225, 0, 481, 0, priority=True, force_zero=True
-            )
-        except (OSError, serial.SerialException):
-            pass
-        self.send("ble disconnect")
-        return True
+        self._disconnect_event.clear()
+        with self._rumble_condition:
+            self._rumble_accepting = False
+            self._feedback_active = False
+            self._rumble_pending = None
+            self._rumble_condition.notify_all()
+        with self._state_lock:
+            has_connection = self.connected_channel is not None
+        if not has_connection:
+            return True
+        if has_connection:
+            try:
+                self._send_final_zero_rumble()
+                time.sleep(0.02)
+            except (OSError, serial.SerialException):
+                pass
+        if not self.send("ble disconnect"):
+            return False
+        return self._disconnect_event.wait(timeout=2.0)
+
+    @staticmethod
+    def _limit_receive_buffer(buf):
+        """Bound corrupt CDC input while preserving a possible packet tail."""
+        if len(buf) <= SERIAL_RECEIVE_BUFFER_LIMIT:
+            return
+        search_start = len(buf) - SERIAL_RECEIVE_BUFFER_LIMIT
+        header = buf.rfind(b"\xaa\x55", search_start)
+        if header >= 0:
+            del buf[:header]
+        elif buf.endswith(b"\xaa"):
+            buf[:] = b"\xaa"
+        else:
+            buf.clear()
 
     def _read_loop(self):
         # Match Tommy's low-latency serial strategy: wait for the first byte
@@ -936,6 +1144,7 @@ class ESP32Bridge:
                 waiting = self.serial.in_waiting
                 if waiting:
                     buf.extend(self.serial.read(waiting))
+                self._limit_receive_buffer(buf)
 
             except (
                 serial.SerialException,
@@ -988,12 +1197,14 @@ class ESP32Bridge:
                     data = bytes(buf[consumed + 3:packet_end])
                     consumed = packet_end
 
+                    with self._state_lock:
+                        packet_generation = self._connection_generation
                     payload = self._handle_binary(
                         data,
                         dispatch=False,
                     )
                     if payload is not None:
-                        input_batch.append(payload)
+                        input_batch.append((packet_generation, payload))
                     continue
 
                 if hdr > consumed:
@@ -1007,6 +1218,18 @@ class ESP32Bridge:
             if consumed:
                 del buf[:consumed]
 
+            if input_batch and self.input_callback is not None:
+                with self._state_lock:
+                    current_generation = self._connection_generation
+                    ready = (
+                        self.connected_channel is not None
+                        and self._ready_channel == self.connected_channel
+                    )
+                input_batch = [
+                    payload
+                    for generation, payload in input_batch
+                    if ready and generation == current_generation
+                ]
             if input_batch and self.input_callback is not None:
                 submit_batch = getattr(
                     self.input_callback,
@@ -1025,11 +1248,13 @@ class ESP32Bridge:
         def worker():
             time.sleep(delay)
 
-            if (
-                self.running
-                and self.connected_channel is None
-                and not self._connecting
-            ):
+            with self._state_lock:
+                should_restart = (
+                    self.running
+                    and self.connected_channel is None
+                    and not self._connecting
+                )
+            if should_restart:
                 print("正在重新搜尋控制器...")
                 self.send("scan on")
 
@@ -1037,6 +1262,102 @@ class ESP32Bridge:
             target=worker,
             daemon=True
         ).start()
+
+    def _connection_is_current(self, channel, generation):
+        with self._state_lock:
+            return (
+                self.running
+                and not self._closing
+                and self.connected_channel == channel
+                and self._connection_generation == generation
+            )
+
+    def _fail_controller_preparation(self, channel, generation):
+        """Drop a BLE link that never reached the ready state."""
+        if not self._connection_is_current(channel, generation):
+            return
+        with self._rumble_condition:
+            self._rumble_accepting = False
+            self._feedback_active = False
+            self._rumble_pending = None
+            self._rumble_condition.notify_all()
+        with self._state_lock:
+            if not self._connection_is_current(channel, generation):
+                return
+            self.connected_channel = None
+            self._ready_channel = None
+            self.controller_id = None
+            self._connecting = False
+            self._connection_generation += 1
+        self._disconnect_event.set()
+        self.send("ble disconnect")
+        self._restart_scan()
+
+    def _prepare_connected_controller(
+        self,
+        channel,
+        generation,
+        pairing_required,
+    ):
+        """Pair and initialize one BLE generation before reporting ready."""
+        if not self._connection_is_current(channel, generation):
+            return
+        if (
+            pairing_required
+            and not self.pair_controller_to_esp32(channel, generation)
+        ):
+            self._fail_controller_preparation(channel, generation)
+            return
+        if (
+            not self._connection_is_current(channel, generation)
+            or not self.initialize_controller_features(channel, generation)
+        ):
+            self._fail_controller_preparation(channel, generation)
+            return
+        if not self._connection_is_current(channel, generation):
+            return
+
+        # Linearize callback delivery and the ready commit with disconnect.
+        # The callback deliberately observes is_ready == False.  Only after it
+        # returns, and only if the same generation still exists, may ordinary
+        # input and rumble begin.
+        callback_started = False
+        callback_error = None
+        ready_committed = False
+        with self._state_lock:
+            if not self._connection_is_current(channel, generation):
+                return
+            if self.connected_callback is not None:
+                callback_started = True
+                try:
+                    self.connected_callback()
+                except Exception as exc:
+                    callback_error = exc
+            if (
+                callback_error is None
+                and self._connection_is_current(channel, generation)
+            ):
+                self._ready_channel = channel
+                with self._rumble_condition:
+                    self._rumble_accepting = True
+                    self._feedback_active = False
+                    self._rumble_condition.notify_all()
+                ready_committed = True
+
+        if not ready_committed:
+            if callback_error is not None:
+                print(f"ESP32 connected callback failed: {callback_error}")
+            if callback_started and self.disconnected_callback is not None:
+                try:
+                    self.disconnected_callback()
+                except Exception as exc:
+                    print(f"ESP32 connected rollback failed: {exc}")
+            self._fail_controller_preparation(channel, generation)
+            return
+
+        time.sleep(0.2)
+        if self._connection_is_current(channel, generation):
+            self.connection_rumble()
 
 
     def _handle_text(self, line):
@@ -1072,30 +1393,61 @@ class ESP32Bridge:
                             f"ESP32 BLE MAC：{self.esp32_mac}"
                         )
 
-                if self.connected_channel is not None:
+                with self._state_lock:
+                    status_channel = self.connected_channel
+                if status_channel is not None:
                     channel_mask = int(obj.get("ble_channels", 0) or 0)
-                    if channel_mask & (1 << self.connected_channel):
-                        self._channel_missing_count = 0
-                    else:
-                        self._channel_missing_count += 1
+                    disconnected_by_status = False
+                    was_ready = False
+                    with self._state_lock:
+                        if self.connected_channel != status_channel:
+                            return
+                        if channel_mask & (1 << status_channel):
+                            self._channel_missing_count = 0
+                        elif (
+                            time.monotonic() < self._status_grace_until
+                            or self._ready_channel != status_channel
+                        ):
+                            # The manager status mask can lag behind the
+                            # immediate "connected" event while pairing and
+                            # mandatory controller setup are still running.
+                            self._channel_missing_count = 0
+                        else:
+                            self._channel_missing_count += 1
                         if self._channel_missing_count >= 3:
                             self._channel_missing_count = 0
+                            was_ready = self._ready_channel == status_channel
                             self.connected_channel = None
+                            self._ready_channel = None
+                            self._connection_generation += 1
                             self._connecting = False
-                            print("ESP32 狀態連續三次未包含控制器通道。")
-                            if self.disconnected_callback is not None:
-                                try:
-                                    self.disconnected_callback()
-                                except Exception as exc:
-                                    print(f"控制器斷線回呼錯誤：{exc}")
-                            self._restart_scan()
+                            disconnected_by_status = True
+                    if disconnected_by_status:
+                        self._disconnect_event.set()
+                        self._command_response_event.set()
+                        with self._rumble_condition:
+                            self._rumble_accepting = False
+                            self._feedback_active = False
+                            self._rumble_pending = None
+                            self._rumble_condition.notify_all()
+                        print("ESP32 狀態連續三次未包含控制器通道。")
+                        if (
+                            was_ready
+                            and self.disconnected_callback is not None
+                        ):
+                            try:
+                                self.disconnected_callback()
+                            except Exception as exc:
+                                print(f"控制器斷線回呼錯誤：{exc}")
+                        self._restart_scan()
 
             elif cmd == "scan_result":
-                if (
-                    self.connected_channel is not None
-                    or self._connecting
-                ):
-                    return
+                with self._state_lock:
+                    if (
+                        self.connected_channel is not None
+                        or self._connecting
+                    ):
+                        return
 
                 mac = obj.get("mac")
                 addr_type = int(
@@ -1145,7 +1497,8 @@ class ESP32Bridge:
                         _tr("辨識為 SYNC 配對模式。", "SYNC pairing mode detected.")
                     )
 
-                    self._pending_pair = True
+                    with self._state_lock:
+                        self._pending_pair = True
 
                 # 已經配對到這個 ESP32
                 elif (
@@ -1157,7 +1510,8 @@ class ESP32Bridge:
                         _tr("辨識為已配對到此 ESP32。", "Controller is already paired with this ESP32.")
                     )
 
-                    self._pending_pair = False
+                    with self._state_lock:
+                        self._pending_pair = False
 
                 # 已經配對到其他 Host
                 elif self.esp32_mac_value is not None:
@@ -1181,10 +1535,17 @@ class ESP32Bridge:
                         "暫時使用一般連線模式。"
                     )
 
-                    self._pending_pair = False
+                    with self._state_lock:
+                        self._pending_pair = False
 
-                self._connecting = True
-                self.controller_id = mac.upper()
+                with self._state_lock:
+                    if (
+                        self.connected_channel is not None
+                        or self._connecting
+                    ):
+                        return
+                    self._connecting = True
+                    self.controller_id = mac.upper()
 
                 print(
                     _tr(f"已找到控制器：{mac}", f"Controller found: {mac}")
@@ -1199,55 +1560,60 @@ class ESP32Bridge:
                 )
 
             elif cmd == "connected":
-
-                self.connected_channel = int(
-                    obj.get("channel", 0)
-                )
-                self._connecting = False
-                self._channel_missing_count = 0
+                with self._state_lock:
+                    self.connected_channel = int(
+                        obj.get("channel", 0)
+                    )
+                    self._ready_channel = None
+                    self._connection_generation += 1
+                    generation = self._connection_generation
+                    channel = self.connected_channel
+                    pairing_required = self._pending_pair
+                    self._connecting = False
+                    self._channel_missing_count = 0
+                self._disconnect_event.clear()
+                self._command_response_event.clear()
+                with self._command_response_lock:
+                    self._command_response = None
+                with self._rumble_condition:
+                    self._rumble_accepting = False
+                    self._feedback_active = False
+                    self._rumble_pending = None
+                    self._rumble_condition.notify_all()
                 # SW2 initialization temporarily keeps the firmware busy.
                 self._status_grace_until = time.monotonic() + 10.0
 
-                if self.connected_callback is not None:
-                    try:
-                        self.connected_callback()
-                    except Exception as exc:
-                        print(f"控制器連線回呼錯誤：{exc}")
-
-
                 print(
                     _tr(
-                        f"控制器連線成功，ESP32 通道：{self.connected_channel}",
-                        f"Controller connected on ESP32 channel {self.connected_channel}.",
+                        f"控制器 BLE 已連線，正在初始化；ESP32 通道：{channel}",
+                        "Controller BLE link established; initializing on "
+                        f"ESP32 channel {channel}.",
                     )
                 )
 
                 # BLE notifications are already active at this point.  Run the
                 # pairing and initialization sequences outside the serial read
                 # thread so their stepwise ACKs can continue to be drained.
-                def prepare_connected_controller():
-                    if self._pending_pair:
-                        print(
-                            "偵測到 SYNC 配對連線，"
-                            "開始寫入 ESP32 配對資料..."
-                        )
-                        if not self.pair_controller_to_esp32():
-                            return
-                    if not self.initialize_controller_features():
-                        print("控制器功能初始化失敗，陀螺儀資料可能無法使用。")
-                        return
-                    time.sleep(0.2)
-                    self.connection_rumble()
-
                 threading.Thread(
-                    target=prepare_connected_controller,
+                    target=self._prepare_connected_controller,
+                    args=(channel, generation, pairing_required),
                     daemon=True
                 ).start()
 
             elif cmd == "connect_fail":
-                self.connected_channel = None
-                self.controller_id = None
-                self._connecting = False
+                with self._state_lock:
+                    self.connected_channel = None
+                    self._ready_channel = None
+                    self._connection_generation += 1
+                    self.controller_id = None
+                    self._connecting = False
+                self._disconnect_event.set()
+                self._command_response_event.set()
+                with self._rumble_condition:
+                    self._rumble_accepting = False
+                    self._feedback_active = False
+                    self._rumble_pending = None
+                    self._rumble_condition.notify_all()
 
                 print(_tr("控制器連線失敗。", "Controller connection failed."))
 
@@ -1255,15 +1621,25 @@ class ESP32Bridge:
 
 
             elif cmd == "disconnected":
-                was_connected = (
-                    self.connected_channel is not None
-                )
+                with self._state_lock:
+                    was_ready = (
+                        self.connected_channel is not None
+                        and self._ready_channel == self.connected_channel
+                    )
+                    self.connected_channel = None
+                    self._ready_channel = None
+                    self._connection_generation += 1
+                    self._connecting = False
+                    self._channel_missing_count = 0
+                self._disconnect_event.set()
+                self._command_response_event.set()
+                with self._rumble_condition:
+                    self._rumble_accepting = False
+                    self._feedback_active = False
+                    self._rumble_pending = None
+                    self._rumble_condition.notify_all()
 
-                self.connected_channel = None
-                self._connecting = False
-                self._channel_missing_count = 0
-
-                if was_connected:
+                if was_ready:
                     print(_tr("控制器已中斷連線。", "Controller disconnected."))
 
                     if self.disconnected_callback is not None:
@@ -1289,11 +1665,18 @@ class ESP32Bridge:
         if not (1 <= chan_id <= 8):
             return None
 
+        with self._state_lock:
+            channel = self.connected_channel
+            generation = self._connection_generation
+            ready = (
+                channel is not None
+                and self._ready_channel == channel
+            )
         if (
-            self.connected_channel is None
+            channel is None
             # JSON channel numbers are zero-based; CDC frame channels are
             # encoded as channel + 1 by the ESP32 firmware.
-            or chan_id != self.connected_channel + 1
+            or chan_id != channel + 1
         ):
             return None
 
@@ -1305,8 +1688,15 @@ class ESP32Bridge:
             response = bytes(data[1:])
             if response:
                 with self._command_response_lock:
-                    self._command_response = response
+                    self._command_response = (generation, response)
                 self._command_response_event.set()
+            return None
+
+        # BLE notifications begin before pairing and feature initialization
+        # finish.  Command frames above must remain available for those ACKs,
+        # but ordinary input must not reach mappings, calibration, or virtual
+        # output until this connection generation is fully ready.
+        if not ready:
             return None
 
         # The working calibration tool treats everything after the channel byte

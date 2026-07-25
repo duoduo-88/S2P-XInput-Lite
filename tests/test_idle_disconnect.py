@@ -4,6 +4,7 @@ import unittest
 from idle_disconnect import (
     IdleActivityTracker,
     normalize_idle_disconnect_minutes,
+    perform_idle_disconnect,
 )
 
 
@@ -50,3 +51,19 @@ class IdleDisconnectTests(unittest.TestCase):
         tracker = IdleActivityTracker(0, now=0)
         tracker.observe(_state(), now=0)
         self.assertFalse(tracker.expired(now=100000))
+
+    def test_failed_disconnect_does_not_publish_idle_disconnected(self):
+        events = []
+        controller = SimpleNamespace(disconnect_for_idle=lambda: False)
+        xinput = SimpleNamespace(
+            reset_output_state=lambda: events.append("reset")
+        )
+
+        result = perform_idle_disconnect(
+            controller,
+            xinput,
+            lambda **status: events.append(status),
+        )
+
+        self.assertFalse(result)
+        self.assertEqual(events, ["reset"])

@@ -2868,7 +2868,7 @@ class ConfigGUI:
         """只有內容真的超出可視區時才處理滾輪。"""
 
         if not self.scrollbar.winfo_ismapped():
-            return
+            return "break"
 
         self.scroll_canvas.yview_scroll(
             int(
@@ -2876,6 +2876,60 @@ class ConfigGUI:
             ),
             "units"
         )
+        return "break"
+
+
+    @staticmethod
+    def _nearest_scroll_canvas(widget):
+        """Return the nearest parent canvas for a parameter control."""
+        current = widget
+        while current is not None:
+            try:
+                if current.winfo_class() == "Canvas":
+                    return current
+            except (AttributeError, tk.TclError):
+                return None
+            current = getattr(current, "master", None)
+        return None
+
+
+    def _on_parameter_control_mousewheel(self, event):
+        """Scroll the containing view without changing a control's value."""
+        canvas = self._nearest_scroll_canvas(event.widget)
+        delta = int(getattr(event, "delta", 0) or 0)
+        units = int(-delta / 120)
+        if delta and units == 0:
+            units = -1 if delta > 0 else 1
+        if canvas is not None and units:
+            try:
+                canvas.yview_scroll(units, "units")
+            except tk.TclError:
+                pass
+        # Widget bindings run before ttk's Scale, Spinbox, and Combobox class
+        # bindings. Stopping propagation here prevents their native wheel
+        # handlers from changing the selected parameter.
+        return "break"
+
+
+    def _bind_combobox_popdown_mousewheel_guard(self, widget):
+        """Disable wheel changes inside a ttk Combobox's native popup list."""
+        try:
+            popdown = self.root.tk.call(
+                "ttk::combobox::PopdownWindow",
+                str(widget),
+            )
+            listbox = f"{popdown}.f.l"
+            # A widget binding runs before the Listbox class binding. Tcl's
+            # ``break`` prevents both list scrolling and selection changes.
+            self.root.tk.call(
+                "bind",
+                listbox,
+                "<MouseWheel>",
+                "break",
+            )
+        except (AttributeError, tk.TclError):
+            # Some Tk themes use a different native popup implementation.
+            pass
 
 
     def get_work_area(self):
@@ -5025,6 +5079,7 @@ class ConfigGUI:
         already uses direct bindings and therefore did not have that problem.
         """
         self._parameter_reset_bound_widgets = set()
+        self._parameter_wheel_bound_widgets = set()
         self._bind_parameter_reset_widget_tree(self.root)
 
         # Some controls (for example the enlarged stick-curve editor) are
@@ -5057,6 +5112,20 @@ class ConfigGUI:
             widget_class = widget.winfo_class()
         except (AttributeError, tk.TclError):
             return
+        if widget_class in {
+            "TCombobox", "TScale", "TSpinbox",
+            "Scale", "Spinbox",
+        }:
+            if widget_class == "TCombobox":
+                self._bind_combobox_popdown_mousewheel_guard(widget)
+            widget_name = str(widget)
+            if widget_name not in self._parameter_wheel_bound_widgets:
+                widget.bind(
+                    "<MouseWheel>",
+                    self._on_parameter_control_mousewheel,
+                    add="+",
+                )
+                self._parameter_wheel_bound_widgets.add(widget_name)
         if widget_class not in {
             "TEntry", "TCombobox", "TScale", "TSpinbox",
             "TCheckbutton", "TRadiobutton", "TLabel",
@@ -5119,7 +5188,22 @@ class ConfigGUI:
                 return variable, saved_binding[1], system_default
         return None
 
+    @staticmethod
+    def parameter_widget_is_disabled(widget):
+        """Return whether a Tk/ttk parameter control rejects user edits."""
+        try:
+            if widget.instate(["disabled"]):
+                return True
+        except (AttributeError, tk.TclError):
+            pass
+        try:
+            return str(widget.cget("state")).strip().lower() == "disabled"
+        except (AttributeError, tk.TclError):
+            return False
+
     def show_parameter_reset_context_menu(self, event):
+        if self.parameter_widget_is_disabled(event.widget):
+            return "break"
         binding = self.parameter_binding_for_widget(event.widget)
         if binding is None:
             return None
@@ -6995,6 +7079,12 @@ class ConfigGUI:
         widget.configure(cursor="sb_h_double_arrow")
 
         def begin(event):
+            interaction_enabled = not self.parameter_widget_is_disabled(
+                widget
+            )
+            state["interaction_enabled"] = interaction_enabled
+            if not interaction_enabled:
+                return "break"
             try:
                 start_value = float(variable.get())
             except (TypeError, ValueError, tk.TclError):
@@ -7009,6 +7099,8 @@ class ConfigGUI:
             return "break"
 
         def drag(event):
+            if not state.get("interaction_enabled", False):
+                return "break"
             delta_x = event.x_root - state["start_x"]
             delta_y = event.y_root - state["start_y"]
             distance = delta_x if abs(delta_x) >= abs(delta_y) else -delta_y
@@ -7034,6 +7126,8 @@ class ConfigGUI:
             return "break"
 
         def finish(_event):
+            if not state.get("interaction_enabled", False):
+                return "break"
             if not state["dragged"] and click_command is not None:
                 click_command()
             return "break"
@@ -9442,7 +9536,7 @@ class ConfigGUI:
                 ))
                 messagebox.showerror(
                     self.tr(
-                        "?典?閮剖??⊥?撖怠 ESP32"
+                        "獨立模式設定無法寫入 ESP32"
                     ),
                     "\n".join(lines),
                 )
