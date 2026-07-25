@@ -6,11 +6,13 @@
 
 S2P-XInput-Lite provides XInput-compatible controller output for a Switch 2 Pro Controller on Windows. It supports wired USB, an ESP32-S3 USB bridge, and native Windows BLE.
 
-Development version: **v0.6.1**
+Current release: **v0.6.1**
 
 [Latest published release](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 
-> This is an independent, unofficial community project. It is not affiliated with, endorsed by, sponsored by, or certified by Nintendo, Microsoft, or Espressif Systems.
+> This is an independent, unofficial community project. It is not affiliated with, endorsed by, sponsored by, or certified by Nintendo, Microsoft, Espressif Systems, Apple, or Google.
+>
+> Nintendo Switch is a trademark of Nintendo. Windows and Xbox are trademarks of Microsoft. ESP32 is a trademark of Espressif Systems. Apple, macOS, iOS, and iPadOS are trademarks of Apple Inc. Android is a trademark of Google LLC. All other trademarks are the property of their respective owners.
 
 ## Features
 
@@ -88,6 +90,15 @@ Reusable hardware probes and automated tests are maintained in the development r
 - Windows only
 - One controller at a time
 - No Joy-Con pairing or PS5 controller emulation
+- The ESP32-S3 standalone USB HID mode is not currently compatible with
+  macOS, iOS, or iPadOS.
+- Mobile use is currently limited to Android devices that support USB OTG and
+  correctly recognize this HID game-controller mode. Compatibility varies by
+  device, Android version, and game, so plug-and-play operation cannot be
+  guaranteed on every device.
+- Mobile mode supports controller input only; game rumble feedback is not
+  supported. Apple-device compatibility and mobile rumble support are future
+  development directions.
 - ESP32 standalone mode does not support Windows keyboard/mouse output, audio
   haptics, process-based profile switching, phone rumble, or BLE HID output
 - Motion is mapped to a stick or mouse; XInput does not expose raw motion sensors

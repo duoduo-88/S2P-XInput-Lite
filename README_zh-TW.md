@@ -10,7 +10,17 @@ S2P-XInput-Lite 可在 Windows 為 Switch 2 Pro Controller 提供 XInput 相容�
 
 [最新正式版本](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 
-> 本專案是獨立、非官方的社群作品，未獲 Nintendo、Microsoft 或 Espressif Systems 授權、認證、贊助或背書，亦與這些公司無關。
+> 本專案是獨立、非官方的社群作品，未獲 Nintendo、Microsoft、Espressif Systems、Apple 或 Google 授權、認證、贊助或背書，亦與這些公司無關。
+>
+> Nintendo Switch 為 Nintendo 的商標；Windows 與 Xbox 為 Microsoft 的商標；ESP32 為 Espressif Systems 的商標；Apple、macOS、iOS 與 iPadOS 為 Apple Inc. 的商標；Android 為 Google LLC 的商標。其他商標均屬其各自權利人所有。
+
+### 行動裝置相容性
+
+經實機測試，ESP32-S3 的 USB HID 獨立模式目前不相容於 macOS、iOS 或 iPadOS。
+
+行動裝置目前僅支援具備 USB OTG 功能，且可正確辨識此 HID 手把模式的 Android 裝置。由於 Android 裝置型號、系統版本與遊戲的 USB HID 支援差異很大，無法保證所有裝置插入後都可直接使用。
+
+行動裝置模式目前僅支援手把輸入，暫不支援遊戲震動回傳。Apple 裝置相容性與行動平台震動支援，將作為後續開發方向。
 
 ## 主要功能
 

@@ -1471,12 +1471,17 @@ class BluetoothController:
                 if self._feedback_task is done:
                     self._feedback_task = None
                 try:
-                    done.result()
+                    completed = bool(done.result())
                 except asyncio.CancelledError:
                     return
                 except Exception:
                     return
-                if completed_callback is not None and self.is_ready:
+                if (
+                    completed
+                    and completed_callback is not None
+                    and self._connection_is_current(generation)
+                    and self.is_ready
+                ):
                     completed_callback()
 
             task.add_done_callback(finished)

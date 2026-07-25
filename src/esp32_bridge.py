@@ -1117,7 +1117,7 @@ class ESP32Bridge:
         channel, generation, token = reservation
 
         def worker():
-            self._play_fixed_feedback(
+            completed = self._play_fixed_feedback(
                 CONNECTION_FEEDBACK_PATTERN,
                 CONNECTION_LF_FREQUENCY,
                 CONNECTION_HF_FREQUENCY,
@@ -1126,7 +1126,10 @@ class ESP32Bridge:
                 token,
             )
 
-            if not self._connection_is_current(channel, generation):
+            if (
+                not completed
+                or not self._connection_is_current(channel, generation)
+            ):
                 return
             if self.calibration_mode:
                 if self.ready_callback is not None:

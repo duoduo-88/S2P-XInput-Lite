@@ -28,6 +28,17 @@ class _HidDevice:
 
 
 class FeedbackRumbleOverrideTests(unittest.TestCase):
+    def make_ready_esp32_bridge(self):
+        bridge = ESP32Bridge("TEST")
+        bridge.running = True
+        bridge.connected_channel = 0
+        bridge._ready_channel = 0
+        bridge._connection_generation = 1
+        bridge._rumble_worker_running = True
+        bridge._rumble_accepting = True
+        bridge.serial = type("Serial", (), {"is_open": True})()
+        return bridge
+
     @patch("wired_controller.time.sleep")
     def test_wired_fixed_cue_cannot_be_overwritten_by_audio(self, _sleep):
         controller = WiredController()
@@ -57,14 +68,7 @@ class FeedbackRumbleOverrideTests(unittest.TestCase):
 
     @patch("esp32_bridge.time.sleep")
     def test_esp32_fixed_cue_cannot_be_overwritten_by_audio(self, _sleep):
-        bridge = ESP32Bridge("TEST")
-        bridge.running = True
-        bridge.connected_channel = 0
-        bridge._ready_channel = 0
-        bridge._connection_generation = 1
-        bridge._rumble_worker_running = True
-        bridge._rumble_accepting = True
-        bridge.serial = type("Serial", (), {"is_open": True})()
+        bridge = self.make_ready_esp32_bridge()
         commands = []
         normal_results = []
 
@@ -94,14 +98,7 @@ class FeedbackRumbleOverrideTests(unittest.TestCase):
 
     @patch("esp32_bridge.time.sleep")
     def test_esp32_old_feedback_cannot_cross_generation(self, _sleep):
-        bridge = ESP32Bridge("TEST")
-        bridge.running = True
-        bridge.connected_channel = 0
-        bridge._ready_channel = 0
-        bridge._connection_generation = 1
-        bridge._rumble_worker_running = True
-        bridge._rumble_accepting = True
-        bridge.serial = type("Serial", (), {"is_open": True})()
+        bridge = self.make_ready_esp32_bridge()
         commands = []
 
         def send(command):
@@ -117,6 +114,24 @@ class FeedbackRumbleOverrideTests(unittest.TestCase):
             CONNECTION_HF_FREQUENCY,
         ))
         self.assertEqual(len(commands), 1)
+
+    @patch("esp32_bridge.threading.Thread")
+    def test_esp32_failed_connection_cue_does_not_run_ready_callback(
+        self,
+        thread_factory,
+    ):
+        bridge = self.make_ready_esp32_bridge()
+        callbacks = []
+        bridge.calibration_mode = True
+        bridge.ready_callback = lambda: callbacks.append("ready")
+        bridge._play_fixed_feedback = lambda *_args: False
+
+        self.assertTrue(bridge.connection_rumble(expected_generation=1))
+        thread_factory.assert_called_once()
+
+        thread_factory.call_args.kwargs["target"]()
+
+        self.assertEqual(callbacks, [])
 
     @patch("wired_controller.time.sleep")
     def test_wired_old_feedback_cannot_cross_generation(self, _sleep):
@@ -173,7 +188,7 @@ class FeedbackRumbleOverrideTests(unittest.TestCase):
 
 
 class BluetoothFeedbackOverrideTests(unittest.IsolatedAsyncioTestCase):
-    async def test_native_ble_fixed_cue_cannot_be_overwritten_by_audio(self):
+    def make_ready_bluetooth_controller(self):
         controller = BluetoothController()
         controller.running = True
         controller.connected = True
@@ -183,6 +198,16 @@ class BluetoothFeedbackOverrideTests(unittest.IsolatedAsyncioTestCase):
         controller._loop = asyncio.get_running_loop()
         controller._feedback_lock = asyncio.Lock()
         controller.client = type("Client", (), {"is_connected": True})()
+        return controller
+
+    async def wait_for_feedback_task(self, controller):
+        for _ in range(3):
+            await asyncio.sleep(0)
+            if controller._feedback_task is None:
+                return
+
+    async def test_native_ble_fixed_cue_cannot_be_overwritten_by_audio(self):
+        controller = self.make_ready_bluetooth_controller()
         sent = []
         normal_results = []
 
@@ -220,6 +245,45 @@ class BluetoothFeedbackOverrideTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             controller.send_pro_rumble(90, 300, 180, 300)
         )
+
+    async def test_native_ble_failed_cue_does_not_run_completed_callback(self):
+        controller = self.make_ready_bluetooth_controller()
+        callbacks = []
+
+        async def fail_feedback(*_args):
+            return False
+
+        controller._play_fixed_feedback_async = fail_feedback
+
+        self.assertTrue(controller._start_fixed_feedback(
+            CONNECTION_FEEDBACK_PATTERN,
+            CONNECTION_LF_FREQUENCY,
+            CONNECTION_HF_FREQUENCY,
+            completed_callback=lambda: callbacks.append("completed"),
+        ))
+        await self.wait_for_feedback_task(controller)
+
+        self.assertEqual(callbacks, [])
+
+    async def test_native_ble_stale_cue_does_not_run_completed_callback(self):
+        controller = self.make_ready_bluetooth_controller()
+        callbacks = []
+
+        async def finish_on_new_generation(*_args):
+            controller._connection_generation = 2
+            return True
+
+        controller._play_fixed_feedback_async = finish_on_new_generation
+
+        self.assertTrue(controller._start_fixed_feedback(
+            CONNECTION_FEEDBACK_PATTERN,
+            CONNECTION_LF_FREQUENCY,
+            CONNECTION_HF_FREQUENCY,
+            completed_callback=lambda: callbacks.append("completed"),
+        ))
+        await self.wait_for_feedback_task(controller)
+
+        self.assertEqual(callbacks, [])
 
 
 if __name__ == "__main__":
