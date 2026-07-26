@@ -4,6 +4,11 @@
 
 ![S2P-XInput-Lite banner](image/S2P-XInput-Lite-banner.jpg)
 
+<p align="center">
+  <img src="image/GUI.gif" alt="S2P-XInput-Lite settings interface" width="46%">
+  <img src="image/test.gif" alt="S2P-XInput-Lite gamepad tester" width="46%">
+</p>
+
 S2P-XInput-Lite provides XInput-compatible controller output for a Switch 2 Pro Controller on Windows. It supports wired USB, an ESP32-S3 USB bridge, and native Windows BLE.
 
 Current release: **v0.7.0**

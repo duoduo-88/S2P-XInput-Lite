@@ -13,7 +13,7 @@ import zlib
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from tkinter import ttk, font as tkfont
+from tkinter import ttk, font as tkfont, messagebox
 
 from gamepad_devices import (
     GamepadDevice,
@@ -309,6 +309,21 @@ def shape_ease_amount(delta_seconds, time_constant=0.05):
     delta = max(0.0, min(0.1, float(delta_seconds)))
     constant = max(1e-6, float(time_constant))
     return 1.0 - math.exp(-delta / constant)
+
+
+def normalize_test_parameter(value, minimum, maximum, step):
+    """Clamp and snap a tester parameter exactly like the settings sliders."""
+    numeric = float(value)
+    if not math.isfinite(numeric):
+        raise ValueError("parameter value must be finite")
+    minimum = float(minimum)
+    maximum = float(maximum)
+    step = float(step)
+    if step <= 0.0:
+        raise ValueError("step must be positive")
+    numeric = max(minimum, min(maximum, numeric))
+    numeric = minimum + round((numeric - minimum) / step) * step
+    return max(minimum, min(maximum, numeric))
 
 
 @dataclass
@@ -1845,6 +1860,7 @@ class GamepadTestWindow:
         self._last_window_geometry = None
         self._high_resolution_timer_active = False
         self._window_icon = None
+        self._parameter_editor_window = None
 
     def _apply_window_icon(self, window):
         """Apply the dedicated tester icon without changing the main app icon."""
@@ -2024,7 +2040,7 @@ class GamepadTestWindow:
         ttk.Label(
             display_controls, text=self.gui.tr("採樣點")
         ).grid(row=0, column=3, padx=(0, 3))
-        ttk.Scale(
+        sample_scale = ttk.Scale(
             display_controls,
             from_=10.0,
             to=100.0,
@@ -2032,13 +2048,26 @@ class GamepadTestWindow:
             variable=self.sample_display_percent_var,
             command=self._update_sample_display_percent,
             orient="horizontal",
-        ).grid(row=0, column=4)
-        ttk.Label(
+        )
+        sample_scale.grid(row=0, column=4)
+        sample_value_label = ttk.Label(
             display_controls,
             textvariable=self.sample_display_percent_text,
             width=5,
             anchor="e",
-        ).grid(row=0, column=5, padx=(3, 3))
+        )
+        sample_value_label.grid(row=0, column=5, padx=(3, 3))
+        self._bind_parameter_control(
+            sample_value_label,
+            self.sample_display_percent_var,
+            "採樣點",
+            10.0,
+            100.0,
+            step=1.0,
+            number_format=".0f",
+            on_change=self._update_sample_display_percent,
+            state_widget=sample_scale,
+        )
         sample_help = tk.Label(
             display_controls,
             text="?",
@@ -2065,20 +2094,33 @@ class GamepadTestWindow:
         ttk.Label(
             display_controls, text=self.gui.tr("軌跡長度")
         ).grid(row=0, column=7, padx=(0, 4))
-        ttk.Scale(
+        trail_scale = ttk.Scale(
             display_controls,
             from_=0.5,
             to=5.0,
             variable=self.trail_length_var,
             command=self._update_trail_length_text,
             orient="horizontal",
-        ).grid(row=0, column=8, sticky="ew")
-        ttk.Label(
+        )
+        trail_scale.grid(row=0, column=8, sticky="ew")
+        trail_value_label = ttk.Label(
             display_controls,
             textvariable=self.trail_length_text,
             width=7,
             anchor="e",
-        ).grid(row=0, column=9, padx=(4, 0))
+        )
+        trail_value_label.grid(row=0, column=9, padx=(4, 0))
+        self._bind_parameter_control(
+            trail_value_label,
+            self.trail_length_var,
+            "軌跡長度",
+            0.5,
+            5.0,
+            step=0.1,
+            number_format=".1f",
+            on_change=self._update_trail_length_text,
+            state_widget=trail_scale,
+        )
 
         details = ttk.Frame(panel_stack)
         details.grid(
@@ -2234,6 +2276,240 @@ class GamepadTestWindow:
             pass
         self._high_resolution_timer_active = False
 
+    @staticmethod
+    def _parameter_control_is_disabled(widget):
+        try:
+            return bool(widget.instate(["disabled"]))
+        except (AttributeError, tk.TclError):
+            return False
+
+    def _apply_parameter_value(
+        self,
+        variable,
+        value,
+        minimum,
+        maximum,
+        step,
+        on_change,
+    ):
+        numeric = normalize_test_parameter(
+            value,
+            minimum,
+            maximum,
+            step,
+        )
+        variable.set(numeric)
+        if on_change is not None:
+            on_change()
+        return numeric
+
+    def _bind_parameter_control(
+        self,
+        widget,
+        variable,
+        title,
+        minimum,
+        maximum,
+        *,
+        step,
+        number_format,
+        on_change,
+        state_widget=None,
+    ):
+        """Add click-to-enter and four-direction scrubbing to a value label."""
+        pixels_per_step = 8
+        state_widget = state_widget or widget
+        state = {
+            "start_x": 0,
+            "start_y": 0,
+            "start_value": float(minimum),
+            "last_steps": 0,
+            "dragged": False,
+            "enabled": False,
+        }
+        widget.configure(cursor="sb_h_double_arrow")
+
+        def begin(event):
+            state["enabled"] = not self._parameter_control_is_disabled(
+                state_widget
+            )
+            if not state["enabled"]:
+                return "break"
+            try:
+                start_value = float(variable.get())
+            except (TypeError, ValueError, tk.TclError):
+                start_value = float(minimum)
+            state.update({
+                "start_x": event.x_root,
+                "start_y": event.y_root,
+                "start_value": start_value,
+                "last_steps": 0,
+                "dragged": False,
+            })
+            return "break"
+
+        def drag(event):
+            if not state["enabled"]:
+                return "break"
+            delta_x = event.x_root - state["start_x"]
+            delta_y = event.y_root - state["start_y"]
+            distance = delta_x if abs(delta_x) >= abs(delta_y) else -delta_y
+            step_count = int(distance / pixels_per_step)
+            if step_count == 0 or step_count == state["last_steps"]:
+                return "break"
+            state["dragged"] = True
+            state["last_steps"] = step_count
+            self._apply_parameter_value(
+                variable,
+                state["start_value"] + step_count * float(step),
+                minimum,
+                maximum,
+                step,
+                on_change,
+            )
+            return "break"
+
+        def finish(_event):
+            if not state["enabled"]:
+                return "break"
+            if not state["dragged"]:
+                self._open_parameter_editor(
+                    variable,
+                    title,
+                    minimum,
+                    maximum,
+                    step=step,
+                    number_format=number_format,
+                    on_change=on_change,
+                    state_widget=state_widget,
+                )
+            return "break"
+
+        widget.bind("<ButtonPress-1>", begin)
+        widget.bind("<B1-Motion>", drag)
+        widget.bind("<ButtonRelease-1>", finish)
+
+    def _open_parameter_editor(
+        self,
+        variable,
+        title,
+        minimum,
+        maximum,
+        *,
+        step,
+        number_format,
+        on_change,
+        state_widget,
+    ):
+        if self._parameter_control_is_disabled(state_widget):
+            return
+        current = self._parameter_editor_window
+        try:
+            if current is not None and current.winfo_exists():
+                current.deiconify()
+                current.lift()
+                return
+        except tk.TclError:
+            pass
+
+        owner = self.window or self.root
+        dialog = tk.Toplevel(owner)
+        dialog.withdraw()
+        dialog.title(
+            f"{self.gui.tr('輸入參數')} - {self.gui.tr(title)}"
+        )
+        dialog.resizable(False, False)
+        dialog.transient(owner)
+        self._parameter_editor_window = dialog
+
+        content = ttk.Frame(dialog, padding=12)
+        content.grid(row=0, column=0, sticky="nsew")
+        ttk.Label(
+            content,
+            text=self.gui.tr("目前數值"),
+        ).grid(row=0, column=0, sticky="e", padx=(0, 8), pady=(0, 8))
+        try:
+            initial = format(float(variable.get()), number_format)
+        except (TypeError, ValueError, tk.TclError):
+            initial = format(float(minimum), number_format)
+        input_var = tk.StringVar(master=dialog, value=initial)
+        entry = ttk.Entry(content, textvariable=input_var, width=16)
+        entry.grid(row=0, column=1, sticky="ew", pady=(0, 8))
+        ttk.Label(
+            content,
+            text=(
+                f"{self.gui.tr('設定範圍')}：{minimum:g} ～ {maximum:g}\n"
+                f"{self.gui.tr('步進')}：{step:g}"
+            ),
+            justify="left",
+        ).grid(row=1, column=0, columnspan=2, sticky="w")
+
+        actions = ttk.Frame(content)
+        actions.grid(row=2, column=0, columnspan=2, pady=(12, 0))
+
+        def close_dialog():
+            if self._parameter_editor_window is dialog:
+                self._parameter_editor_window = None
+            try:
+                dialog.destroy()
+            except tk.TclError:
+                pass
+
+        def apply_value(_event=None):
+            try:
+                self._apply_parameter_value(
+                    variable,
+                    input_var.get(),
+                    minimum,
+                    maximum,
+                    step,
+                    on_change,
+                )
+            except (TypeError, ValueError, tk.TclError):
+                messagebox.showerror(
+                    self.gui.tr("設定錯誤"),
+                    self.gui.tr("請輸入有效數字。"),
+                    parent=dialog,
+                )
+                entry.focus_set()
+                entry.selection_range(0, "end")
+                return
+            close_dialog()
+
+        ttk.Button(
+            actions,
+            text=self.gui.tr("確定"),
+            command=apply_value,
+            width=9,
+        ).pack(side="left", padx=(0, 6))
+        ttk.Button(
+            actions,
+            text=self.gui.tr("取消"),
+            command=close_dialog,
+            width=9,
+        ).pack(side="left")
+        dialog.bind("<Return>", apply_value)
+        dialog.bind("<Escape>", lambda _event: close_dialog())
+        dialog.protocol("WM_DELETE_WINDOW", close_dialog)
+        dialog.update_idletasks()
+
+        width = max(290, dialog.winfo_reqwidth())
+        height = dialog.winfo_reqheight()
+        try:
+            x = owner.winfo_rootx() + (owner.winfo_width() - width) // 2
+            y = owner.winfo_rooty() + (owner.winfo_height() - height) // 2
+            screen_width = owner.winfo_screenwidth()
+            screen_height = owner.winfo_screenheight()
+            x = max(0, min(screen_width - width, x))
+            y = max(0, min(screen_height - height, y))
+            dialog.geometry(f"{width}x{height}+{x}+{y}")
+        except tk.TclError:
+            pass
+        dialog.deiconify()
+        entry.focus_set()
+        entry.selection_range(0, "end")
+        dialog.grab_set()
+
     def _build_rumble_tab(self, parent):
         parent.columnconfigure(0, weight=1)
         manual_group = ttk.LabelFrame(
@@ -2259,8 +2535,24 @@ class GamepadTestWindow:
                 command=self._on_manual_rumble_changed,
             )
             scale.grid(row=row, column=1, sticky="ew", pady=3)
-            ttk.Label(manual_group, textvariable=value_text, width=6).grid(
+            value_label = ttk.Label(
+                manual_group,
+                textvariable=value_text,
+                width=6,
+            )
+            value_label.grid(
                 row=row, column=2, sticky="e", padx=(8, 0)
+            )
+            self._bind_parameter_control(
+                value_label,
+                variable,
+                label,
+                0.0,
+                100.0,
+                step=1.0,
+                number_format=".0f",
+                on_change=self._on_manual_rumble_changed,
+                state_widget=scale,
             )
             self.manual_rumble_widgets.append(scale)
 
@@ -2368,8 +2660,24 @@ class GamepadTestWindow:
         repeat_rate.grid(
             row=0, column=1, sticky="ew"
         )
-        ttk.Label(controls, textvariable=self.rumble_repeat_hz_text, width=8).grid(
+        repeat_rate_value = ttk.Label(
+            controls,
+            textvariable=self.rumble_repeat_hz_text,
+            width=8,
+        )
+        repeat_rate_value.grid(
             row=0, column=2, sticky="e", padx=(8, 0)
+        )
+        self._bind_parameter_control(
+            repeat_rate_value,
+            self.rumble_repeat_hz_var,
+            "播放頻率",
+            0.1,
+            100.0,
+            step=0.1,
+            number_format=".1f",
+            on_change=self._on_repeat_rate_changed,
+            state_widget=repeat_rate,
         )
         ttk.Label(controls, text=self.gui.tr("模板強度"), width=14).grid(
             row=1, column=0, sticky="w", padx=(0, 8), pady=(8, 0)
@@ -2382,8 +2690,24 @@ class GamepadTestWindow:
             command=self._on_rumble_strength_changed,
         )
         strength.grid(row=1, column=1, sticky="ew", pady=(8, 0))
-        ttk.Label(controls, textvariable=self.rumble_strength_text, width=8).grid(
+        strength_value = ttk.Label(
+            controls,
+            textvariable=self.rumble_strength_text,
+            width=8,
+        )
+        strength_value.grid(
             row=1, column=2, sticky="e", padx=(8, 0), pady=(8, 0)
+        )
+        self._bind_parameter_control(
+            strength_value,
+            self.rumble_strength_var,
+            "模板強度",
+            0.0,
+            100.0,
+            step=1.0,
+            number_format=".0f",
+            on_change=self._on_rumble_strength_changed,
+            state_widget=strength,
         )
         self.rumble_option_widgets.extend(
             (repeat, template_lf, template_hf, repeat_rate, strength)
@@ -3542,6 +3866,13 @@ class GamepadTestWindow:
 
     def close(self):
         self.stop_rumble()
+        parameter_editor = self._parameter_editor_window
+        self._parameter_editor_window = None
+        if parameter_editor is not None:
+            try:
+                parameter_editor.destroy()
+            except tk.TclError:
+                pass
         if self.window is not None:
             for job in (self._poll_job, self._device_refresh_job):
                 if job is not None:

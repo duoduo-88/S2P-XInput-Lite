@@ -3529,6 +3529,30 @@ class ConfigGUI:
         self._stick_zoom_trace_bindings.append((variable, trace_id))
         update()
 
+    def _create_stick_zoom_deadzone_label(
+        self,
+        parent,
+        text,
+        variable,
+    ):
+        """Create an expanded-view deadzone label with numeric scrubbing."""
+        label = ttk.Label(
+            parent,
+            text=text,
+            width=7,
+            anchor="w",
+        )
+        label.pack(side="left")
+        self.bind_numeric_scrubber(
+            label,
+            variable,
+            0.0,
+            0.99,
+            step=0.01,
+            number_format=".2f",
+        )
+        return label
+
     def _build_stick_zoom_tab(self, notebook, side, canvas_width, canvas_height):
         """Build one expanded stick page using the same variables as the main UI."""
         side = str(side).upper()
@@ -3738,12 +3762,11 @@ class ConfigGUI:
             width=5,
             variable=deadzone_compress_var,
         ).pack(side="left", padx=(0, 4))
-        ttk.Label(
+        self._create_stick_zoom_deadzone_label(
             center_label_frame,
-            text="中心死區",
-            width=7,
-            anchor="w",
-        ).pack(side="left")
+            "中心死區",
+            deadzone_var,
+        )
         ttk.Entry(
             deadzone_group,
             textvariable=deadzone_var,
@@ -3771,12 +3794,11 @@ class ConfigGUI:
             width=5,
             variable=outer_deadzone_compress_var,
         ).pack(side="left", padx=(0, 4))
-        ttk.Label(
+        self._create_stick_zoom_deadzone_label(
             outer_label_frame,
-            text="外圍死區",
-            width=7,
-            anchor="w",
-        ).pack(side="left")
+            "外圍死區",
+            outer_deadzone_var,
+        )
         ttk.Entry(
             deadzone_group,
             textvariable=outer_deadzone_var,
@@ -7741,6 +7763,13 @@ class ConfigGUI:
         y = max(work_y, min(y, work_y + work_height - height))
         window.geometry(f"{width}x{height}+{x}+{y}")
 
+    def _mapping_layer_editor_width(self):
+        """Match the editor to the visible settings window, not its request."""
+        width = max(1, int(self.root.winfo_width()))
+        if width <= 1:
+            width = max(1, int(self.root.winfo_reqwidth()))
+        return width
+
     def _register_modal_window(self, window):
         """Track a transient dialog without changing Windows window styles."""
         if window in self._modal_windows:
@@ -9328,9 +9357,7 @@ class ConfigGUI:
             controls, text=self.tr("還原"), command=restore_defaults
         ).pack(side="right", padx=(0, 6))
         dialog.update_idletasks()
-        editor_width = max(
-            self.root.winfo_width(), self.root.winfo_reqwidth()
-        )
+        editor_width = self._mapping_layer_editor_width()
         natural_height = (
             body.winfo_reqheight()
             + controls.winfo_reqheight()

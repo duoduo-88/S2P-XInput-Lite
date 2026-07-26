@@ -56,6 +56,7 @@ from gamepad_test_window import (
     curve_output_radii,
     display_refresh_rate,
     encode_rgba_png,
+    normalize_test_parameter,
     primary_display_refresh_rate,
     shape_ease_amount,
 )
@@ -148,6 +149,74 @@ class SharedTelemetryTests(unittest.TestCase):
 
 
 class GamepadMathTests(unittest.TestCase):
+    def test_tester_parameter_input_clamps_and_snaps(self):
+        self.assertAlmostEqual(
+            normalize_test_parameter("2.54", 0.5, 5.0, 0.1),
+            2.5,
+        )
+        self.assertEqual(
+            normalize_test_parameter("999", 10.0, 100.0, 1.0),
+            100.0,
+        )
+        with self.assertRaises(ValueError):
+            normalize_test_parameter("nan", 0.0, 1.0, 0.1)
+
+    def test_tester_value_label_supports_drag_and_click_entry(self):
+        class FakeVariable:
+            def __init__(self):
+                self.value = 2.5
+
+            def get(self):
+                return self.value
+
+            def set(self, value):
+                self.value = value
+
+        class FakeWidget:
+            def __init__(self):
+                self.callbacks = {}
+                self.options = {}
+
+            def configure(self, **options):
+                self.options.update(options)
+
+            def bind(self, sequence, callback):
+                self.callbacks[sequence] = callback
+
+            def instate(self, _states):
+                return False
+
+        tester = object.__new__(GamepadTestWindow)
+        tester._open_parameter_editor = Mock()
+        widget = FakeWidget()
+        variable = FakeVariable()
+        changed = Mock()
+        tester._bind_parameter_control(
+            widget,
+            variable,
+            "軌跡長度",
+            0.5,
+            5.0,
+            step=0.1,
+            number_format=".1f",
+            on_change=changed,
+            state_widget=widget,
+        )
+        start = SimpleNamespace(x_root=10, y_root=10)
+        moved = SimpleNamespace(x_root=34, y_root=10)
+
+        widget.callbacks["<ButtonPress-1>"](start)
+        widget.callbacks["<B1-Motion>"](moved)
+        widget.callbacks["<ButtonRelease-1>"](moved)
+
+        self.assertAlmostEqual(variable.value, 2.8)
+        changed.assert_called_once_with()
+        tester._open_parameter_editor.assert_not_called()
+
+        widget.callbacks["<ButtonPress-1>"](start)
+        widget.callbacks["<ButtonRelease-1>"](start)
+        tester._open_parameter_editor.assert_called_once()
+
     def test_tester_window_stays_hidden_until_final_geometry_is_committed(self):
         root = Mock()
         window = Mock()

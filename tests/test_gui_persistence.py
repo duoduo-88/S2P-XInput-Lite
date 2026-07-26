@@ -33,6 +33,41 @@ class DummyLabel:
 
 
 class GuiPersistenceTests(unittest.TestCase):
+    def test_zoom_deadzone_label_uses_numeric_scrubber(self):
+        gui = object.__new__(config_gui.ConfigGUI)
+        gui.bind_numeric_scrubber = Mock()
+        parent = Mock()
+        variable = Mock()
+        label = Mock()
+
+        with patch.object(
+            config_gui.ttk,
+            "Label",
+            return_value=label,
+        ) as label_factory:
+            result = gui._create_stick_zoom_deadzone_label(
+                parent,
+                "中心死區",
+                variable,
+            )
+
+        self.assertIs(result, label)
+        label_factory.assert_called_once_with(
+            parent,
+            text="中心死區",
+            width=7,
+            anchor="w",
+        )
+        label.pack.assert_called_once_with(side="left")
+        gui.bind_numeric_scrubber.assert_called_once_with(
+            label,
+            variable,
+            0.0,
+            0.99,
+            step=0.01,
+            number_format=".2f",
+        )
+
     def test_main_root_stays_hidden_until_gui_is_ready_to_show(self):
         events = []
         root = Mock()
@@ -167,6 +202,22 @@ class GuiPersistenceTests(unittest.TestCase):
         gui._center_child_window(window, width=200, height=100)
 
         window.geometry.assert_called_once_with("200x100+400+350")
+
+    def test_mapping_layer_editor_uses_visible_root_width(self):
+        gui = object.__new__(config_gui.ConfigGUI)
+        gui.root = Mock()
+        gui.root.winfo_width.return_value = 800
+        gui.root.winfo_reqwidth.return_value = 1200
+
+        self.assertEqual(gui._mapping_layer_editor_width(), 800)
+
+    def test_mapping_layer_editor_falls_back_to_requested_width_before_show(self):
+        gui = object.__new__(config_gui.ConfigGUI)
+        gui.root = Mock()
+        gui.root.winfo_width.return_value = 1
+        gui.root.winfo_reqwidth.return_value = 900
+
+        self.assertEqual(gui._mapping_layer_editor_width(), 900)
 
     def test_profile_reload_refreshes_stick_mode_after_atomic_variable_merge(self):
         gui = object.__new__(config_gui.ConfigGUI)
