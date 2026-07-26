@@ -1910,7 +1910,12 @@ class GamepadTestWindow:
         self._last_trail_sequence = self.telemetry.latest_trail_sequence()
         if self.native_sampler is None:
             self.native_sampler = NativeGamepadSampler(self.backend)
-        self.native_sampler.start()
+        if not self.native_sampler.start():
+            self.root.after(
+                25,
+                lambda sampler=self.native_sampler:
+                    self._retry_native_sampler_start(sampler),
+            )
         self._enable_high_resolution_timer()
         self._display_refresh_hz = primary_display_refresh_rate()
         self._frame_interval = 1.0 / self._display_refresh_hz
@@ -2265,6 +2270,23 @@ class GamepadTestWindow:
             window,
             f"{initial_width}x{initial_height}+{x}+{y}",
         )
+
+    def _retry_native_sampler_start(self, sampler):
+        """Restart after a previous sampler generation finishes winding down."""
+        if sampler is not self.native_sampler:
+            return
+        window = self.window
+        if window is None or not window.winfo_exists():
+            return
+        if sampler.start():
+            return
+        try:
+            window.after(
+                25,
+                lambda: self._retry_native_sampler_start(sampler),
+            )
+        except tk.TclError:
+            pass
 
     def _enable_high_resolution_timer(self):
         """Request 1 ms Windows timer granularity while this tester is open."""
@@ -3646,10 +3668,15 @@ class GamepadTestWindow:
             if variable is not None:
                 variable.set(value)
         self._refresh_rumble_template_styles()
-        if active_slot is not None:
-            self._set_rumble(0.0, 0.0, slot=active_slot)
-        else:
-            self._set_rumble(0.0, 0.0)
+        try:
+            if active_slot is not None:
+                self._set_rumble(0.0, 0.0, slot=active_slot)
+            else:
+                self._set_rumble(0.0, 0.0)
+        finally:
+            # A disconnected XInput slot cannot acknowledge the stop. Do not
+            # retain it and later target an unrelated controller reusing it.
+            self._active_rumble_slot = None
 
     def play_rumble(self, name):
         """Play once, or toggle one repeating template layer on/off."""

@@ -523,12 +523,17 @@ class WindowsGamepadBackend:
             )
         else:
             right_x = right_y = 0.0
-        has_mobile_trigger_axes = is_s2p_mobile and (
-            (
-                capabilities & JOYCAPS_HASU
-                and capabilities & JOYCAPS_HASV
+        has_mobile_trigger_axes = (
+            is_s2p_mobile
+            and (
+                (
+                    capabilities & JOYCAPS_HASU
+                    and capabilities & JOYCAPS_HASV
+                )
+                or int(caps.wNumAxes) >= 6
             )
-            or int(caps.wNumAxes) >= 6
+            and int(caps.wUmax) > int(caps.wUmin)
+            and int(caps.wVmax) > int(caps.wVmin)
         )
         if has_mobile_trigger_axes:
             left_trigger = normalize_trigger_axis(
@@ -597,6 +602,7 @@ class NativeGamepadSampler:
         self.poll_interval = max(0.0005, float(poll_interval))
         self._lock = threading.Lock()
         self._backend_lock = threading.Lock()
+        self._lifecycle_lock = threading.Lock()
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._thread = None
@@ -621,15 +627,22 @@ class NativeGamepadSampler:
         )
 
     def start(self):
-        if self._thread is not None and self._thread.is_alive():
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(
-            target=self._run,
-            daemon=True,
-            name="GamepadTestNativeSampler",
-        )
-        self._thread.start()
+        with self._lifecycle_lock:
+            thread = self._thread
+            if thread is not None and thread.is_alive():
+                # A stop-requested generation is winding down, not running.
+                # The UI retries once that exact thread has really exited.
+                return not self._stop.is_set()
+            self._thread = None
+            self._stop.clear()
+            thread = threading.Thread(
+                target=self._run,
+                daemon=True,
+                name="GamepadTestNativeSampler",
+            )
+            self._thread = thread
+            thread.start()
+            return True
 
     def stop(self, timeout=1.0):
         self._stop.set()
@@ -731,10 +744,16 @@ class NativeGamepadSampler:
         return latest, samples, rate
 
     def _run(self):
-        while not self._stop.is_set():
-            started = self.clock()
-            self._poll_once()
-            elapsed = self.clock() - started
-            delay = max(0.0, self.poll_interval - elapsed)
-            self._wake.wait(delay)
-            self._wake.clear()
+        thread = threading.current_thread()
+        try:
+            while not self._stop.is_set():
+                started = self.clock()
+                self._poll_once()
+                elapsed = self.clock() - started
+                delay = max(0.0, self.poll_interval - elapsed)
+                self._wake.wait(delay)
+                self._wake.clear()
+        finally:
+            with self._lifecycle_lock:
+                if self._thread is thread:
+                    self._thread = None

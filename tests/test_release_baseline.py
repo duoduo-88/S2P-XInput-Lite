@@ -34,13 +34,16 @@ class ReleaseBaselineTests(unittest.TestCase):
             r'set\(PROJECT_VER\s+"0\.14\.0"\)',
         )
 
-    def test_bundled_firmware_hashes_match_v060(self):
+    def test_bundled_firmware_hashes_match_current_release(self):
         expected = {
             "bootloader.bin": (
                 "9f1be89eecd1c24a562c0c570894f6f625405041508e55a2b1aa3875b74d237a"
             ),
+            "partition-table.bin": (
+                "7f00b6c042a89b15b0cac534f82ed988caf29278ff5700b0c511eb1b5bb7c820"
+            ),
             "esp32s3_bluedroid_bridge.bin": (
-                "bfe11ece6fbfcec0a5df8aabae38ccde7d15a245f08d52f1c4a0102ad9404641"
+                "8ad521dcaee712da943a5eaf4d5f58043c3fca1183b326c2f342c5dcd6e6510e"
             ),
         }
         firmware_dir = ROOT / "esp32s3" / "firmware"

@@ -115,7 +115,7 @@ class StandaloneFirmwareContractTests(unittest.TestCase):
         accepted = task.rindex("standalone_xinput_accept_switch_report")
         post_input_pump = task.rindex("standalone_xinput_pump()")
         command_output = task.index(
-            "while (xQueueReceive(s_out_queue", accepted
+            "xQueueReceive(s_out_queue", accepted
         )
         self.assertLess(accepted, post_input_pump)
         self.assertLess(post_input_pump, command_output)
@@ -150,6 +150,14 @@ class StandaloneFirmwareContractTests(unittest.TestCase):
         )
         self.assertIn("s_ch[channel].itvl", MAIN_SOURCE)
         self.assertIn("gap_threshold_ms", MAIN_SOURCE)
+        self.assertIn(
+            "s_last_input_report_time_valid[ch] = false",
+            MAIN_SOURCE,
+        )
+        self.assertIn(
+            "s_widened_mask & (1u << channel)",
+            MAIN_SOURCE,
+        )
         self.assertIn("static void cancel_usb_wait(void)", XINPUT_SOURCE)
         self.assertIn(
             "if (!tud_ready()) {\n"
@@ -159,6 +167,16 @@ class StandaloneFirmwareContractTests(unittest.TestCase):
         reset = XINPUT_SOURCE.index("static void xinput_reset(")
         opened = XINPUT_SOURCE.index("static uint16_t xinput_open(", reset)
         self.assertIn("cancel_usb_wait();", XINPUT_SOURCE[reset:opened])
+
+    def test_cdc_writes_have_absolute_deadline_and_loop_budget(self):
+        self.assertIn("CDC_WRITE_TIMEOUT_US", MAIN_SOURCE)
+        self.assertIn(
+            "esp_timer_get_time() + CDC_WRITE_TIMEOUT_US",
+            MAIN_SOURCE,
+        )
+        self.assertNotIn("w += n; t = 0", MAIN_SOURCE)
+        self.assertIn("w += written", MAIN_SOURCE)
+        self.assertIn("CDC_OUT_BUDGET_PER_LOOP", MAIN_SOURCE)
 
     def test_direction_mapping_consumes_native_stick_before_gyro(self):
         helper = XINPUT_SOURCE.index(

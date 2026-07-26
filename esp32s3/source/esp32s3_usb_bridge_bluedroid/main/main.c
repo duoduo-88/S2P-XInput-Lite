@@ -65,6 +65,8 @@ static const char *TAG = "S3_BLUEDROID";
 #define EXPECTED_FIRMWARE_PROFILE "tinyusb_direct"
 #define EXPECTED_FIRMWARE_BUILD   "cdc_bridge_2_lowlatency"
 #define CDC_LINE_STATE_DTR        0x01
+#define CDC_WRITE_TIMEOUT_US      100000
+#define CDC_OUT_BUDGET_PER_LOOP   4
 #define NINTENDO_COMPANY_ID       0x0553
 #define MAX_CH                    8     // one GATTC app per channel
 #define REPORT_SIZE               64
@@ -337,7 +339,9 @@ static void note_ble_input_report(
         expected_interval_ms + expected_interval_ms / 2u;
     portENTER_CRITICAL(&s_in_mux);
     s_input_latency_metrics.ble_input_reports++;
-    if (s_last_input_report_time_valid[channel]) {
+    bool gap_suppressed =
+        (s_widened_mask & (1u << channel)) != 0;
+    if (!gap_suppressed && s_last_input_report_time_valid[channel]) {
         uint32_t delta =
             report_time - s_last_input_report_time[channel];
         /*
@@ -354,7 +358,12 @@ static void note_ble_input_report(
         }
     }
     s_last_input_report_time[channel] = report_time;
-    s_last_input_report_time_valid[channel] = true;
+    /*
+     * A temporary third-link widen changes the real interval before the
+     * negotiated interval callback updates s_ch[].itvl. Do not compare across
+     * that transition; the first report after the mask clears is a new base.
+     */
+    s_last_input_report_time_valid[channel] = !gap_suppressed;
     portEXIT_CRITICAL(&s_in_mux);
 }
 
@@ -435,23 +444,31 @@ static void rumble_playout_task(void *arg) {
 static bool cdc_host_ready(void) {
     return tud_cdc_connected() && (tud_cdc_get_line_state() & CDC_LINE_STATE_DTR);
 }
-static void safe_cdc_write(const uint8_t *data, uint32_t len) {
+static bool safe_cdc_write(const uint8_t *data, uint32_t len) {
     /*
      * CDC is an optional configuration/bridge channel.  In standalone mode
      * it is normally closed; waiting 100 ms for DTR here would stall the same
      * task that services the XInput endpoint and reduce input to about 10 Hz.
      * A closed host cannot consume this data, so discard it immediately.
      */
-    if (!cdc_host_ready()) return;
-    uint32_t w = 0, t = 0;
-    while (w < len && t < 100) {
-        if (!cdc_host_ready()) return;
+    if (!cdc_host_ready()) return false;
+    uint32_t w = 0;
+    int64_t deadline_us = esp_timer_get_time() + CDC_WRITE_TIMEOUT_US;
+    while (w < len && esp_timer_get_time() < deadline_us) {
+        if (!cdc_host_ready()) return false;
         uint32_t avail = tud_cdc_write_available();
         if (avail > 0) {
             uint32_t n = (len - w) > avail ? avail : (len - w);
-            tud_cdc_write(data + w, n); tud_cdc_write_flush(); w += n; t = 0;
-        } else { vTaskDelay(pdMS_TO_TICKS(1)); t++; }
+            uint32_t written = tud_cdc_write(data + w, n);
+            if (written > 0) {
+                w += written;
+                tud_cdc_write_flush();
+                continue;
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
+    return w == len;
 }
 static void send_json(const char *s) { safe_cdc_write((const uint8_t *)s, strlen(s)); }  // cdc_task only
 // out_json/out_debug: enqueue for cdc_task to send.  MUST be used from BLE callback
@@ -486,6 +503,8 @@ static void clear_channel_state(int ch) {
     portENTER_CRITICAL(&s_in_mux);
     s_in_dirty[ch] = false;
     memset(&s_in_shadow[ch], 0, sizeof(s_in_shadow[ch]));
+    s_last_input_report_time[ch] = 0;
+    s_last_input_report_time_valid[ch] = false;
     portEXIT_CRITICAL(&s_in_mux);
     memset(&s_ch[ch], 0, sizeof(s_ch[ch]));
     s_ch[ch].gattc_if = keep;
@@ -1786,7 +1805,12 @@ static void cdc_task(void *arg) {
          */
         standalone_xinput_pump();
         line_t out;
-        while (xQueueReceive(s_out_queue, &out, 0) == pdTRUE)
+        for (
+            int sent = 0;
+            sent < CDC_OUT_BUDGET_PER_LOOP &&
+                xQueueReceive(s_out_queue, &out, 0) == pdTRUE;
+            sent++
+        )
             safe_cdc_write((const uint8_t *)out.text, strlen(out.text));
         line_t L;
         while (xQueueReceive(s_cmd_queue, &L, 0) == pdTRUE)

@@ -4,6 +4,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -92,20 +93,47 @@ class AudioHapticsBandTests(unittest.TestCase):
         audio.mode = "AUDIO"
         audio._stream = EmptyStream()
         audio._running = True
-        audio._thread = threading.Thread(
+        capture_thread = threading.Thread(
             target=audio._process_stream,
             args=(48000, 2, 240, 960),
         )
-        audio._thread.start()
+        audio._thread = capture_thread
+        capture_thread.start()
         time.sleep(0.01)
 
         started = time.perf_counter()
         self.assertTrue(audio.close())
         elapsed = time.perf_counter() - started
 
-        self.assertFalse(audio._thread.is_alive())
+        self.assertFalse(capture_thread.is_alive())
+        self.assertIsNone(audio._thread)
         self.assertEqual(audio._stream.read_calls, 0)
         self.assertLess(elapsed, 0.1)
+
+    def test_start_defers_until_winding_generation_has_exited(self):
+        audio = self._default_audio()
+        audio.mode = "AUDIO"
+        old_thread = Mock()
+        old_thread.is_alive.return_value = True
+        audio._thread = old_thread
+        audio._running = False
+        audio._stop_event.set()
+
+        self.assertFalse(audio.start())
+        self.assertTrue(audio._restart_after_exit)
+
+        old_thread.is_alive.return_value = False
+        new_thread = Mock()
+        with patch(
+            "audio_haptics.threading.Thread",
+            return_value=new_thread,
+        ):
+            self.assertTrue(audio.start())
+
+        self.assertIs(audio._thread, new_thread)
+        self.assertFalse(audio._stop_event.is_set())
+        self.assertEqual(audio._generation, 1)
+        new_thread.start.assert_called_once_with()
 
     def test_game_mode_drains_without_dsp_callbacks(self):
         callbacks = []

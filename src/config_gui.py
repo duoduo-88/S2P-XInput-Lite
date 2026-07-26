@@ -7675,11 +7675,14 @@ class ConfigGUI:
     def _schedule_gamepad_test_exit_check(self, process):
         if getattr(self, "_gamepad_test_exit_job", None) is not None:
             return
-        self._gamepad_test_exit_job = self.root.after(
-            25,
-            lambda target=process:
-            self._check_gamepad_test_exit(target),
-        )
+        try:
+            self._gamepad_test_exit_job = self.root.after(
+                25,
+                lambda target=process:
+                self._check_gamepad_test_exit(target),
+            )
+        except tk.TclError:
+            self._gamepad_test_exit_job = None
 
     def _check_gamepad_test_exit(self, process):
         """Reopen after a close-time click once the old process has exited."""
@@ -7747,17 +7750,13 @@ class ConfigGUI:
     ):
         """Ask the tester to stop rumble and exit before forced termination."""
         process = self.gamepad_test_process
-        self.gamepad_test_process = None
-        self._gamepad_test_closing_event = None
-        self._gamepad_test_ready_event = None
         stderr_thread = getattr(
             self, "_gamepad_test_stderr_thread", None
         )
-        self._gamepad_test_stderr_thread = None
         if not keep_loading:
             self._close_gamepad_test_loading_window()
         if process is None:
-            return
+            return True
         if process.poll() is None:
             try:
                 process.stdin.write(b"close\n")
@@ -7771,7 +7770,27 @@ class ConfigGUI:
                     process.terminate()
                     process.wait(timeout=0.5)
                 except (OSError, subprocess.TimeoutExpired):
-                    pass
+                    try:
+                        process.kill()
+                        process.wait(timeout=0.5)
+                    except (OSError, subprocess.TimeoutExpired):
+                        closing_event = getattr(
+                            self, "_gamepad_test_closing_event", None
+                        )
+                        if closing_event is None:
+                            closing_event = threading.Event()
+                            self._gamepad_test_closing_event = closing_event
+                        closing_event.set()
+                        # Keep the process and pipe references until a later
+                        # poll confirms exit; otherwise a rare native hang
+                        # becomes an untracked orphan.
+                        self._schedule_gamepad_test_exit_check(process)
+                        return False
+        if self.gamepad_test_process is process:
+            self.gamepad_test_process = None
+        self._gamepad_test_closing_event = None
+        self._gamepad_test_ready_event = None
+        self._gamepad_test_stderr_thread = None
         for stream in (process.stdin, process.stdout, process.stderr):
             try:
                 stream.close()
@@ -7782,6 +7801,7 @@ class ConfigGUI:
             and stderr_thread is not threading.current_thread()
         ):
             stderr_thread.join(timeout=0.2)
+        return True
 
     def _center_child_window(self, window, width=None, height=None):
         """Place a modal over the current settings window, clamped on-screen."""

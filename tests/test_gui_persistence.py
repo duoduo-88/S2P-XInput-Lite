@@ -597,6 +597,29 @@ class GuiPersistenceTests(unittest.TestCase):
         process.terminate.assert_called_once_with()
         self.assertEqual(process.wait.call_count, 2)
 
+    def test_gamepad_tester_hard_timeout_keeps_process_for_later_reap(self):
+        gui = object.__new__(config_gui.ConfigGUI)
+        process = Mock()
+        process.poll.return_value = None
+        process.wait.side_effect = config_gui.subprocess.TimeoutExpired(
+            "tester", 0.5
+        )
+        gui.gamepad_test_process = process
+        gui._gamepad_test_exit_job = None
+        gui.root = Mock()
+        gui.root.after.return_value = "reap-job"
+
+        self.assertFalse(gui._close_gamepad_test_process())
+
+        process.terminate.assert_called_once_with()
+        process.kill.assert_called_once_with()
+        self.assertIs(gui.gamepad_test_process, process)
+        self.assertTrue(gui._gamepad_test_closing_event.is_set())
+        self.assertEqual(gui._gamepad_test_exit_job, "reap-job")
+        process.stdin.close.assert_not_called()
+        process.stdout.close.assert_not_called()
+        process.stderr.close.assert_not_called()
+
     def test_parameter_mousewheel_scrolls_canvas_and_stops_value_binding(self):
         class Widget:
             def __init__(self, widget_class, master=None):

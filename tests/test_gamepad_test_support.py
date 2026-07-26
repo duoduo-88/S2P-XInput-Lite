@@ -434,6 +434,39 @@ class GamepadMathTests(unittest.TestCase):
         self.assertAlmostEqual(state.left_trigger, 64 / 255)
         self.assertAlmostEqual(state.right_trigger, 192 / 255)
 
+    def test_mobile_hid_invalid_winmm_trigger_ranges_use_raw_report(self):
+        caps = JOYCAPSW()
+        caps.wCaps = (
+            JOYCAPS_HASZ | JOYCAPS_HASR | JOYCAPS_HASU | JOYCAPS_HASV
+        )
+        caps.wNumAxes = 6
+        caps.wUmin = caps.wUmax = 0
+        caps.wVmin = caps.wVmax = 0
+        for name in ("wXmax", "wYmax", "wZmax", "wRmax"):
+            setattr(caps, name, 65535)
+        backend = object.__new__(WindowsGamepadBackend)
+        backend._winmm_caps = {0: caps}
+        backend._s2p_mobile_hid = SimpleNamespace(
+            read=Mock(side_effect=[
+                [0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 51, 204],
+                [],
+            ])
+        )
+        backend._s2p_mobile_hid_triggers = None
+
+        def fill_state(_index, pointer):
+            info = pointer._obj
+            info.dwXpos = info.dwYpos = 32768
+            info.dwZpos = info.dwRpos = 32768
+            info.dwPOV = 0xFFFF
+            return 0
+
+        backend.winmm = SimpleNamespace(joyGetPosEx=fill_state)
+        state = backend._read_winmm(0, S2P_MOBILE_HID_PROFILE)
+
+        self.assertAlmostEqual(state.left_trigger, 51 / 255)
+        self.assertAlmostEqual(state.right_trigger, 204 / 255)
+
     def test_mobile_hid_winmm_buttons_follow_usage_numbers(self):
         expected_by_usage = {
             1: "A",
@@ -497,6 +530,26 @@ class GamepadMathTests(unittest.TestCase):
         tester.stop_rumble()
 
         tester.backend.set_xinput_rumble.assert_called_once_with(0, 0.0, 0.0)
+        self.assertIsNone(tester._active_rumble_slot)
+
+    def test_stop_rumble_forgets_disconnected_slot_after_failed_zero(self):
+        tester = object.__new__(GamepadTestWindow)
+        tester.window = None
+        tester.backend = Mock()
+        tester.backend.set_xinput_rumble.return_value = False
+        tester.devices = {}
+        tester.selected_device_var = Mock(get=Mock(return_value=""))
+        tester._active_rumble_slot = 2
+        tester._rumble_jobs = {}
+        tester._repeat_rumble_jobs = {}
+        tester._rumble_layers = {}
+        tester._rumble_layer_templates = {}
+        tester._active_rumble_templates = {}
+        tester._refresh_rumble_template_styles = Mock()
+
+        tester.stop_rumble()
+
+        tester.backend.set_xinput_rumble.assert_called_once_with(2, 0.0, 0.0)
         self.assertIsNone(tester._active_rumble_slot)
 
     def test_native_status_does_not_mirror_unrelated_bridge_status(self):
@@ -1289,6 +1342,28 @@ class NativeSamplerTests(unittest.TestCase):
         thread.is_alive.return_value = False
         self.assertTrue(sampler.stop(timeout=0.01))
         self.assertIsNone(sampler._thread)
+
+    def test_start_waits_for_stop_requested_generation_to_exit(self):
+        sampler = NativeGamepadSampler(SimpleNamespace())
+        old_thread = Mock()
+        old_thread.is_alive.return_value = True
+        sampler._thread = old_thread
+        sampler._stop.set()
+
+        self.assertFalse(sampler.start())
+        self.assertTrue(sampler._stop.is_set())
+
+        old_thread.is_alive.return_value = False
+        new_thread = Mock()
+        with patch(
+            "gamepad_devices.threading.Thread",
+            return_value=new_thread,
+        ):
+            self.assertTrue(sampler.start())
+
+        self.assertIs(sampler._thread, new_thread)
+        self.assertFalse(sampler._stop.is_set())
+        new_thread.start.assert_called_once_with()
 
     def test_generic_rate_and_samples_are_independent_of_drawing(self):
         clock = [10.0]
