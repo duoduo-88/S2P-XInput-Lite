@@ -5,7 +5,7 @@ ESP32-S3 bridge firmware.
 
 - Upstream: https://github.com/TommyWabg/Switch2Connect
 - Base commit: `d63b044e66cfb93f8377a3596e3f00c82715b029`
-- Firmware build version: `0.14.0`
+- Firmware build version: `0.14.1`
 - Bridge command compatibility: `0.12.4`
 - Lite build: `cdc_bridge_2_lowlatency`
 - Target: ESP32-S3
@@ -30,8 +30,8 @@ on real hardware. The exact upstream revision is linked above for comparison.
 
 | Current file | SHA-256 |
 |---|---|
-| `esp32s3_bluedroid_bridge.bin` | `8AD521DCAEE712DA943A5EAF4D5F58043C3FCA1183B326C2F342C5DCD6E6510E` |
-| `bootloader.bin` | `9F1BE89EECD1C24A562C0C570894F6F625405041508E55A2B1AA3875B74D237A` |
+| `esp32s3_bluedroid_bridge.bin` | `6F3BC53BC066A90FA513B51356BB499DB33526531091B3D2F789A5B9D4B104D7` |
+| `bootloader.bin` | `1E6B5148E11223F7E50E98549B0D220C77CF48F55D6F7397365A7EFBAF3711D4` |
 | `partition-table.bin` | `7F00B6C042A89B15B0CAC534F82ED988CAF29278FF5700B0C511EB1B5BB7C820` |
 
 Real-controller A/B testing improved the normal host arrival interval from
@@ -62,3 +62,10 @@ cd esp32s3_usb_bridge_bluedroid
 idf.py set-target esp32s3
 idf.py build
 ```
+
+The optional full-build test can also verify that a controlled release
+packaging run copied the exact bootloader, partition table, and application
+images into `esp32s3/firmware`. Set both `S2P_RUN_IDF_BUILD=1` and
+`S2P_VERIFY_RELEASE_IMAGE=1` only after synchronizing those outputs from the
+same build. Normal CI does not enable the byte comparison because ESP-IDF
+currently embeds the compile date in the application image.

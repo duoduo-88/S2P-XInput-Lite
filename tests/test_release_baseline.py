@@ -17,7 +17,7 @@ class ReleaseBaselineTests(unittest.TestCase):
         source = (ROOT / "src" / "version.py").read_text(encoding="utf-8")
         self.assertRegex(source, r'VERSION\s*=\s*"0\.7\.0"')
 
-    def test_bundled_firmware_is_stable_0140(self):
+    def test_bundled_firmware_is_stable_0141(self):
         main_source = (
             FIRMWARE_ROOT / "main" / "main.c"
         ).read_text(encoding="utf-8")
@@ -26,24 +26,24 @@ class ReleaseBaselineTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertRegex(
             main_source,
-            r'APP_FIRMWARE_VERSION\s+"0\.14\.0"',
+            r'APP_FIRMWARE_VERSION\s+"0\.14\.1"',
         )
-        self.assertNotIn("0.14.0-dev", main_source)
+        self.assertNotIn("0.14.1-dev", main_source)
         self.assertRegex(
             cmake_source,
-            r'set\(PROJECT_VER\s+"0\.14\.0"\)',
+            r'set\(PROJECT_VER\s+"0\.14\.1"\)',
         )
 
     def test_bundled_firmware_hashes_match_current_release(self):
         expected = {
             "bootloader.bin": (
-                "9f1be89eecd1c24a562c0c570894f6f625405041508e55a2b1aa3875b74d237a"
+                "1e6b5148e11223f7e50e98549b0d220c77cf48f55d6f7397365a7efbaf3711d4"
             ),
             "partition-table.bin": (
                 "7f00b6c042a89b15b0cac534f82ed988caf29278ff5700b0c511eb1b5bb7c820"
             ),
             "esp32s3_bluedroid_bridge.bin": (
-                "8ad521dcaee712da943a5eaf4d5f58043c3fca1183b326c2f342c5dcd6e6510e"
+                "6f3bc53bc066a90fa513b51356bb499db33526531091b3d2f789a5b9d4b104d7"
             ),
         }
         firmware_dir = ROOT / "esp32s3" / "firmware"

@@ -61,12 +61,13 @@
 
 static const char *TAG = "S3_BLUEDROID";
 
-#define APP_FIRMWARE_VERSION      "0.14.0"
+#define APP_FIRMWARE_VERSION      "0.14.1"
 #define EXPECTED_FIRMWARE_PROFILE "tinyusb_direct"
 #define EXPECTED_FIRMWARE_BUILD   "cdc_bridge_2_lowlatency"
 #define CDC_LINE_STATE_DTR        0x01
-#define CDC_WRITE_TIMEOUT_US      100000
-#define CDC_OUT_BUDGET_PER_LOOP   4
+#define CDC_TX_BUFFER_SIZE        512
+#define CDC_TX_PHASE_BUDGET_US    5000
+#define CDC_QUEUE_BUDGET_PER_LOOP 4
 #define NINTENDO_COMPANY_ID       0x0553
 #define MAX_CH                    8     // one GATTC app per channel
 #define REPORT_SIZE               64
@@ -299,6 +300,13 @@ static TaskHandle_t s_cdc_task_h;
 static volatile bool s_request_status = false;
 typedef struct { char text[256]; } line_t;
 typedef struct {
+    uint8_t data[CDC_TX_BUFFER_SIZE];
+    size_t length;
+    size_t offset;
+    bool valid;
+} cdc_tx_state_t;
+static cdc_tx_state_t s_cdc_tx;
+typedef struct {
     uint8_t ch;
     uint8_t len;
     uint16_t handle;
@@ -444,36 +452,63 @@ static void rumble_playout_task(void *arg) {
 static bool cdc_host_ready(void) {
     return tud_cdc_connected() && (tud_cdc_get_line_state() & CDC_LINE_STATE_DTR);
 }
-static bool safe_cdc_write(const uint8_t *data, uint32_t len) {
-    /*
-     * CDC is an optional configuration/bridge channel.  In standalone mode
-     * it is normally closed; waiting 100 ms for DTR here would stall the same
-     * task that services the XInput endpoint and reduce input to about 10 Hz.
-     * A closed host cannot consume this data, so discard it immediately.
-     */
-    if (!cdc_host_ready()) return false;
-    uint32_t w = 0;
-    int64_t deadline_us = esp_timer_get_time() + CDC_WRITE_TIMEOUT_US;
-    while (w < len && esp_timer_get_time() < deadline_us) {
-        if (!cdc_host_ready()) return false;
-        uint32_t avail = tud_cdc_write_available();
-        if (avail > 0) {
-            uint32_t n = (len - w) > avail ? avail : (len - w);
-            uint32_t written = tud_cdc_write(data + w, n);
-            if (written > 0) {
-                w += written;
-                tud_cdc_write_flush();
-                continue;
-            }
-        }
-        vTaskDelay(pdMS_TO_TICKS(1));
-    }
-    return w == len;
+static void cdc_tx_reset(void) {
+    s_cdc_tx.length = 0;
+    s_cdc_tx.offset = 0;
+    s_cdc_tx.valid = false;
 }
-static void send_json(const char *s) { safe_cdc_write((const uint8_t *)s, strlen(s)); }  // cdc_task only
+static bool cdc_tx_submit(const uint8_t *data, size_t len) {
+    if (!data || len == 0) return true;
+    if (!cdc_host_ready()) {
+        cdc_tx_reset();
+        return true;  // Preserve the historical closed-CDC drop policy.
+    }
+    if (s_cdc_tx.valid || len > sizeof(s_cdc_tx.data)) return false;
+    memcpy(s_cdc_tx.data, data, len);
+    s_cdc_tx.length = len;
+    s_cdc_tx.offset = 0;
+    s_cdc_tx.valid = true;
+    return true;
+}
+static bool cdc_tx_pump_until(int64_t deadline_us) {
+    if (!s_cdc_tx.valid) return true;
+    if (!cdc_host_ready()) {
+        cdc_tx_reset();
+        return true;
+    }
+    while (
+        s_cdc_tx.valid &&
+        esp_timer_get_time() < deadline_us
+    ) {
+        uint32_t avail = tud_cdc_write_available();
+        if (avail == 0) return false;
+        size_t remaining = s_cdc_tx.length - s_cdc_tx.offset;
+        uint32_t request =
+            remaining > avail ? avail : (uint32_t)remaining;
+        uint32_t written = tud_cdc_write(
+            s_cdc_tx.data + s_cdc_tx.offset, request
+        );
+        if (written == 0) return false;
+        s_cdc_tx.offset += written;
+        tud_cdc_write_flush();
+        if (s_cdc_tx.offset >= s_cdc_tx.length) {
+            cdc_tx_reset();
+            return true;
+        }
+    }
+    return !s_cdc_tx.valid;
+}
+static bool cdc_tx_can_submit(int64_t deadline_us) {
+    if (!cdc_tx_pump_until(deadline_us)) return false;
+    return esp_timer_get_time() < deadline_us;
+}
+static void send_json(const char *s) {
+    if (!cdc_tx_submit((const uint8_t *)s, strlen(s)))
+        ESP_LOGW(TAG, "CDC TX busy while submitting JSON");
+}
 // out_json/out_debug: enqueue for cdc_task to send.  MUST be used from BLE callback
-// (BTC task) context — calling safe_cdc_write there can block up to 100 ms and, under a
-// flood of scan_results (a controller in pairing mode), stalls the BLE host -> crash.
+// (BTC task) context. The cdc_task owns the resumable TX state, so BLE callbacks
+// never touch TinyUSB or wait for a slow host.
 static void out_json(const char *s) {
     if (!s_out_queue) return;
     line_t L; strncpy(L.text, s, sizeof(L.text) - 1); L.text[sizeof(L.text) - 1] = '\0';
@@ -637,7 +672,15 @@ static void do_mode_command(const char *mode) {
 
 static void do_restart_command(void) {
     send_json("{\"cmd\":\"restart\",\"ok\":1}\n");
-    vTaskDelay(pdMS_TO_TICKS(120));
+    int64_t deadline_us = esp_timer_get_time() + 100000;
+    while (
+        s_cdc_tx.valid &&
+        esp_timer_get_time() < deadline_us
+    ) {
+        if (!cdc_tx_pump_until(deadline_us))
+            vTaskDelay(pdMS_TO_TICKS(1));
+    }
+    vTaskDelay(pdMS_TO_TICKS(20));
     esp_restart();
 }
 
@@ -649,7 +692,8 @@ static void send_report_frame(uint8_t channel, const uint8_t *payload, uint8_t p
         (uint8_t)((channel + 1) | (is_cmd ? 0x80 : 0x00))
     };
     memcpy(frame + 4, payload, plen);
-    safe_cdc_write(frame, 4 + plen);
+    if (!cdc_tx_submit(frame, 4 + plen))
+        ESP_LOGW(TAG, "CDC TX busy while submitting report frame");
 }
 // CDC v2 notify frame: 0xaa 0x55 <len=payload+3> <0x40|chan> <handle_le16> <payload...>
 static void send_notify_handle_frame(uint8_t channel, uint16_t handle, const uint8_t *payload, uint8_t plen) {
@@ -659,7 +703,8 @@ static void send_notify_handle_frame(uint8_t channel, uint16_t handle, const uin
         (uint8_t)(handle & 0xff), (uint8_t)(handle >> 8)
     };
     memcpy(frame + 6, payload, plen);
-    safe_cdc_write(frame, 6 + plen);
+    if (!cdc_tx_submit(frame, 6 + plen))
+        ESP_LOGW(TAG, "CDC TX busy while submitting notify frame");
 }
 static int hexval(char c) {
     if (c >= '0' && c <= '9') return c - '0';
@@ -806,6 +851,18 @@ static void do_conn(char *args, bool standalone_pair_required) {
                 s_widened_mask |= (1u << i);
             }
         }
+        /*
+         * Reset the source-gap baseline immediately. Do not depend on a
+         * report arriving during the widen window before the mask is cleared.
+         */
+        portENTER_CRITICAL(&s_in_mux);
+        for (int i = 0; i < MAX_CH; i++) {
+            if (s_widened_mask & (1u << i)) {
+                s_last_input_report_time[i] = 0;
+                s_last_input_report_time_valid[i] = false;
+            }
+        }
+        portEXIT_CRITICAL(&s_in_mux);
         s_conn_open_after = now_ms() + 250;   // let the widen settle before opening
         gap_busy(700);
         char dbg[80];
@@ -1700,7 +1757,6 @@ static void cdc_task(void *arg) {
             s_standalone_auto_conn_pair_required = false;
             do_conn(s_standalone_auto_conn, pair_required);
         }
-        if (s_request_status) { s_request_status = false; send_status_response(); }
         // Deferred 3rd-link open: the existing links were widened to 15ms in do_conn;
         // open the 3rd once that has settled (scan is already stopped by then).
         if (
@@ -1740,10 +1796,22 @@ static void cdc_task(void *arg) {
             time_reached(now_ms(), s_gap_busy_until)
         )
             kick_disc_queue();
+        /*
+         * Every CDC producer shares one short phase deadline. A partial item
+         * remains in s_cdc_tx and is completed before any queue is dequeued,
+         * so a slow host cannot splice two frames or monopolize cdc_task.
+         */
+        int64_t cdc_deadline_us =
+            esp_timer_get_time() + CDC_TX_PHASE_BUDGET_US;
+        cdc_tx_pump_until(cdc_deadline_us);
         // Input shadows are P0: forward the newest controller state before
         // diagnostics or command traffic.  BLE callbacks wake this task
         // immediately, removing the old command-queue polling delay (<=2 ms).
         for (int i = 0; i < MAX_CH; i++) {
+            if (
+                !s_standalone_mode &&
+                !cdc_tx_can_submit(cdc_deadline_us)
+            ) break;
             in_report_t r; bool dirty = false;
             portENTER_CRITICAL(&s_in_mux);
             if (s_in_dirty[i]) { r = s_in_shadow[i]; s_in_dirty[i] = false; dirty = true; }
@@ -1759,11 +1827,21 @@ static void cdc_task(void *arg) {
                 } else {
                     if (r.handle) send_notify_handle_frame(r.ch, r.handle, r.data, r.len);
                     else send_report_frame(r.ch, r.data, r.len, false);
+                    cdc_tx_pump_until(cdc_deadline_us);
                 }
             }
         }
         in_report_t ack;
-        while (xQueueReceive(s_ack_queue, &ack, 0) == pdTRUE) {
+        int ack_processed = 0;
+        while (
+            ack_processed < CDC_QUEUE_BUDGET_PER_LOOP &&
+            (
+                s_standalone_mode ||
+                cdc_tx_can_submit(cdc_deadline_us)
+            ) &&
+            xQueueReceive(s_ack_queue, &ack, 0) == pdTRUE
+        ) {
+            ack_processed++;
             if (
                 ack.ch >= MAX_CH || !s_ch[ack.ch].used ||
                 ack.generation != s_ch[ack.ch].generation
@@ -1778,10 +1856,20 @@ static void cdc_task(void *arg) {
                 }
             } else {
                 send_report_frame(ack.ch, ack.data, ack.len, true);
+                cdc_tx_pump_until(cdc_deadline_us);
             }
         }
         in_report_t ntf;
-        while (xQueueReceive(s_notify_queue, &ntf, 0) == pdTRUE) {
+        int notify_processed = 0;
+        while (
+            notify_processed < CDC_QUEUE_BUDGET_PER_LOOP &&
+            (
+                s_standalone_mode ||
+                cdc_tx_can_submit(cdc_deadline_us)
+            ) &&
+            xQueueReceive(s_notify_queue, &ntf, 0) == pdTRUE
+        ) {
+            notify_processed++;
             if (
                 ntf.ch >= MAX_CH || !s_ch[ntf.ch].used ||
                 ntf.generation != s_ch[ntf.ch].generation
@@ -1795,6 +1883,7 @@ static void cdc_task(void *arg) {
                 );
             } else if (!s_standalone_mode) {
                 send_notify_handle_frame(ntf.ch, ntf.handle, ntf.data, ntf.len);
+                cdc_tx_pump_until(cdc_deadline_us);
             }
         }
         /*
@@ -1804,17 +1893,36 @@ static void cdc_task(void *arg) {
          * of the loop as well so a report whose endpoint was busy is retried.
          */
         standalone_xinput_pump();
+        if (
+            s_request_status &&
+            cdc_tx_can_submit(cdc_deadline_us)
+        ) {
+            s_request_status = false;
+            send_status_response();
+            cdc_tx_pump_until(cdc_deadline_us);
+        }
         line_t out;
         for (
             int sent = 0;
-            sent < CDC_OUT_BUDGET_PER_LOOP &&
+            sent < CDC_QUEUE_BUDGET_PER_LOOP &&
+                cdc_tx_can_submit(cdc_deadline_us) &&
                 xQueueReceive(s_out_queue, &out, 0) == pdTRUE;
             sent++
-        )
-            safe_cdc_write((const uint8_t *)out.text, strlen(out.text));
+        ) {
+            send_json(out.text);
+            cdc_tx_pump_until(cdc_deadline_us);
+        }
         line_t L;
-        while (xQueueReceive(s_cmd_queue, &L, 0) == pdTRUE)
+        for (
+            int handled = 0;
+            handled < CDC_QUEUE_BUDGET_PER_LOOP &&
+                cdc_tx_can_submit(cdc_deadline_us) &&
+                xQueueReceive(s_cmd_queue, &L, 0) == pdTRUE;
+            handled++
+        ) {
             handle_command(L.text);
+            cdc_tx_pump_until(cdc_deadline_us);
+        }
 
         // Notifications make input wakeups immediate.  The timeout only keeps
         // deferred GAP maintenance deadlines progressing when fully idle.
