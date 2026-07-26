@@ -105,7 +105,7 @@ class StandaloneFirmwareContractTests(unittest.TestCase):
         task_start = MAIN_SOURCE.index("static void cdc_task")
         task_end = MAIN_SOURCE.index("static void gap_cb", task_start)
         task = MAIN_SOURCE[task_start:task_end]
-        self.assertIn("handle_command", task)
+        self.assertIn("handle_query_command", task)
         self.assertIn("standalone_xinput_accept_switch_report", task)
 
     def test_standalone_usb_is_pumped_after_fresh_input(self):
@@ -211,6 +211,55 @@ class StandaloneFirmwareContractTests(unittest.TestCase):
         self.assertIn("cdc_tx_can_submit(cdc_deadline_us)", task)
         self.assertIn("CDC_QUEUE_BUDGET_PER_LOOP", task)
         self.assertNotIn("safe_cdc_write", MAIN_SOURCE)
+
+    def test_cdc_control_and_event_queues_precede_low_priority_output(self):
+        task_start = MAIN_SOURCE.index("static void cdc_task")
+        task_end = MAIN_SOURCE.index(
+            "static void wake_standalone_output", task_start
+        )
+        task = MAIN_SOURCE[task_start:task_end]
+        control = task.index("xQueueReceive(\n                    s_control_queue")
+        event = task.index("xQueueReceive(s_event_queue")
+        query = task.index("xQueueReceive(s_query_queue")
+        low_priority = task.index("xQueueReceive(s_out_queue")
+        self.assertLess(control, event)
+        self.assertLess(event, query)
+        self.assertLess(query, low_priority)
+        control_loop = task[task.rfind("for (", 0, control):control]
+        self.assertNotIn("cdc_tx_can_submit", control_loop)
+
+    def test_scan_flood_cannot_consume_lifecycle_event_capacity(self):
+        self.assertIn(
+            "s_event_queue = xQueueCreate(16, sizeof(line_t))",
+            MAIN_SOURCE,
+        )
+        self.assertIn(
+            "s_out_queue = xQueueCreate(24, sizeof(line_t))",
+            MAIN_SOURCE,
+        )
+        self.assertIn("queue_json(s_event_queue, s)", MAIN_SOURCE)
+        self.assertIn("queue_json(s_out_queue, s)", MAIN_SOURCE)
+        for command in (
+            "connected",
+            "connect_fail",
+            "disconnected",
+            "gatt_done",
+        ):
+            marker = f'\\"cmd\\":\\"{command}\\"'
+            event_start = MAIN_SOURCE.index(marker)
+            event_end = MAIN_SOURCE.index(";", event_start)
+            self.assertIn(
+                "out_event(",
+                MAIN_SOURCE[event_end:event_end + 350],
+                command,
+            )
+        scan_start = MAIN_SOURCE.index('\\"cmd\\":\\"scan_result\\"')
+        scan_end = MAIN_SOURCE.index(";", scan_start)
+        self.assertIn(
+            "out_json(",
+            MAIN_SOURCE[scan_end:scan_end + 350],
+        )
+        self.assertIn("s_event_queue_drops", MAIN_SOURCE)
 
     def test_direction_mapping_consumes_native_stick_before_gyro(self):
         helper = XINPUT_SOURCE.index(

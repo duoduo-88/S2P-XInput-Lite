@@ -17,7 +17,7 @@ class ReleaseBaselineTests(unittest.TestCase):
         source = (ROOT / "src" / "version.py").read_text(encoding="utf-8")
         self.assertRegex(source, r'VERSION\s*=\s*"0\.7\.0"')
 
-    def test_bundled_firmware_is_stable_0141(self):
+    def test_bundled_firmware_is_stable_0142(self):
         main_source = (
             FIRMWARE_ROOT / "main" / "main.c"
         ).read_text(encoding="utf-8")
@@ -26,12 +26,12 @@ class ReleaseBaselineTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertRegex(
             main_source,
-            r'APP_FIRMWARE_VERSION\s+"0\.14\.1"',
+            r'APP_FIRMWARE_VERSION\s+"0\.14\.2"',
         )
-        self.assertNotIn("0.14.1-dev", main_source)
+        self.assertNotIn("0.14.2-dev", main_source)
         self.assertRegex(
             cmake_source,
-            r'set\(PROJECT_VER\s+"0\.14\.1"\)',
+            r'set\(PROJECT_VER\s+"0\.14\.2"\)',
         )
 
     def test_bundled_firmware_hashes_match_current_release(self):
@@ -43,7 +43,7 @@ class ReleaseBaselineTests(unittest.TestCase):
                 "7f00b6c042a89b15b0cac534f82ed988caf29278ff5700b0c511eb1b5bb7c820"
             ),
             "esp32s3_bluedroid_bridge.bin": (
-                "6f3bc53bc066a90fa513b51356bb499db33526531091b3d2f789a5b9d4b104d7"
+                "a7f167e23d42d97490c978ec12113163c106e2478372119da52a0618824ccc63"
             ),
         }
         firmware_dir = ROOT / "esp32s3" / "firmware"

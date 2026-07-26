@@ -1,6 +1,6 @@
 # S2P-XInput-Lite ESP32-S3 BLE Bridge
 
-This directory contains the stable bridge and standalone `0.14.1` firmware
+This directory contains the stable bridge and standalone `0.14.2` firmware
 source. It targets an ESP32-S3. Bridge mode keeps
 the existing USB CDC transport. Standalone mode can expose either a CDC +
 XInput-compatible composite device for PCs or a CDC + standards-based
@@ -24,6 +24,8 @@ The development firmware keeps the existing bridge protocol and adds:
   sticks, direction mappings, mapping layers and gyro-to-stick state.
 - resumable CDC transmission with a shared per-loop time budget, preventing
   slow hosts from producing partial frames or starving controller processing;
+- priority-isolated CDC control, lifecycle-event and scan/debug queues, keeping
+  connection commands and state changes responsive during scan-result floods;
 - standalone scanning waits for GAP scan-parameter setup, recognizes the
   controller `reconnect_mac`, and completes the SET_MAC/LTK1/LTK2/FINISH
   sequence after a first-time SYNC connection so later wakeups and ESP32
@@ -116,4 +118,4 @@ S2P-XInput-Lite uses these release files and offsets:
 The Windows application invokes `tools/esptool.exe` with DIO mode, an 80 MHz
 flash frequency, and a 16 MB flash size. Existing `0.12.4` devices remain
 usable in bridge mode, but standalone profile storage and direct USB controller
-output require the current `0.14.1` firmware.
+output require the current `0.14.2` firmware.

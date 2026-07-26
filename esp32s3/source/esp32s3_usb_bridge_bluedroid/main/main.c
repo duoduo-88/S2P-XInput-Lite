@@ -61,7 +61,7 @@
 
 static const char *TAG = "S3_BLUEDROID";
 
-#define APP_FIRMWARE_VERSION      "0.14.1"
+#define APP_FIRMWARE_VERSION      "0.14.2"
 #define EXPECTED_FIRMWARE_PROFILE "tinyusb_direct"
 #define EXPECTED_FIRMWARE_BUILD   "cdc_bridge_2_lowlatency"
 #define CDC_LINE_STATE_DTR        0x01
@@ -292,12 +292,14 @@ static void ch_count(int *used, int *ready) {
 }
 
 // --- USB-CDC transport ---
-static QueueHandle_t s_cmd_queue;   // inbound command lines
+static QueueHandle_t s_control_queue; // inbound commands that never write CDC
+static QueueHandle_t s_query_queue; // inbound commands that produce CDC output
 static QueueHandle_t s_ack_queue;   // ack/cmd notifications (P0)
 static QueueHandle_t s_notify_queue; // handle-routed notifications for GCN/WinRT parity
-static QueueHandle_t s_out_queue;   // outbound JSON lines from BLE callbacks
+static QueueHandle_t s_event_queue; // connection lifecycle JSON (P1)
+static QueueHandle_t s_out_queue;   // scan/debug JSON (low priority)
 static TaskHandle_t s_cdc_task_h;
-static volatile bool s_request_status = false;
+static volatile uint32_t s_event_queue_drops = 0;
 typedef struct { char text[256]; } line_t;
 typedef struct {
     uint8_t data[CDC_TX_BUFFER_SIZE];
@@ -506,14 +508,23 @@ static void send_json(const char *s) {
     if (!cdc_tx_submit((const uint8_t *)s, strlen(s)))
         ESP_LOGW(TAG, "CDC TX busy while submitting JSON");
 }
-// out_json/out_debug: enqueue for cdc_task to send.  MUST be used from BLE callback
-// (BTC task) context. The cdc_task owns the resumable TX state, so BLE callbacks
-// never touch TinyUSB or wait for a slow host.
-static void out_json(const char *s) {
-    if (!s_out_queue) return;
+// Queue JSON for cdc_task. BLE callbacks never touch TinyUSB or wait for a slow
+// host. Important lifecycle events have a dedicated queue, so scan/debug floods
+// cannot consume their capacity.
+static bool queue_json(QueueHandle_t queue, const char *s) {
+    if (!queue) return false;
     line_t L; strncpy(L.text, s, sizeof(L.text) - 1); L.text[sizeof(L.text) - 1] = '\0';
-    if (xQueueSend(s_out_queue, &L, 0) == pdTRUE && s_cdc_task_h)
-        xTaskNotifyGive(s_cdc_task_h);
+    if (xQueueSend(queue, &L, 0) != pdTRUE) return false;
+    if (s_cdc_task_h) xTaskNotifyGive(s_cdc_task_h);
+    return true;
+}
+static void out_json(const char *s) {
+    (void)queue_json(s_out_queue, s);
+}
+static void out_event(const char *s) {
+    if (queue_json(s_event_queue, s)) return;
+    __atomic_add_fetch(&s_event_queue_drops, 1u, __ATOMIC_RELAXED);
+    ESP_LOGW(TAG, "critical event queue full");
 }
 static void out_debug(const char *msg) {
     char b[200];
@@ -602,13 +613,17 @@ static void send_status_response(void) {
     snprintf(b, sizeof(b),
         "{\"cmd\":\"status\",\"version\":\"%s\",\"profile\":\"%s\",\"build\":\"%s\","
         "\"ble_channels\":%u,\"mac\":\"%s\","
+        "\"event_queue_drops\":%lu,"
         "\"features\":{\"wrpair\":1,\"shadow\":1,"
         "\"standalone_profile_write\":1,\"standalone_profile_runtime\":1,"
         "\"standalone_usb_xinput\":1,"
         "\"standalone_usb_hid\":1,"
         "\"standalone_ble_hid\":0},\"profile_schemas\":[1]}\n",
         APP_FIRMWARE_VERSION, EXPECTED_FIRMWARE_PROFILE, EXPECTED_FIRMWARE_BUILD,
-        (unsigned)ch_active_mask(), s_own_mac);
+        (unsigned)ch_active_mask(), s_own_mac,
+        (unsigned long)__atomic_load_n(
+            &s_event_queue_drops, __ATOMIC_RELAXED
+        ));
     send_json(b);
 }
 
@@ -993,7 +1008,7 @@ static void open_pending_conn(void) {
             "{\"cmd\":\"connect_fail\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\"}\n",
             s_ch[ch].bda[0],s_ch[ch].bda[1],s_ch[ch].bda[2],
             s_ch[ch].bda[3],s_ch[ch].bda[4],s_ch[ch].bda[5]);
-        out_json(fail);
+        out_event(fail);
         clear_channel_state(ch);
         restore_widened_links();
         if (s_scan_mode) s_resume_scan = true;
@@ -1559,8 +1574,22 @@ static void pump_standalone_xinput_rumble(void) {
         s_standalone_zero_flush--;
 }
 
-static void handle_command(char *cmd) {
-    if (strncmp(cmd, "status", 6) == 0)         { s_request_status = true; }
+static bool command_is_control(const char *cmd) {
+    return
+        strncmp(cmd, "scan on", 7) == 0 ||
+        strncmp(cmd, "scan off", 8) == 0 ||
+        strncmp(cmd, "ble disconnect", 14) == 0 ||
+        strncmp(cmd, "auto", 4) == 0 ||
+        strncmp(cmd, "conn ", 5) == 0 ||
+        strncmp(cmd, "inputsrc ", 9) == 0 ||
+        strncmp(cmd, "disc ", 5) == 0 ||
+        strncmp(cmd, "wrpair ", 7) == 0 ||
+        strncmp(cmd, "wr ", 3) == 0 ||
+        strncmp(cmd, "rs ", 3) == 0;
+}
+
+static void handle_query_command(char *cmd) {
+    if (strncmp(cmd, "status", 6) == 0)         { send_status_response(); }
     else if (strcmp(cmd, "capabilities") == 0)  { send_capabilities_response(); }
     else if (strcmp(cmd, "profile status") == 0) {
         char response[256];
@@ -1638,7 +1667,10 @@ static void handle_command(char *cmd) {
     }
     else if (strncmp(cmd, "mode ", 5) == 0) { do_mode_command(cmd + 5); }
     else if (strcmp(cmd, "restart") == 0) { do_restart_command(); }
-    else if (strncmp(cmd, "scan on", 7) == 0)   {
+}
+
+static void handle_control_command(char *cmd) {
+    if (strncmp(cmd, "scan on", 7) == 0) {
         // The host sends "scan on" right after "disc <ch>" to re-arm detection.  Never
         // start the scan synchronously here: a gap_disconnect issued by do_disc is still
         // in flight on the HCI path and starting a scan on top of it collides and
@@ -1657,12 +1689,14 @@ static void handle_command(char *cmd) {
             s_resume_scan = true;
         }
     }
-    else if (strncmp(cmd, "scan off", 8) == 0)  {
+    else if (strncmp(cmd, "scan off", 8) == 0) {
         s_scan_mode = false;
         s_resume_scan = false;
         request_scan_stop();
     }
-    else if (strncmp(cmd, "ble disconnect", 14) == 0) { do_disc_all(); }
+    else if (strncmp(cmd, "ble disconnect", 14) == 0) {
+        do_disc_all();
+    }
     else if (strncmp(cmd, "auto", 4) == 0)      { /* host-driven conn only */ }
     else if (strncmp(cmd, "conn ", 5) == 0)     { do_conn(cmd + 5, false); }
     else if (strncmp(cmd, "inputsrc ", 9) == 0) { do_inputsrc(cmd + 9); }
@@ -1681,7 +1715,7 @@ static void emit_connect_fail(int ch, const char *reason) {
         s_ch[ch].bda[0],s_ch[ch].bda[1],s_ch[ch].bda[2],
         s_ch[ch].bda[3],s_ch[ch].bda[4],s_ch[ch].bda[5]
     );
-    out_json(message);
+    out_event(message);
     char debug[96];
     snprintf(debug, sizeof(debug), "connect watchdog ch=%d: %s", ch, reason);
     out_debug(debug);
@@ -1728,9 +1762,16 @@ void tinyusb_cdc_rx_callback(int itf, cdcacm_event_t *event) {
         if (c == '\r') continue;
         if (c == '\n') {
             s_rx_buf[s_rx_len] = '\0';
-            if (s_rx_len > 0 && s_cmd_queue) {
+            if (s_rx_len > 0) {
+                QueueHandle_t destination =
+                    command_is_control(s_rx_buf)
+                        ? s_control_queue : s_query_queue;
                 line_t L; strncpy(L.text, s_rx_buf, sizeof(L.text) - 1); L.text[sizeof(L.text)-1] = '\0';
-                if (xQueueSend(s_cmd_queue, &L, 0) == pdTRUE && s_cdc_task_h)
+                if (
+                    destination &&
+                    xQueueSend(destination, &L, 0) == pdTRUE &&
+                    s_cdc_task_h
+                )
                     xTaskNotifyGive(s_cdc_task_h);
             }
             s_rx_len = 0;
@@ -1891,14 +1932,45 @@ static void cdc_task(void *arg) {
          * in the same wakeup instead of reaching the 2 ms maintenance wait and
          * deferring the new state to the next loop.  Keep the pump at the top
          * of the loop as well so a report whose endpoint was busy is retried.
-         */
+        */
         standalone_xinput_pump();
-        if (
-            s_request_status &&
-            cdc_tx_can_submit(cdc_deadline_us)
+        /*
+         * Control commands never write CDC, so execute them even while a
+         * previous frame is pending. This lets scan off, conn, disconnect and
+         * rumble make progress independently of a slow host reader.
+         */
+        line_t control;
+        for (
+            int handled = 0;
+            handled < CDC_QUEUE_BUDGET_PER_LOOP &&
+                xQueueReceive(
+                    s_control_queue, &control, 0
+                ) == pdTRUE;
+            handled++
         ) {
-            s_request_status = false;
-            send_status_response();
+            handle_control_command(control.text);
+        }
+        // Lifecycle events outrank queries and low-priority scan/debug output.
+        line_t event;
+        for (
+            int sent = 0;
+            sent < CDC_QUEUE_BUDGET_PER_LOOP &&
+                cdc_tx_can_submit(cdc_deadline_us) &&
+                xQueueReceive(s_event_queue, &event, 0) == pdTRUE;
+            sent++
+        ) {
+            send_json(event.text);
+            cdc_tx_pump_until(cdc_deadline_us);
+        }
+        line_t query;
+        for (
+            int handled = 0;
+            handled < CDC_QUEUE_BUDGET_PER_LOOP &&
+                cdc_tx_can_submit(cdc_deadline_us) &&
+                xQueueReceive(s_query_queue, &query, 0) == pdTRUE;
+            handled++
+        ) {
+            handle_query_command(query.text);
             cdc_tx_pump_until(cdc_deadline_us);
         }
         line_t out;
@@ -1910,17 +1982,6 @@ static void cdc_task(void *arg) {
             sent++
         ) {
             send_json(out.text);
-            cdc_tx_pump_until(cdc_deadline_us);
-        }
-        line_t L;
-        for (
-            int handled = 0;
-            handled < CDC_QUEUE_BUDGET_PER_LOOP &&
-                cdc_tx_can_submit(cdc_deadline_us) &&
-                xQueueReceive(s_cmd_queue, &L, 0) == pdTRUE;
-            handled++
-        ) {
-            handle_command(L.text);
             cdc_tx_pump_until(cdc_deadline_us);
         }
 
@@ -2081,7 +2142,7 @@ static void mark_channel_ready(int ch) {
         ch, s_ch[ch].bda[0],s_ch[ch].bda[1],s_ch[ch].bda[2],
         s_ch[ch].bda[3],s_ch[ch].bda[4],s_ch[ch].bda[5]
     );
-    out_json(message);
+    out_event(message);
     restore_widened_links();
     if (s_standalone_mode) {
         s_resume_scan = false;
@@ -2139,10 +2200,10 @@ static void gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
                     "{\"cmd\":\"connect_fail\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\"}\n",
                     s_ch[dch].bda[0],s_ch[dch].bda[1],s_ch[dch].bda[2],
                     s_ch[dch].bda[3],s_ch[dch].bda[4],s_ch[dch].bda[5]);
-                out_json(b);
+                out_event(b);
             } else {
                 char b[80]; snprintf(b, sizeof(b), "{\"cmd\":\"disconnected\",\"channel\":%d}\n", dch);
-                out_json(b);
+                out_event(b);
             }
             clear_channel_state(dch);
         }
@@ -2189,7 +2250,7 @@ static void gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
                 "{\"cmd\":\"connect_fail\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\"}\n",
                 s_ch[ch].bda[0],s_ch[ch].bda[1],s_ch[ch].bda[2],
                 s_ch[ch].bda[3],s_ch[ch].bda[4],s_ch[ch].bda[5]);
-            out_json(b);
+            out_event(b);
             int uo, ro; ch_count(&uo, &ro);
             char dbg[110];
             snprintf(dbg, sizeof(dbg),
@@ -2237,7 +2298,7 @@ static void gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
                  s_ch[ch].ack_handle, s_ch[ch].cmd_handle, s_ch[ch].rumble_handle);
         out_debug(b);
         snprintf(b, sizeof(b), "{\"cmd\":\"gatt_done\",\"channel\":%d}\n", ch);
-        out_json(b);
+        out_event(b);
         enable_notifications(ch);
         break;
     }
@@ -2544,12 +2605,16 @@ void app_main(void) {
     s_standalone_usb_hid = output_mode == STANDALONE_OUTPUT_HID;
     bool standalone_profile_loaded = standalone_profile_load_runtime();
 
-    s_cmd_queue = xQueueCreate(16, sizeof(line_t));
+    s_control_queue = xQueueCreate(16, sizeof(line_t));
+    s_query_queue = xQueueCreate(16, sizeof(line_t));
     s_ack_queue = xQueueCreate(16, sizeof(in_report_t));
     s_notify_queue = xQueueCreate(32, sizeof(in_report_t));
+    s_event_queue = xQueueCreate(16, sizeof(line_t));
     s_out_queue = xQueueCreate(24, sizeof(line_t));
     ESP_ERROR_CHECK(
-        s_cmd_queue && s_ack_queue && s_notify_queue && s_out_queue
+        s_control_queue && s_query_queue &&
+        s_ack_queue && s_notify_queue &&
+        s_event_queue && s_out_queue
             ? ESP_OK : ESP_ERR_NO_MEM
     );
 

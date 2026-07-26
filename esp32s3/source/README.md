@@ -5,7 +5,7 @@ ESP32-S3 bridge firmware.
 
 - Upstream: https://github.com/TommyWabg/Switch2Connect
 - Base commit: `d63b044e66cfb93f8377a3596e3f00c82715b029`
-- Firmware build version: `0.14.1`
+- Firmware build version: `0.14.2`
 - Bridge command compatibility: `0.12.4`
 - Lite build: `cdc_bridge_2_lowlatency`
 - Target: ESP32-S3
@@ -22,6 +22,8 @@ schedule:
 - channels become ready only after the input CCCD write succeeds, and queued
   input, ACK and rumble packets are generation-scoped across reconnects;
 - each CDC report uses one combined header/payload write;
+- host control commands and lifecycle events use dedicated priority queues, so
+  scan/debug floods cannot delay connection control or discard connection state;
 - rumble uses direct `wr` latest-only output from the host, avoiding the legacy
   five-packet `rs` FIFO.
 
@@ -30,7 +32,7 @@ on real hardware. The exact upstream revision is linked above for comparison.
 
 | Current file | SHA-256 |
 |---|---|
-| `esp32s3_bluedroid_bridge.bin` | `6F3BC53BC066A90FA513B51356BB499DB33526531091B3D2F789A5B9D4B104D7` |
+| `esp32s3_bluedroid_bridge.bin` | `A7F167E23D42D97490C978EC12113163C106E2478372119DA52A0618824CCC63` |
 | `bootloader.bin` | `1E6B5148E11223F7E50E98549B0D220C77CF48F55D6F7397365A7EFBAF3711D4` |
 | `partition-table.bin` | `7F00B6C042A89B15B0CAC534F82ED988CAF29278FF5700B0C511EB1B5BB7C820` |
 
