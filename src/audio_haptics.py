@@ -2,6 +2,7 @@
 
 import math
 import threading
+from functools import lru_cache
 
 import numpy as np
 from console_i18n import current_language
@@ -52,6 +53,21 @@ def _spectral_band_rms(samples, sample_rate):
     sample_count = int(mono.size)
     if sample_count < 8 or sample_rate <= 0:
         return (0.0,) * len(AUDIO_BANDS_HZ)
+    window, denominator, band_bins = _spectral_plan(
+        sample_count, float(sample_rate)
+    )
+    spectrum = np.fft.rfft(mono * window)
+    power = np.abs(spectrum) ** 2
+    levels = []
+    for start, stop in band_bins:
+        band_power = float(np.sum(power[start:stop]))
+        levels.append(math.sqrt(max(0.0, 2.0 * band_power / denominator)))
+    return tuple(levels)
+
+
+@lru_cache(maxsize=8)
+def _spectral_plan(sample_count, sample_rate):
+    """Cache the immutable FFT window and band bins used on every audio hop."""
     # A symmetric Hann window suppresses the newest samples at its right
     # edge, adding perceptible onset lag in a causal real-time stream. This
     # rising half-sine keeps leakage controlled while giving the newest audio
@@ -60,16 +76,16 @@ def _spectral_band_rms(samples, sample_rate):
         np.linspace(0.0, math.pi / 2.0, sample_count, dtype=np.float32)
     )
     window_power = float(np.mean(window * window))
-    spectrum = np.fft.rfft(mono * window)
-    power = np.abs(spectrum) ** 2
     frequencies = np.fft.rfftfreq(sample_count, 1.0 / float(sample_rate))
     denominator = max(1e-12, sample_count * sample_count * window_power)
-    levels = []
+    band_bins = []
     for low_hz, high_hz in AUDIO_BANDS_HZ:
-        mask = (frequencies >= low_hz) & (frequencies < high_hz)
-        band_power = float(np.sum(power[mask])) if np.any(mask) else 0.0
-        levels.append(math.sqrt(max(0.0, 2.0 * band_power / denominator)))
-    return tuple(levels)
+        band_bins.append((
+            int(np.searchsorted(frequencies, low_hz, side="left")),
+            int(np.searchsorted(frequencies, high_hz, side="left")),
+        ))
+    window.setflags(write=False)
+    return window, denominator, tuple(band_bins)
 
 
 class AudioHaptics:
@@ -81,6 +97,7 @@ class AudioHaptics:
         self._thread = None
         self._stream = None
         self._audio = None
+        self._stop_event = threading.Event()
         self._apply_config(config)
 
     def _apply_config(self, config):
@@ -133,6 +150,7 @@ class AudioHaptics:
     def start(self):
         if self.mode == "GAME" or self._running:
             return
+        self._stop_event.clear()
         self._running = True
         self._thread = threading.Thread(
             target=self._capture_loop,
@@ -143,16 +161,7 @@ class AudioHaptics:
 
     def close(self):
         self._running = False
-        stream = self._stream
-        if stream is not None:
-            try:
-                stream.stop_stream()
-            except Exception:
-                pass
-            try:
-                stream.close()
-            except Exception:
-                pass
+        self._stop_event.set()
         if (
             self._thread is not None
             and self._thread.is_alive()
@@ -160,6 +169,7 @@ class AudioHaptics:
         ):
             self._thread.join(timeout=1.0)
         self._level_callback(0.0, 0.0)
+        return self._thread is None or not self._thread.is_alive()
 
     def _capture_loop(self):
         try:
@@ -197,6 +207,10 @@ class AudioHaptics:
             self._running = False
             self._level_callback(0.0, 0.0)
             if self._stream is not None:
+                try:
+                    self._stream.stop_stream()
+                except Exception:
+                    pass
                 try:
                     self._stream.close()
                 except Exception:
@@ -238,6 +252,17 @@ class AudioHaptics:
         rolling_audio = np.zeros(analysis_frames, dtype=np.float32)
 
         while self._running:
+            get_read_available = getattr(
+                self._stream, "get_read_available", None
+            )
+            if get_read_available is not None:
+                available = max(0, int(get_read_available()))
+                if available < hop_frames:
+                    missing_seconds = (hop_frames - available) / sample_rate
+                    self._stop_event.wait(
+                        timeout=max(0.0005, min(0.002, missing_seconds))
+                    )
+                    continue
             data = self._stream.read(
                 hop_frames, exception_on_overflow=False
             )
@@ -248,10 +273,19 @@ class AudioHaptics:
             samples = samples[:frame_count * channels].reshape(
                 frame_count, channels
             )
+            if self.mode == "GAME":
+                # Keep draining the live stream so switching back to AUDIO/MIX
+                # cannot replay stale buffered sound, but skip all DSP and
+                # callback traffic while game rumble owns the output.
+                lf_envelope = 0.0
+                hf_envelope = 0.0
+                continue
             mono = np.mean(samples, axis=1)
-            rolling_audio = np.concatenate((rolling_audio, mono))[
-                -analysis_frames:
-            ]
+            if frame_count >= analysis_frames:
+                rolling_audio[:] = mono[-analysis_frames:]
+            else:
+                rolling_audio[:-frame_count] = rolling_audio[frame_count:]
+                rolling_audio[-frame_count:] = mono
             band_rms = _spectral_band_rms(rolling_audio, sample_rate)
             band_levels = tuple(
                 self._level_from_rms(rms, gain)

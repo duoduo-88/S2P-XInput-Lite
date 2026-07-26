@@ -6,7 +6,7 @@
 
 S2P-XInput-Lite provides XInput-compatible controller output for a Switch 2 Pro Controller on Windows. It supports wired USB, an ESP32-S3 USB bridge, and native Windows BLE.
 
-Current release: **v0.6.1**
+Current release: **v0.7.0**
 
 [Latest published release](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 
@@ -27,6 +27,8 @@ Current release: **v0.6.1**
 - ESP32 standalone profile writing for PC XInput-compatible output or
   standards-based mobile USB HID without keeping the Windows application open
 - Gyroscope mapping to an XInput stick or mouse
+- Standalone gamepad tester with live input/output plots, button mapping
+  details, report rates, shape capture, and vibration tests
 - Full game profiles for switching stick, gyro, rumble, audio-haptics, and mapping settings together, with automatic UI refresh
 - Traditional Chinese and English interface
 - Live connection, battery, ESP32, ViGEmBus, WASAPI, and HidHide status

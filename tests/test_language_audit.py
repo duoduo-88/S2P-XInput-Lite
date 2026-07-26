@@ -163,6 +163,48 @@ class LanguageAuditTests(unittest.TestCase):
             self.assertNotEqual(translated, source, source)
             self.assertIsNone(HAN.search(translated), translated)
 
+    def test_gamepad_test_ui_has_complete_english_translations(self):
+        path = SRC / "gamepad_test_window.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        missing = []
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "tr"
+                and node.args
+            ):
+                continue
+            for text_node in ast.walk(node.args[0]):
+                if not (
+                    isinstance(text_node, ast.Constant)
+                    and isinstance(text_node.value, str)
+                    and HAN.search(text_node.value)
+                ):
+                    continue
+                translated = translate_text(text_node.value, "en")
+                if translated == text_node.value or HAN.search(translated):
+                    missing.append(
+                        f"{path.name}:{node.lineno}: {text_node.value}"
+                    )
+        self.assertEqual(missing, [])
+
+    def test_gamepad_test_uses_compact_english_labels(self):
+        expected = {
+            "實體搖桿": "Stick",
+            "陀螺儀": "Gyro",
+            "合成結果": "Final",
+            "清除軌跡與統計": "Clear",
+            "顯示輸出形狀": "Shape",
+            "採樣點": "Samples",
+            "軌跡長度": "Trail",
+            "線性扳機": "Triggers",
+            "震動模板": "Patterns",
+            "手動震動輸出": "Manual Output",
+        }
+        for source, target in expected.items():
+            self.assertEqual(translate_text(source, "en"), target)
+
     def test_dynamic_help_bubbles_have_exact_english_translations(self):
         texts = (
             "只在「混合」模式生效。\n\n"

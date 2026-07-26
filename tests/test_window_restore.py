@@ -2,7 +2,7 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -51,6 +51,8 @@ class WindowRestoreTests(unittest.TestCase):
         gui._root_restore_repaint_job = None
         gui._root_restore_repaint_retry_job = None
         gui._root_restore_show_job = "pending"
+        gui._restore_splash = None
+        gui._restore_splash_generation = None
         gui._repaint_root_after_restore = lambda: None
         gui._flush_dwm_composition = lambda: None
         return gui
@@ -59,7 +61,7 @@ class WindowRestoreTests(unittest.TestCase):
         gui = self.gui(0.03)
         with patch.object(config_gui.sys, "platform", "win32"):
             gui._hide_root_until_restore_painted()
-            self.assertEqual(gui.root.alpha, 0.01)
+            self.assertEqual(gui.root.alpha, 0.0)
             gui._show_root_after_restore_painted()
 
         self.assertEqual(gui.root.alpha, 0.03)
@@ -76,20 +78,26 @@ class WindowRestoreTests(unittest.TestCase):
         self.assertEqual(gui.root.alpha, 0.6)
 
     def test_stale_restore_generation_cannot_reveal_window(self):
-        gui = self.gui(0.01)
+        gui = self.gui(0.0)
         gui._root_restore_original_alpha = 0.8
         gui._root_restore_alpha_hidden = True
         gui._root_restore_generation = 4
+        splash = Mock()
+        gui._restore_splash = splash
+        gui._restore_splash_generation = 4
 
         gui._show_root_after_restore_painted(3)
 
-        self.assertEqual(gui.root.alpha, 0.01)
+        self.assertEqual(gui.root.alpha, 0.0)
         self.assertTrue(gui._root_restore_alpha_hidden)
+        splash.destroy.assert_not_called()
 
         gui._show_root_after_restore_painted(4)
 
         self.assertEqual(gui.root.alpha, 0.8)
         self.assertFalse(gui._root_restore_alpha_hidden)
+        splash.destroy.assert_called_once_with()
+        self.assertIsNone(gui._restore_splash)
 
     def test_new_restore_cycle_cancels_every_old_job(self):
         gui = self.gui(1.0)
@@ -109,7 +117,7 @@ class WindowRestoreTests(unittest.TestCase):
         self.assertIsNone(gui._root_restore_show_job)
 
     def test_restore_uses_idle_paints_and_150_ms_only_as_fallback(self):
-        gui = self.gui(0.01)
+        gui = self.gui(0.0)
         gui._root_restore_show_job = None
         repaints = []
         reveals = []
@@ -118,8 +126,9 @@ class WindowRestoreTests(unittest.TestCase):
             lambda generation=None: reveals.append(generation)
         )
 
-        gui._schedule_root_restore_repaint()
+        generation = gui._schedule_root_restore_repaint()
 
+        self.assertEqual(generation, 1)
         self.assertEqual(len(gui.root.after_jobs), 1)
         fallback_token, delay, stale_fallback = gui.root.after_jobs[0]
         self.assertEqual(delay, 150)
@@ -136,6 +145,38 @@ class WindowRestoreTests(unittest.TestCase):
         gui._begin_root_restore_cycle()
         stale_fallback()
         self.assertEqual(reveals, [1])
+
+    def test_map_registers_splash_before_scheduling_idle_repaint(self):
+        gui = self.gui(0.0)
+        gui._root_restore_pending = True
+        gui._main_window_positioned = True
+        events = []
+        gui._hide_root_until_restore_painted = (
+            lambda: events.append("hide-root")
+        )
+        gui._begin_root_restore_cycle = (
+            lambda: events.append("begin-cycle") or 7
+        )
+        gui._show_restore_splash = (
+            lambda generation: events.append(("show-splash", generation))
+        )
+        gui._schedule_root_restore_repaint = (
+            lambda generation: events.append(("schedule-paint", generation))
+        )
+        gui._clear_root_topmost = lambda: None
+        gui._restore_windows_after_root_map = lambda: None
+
+        gui._on_root_map()
+
+        self.assertEqual(
+            events,
+            [
+                "hide-root",
+                "begin-cycle",
+                ("show-splash", 7),
+                ("schedule-paint", 7),
+            ],
+        )
 
     def test_dwm_flush_waits_for_one_composition(self):
         class FakeFlush:

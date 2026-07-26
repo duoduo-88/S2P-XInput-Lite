@@ -39,6 +39,7 @@ from command_queue import (
     finish_controller_command,
     next_controller_command,
 )
+from test_telemetry import SharedTestTelemetry
 from console_i18n import current_language
 from console_i18n import localized_print as print
 from console_i18n import localized_input as input
@@ -159,6 +160,8 @@ def main():
         "charging": False,
         "wired_full_report": None, "wired_polling_rate": None,
         "wired_processing_rate": None,
+        "input_report_rate": None, "xinput_output_rate": None,
+        "xinput_slot": None,
         "sensor_mode": None,
         "gyro_raw": None, "accel_raw": None,
         "report_time": None, "report_delta": None,
@@ -306,12 +309,20 @@ def main():
         connection_mode = "bluetooth"
     publish_status(state="searching", mode=connection_mode)
     audio_haptics = None
+    test_telemetry = None
     try:
         xinput = XInputController(
             config,
             custom_stick_cal,
             layer_state_config_path=CONFIG_PATH,
         )
+        try:
+            test_telemetry = SharedTestTelemetry()
+            xinput.set_test_telemetry(test_telemetry)
+            xinput_slot = xinput.get_xinput_user_index()
+            publish_status(xinput_slot=xinput_slot)
+        except (AttributeError, OSError, TypeError, ValueError):
+            test_telemetry = None
 
     except (ValueError, TypeError, KeyError, configparser.Error) as exc:
         publish_status(
@@ -410,11 +421,12 @@ def main():
         controller.input_callback = None
         set_input_gc_suppressed(False)
 
+        xinput_stopped = False
         try:
-            if not close_xinput_after_dispatcher(
-                input_dispatcher,
-                xinput,
-            ):
+            xinput_stopped = close_xinput_after_dispatcher(
+                input_dispatcher, xinput,
+            )
+            if not xinput_stopped:
                 print(tr(
                     "輸入處理執行緒未能停止；已保留虛擬控制器狀態，避免與仍在執行的 callback 競爭。",
                     "The input worker did not stop; virtual controller state "
@@ -422,6 +434,12 @@ def main():
                 ))
         except Exception as exc:
             print(tr(f"虛擬控制器清理失敗：{exc}", f"Virtual controller cleanup failed: {exc}"))
+
+        if test_telemetry is not None and xinput_stopped:
+            try:
+                test_telemetry.close()
+            except Exception:
+                pass
 
         # Keep the physical transport alive until the virtual/audio rumble
         # producers have stopped.  Its own close path then sends the final zero.
@@ -443,6 +461,9 @@ def main():
             wired_full_report=None,
             wired_polling_rate=None,
             wired_processing_rate=None,
+            input_report_rate=None,
+            xinput_output_rate=None,
+            xinput_slot=None,
             sensor_mode=None,
             gyro_raw=None,
             accel_raw=None,
@@ -490,6 +511,9 @@ def main():
             now = time.monotonic()
             if now - last_status_stage >= 0.5:
                 last_status_stage = now
+                xinput.set_test_input_rate(
+                    getattr(input_dispatcher, "input_rate_hz", None)
+                )
                 # GUI/status data is human-facing and does not need the input
                 # report rate.  Stage it at 2 Hz to remove a lock, dict update,
                 # list allocation and wall-clock query from every Fast Path.
@@ -509,6 +533,12 @@ def main():
                     wired_processing_rate=(
                         getattr(input_dispatcher, "processing_rate_hz", None)
                         if connection_mode == "wired" else None
+                    ),
+                    input_report_rate=getattr(
+                        input_dispatcher, "input_rate_hz", None
+                    ),
+                    xinput_output_rate=getattr(
+                        input_dispatcher, "processing_rate_hz", None
                     ),
                     sensor_mode=sensor_mode,
                     gyro_raw=list(state.gyroscope),
@@ -757,6 +787,12 @@ def main():
                 getattr(input_dispatcher, "processing_rate_hz", None)
                 if connection_mode == "wired" else None
             ),
+            input_report_rate=getattr(
+                input_dispatcher, "input_rate_hz", None
+            ),
+            xinput_output_rate=getattr(
+                input_dispatcher, "processing_rate_hz", None
+            ),
             sensor_mode=None,
             gyro_raw=None,
             accel_raw=None,
@@ -802,6 +838,8 @@ def main():
                     wired_full_report=None,
                     wired_polling_rate=None,
                     wired_processing_rate=None,
+                    input_report_rate=None,
+                    xinput_output_rate=None,
                     sensor_mode=None,
                     gyro_raw=None,
                     accel_raw=None,
@@ -839,6 +877,8 @@ def main():
                 wired_full_report=None,
                 wired_polling_rate=None,
                 wired_processing_rate=None,
+                input_report_rate=None,
+                xinput_output_rate=None,
                 sensor_mode=None,
                 gyro_raw=None,
                 accel_raw=None,

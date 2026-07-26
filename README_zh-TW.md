@@ -6,7 +6,7 @@
 
 S2P-XInput-Lite 可在 Windows 為 Switch 2 Pro Controller 提供 XInput 相容控制器輸出，支援 USB 有線、ESP32-S3 USB 橋接器及 Windows 原生 BLE。
 
-開發版本：**v0.6.1**
+開發版本：**v0.7.0**
 
 [最新正式版本](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 
@@ -35,6 +35,7 @@ S2P-XInput-Lite 可在 Windows 為 Switch 2 Pro Controller 提供 XInput 相容�
 - 可將相容設定檔寫入 ESP32，讓它不開啟 Windows 程式也能提供 PC XInput
   相容輸出或標準手機 USB HID
 - 將陀螺儀映射至 XInput 搖桿或滑鼠
+- 獨立手把測試工具：即時顯示輸入／輸出軌跡、按鍵映射、回報率、輸出形狀與震動測試
 - 完整遊戲設定檔，可一起切換搖桿、陀螺儀、震動、音訊觸覺與映射設定
 - 繁體中文與英文介面
 - 即時顯示連線、電量、ESP32、ViGEmBus、WASAPI 及 HidHide 狀態

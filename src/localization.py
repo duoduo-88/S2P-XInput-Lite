@@ -1,6 +1,157 @@
 """Traditional Chinese / English text used by the settings GUI."""
 
 EN_TEXT = {
+    "S2P-XInput-Lite 啟動中…": "Starting S2P-XInput-Lite…",
+    "手把測試": "Gamepad Test",
+    "手把測試程式初始化中": "Starting Gamepad Test",
+    "正在初始化手把測試程式，請稍候…":
+        "Initializing the gamepad tester. Please wait…",
+    "手把測試無法開啟": "Could Not Open Gamepad Test",
+    "關閉程式": "Close Application",
+    "關閉設定視窗後：\n\n• 桌面橋接模式會中斷連線。\n• ESP32 獨立模式會繼續運作。":
+        "After closing the settings window:\n\n"
+        "• Desktop bridge mode will disconnect.\n"
+        "• ESP32 standalone mode will continue running.",
+    "以後不再提示": "Do not show this again",
+    "仍要關閉": "Close Anyway",
+    "無法讀取 Windows 手把介面。":
+        "Could not access the Windows gamepad interface.",
+    "測試手把": "Device",
+    "重新整理": "Refresh",
+    "輸入更新率（Hz）\nS2P橋接顯示原始輸入報告率。一般XInput／WinMM裝置只能在操作時估算Windows可觀測的狀態更新率。\n\n視窗繪製率（FPS）\n最高目標為視窗所在螢幕的刷新率。Hz與FPS用途不同，數值不需要相等。\n\nXInput與8000 Hz裝置\nXInput不提供原始USB封包時間戳。程式會利用dwPacketNumber的差值計入兩次輪詢間的更新；如果驅動程式不提供連續計數，8000 Hz裝置仍可能只顯示接近輪詢率。此時必須使用該裝置專用的Raw HID工具，才能驗證真正USB回報率。\n\n注意：這些數值不代表輸入延遲。":
+        "Input update rate (Hz)\n"
+        "S2P bridge mode shows the raw input report rate. Generic XInput/"
+        "WinMM devices can only estimate Windows-observable state updates "
+        "while the controller is operated.\n\n"
+        "Window render rate (FPS)\n"
+        "The maximum target is the refresh rate of the display containing "
+        "the window. Hz and FPS serve different purposes and do not need "
+        "to match.\n\n"
+        "XInput and 8000 Hz devices\n"
+        "XInput does not expose raw USB report timestamps. The app uses "
+        "dwPacketNumber gaps to include updates between polls. If the driver "
+        "does not expose a continuous counter, an 8000 Hz device may still "
+        "show a value near the polling rate. A device-specific Raw HID tool "
+        "is then required to verify the true USB report rate.\n\n"
+        "Note: These values do not represent input latency.",
+    "輸入監看": "Input Monitor",
+    "震動測試": "Rumble Test",
+    "清除軌跡與統計": "Clear",
+    "顯示輸出形狀": "Shape",
+    "顯示陀螺圖例": "Gyro Legend",
+    "採樣點": "Samples",
+    "採樣點100%\n顯示目前軌跡長度內，所選Windows輸入介面實際收到的全部座標點。\n\nXInput限制\nHz統計可利用packet number差值計入輪詢間的更新次數；但XInput只保留最新座標，無法把已被覆蓋的中間座標還原成路徑點。\n\n顯示百分比\n降低百分比只會減少畫面上的路徑點，不會改變輸入更新率統計。":
+        "Sample points 100%\n"
+        "Shows every coordinate point actually received through the selected "
+        "Windows input interface within the current trail length.\n\n"
+        "XInput limitation\n"
+        "The Hz statistics can use packet-number gaps to count updates between "
+        "polls, but XInput retains only the latest coordinates. Overwritten "
+        "intermediate coordinates cannot be reconstructed as trail points.\n\n"
+        "Display percentage\n"
+        "Lowering the percentage only reduces trail points on screen; it does "
+        "not change the input-update-rate statistics.",
+    "軌跡長度": "Trail",
+    "實體搖桿": "Stick",
+    "陀螺儀": "Gyro",
+    "合成結果": "Final",
+    "實際輸入": "Input",
+    "陀螺": "Gyro",
+    "待命": "Ready",
+    "啟用": "Active",
+    "常駐": "Always",
+    "無按鍵": "None",
+    "線性扳機": "Triggers",
+    "按鍵與映射事件": "Button Events",
+    "來源按鍵": "Source",
+    "狀態": "State",
+    "持續時間": "Time",
+    "生效映射": "Mapping",
+    "震動模板": "Patterns",
+    "手動震動輸出": "Manual Output",
+    "LF（左馬達）": "LF Motor",
+    "HF（右馬達）": "HF Motor",
+    "重複播放": "Repeat",
+    "模板 LF（左馬達）": "LF",
+    "模板 HF（右馬達）": "HF",
+    "播放頻率": "Rate",
+    "模板強度": "Strength",
+    "還原震動預設": "Reset",
+    "正在搜尋手把...": "Searching...",
+    "等待輸入": "Waiting",
+    "輸出形狀記錄未啟用": "Shape log off",
+    "反應": "Response",
+    "基礎": "Base",
+    "X 0.000   Y 0.000   半徑 0.0%": "X 0.000   Y 0.000   R 0.0%",
+    "X {x:+.3f}   Y {y:+.3f}   半徑 {radius:.1f}%":
+        "X {x:+.3f}   Y {y:+.3f}   R {radius:.1f}%",
+    "{curve}   自適死區 {adaptive:.0f}%   加速抑制 {accel:.0f}%   防晃 {freeze:.0f} ms":
+        "{curve}   Adapt DZ {adaptive:.0f}%   Accel {accel:.0f}%   "
+        "Guard {freeze:.0f} ms",
+    "覆蓋 {coverage:.0f}%   圓度誤差 {error}   最大 {maximum:.1f}%":
+        "Cov {coverage:.0f}%   Circ err {error}   Max {maximum:.1f}%",
+    "區段 P{start}–P{end}   中心死區 {deadzone:.1f}%   外圈死區 {outer:.1f}%":
+        "P{start}–P{end}   C-DZ {deadzone:.1f}%   O-DZ {outer:.1f}%",
+    "傾斜   最大角 {maximum:.0f}°   死區 {deadzone:.2f}°":
+        "Tilt   Max {maximum:.0f}°   DZ {deadzone:.2f}°",
+    "回中   感度 {sensitivity:.1f}   死區 {deadzone:.2f}°/s":
+        "Aim   Sens {sensitivity:.1f}   DZ {deadzone:.2f}°/s",
+    "{gyro}：{active}｜{mode} {buttons}｜DZ {deadzone:.2f}｜ADZ {anti_deadzone:.0f}%":
+        "{gyro}: {active} | {mode} {buttons} | "
+        "DZ {deadzone:.2f} | ADZ {anti_deadzone:.0f}%",
+    "搖桿中心死區 {stick_deadzone:.1f}%   外圈死區 {outer_deadzone:.1f}%   觸發 {mode}":
+        "C-DZ {stick_deadzone:.1f}%   O-DZ {outer_deadzone:.1f}%   "
+        "Trig {mode}",
+    "實體搖桿的最終輸出": "Final stick output",
+    "原始裝置輸出（無曲線／死區設定資料）":
+        "Raw input (no curve/DZ data)",
+    "{seconds:.1f} 秒": "{seconds:.1f} s",
+    "{seconds:.2f} 秒": "{seconds:.2f} s",
+    "S2P-XInput-Lite（目前橋接輸出）": "S2P-XInput-Lite (Bridge)",
+    "主方案": "Main",
+    "原始輸入": "Raw",
+    "無": "None",
+    "裝置未提供標準扳機軸": "No trigger axis",
+    "搖桿": "Stick",
+    "按鍵／原生扳機輸出": "Button / native trigger",
+    "裝置實際輸出": "Device output",
+    "持續按壓": "Held",
+    "已放開": "Released",
+    "心跳": "Heartbeat",
+    "節拍": "Footsteps",
+    "路感": "Terrain",
+    "低鳴": "Low Rumble",
+    "爆裂": "Burst",
+    "機槍": "Machine Gun",
+    "散彈": "Shotgun",
+    "加速": "Turbo",
+    "旋翼": "Rotor",
+    "倒數": "Countdown",
+    "繪製 — FPS": "Render — FPS",
+    "繪製 {fps:.0f} FPS": "Render {fps:.0f} FPS",
+    "選擇支援震動的 XInput 手把":
+        "Select an XInput pad with rumble",
+    "LF 脈衝": "LF Pulse",
+    "HF 脈衝": "HF Pulse",
+    "交替": "Alternate",
+    "撞擊": "Impact",
+    "漸強": "Ramp",
+    "雙擊": "Double",
+    "連射": "Rapid",
+    "引擎": "Engine",
+    "波浪": "Wave",
+    "警示": "Alert",
+    "停止": "Stop",
+    "停止所有震動": "Stop All Rumble",
+    "重設": "Reset",
+    "● 已連線": "● Connected",
+    "● 未連線": "● Disconnected",
+    "此手把沒有可用的 XInput 震動介面":
+        "No XInput rumble",
+    "目前為純音訊震動模式，遊戲震動模板不會輸出":
+        "Audio-only mode; patterns disabled",
+    "震動會套用目前方案的 LF／HF 設定":
+        "Uses current LF/HF profile",
     "寫入 ESP32": "ESP32",
     "寫入 ESP32 ▼": "ESP32 ▼",
     "寫入並啟用獨立模式": "Write and enable standalone",
@@ -87,7 +238,7 @@ EN_TEXT = {
     "線性滑鼠滾輪": "Linear Mouse Wheel",
     "線性 Xbox LT": "Linear Xbox LT",
     "線性 Xbox RT": "Linear Xbox RT",
-    "映射層": "Mapping Layers",
+    "映射層": "Layers",
     "只在「混合」模式生效。\n\n0.00 = 只保留遊戲原生震動\n0.35 = 建議起始值（遊戲 65%、音訊 35%）\n1.00 = 只保留音訊震動":
         "Only applies in Mix mode.\n\n0.00 = game rumble only\n0.35 = recommended starting point (65% game, 35% audio)\n1.00 = audio rumble only",
     "控制音訊轉換成震動前的總靈敏度。\n\n0.60 = 建議起始值":
@@ -246,9 +397,9 @@ EN_TEXT = {
     "感度曲線": "Sens. Curve",
     "還原陀螺儀預設": "Reset Gyro Defaults",
     "還原曲線": "Reset Curve",
-    "動態": "Dynamic",
-    "後段加速": "Late Boost",
-    "前段加速": "Early Boost",
+    "動態": "Dyn.",
+    "後段加速": "Late",
+    "前段加速": "Early",
     "曲線強度": "Curve Strength",
     "基礎輸出": "Base Output",
     "曲線輸出": "Curve Output",
@@ -300,7 +451,7 @@ EN_TEXT = {
     "X 比例": "X Ratio",
     "Y 比例": "Y Ratio",
     "死區": "DZ",
-    "反死區": "Anti DZ",
+    "反死區": "Anti-DZ",
     "傾斜死區": "Tilt DZ",
     "平滑 ms": "Smooth ms",
     "傾斜平滑": "Tilt Smooth",
@@ -558,8 +709,16 @@ EN_TEXT = {
         "Invalid integer format.\n\nLF/HF frequencies and max amplitude must be integers.",
     "線性：控制點之間使用直線。\n\n平滑：使用單調三次插值，平滑通過所有控制點，並避免反向與超調。":
         "Linear: straight segments between control points.\n\nSmooth: monotonic cubic interpolation through every point, without reversal or overshoot.",
-    "輸出形狀會在圓形與方形之間分成 10 段。\n\n灰色圓：圓形基準；虛線方框：方形極限；藍線：目前設定的最大輸出範圍。\n\n對角方向每軸約為：\n0 = 0.707　2 = 0.766　5 = 0.854\n8 = 0.941　10 = 1.000\n\n數值越高，對角方向可輸出的範圍越大。\n\n拉桿後方百分比是預估圓周誤差；實際結果會受校正與取樣影響。":
-        "Output shape is divided into 10 steps between round and square.\n\nGray circle: round reference; dashed box: square limit; blue line: the current maximum output range.\n\nApprox. diagonal output per axis:\n0 = 0.707   2 = 0.766   5 = 0.854\n8 = 0.941   10 = 1.000\n\nHigher values allow more diagonal output.\n\nThe percentage after the slider is an estimated circularity error; calibration and sampling affect actual results.",
+    "輸出形狀會在圓形與方形之間分成 10 段。灰色圓：圓形基準；虛線方框：方形極限；藍線：目前設定的最大輸出範圍。\n\n對角方向每軸約為：\n0 = 0.707　2 = 0.766　5 = 0.854\n8 = 0.941　10 = 1.000\n\n數值越高，對角方向可輸出的範圍越大。拉桿後方百分比是預估圓周誤差；實際結果會受校正與取樣影響。":
+        "Output shape is divided into 10 steps between round and square. "
+        "Gray circle: round reference; dashed box: square limit; blue line: "
+        "the current maximum output range.\n\n"
+        "Approx. diagonal output per axis:\n"
+        "0 = 0.707   2 = 0.766   5 = 0.854\n"
+        "8 = 0.941   10 = 1.000\n\n"
+        "Higher values allow more diagonal output. The percentage after the "
+        "slider is an estimated circularity error; calibration and sampling "
+        "affect actual results.",
     "防抖\n\n根據位移曲線目前區段的放大倍率，自動增加防抖強度。\n\n設定範圍：0.0 ～ 3.0\n\n0.0：關閉防抖補償。\n1.0：標準補償，曲線放大幾倍，就按相同倍率增加防抖。\n2.0：加強補償。\n3.0：更強的補償。\n\n僅在曲線斜率大於 1:1 的區域生效。\n平滑使用實際時間計算，不會因 BLE 或 ESP32 更新頻率不同而改變手感。\n數值越高，輸出越穩定，但也可能產生較明顯的平滑感。":
         "Stabilizer\n\nAutomatically increases stabilization where the response curve amplifies motion.\n\nRange: 0.0–3.0\n\n0.0: off\n1.0: standard slope-based compensation\n2.0: stronger\n3.0: strongest\n\nOnly applies where curve slope exceeds 1:1. Time-based smoothing keeps the feel consistent across BLE/ESP32 update rates. Higher values are steadier but feel smoother.",
     "用來消除左搖桿放開後的輕微飄移。\n\n設定範圍：0.00 ～ 0.99\n中心死區與外圍死區總和必須小於 1.00。\n0.00 = 無死區\n0.03 = 在 3% 範圍內忽略輸入\n\n數值越大，搖桿中心附近越不敏感。\n\n勾選「壓縮」後，曲線的 0% 起點會移到中心死區邊界，並將完整曲線重新分布到剩餘行程。\n\n曲線圖左側的灰色區域代表中心死區範圍。":

@@ -1,5 +1,7 @@
 import configparser
 import sys
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -18,6 +20,14 @@ from audio_haptics import (
 
 
 class AudioHapticsBandTests(unittest.TestCase):
+    def _default_audio(self, callback=lambda _lf, _hf: None):
+        config = configparser.ConfigParser()
+        self.assertTrue(config.read(
+            ROOT / "src" / "profiles" / "System Default.ini",
+            encoding="utf-8",
+        ))
+        return AudioHaptics(config, callback)
+
     def test_six_bands_split_the_high_range_at_4000_hz(self):
         self.assertEqual(
             AUDIO_BANDS_HZ,
@@ -61,16 +71,63 @@ class AudioHapticsBandTests(unittest.TestCase):
         self.assertEqual(detail, (0.0, 0.75))
 
     def test_packaged_default_loads_six_gains_and_balance(self):
-        config = configparser.ConfigParser()
-        self.assertTrue(config.read(
-            ROOT / "src" / "profiles" / "System Default.ini",
-            encoding="utf-8",
-        ))
-
-        audio = AudioHaptics(config, lambda _lf, _hf: None)
+        audio = self._default_audio()
 
         self.assertEqual(len(audio.band_gains), 6)
         self.assertEqual(audio.lf_hf_balance, 0.0)
+
+    def test_close_wakes_capture_before_a_blocking_read(self):
+        class EmptyStream:
+            read_calls = 0
+
+            @staticmethod
+            def get_read_available():
+                return 0
+
+            def read(self, *_args, **_kwargs):
+                self.read_calls += 1
+                raise AssertionError("read must wait until a full hop is ready")
+
+        audio = self._default_audio()
+        audio.mode = "AUDIO"
+        audio._stream = EmptyStream()
+        audio._running = True
+        audio._thread = threading.Thread(
+            target=audio._process_stream,
+            args=(48000, 2, 240, 960),
+        )
+        audio._thread.start()
+        time.sleep(0.01)
+
+        started = time.perf_counter()
+        self.assertTrue(audio.close())
+        elapsed = time.perf_counter() - started
+
+        self.assertFalse(audio._thread.is_alive())
+        self.assertEqual(audio._stream.read_calls, 0)
+        self.assertLess(elapsed, 0.1)
+
+    def test_game_mode_drains_without_dsp_callbacks(self):
+        callbacks = []
+        audio = self._default_audio(
+            lambda lf, hf: callbacks.append((lf, hf))
+        )
+
+        class OneHopStream:
+            @staticmethod
+            def get_read_available():
+                return 240
+
+            def read(self, *_args, **_kwargs):
+                audio._running = False
+                return np.zeros(480, dtype=np.float32).tobytes()
+
+        audio.mode = "GAME"
+        audio._stream = OneHopStream()
+        audio._running = True
+        audio._process_stream(48000, 2, 240, 960)
+
+        self.assertEqual(callbacks, [])
 
 
 if __name__ == "__main__":

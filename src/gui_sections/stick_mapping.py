@@ -712,6 +712,11 @@ def build_stick_mapping_section(gui, mapping_notebook):
         def update_direction_mode(
             *args
         ):
+            # Profile loading replaces many related variables in one batch.
+            # Wait until the batch is complete so the selector and its settings
+            # pane can never render from different intermediate states.
+            if getattr(gui, "_loading_profile_values", False):
+                return
             mode = (
                 gui.stick_direction_mode_vars[
                     side
@@ -806,6 +811,10 @@ def build_stick_mapping_section(gui, mapping_notebook):
         gui.stick_direction_mode_updaters[
             side
         ] = update_direction_mode
+        gui.stick_direction_mode_vars[side].trace_add(
+            "write",
+            update_direction_mode,
+        )
 
         def select_direction_mode(event=None):
             del event
@@ -816,7 +825,6 @@ def build_stick_mapping_section(gui, mapping_notebook):
             gui.stick_direction_mode_vars[side].set(
                 reverse_values.get(displayed, displayed)
             )
-            update_direction_mode()
 
         mode_combo.bind(
             "<<ComboboxSelected>>",

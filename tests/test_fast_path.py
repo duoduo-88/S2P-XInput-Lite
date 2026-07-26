@@ -315,6 +315,33 @@ class XusbReportTests(unittest.TestCase):
 
 
 class LiveReconfigureTests(unittest.TestCase):
+    def test_audio_updates_are_suppressed_in_game_and_deduplicated(self):
+        game = configparser.ConfigParser()
+        self.assertTrue(game.read(
+            ROOT / "src" / "profiles" / "System Default.ini",
+            encoding="utf-8",
+        ))
+        calibration = load_stick_calibration(game)
+        controller = XInputController(game, calibration, pad=_FakePad())
+        try:
+            original_sequence = controller._rumble_sequence
+            controller.set_audio_rumble(0.5, 0.5)
+            self.assertEqual(controller._rumble_sequence, original_sequence)
+
+            audio = configparser.ConfigParser()
+            audio.read_dict({
+                section: dict(game.items(section))
+                for section in game.sections()
+            })
+            audio.set("audio_haptics", "mode", "AUDIO")
+            controller.reconfigure(audio, calibration)
+            controller.set_audio_rumble(0.5, 0.5)
+            first_sequence = controller._rumble_sequence
+            controller.set_audio_rumble(0.5, 0.5)
+            self.assertEqual(controller._rumble_sequence, first_sequence)
+        finally:
+            controller.close()
+
     def test_reconfigure_keeps_one_pad_callback_and_worker(self):
         config = configparser.ConfigParser()
         self.assertTrue(config.read(
