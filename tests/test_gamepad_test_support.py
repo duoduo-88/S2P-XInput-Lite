@@ -48,6 +48,7 @@ from gamepad_test_window import (
     GamepadTestWindow,
     PLOT_CENTER,
     PLOT_RADIUS,
+    PLOT_SIZE,
     SHAPE_BIN_COUNT,
     StickHistory,
     StickPlot,
@@ -218,6 +219,18 @@ class GamepadMathTests(unittest.TestCase):
         self.assertNotIn("_raw_hid_metric_font", source)
         self.assertNotIn('(\"Segoe UI\", 16, \"bold\")', source)
 
+    def test_sample_display_percentage_accepts_one_percent(self):
+        tester = object.__new__(GamepadTestWindow)
+        tester.sample_display_percent_var = Mock(
+            get=Mock(return_value=0.4)
+        )
+        tester.sample_display_percent_text = Mock()
+
+        tester._update_sample_display_percent()
+
+        tester.sample_display_percent_var.set.assert_called_once_with(1.0)
+        tester.sample_display_percent_text.set.assert_called_once_with("1%")
+
     def test_high_rate_tab_is_detected_without_drawing_hidden_input_plots(self):
         tester = object.__new__(GamepadTestWindow)
         tester.test_notebook = Mock(select=Mock(return_value=".high_rate"))
@@ -226,6 +239,78 @@ class GamepadMathTests(unittest.TestCase):
         tester.high_rate_tab = ".high_rate"
 
         self.assertEqual(tester._active_test_tab(), "high_rate")
+
+    def test_actual_sampling_stream_is_not_tied_to_visible_tab(self):
+        raw_device = SimpleNamespace(path="hid-path")
+        stream = SimpleNamespace(
+            active=False,
+            stop=Mock(return_value=True),
+            start=Mock(return_value=True),
+        )
+        tester = object.__new__(GamepadTestWindow)
+        tester.window = Mock()
+        tester.raw_hid_probe = SimpleNamespace(
+            read_snapshot=Mock(return_value={"state": "complete"})
+        )
+        tester.raw_hid_stream = stream
+        tester.raw_hid_stream_enabled_var = Mock(
+            get=Mock(return_value=True)
+        )
+        tester.raw_hid_stream_status_var = Mock()
+        tester._raw_hid_stream_path = None
+        tester._raw_hid_stream_sequence = 0
+        tester._raw_hid_stream_dropped = 0
+        tester._selected_device = lambda: GamepadDevice(
+            "xinput:1", "xinput", 1, "XInput Gamepad 2", True
+        )
+        tester._selected_raw_hid_device = lambda: raw_device
+        tester._active_test_tab = Mock(
+            side_effect=AssertionError("stream must not depend on the tab")
+        )
+        tester.gui = SimpleNamespace(tr=lambda text: text)
+
+        tester._sync_raw_hid_stream()
+
+        stream.start.assert_called_once_with("hid-path")
+
+    def test_tab_boundary_discards_every_pending_input_queue(self):
+        tester = object.__new__(GamepadTestWindow)
+        tester.raw_hid_stream = SimpleNamespace(
+            active=True,
+            read_samples=Mock(return_value=((), 19, 2)),
+        )
+        tester._raw_hid_stream_sequence = 7
+        tester._raw_hid_stream_dropped = 3
+        tester.native_sampler = Mock()
+        tester.telemetry = Mock(
+            latest_trail_sequence=Mock(return_value=23)
+        )
+        tester._last_trail_sequence = 5
+        tester._last_consumed_token = "old"
+
+        tester._discard_pending_monitor_samples()
+
+        tester.raw_hid_stream.read_samples.assert_called_once_with(7)
+        tester.native_sampler.read_snapshot.assert_called_once_with()
+        self.assertEqual(tester._raw_hid_stream_sequence, 19)
+        self.assertEqual(tester._raw_hid_stream_dropped, 5)
+        self.assertEqual(tester._last_trail_sequence, 23)
+        self.assertIsNone(tester._last_consumed_token)
+
+    def test_completed_measurement_resumes_actual_sampling_once(self):
+        tester = object.__new__(GamepadTestWindow)
+        tester._raw_hid_resume_after_measurement = True
+        tester.raw_hid_probe = Mock()
+        tester._sync_raw_hid_stream = Mock()
+
+        self.assertTrue(
+            tester._resume_actual_sampling_after_measurement()
+        )
+        self.assertFalse(
+            tester._resume_actual_sampling_after_measurement()
+        )
+        tester.raw_hid_probe.stop.assert_called_once_with(timeout=0.1)
+        tester._sync_raw_hid_stream.assert_called_once_with()
 
     def test_high_rate_measurement_follows_selected_device(self):
         raw_device = RawHidDevice(
@@ -832,6 +917,38 @@ class GamepadMathTests(unittest.TestCase):
         self.assertEqual(tester._display_refresh_hz, 144.0)
         self.assertAlmostEqual(tester._frame_interval, 1.0 / 144.0)
 
+    def test_frame_scheduler_never_rounds_before_display_deadline(self):
+        tester = object.__new__(GamepadTestWindow)
+        tester.window = Mock()
+        tester.window.winfo_exists.return_value = True
+        tester._frame_interval = 1.0 / 165.0
+        tester._next_frame_at = 10.0061
+        tester._window_motion_until = 0.0
+        tester._active_test_tab = Mock(return_value="input")
+
+        with patch(
+            "gamepad_test_window.time.perf_counter",
+            return_value=10.0,
+        ):
+            tester._schedule_poll()
+
+        delay = tester.window.after.call_args.args[0]
+        self.assertEqual(delay, 7)
+
+    def test_monitor_presentation_pauses_during_window_motion(self):
+        tester = object.__new__(GamepadTestWindow)
+        tester._window_motion_until = 10.0
+
+        self.assertFalse(
+            tester._monitor_presentation_allowed("input", 9.99)
+        )
+        self.assertTrue(
+            tester._monitor_presentation_allowed("input", 10.0)
+        )
+        self.assertFalse(
+            tester._monitor_presentation_allowed("rumble", 11.0)
+        )
+
     def test_monitor_rate_frame_skips_detail_widget_updates(self):
         plot = object.__new__(StickPlot)
         plot.side = "left"
@@ -845,7 +962,7 @@ class GamepadMathTests(unittest.TestCase):
         plot._bitmap_enabled = True
         plot._bitmap_photo = Mock()
         plot._bitmap_item = 8
-        plot._bitmap_next_present_at = float("inf")
+        plot._draw_trail_bitmap = Mock(return_value=True)
         plot._dynamic_deadzone_item = None
         plot._dot_item = None
         plot.owner = SimpleNamespace(
@@ -883,7 +1000,7 @@ class GamepadMathTests(unittest.TestCase):
         plot._bitmap_enabled = True
         plot._bitmap_photo = Mock()
         plot._bitmap_item = 8
-        plot._bitmap_next_present_at = float("inf")
+        plot._draw_trail_bitmap = Mock(return_value=True)
         plot._dynamic_deadzone_item = None
         plot._dot_item = None
         plot.owner = SimpleNamespace(
@@ -912,7 +1029,9 @@ class GamepadMathTests(unittest.TestCase):
             update_details=False,
         )
 
-        plot.canvas.tag_raise.assert_has_calls([call(8), call(9)])
+        plot.canvas.tag_raise.assert_has_calls([
+            call("trail_bitmap"), call(9)
+        ])
         plot._last_trace_draw_at = 0.0
         plot.draw(
             history,
@@ -1194,13 +1313,11 @@ class GamepadMathTests(unittest.TestCase):
         plot._bitmap_expiry_heap = []
         plot._bitmap_last_processed_sequence = -1
         plot._bitmap_render_config = None
-        plot._bitmap_dirty = False
-        plot._bitmap_next_present_at = 0.0
         history = StickHistory()
         for sequence in range(10):
             history.add(
-                sequence / 10.0,
-                0.0,
+                0.1,
+                0.1,
                 float(sequence),
                 record_shape=False,
             )
@@ -1216,11 +1333,133 @@ class GamepadMathTests(unittest.TestCase):
             plot._draw_trail_bitmap(history, now=9.0)
             photo.configure.assert_not_called()
 
-            history.add(1.0, 0.0, 10.0, record_shape=False)
+            history.add(0.2, 0.1, 10.0, record_shape=False)
             plot._draw_trail_bitmap(history, now=10.0)
 
         plot.canvas.create_image.assert_called_once()
         photo.configure.assert_called_once()
+
+    def test_bitmap_trail_deduplicates_high_rate_samples_per_pixel(self):
+        plot = object.__new__(StickPlot)
+        plot.trail_color = "#1976D2"
+        plot.zoom = 1.0
+        plot.pan_x = 0.0
+        plot.pan_y = 0.0
+        plot.owner = SimpleNamespace(
+            sample_display_percent_var=Mock(
+                get=Mock(return_value=100.0)
+            ),
+            trail_length_var=Mock(get=Mock(return_value=2.5)),
+            _display_refresh_hz=144.0,
+        )
+        plot.canvas = Mock()
+        plot.canvas.create_image.return_value = 9
+        plot._bitmap_photo = None
+        plot._bitmap_item = None
+        plot._bitmap_scanlines = None
+        plot._bitmap_pixel_expiry = None
+        plot._bitmap_expiry_heap = []
+        plot._bitmap_last_processed_sequence = -1
+        plot._bitmap_render_config = None
+        history = StickHistory()
+        for sequence in range(500):
+            history.add(0.25, -0.5, 1.0 + sequence / 8000.0,
+                        record_shape=False)
+
+        with patch(
+            "gamepad_test_window.tk.PhotoImage", return_value=Mock()
+        ):
+            plot._draw_trail_bitmap(history, now=1.1)
+
+        self.assertEqual(
+            plot._bitmap_last_processed_sequence,
+            history.trail[-1][3],
+        )
+        self.assertLessEqual(len(plot._bitmap_expiry_heap), 16)
+    def test_bitmap_merge_preserves_subpixel_footprint_union(self):
+        plot = object.__new__(StickPlot)
+        plot.trail_color = "#1976D2"
+        plot.zoom = 1.0
+        plot.pan_x = 0.0
+        plot.pan_y = 0.0
+        plot.owner = SimpleNamespace(
+            sample_display_percent_var=Mock(
+                get=Mock(return_value=100.0)
+            ),
+            trail_length_var=Mock(get=Mock(return_value=2.5)),
+        )
+        plot.canvas = Mock()
+        plot.canvas.create_image.return_value = 9
+        plot._bitmap_photo = None
+        plot._bitmap_item = None
+        plot._bitmap_scanlines = None
+        plot._bitmap_pixel_expiry = None
+        plot._bitmap_expiry_heap = []
+        plot._bitmap_last_processed_sequence = -1
+        plot._bitmap_render_config = None
+        history = StickHistory()
+        history.add(
+            0.01 / PLOT_RADIUS,
+            -0.01 / PLOT_RADIUS,
+            1.0,
+            record_shape=False,
+        )
+        history.add(
+            0.49 / PLOT_RADIUS,
+            -0.49 / PLOT_RADIUS,
+            1.01,
+            record_shape=False,
+        )
+
+        with patch(
+            "gamepad_test_window.tk.PhotoImage", return_value=Mock()
+        ):
+            plot._draw_trail_bitmap(history, now=1.1)
+
+        row_stride = 1 + PLOT_SIZE * 4
+        alpha_index = 159 * row_stride + 1 + 159 * 4 + 3
+        self.assertEqual(plot._bitmap_scanlines[alpha_index], 255)
+
+    def test_expired_tile_deletes_canvas_item_before_photo(self):
+        events = []
+
+        class LoggedPhotos(dict):
+            def pop(self, key, default=None):
+                events.append("photo")
+                return super().pop(key, default)
+
+        plot = object.__new__(StickPlot)
+        plot.trail_color = "#1976D2"
+        plot.zoom = 1.0
+        plot.pan_x = 0.0
+        plot.pan_y = 0.0
+        plot.owner = SimpleNamespace(
+            sample_display_percent_var=Mock(
+                get=Mock(return_value=100.0)
+            ),
+            trail_length_var=Mock(get=Mock(return_value=2.5)),
+        )
+        plot.canvas = Mock()
+        plot.canvas.delete.side_effect = lambda _item: events.append(
+            "canvas"
+        )
+        row_stride = 1 + PLOT_SIZE * 4
+        plot._bitmap_scanlines = bytearray(row_stride * PLOT_SIZE)
+        plot._bitmap_scanlines[4] = 255
+        plot._bitmap_pixel_expiry = [0.0] * (PLOT_SIZE * PLOT_SIZE)
+        plot._bitmap_pixel_expiry[0] = 1.0
+        plot._bitmap_expiry_heap = [(1.0, 0)]
+        plot._bitmap_last_processed_sequence = -1
+        plot._bitmap_render_config = (100, 1.0, 0.0, 0.0, 2.5)
+        plot._bitmap_tile_photos = LoggedPhotos({(0, 0): Mock()})
+        plot._bitmap_tile_items = {(0, 0): 9}
+        plot._bitmap_tile_live_counts = {(0, 0): 1}
+        plot._bitmap_photo = plot._bitmap_tile_photos[(0, 0)]
+        plot._bitmap_item = 9
+
+        plot._draw_trail_bitmap(StickHistory(), now=2.0)
+
+        self.assertEqual(events[:2], ["canvas", "photo"])
 
     def test_rgba_png_encoder_preserves_transparency_and_colour(self):
         scanlines = bytearray(2 * (1 + 2 * 4))
@@ -1283,6 +1522,32 @@ class GamepadMathTests(unittest.TestCase):
         self.assertAlmostEqual(
             tester.histories["left"].trail[0][0], 9.97
         )
+
+    def test_raw_hid_background_samples_do_not_enter_monitor_trail(self):
+        tester = object.__new__(GamepadTestWindow)
+        tester.raw_hid_stream = SimpleNamespace(
+            read_samples=Mock(return_value=(
+                ((10.0, (0.5, -0.25), (0.0, 0.0), 7),),
+                7,
+                0,
+            ))
+        )
+        tester._raw_hid_stream_sequence = 0
+        tester._raw_hid_stream_dropped = 0
+        tester.shape_enabled_var = Mock(get=Mock(return_value=False))
+        tester.histories = {
+            "left": StickHistory(),
+            "right": StickHistory(),
+        }
+
+        sample, consumed = tester._consume_raw_hid_stream(
+            None, record_trail=False
+        )
+
+        self.assertTrue(consumed)
+        self.assertEqual(sample["left"], (0.5, -0.25))
+        self.assertEqual(len(tester.histories["left"].trail), 0)
+        self.assertEqual(len(tester.histories["right"].trail), 0)
 
     def test_source_change_seeds_latest_value_without_center_flash(self):
         tester = object.__new__(GamepadTestWindow)

@@ -21,7 +21,11 @@ from gamepad_devices import (
     WindowsGamepadBackend,
 )
 from gyro_processing import _apply_gyro_response_curve
-from raw_hid_probe import RawHidProbeClient, enumerate_raw_hid_gamepads
+from raw_hid_probe import (
+    RawHidProbeClient,
+    RawHidStreamClient,
+    enumerate_raw_hid_gamepads,
+)
 from test_telemetry import SharedTestTelemetry
 from tooltip_layout import wrap_tooltip_text
 
@@ -30,7 +34,7 @@ PLOT_SIZE = 320
 PLOT_CENTER = PLOT_SIZE / 2
 PLOT_RADIUS = 146
 SHAPE_BIN_COUNT = 72
-TRAIL_RASTER_REFRESH_HZ = 30.0
+TRAIL_TILE_SIZE = 40
 SHAPE_TRACE_REFRESH_HZ = 60.0
 SHAPE_CAPTURE_SETTLE_SECONDS = 1.0
 TRAIL_COLOR = "#1976D2"
@@ -301,6 +305,35 @@ def encode_rgba_png(width, height, scanlines):
     )
 
 
+def encode_rgba_png_region(
+    source_width,
+    source_scanlines,
+    left,
+    top,
+    width,
+    height,
+):
+    """Encode one rectangular region from filter-prefixed RGBA rows."""
+    source_width = int(source_width)
+    left = int(left)
+    top = int(top)
+    width = int(width)
+    height = int(height)
+    source_stride = 1 + source_width * 4
+    region_stride = 1 + width * 4
+    region = bytearray(region_stride * height)
+    byte_width = width * 4
+    for row in range(height):
+        source_start = (
+            (top + row) * source_stride + 1 + left * 4
+        )
+        region_start = row * region_stride + 1
+        region[region_start:region_start + byte_width] = (
+            source_scanlines[source_start:source_start + byte_width]
+        )
+    return encode_rgba_png(width, height, region)
+
+
 def curve_output_radii(points):
     """Return the four applied-curve Y ranges used by the radial overlay."""
     normalized = [
@@ -339,7 +372,9 @@ def normalize_test_parameter(value, minimum, maximum, step):
 
 @dataclass
 class StickHistory:
-    trail: deque = field(default_factory=lambda: deque(maxlen=4096))
+    # Five seconds at 8 kHz needs 40,000 points. Keep headroom without
+    # allocating per-report UI objects.
+    trail: deque = field(default_factory=lambda: deque(maxlen=65536))
     next_sequence: int = 0
     shape_target: list = field(
         default_factory=lambda: [0.0] * SHAPE_BIN_COUNT
@@ -526,8 +561,8 @@ class StickPlot:
         self._trail_selected_sequences = deque()
         self._trail_last_processed_sequence = -1
         self._trail_render_percent = None
-        # A single transparent PhotoImage keeps the Canvas item count constant
-        # even when every high-rate controller report is displayed.
+        # Transparent tiles keep high-rate report count independent from the
+        # Canvas item count while avoiding full 320x320 PNG updates.
         self._bitmap_enabled = True
         self._bitmap_photo = None
         self._bitmap_item = None
@@ -536,8 +571,10 @@ class StickPlot:
         self._bitmap_expiry_heap = []
         self._bitmap_last_processed_sequence = -1
         self._bitmap_render_config = None
-        self._bitmap_dirty = False
-        self._bitmap_next_present_at = 0.0
+        self._bitmap_tile_photos = {}
+        self._bitmap_tile_items = {}
+        self._bitmap_tile_live_counts = {}
+        self._bitmap_presented = False
         self._dot_item = None
         self._dot_coords = None
         self._dynamic_deadzone_item = None
@@ -1106,7 +1143,7 @@ class StickPlot:
         # sequence selection makes 100% exact, while lower percentages retain
         # an evenly distributed subset without reassigning old Canvas items.
         display_percent = int(round(max(
-            10.0,
+            1.0,
             min(
                 100.0,
                 float(self.owner.sample_display_percent_var.get()),
@@ -1187,18 +1224,10 @@ class StickPlot:
 
     def _draw_trail_bitmap(self, history, now=None):
         now = time.perf_counter() if now is None else float(now)
-        if (
-            self._bitmap_photo is not None
-            and self._bitmap_item is not None
-            and now < self._bitmap_next_present_at
-        ):
-            # Samples remain in StickHistory and are consumed together on the
-            # next raster frame. The monitor-rate live dot therefore avoids
-            # all PNG, Tcl-variable and per-pixel trail work between updates.
-            return True
+        self._bitmap_presented = False
         trail = history.trail
         display_percent = int(round(max(
-            10.0,
+            1.0,
             min(
                 100.0,
                 float(self.owner.sample_display_percent_var.get()),
@@ -1218,6 +1247,20 @@ class StickPlot:
         try:
             pixel_count = PLOT_SIZE * PLOT_SIZE
             row_stride = 1 + PLOT_SIZE * 4
+            tile_photos = getattr(self, "_bitmap_tile_photos", None)
+            tile_items = getattr(self, "_bitmap_tile_items", None)
+            tile_live_counts = getattr(
+                self, "_bitmap_tile_live_counts", None
+            )
+            if tile_photos is None:
+                tile_photos = {}
+                self._bitmap_tile_photos = tile_photos
+            if tile_items is None:
+                tile_items = {}
+                self._bitmap_tile_items = tile_items
+            if tile_live_counts is None:
+                tile_live_counts = {}
+                self._bitmap_tile_live_counts = tile_live_counts
             if self._bitmap_scanlines is None:
                 self._bitmap_scanlines = bytearray(
                     row_stride * PLOT_SIZE
@@ -1228,8 +1271,15 @@ class StickPlot:
                 or newest_sequence
                 < self._bitmap_last_processed_sequence
             )
-            dirty = False
+            dirty_tiles = set()
             if rebuild:
+                if tile_items or self._bitmap_item is not None:
+                    self.canvas.delete("trail_bitmap")
+                tile_photos.clear()
+                tile_items.clear()
+                tile_live_counts.clear()
+                self._bitmap_photo = None
+                self._bitmap_item = None
                 self._bitmap_scanlines[:] = (
                     b"\x00" * len(self._bitmap_scanlines)
                 )
@@ -1238,7 +1288,6 @@ class StickPlot:
                 self._bitmap_last_processed_sequence = -1
                 self._bitmap_render_config = render_config
                 new_samples = trail
-                dirty = True
             else:
                 new_samples = []
                 for sample in reversed(trail):
@@ -1249,6 +1298,51 @@ class StickPlot:
                         break
                     new_samples.append(sample)
                 new_samples.reverse()
+
+            # Merge the final pixel coverage rather than only rounded sample
+            # centres. This preserves the exact sub-pixel dot footprint while
+            # ensuring each output pixel is touched at most once per frame.
+            frame_pixels = {}
+            radius = 1.15
+            radius_squared = radius * radius
+            for time_value, x, y, sequence in new_samples:
+                self._bitmap_last_processed_sequence = sequence
+                if (
+                    display_percent < 100
+                    and (sequence * display_percent) % 100
+                    >= display_percent
+                ):
+                    continue
+                point_x, point_y = self._view_point(x, y)
+                expiry = float(time_value) + trail_length
+                if expiry <= now:
+                    continue
+                minimum_x = max(
+                    0, int(math.floor(point_x - radius))
+                )
+                maximum_x = min(
+                    PLOT_SIZE - 1,
+                    int(math.ceil(point_x + radius)),
+                )
+                minimum_y = max(
+                    0, int(math.floor(point_y - radius))
+                )
+                maximum_y = min(
+                    PLOT_SIZE - 1,
+                    int(math.ceil(point_y + radius)),
+                )
+                for pixel_y in range(minimum_y, maximum_y + 1):
+                    delta_y = (pixel_y + 0.5) - point_y
+                    for pixel_x in range(minimum_x, maximum_x + 1):
+                        delta_x = (pixel_x + 0.5) - point_x
+                        if (
+                            delta_x * delta_x + delta_y * delta_y
+                            > radius_squared
+                        ):
+                            continue
+                        pixel_index = pixel_y * PLOT_SIZE + pixel_x
+                        if expiry > frame_pixels.get(pixel_index, 0.0):
+                            frame_pixels[pixel_index] = expiry
 
             while (
                 self._bitmap_expiry_heap
@@ -1273,121 +1367,109 @@ class StickPlot:
                     self._bitmap_scanlines[
                         rgba_index:rgba_index + 4
                     ] = b"\x00\x00\x00\x00"
-                    dirty = True
+                    tile_key = (
+                        pixel_x // TRAIL_TILE_SIZE,
+                        pixel_y // TRAIL_TILE_SIZE,
+                    )
+                    tile_live_counts[tile_key] = max(
+                        0, tile_live_counts.get(tile_key, 1) - 1
+                    )
+                    dirty_tiles.add(tile_key)
 
-            radius = 1.15
-            radius_squared = radius * radius
             color = tuple(
                 int(self.trail_color[index:index + 2], 16)
                 for index in (1, 3, 5)
             ) + (255,)
             color_bytes = bytes(color)
-            for time_value, x, y, sequence in new_samples:
-                self._bitmap_last_processed_sequence = sequence
-                if (
-                    display_percent < 100
-                    and (sequence * display_percent) % 100
-                    >= display_percent
-                ):
+            for pixel_index, expiry in frame_pixels.items():
+                if expiry <= self._bitmap_pixel_expiry[pixel_index]:
                     continue
-                point_x, point_y = self._view_point(x, y)
-                expiry = float(time_value) + trail_length
-                if expiry <= now:
+                self._bitmap_pixel_expiry[pixel_index] = expiry
+                heapq.heappush(
+                    self._bitmap_expiry_heap,
+                    (expiry, pixel_index),
+                )
+                pixel_y, pixel_x = divmod(pixel_index, PLOT_SIZE)
+                rgba_index = pixel_y * row_stride + 1 + pixel_x * 4
+                if not self._bitmap_scanlines[rgba_index + 3]:
+                    self._bitmap_scanlines[
+                        rgba_index:rgba_index + 4
+                    ] = color_bytes
+                    tile_key = (
+                        pixel_x // TRAIL_TILE_SIZE,
+                        pixel_y // TRAIL_TILE_SIZE,
+                    )
+                    tile_live_counts[tile_key] = (
+                        tile_live_counts.get(tile_key, 0) + 1
+                    )
+                    dirty_tiles.add(tile_key)
+
+            live_pixels = sum(tile_live_counts.values())
+            if len(self._bitmap_expiry_heap) > max(
+                2048, live_pixels * 8
+            ):
+                self._bitmap_expiry_heap = [
+                    (expiry, pixel_index)
+                    for pixel_index, expiry in enumerate(
+                        self._bitmap_pixel_expiry
+                    )
+                    if expiry > now
+                ]
+                heapq.heapify(self._bitmap_expiry_heap)
+
+            for tile_key in dirty_tiles:
+                tile_x, tile_y = tile_key
+                item = tile_items.get(tile_key)
+                if tile_live_counts.get(tile_key, 0) <= 0:
+                    tile_live_counts.pop(tile_key, None)
+                    if item is not None:
+                        self.canvas.delete(item)
+                        tile_items.pop(tile_key, None)
+                    # Drop the Tcl image only after no Canvas item references
+                    # it. Reversing this order can crash Tk during a native
+                    # Windows move/resize repaint.
+                    tile_photos.pop(tile_key, None)
                     continue
-                minimum_x = max(0, int(math.floor(point_x - radius)))
-                maximum_x = min(
-                    PLOT_SIZE - 1,
-                    int(math.ceil(point_x + radius)),
-                )
-                minimum_y = max(0, int(math.floor(point_y - radius)))
-                maximum_y = min(
-                    PLOT_SIZE - 1,
-                    int(math.ceil(point_y + radius)),
-                )
-                for pixel_y in range(minimum_y, maximum_y + 1):
-                    delta_y = (pixel_y + 0.5) - point_y
-                    for pixel_x in range(minimum_x, maximum_x + 1):
-                        delta_x = (pixel_x + 0.5) - point_x
-                        if (
-                            delta_x * delta_x + delta_y * delta_y
-                            > radius_squared
-                        ):
-                            continue
-                        pixel_index = pixel_y * PLOT_SIZE + pixel_x
-                        if (
-                            expiry
-                            <= self._bitmap_pixel_expiry[pixel_index]
-                        ):
-                            continue
-                        self._bitmap_pixel_expiry[pixel_index] = expiry
-                        heapq.heappush(
-                            self._bitmap_expiry_heap,
-                            (expiry, pixel_index),
-                        )
-                        rgba_index = (
-                            pixel_y * row_stride + 1 + pixel_x * 4
-                        )
-                        if (
-                            self._bitmap_scanlines[
-                                rgba_index:rgba_index + 4
-                            ]
-                            != color_bytes
-                        ):
-                            self._bitmap_scanlines[
-                                rgba_index:rgba_index + 4
-                            ] = color_bytes
-                            dirty = True
-            self._bitmap_dirty = self._bitmap_dirty or dirty
-            should_present = bool(
-                self._bitmap_photo is None
-                or (
-                    self._bitmap_dirty
-                    and now >= self._bitmap_next_present_at
-                )
-            )
-            bitmap_data = (
-                encode_rgba_png(
-                    PLOT_SIZE,
+                left = tile_x * TRAIL_TILE_SIZE
+                top = tile_y * TRAIL_TILE_SIZE
+                width = min(TRAIL_TILE_SIZE, PLOT_SIZE - left)
+                height = min(TRAIL_TILE_SIZE, PLOT_SIZE - top)
+                bitmap_data = encode_rgba_png_region(
                     PLOT_SIZE,
                     self._bitmap_scanlines,
+                    left,
+                    top,
+                    width,
+                    height,
                 )
-                if should_present else None
-            )
-            first_present = self._bitmap_photo is None
-            if first_present:
-                self._bitmap_photo = tk.PhotoImage(
-                    master=self.canvas,
-                    data=bitmap_data,
-                    format="png",
-                )
-            elif should_present:
-                self._bitmap_photo.configure(
-                    data=bitmap_data,
-                    format="png",
-                )
-            if self._bitmap_item is None:
-                self._bitmap_item = self.canvas.create_image(
-                    0,
-                    0,
-                    anchor="nw",
-                    image=self._bitmap_photo,
-                    tags="trail_bitmap",
-                )
-                self.canvas.tag_raise(self._bitmap_item)
-            if should_present:
-                self._bitmap_dirty = False
-                self._bitmap_next_present_at = (
-                    now + 1.0 / TRAIL_RASTER_REFRESH_HZ
-                )
-                if (
-                    first_present
-                    and getattr(self, "side", "left") == "right"
-                ):
-                    # Do not make both 320x320 PNG layers update in the same
-                    # 180 Hz display frame.
-                    self._bitmap_next_present_at += (
-                        0.5 / TRAIL_RASTER_REFRESH_HZ
+                photo = tile_photos.get(tile_key)
+                if photo is None:
+                    photo = tk.PhotoImage(
+                        master=self.canvas,
+                        data=bitmap_data,
+                        format="png",
                     )
+                    tile_photos[tile_key] = photo
+                    item = self.canvas.create_image(
+                        left,
+                        top,
+                        anchor="nw",
+                        image=photo,
+                        tags="trail_bitmap",
+                    )
+                    tile_items[tile_key] = item
+                else:
+                    photo.configure(data=bitmap_data, format="png")
+
+            if tile_items:
+                first_key = next(iter(tile_items))
+                self._bitmap_item = tile_items[first_key]
+                self._bitmap_photo = tile_photos[first_key]
+                self.canvas.tag_raise("trail_bitmap")
+            else:
+                self._bitmap_item = None
+                self._bitmap_photo = None
+            self._bitmap_presented = bool(dirty_tiles)
             return True
         except (
             AttributeError,
@@ -1400,14 +1482,16 @@ class StickPlot:
             # An older Tk build without PNG PhotoImage support remains usable.
             if self._bitmap_item is not None:
                 try:
-                    self.canvas.delete(self._bitmap_item)
+                    self.canvas.delete("trail_bitmap")
                 except tk.TclError:
                     pass
             self._bitmap_item = None
             self._bitmap_photo = None
+            self._bitmap_tile_photos = {}
+            self._bitmap_tile_items = {}
+            self._bitmap_tile_live_counts = {}
             self._bitmap_enabled = False
             self._bitmap_render_config = None
-            self._bitmap_dirty = False
             return False
 
     def _static_signature(self, side_data, telemetry, is_s2p):
@@ -1473,6 +1557,11 @@ class StickPlot:
         self._trail_last_processed_sequence = -1
         self._trail_render_percent = None
         self._bitmap_item = None
+        self._bitmap_photo = None
+        self._bitmap_tile_photos = {}
+        self._bitmap_tile_items = {}
+        self._bitmap_tile_live_counts = {}
+        self._bitmap_render_config = None
         self._dot_item = None
         self._dynamic_deadzone_item = None
         self._dynamic_deadzone_coords = None
@@ -1513,6 +1602,7 @@ class StickPlot:
         is_s2p,
         update_details=True,
     ):
+        frame_changed = False
         side_data = telemetry.get(self.side, {}) if is_s2p else {}
         source = self.selected_source()
         self._update_gyro_legend_visibility(telemetry, is_s2p, source)
@@ -1520,8 +1610,9 @@ class StickPlot:
         if static_key != self._static_key:
             self._draw_static(side_data, telemetry, is_s2p)
             self._static_key = static_key
+            frame_changed = True
             if self._bitmap_item is not None:
-                self.canvas.tag_raise(self._bitmap_item, "static")
+                self.canvas.tag_raise("trail_bitmap", "static")
         now = time.perf_counter()
         # Redraw the measured envelope at up to 60 FPS only while its data is
         # changing. Once settled, keeping the tester open emits no trace Canvas
@@ -1549,6 +1640,7 @@ class StickPlot:
                 self._draw_shape(history)
                 self._drawn_shape_revision = history.shape_revision
                 trace_redrawn = True
+                frame_changed = True
             self._last_trace_draw_at = now
         # Incremental trail processing usually handles only the reports added
         # since the previous display frame and emits no Canvas command when
@@ -1557,13 +1649,20 @@ class StickPlot:
         if getattr(self, "_bitmap_enabled", False):
             if not self._draw_trail_bitmap(history, now):
                 self._draw_trail(history, now)
+                frame_changed = bool(history.trail) or frame_changed
+            else:
+                frame_changed = (
+                    getattr(self, "_bitmap_presented", False)
+                    or frame_changed
+                )
         else:
             self._draw_trail(history, now)
+            frame_changed = bool(history.trail) or frame_changed
         if trace_redrawn and self._bitmap_item is not None:
             # Animated physical-stick colour bands are recreated after the
             # raster item. Restore the intended bands -> trail -> live-dot
             # stacking order only on those 30 Hz overlay frames.
-            self.canvas.tag_raise(self._bitmap_item)
+            self.canvas.tag_raise("trail_bitmap")
         gyro = telemetry.get("gyro") or {}
         show_dynamic_deadzone = bool(is_s2p and (
             (
@@ -1587,6 +1686,7 @@ class StickPlot:
                         dynamic_deadzone, state="hidden"
                     )
                     self._dynamic_deadzone_visible = False
+                    frame_changed = True
 
         dot_x, dot_y = self._view_point(clamp_unit(x), clamp_unit(y))
         dot_radius = 2.0
@@ -1609,6 +1709,7 @@ class StickPlot:
         if getattr(self, "_dot_coords", None) != dot_coords:
             self.canvas.coords(dot_item, *dot_coords)
             self._dot_coords = dot_coords
+            frame_changed = True
         if (
             dot_is_new
             or trace_redrawn
@@ -1616,7 +1717,7 @@ class StickPlot:
         ):
             self.canvas.tag_raise(dot_item)
         if not update_details:
-            return
+            return frame_changed
         tr = getattr(
             getattr(self.owner, "gui", None),
             "tr",
@@ -1795,6 +1896,7 @@ class StickPlot:
                 "detail_var",
                 tr("原始裝置輸出（無曲線／死區設定資料）"),
             )
+        return frame_changed
 
 
 class GamepadTestWindow:
@@ -1818,6 +1920,13 @@ class GamepadTestWindow:
         )
         self.draw_fps_var = tk.StringVar(value="— FPS")
         self.raw_hid_probe = RawHidProbeClient()
+        self.raw_hid_stream = RawHidStreamClient()
+        self.raw_hid_stream_enabled_var = tk.BooleanVar(value=True)
+        self.raw_hid_stream_status_var = tk.StringVar(value="")
+        self._raw_hid_stream_path = None
+        self._raw_hid_stream_sequence = 0
+        self._raw_hid_stream_dropped = 0
+        self._raw_hid_stream_latest_axes = None
         self.raw_hid_devices = {}
         self.raw_hid_duration_var = tk.StringVar(value="10")
         self.raw_hid_state_var = tk.StringVar(value=self.gui.tr("尚未量測"))
@@ -1889,6 +1998,7 @@ class GamepadTestWindow:
         self._last_trail_sequence = 0
         self._trail_overwrite_count = 0
         self._draw_times = deque(maxlen=512)
+        self._raw_hid_resume_after_measurement = False
         self._button_events = {}
         self._recent_events = deque(maxlen=8)
         self._last_state = None
@@ -2047,48 +2157,86 @@ class GamepadTestWindow:
         display_controls.grid(
             row=1, column=0, columnspan=2, sticky="ew", pady=(8, 6)
         )
+        display_controls.columnconfigure(5, weight=1)
         display_controls.columnconfigure(8, weight=1)
         ttk.Button(
             display_controls,
-            text=self.gui.tr("清除軌跡與統計"),
+            text=self.gui.tr("清除"),
             command=self.clear_measurements,
-        ).grid(row=0, column=0, padx=(0, 10))
+        ).grid(row=0, column=0, padx=(0, 7))
         ttk.Checkbutton(
             display_controls,
-            text=self.gui.tr("顯示輸出形狀"),
+            text=self.gui.tr("輸出形狀"),
             variable=self.shape_enabled_var,
             command=self._on_shape_enabled_changed,
-        ).grid(row=0, column=1, padx=(0, 10))
+        ).grid(row=0, column=1, padx=(0, 7))
         ttk.Checkbutton(
             display_controls,
-            text=self.gui.tr("顯示陀螺圖例"),
+            text=self.gui.tr("陀螺儀圖例"),
             variable=self.show_gyro_legend_var,
-        ).grid(row=0, column=2, padx=(0, 8))
+        ).grid(row=0, column=2, padx=(0, 7))
+        raw_hid_stream_toggle = ttk.Checkbutton(
+            display_controls,
+            text=self.gui.tr("實際採樣"),
+            variable=self.raw_hid_stream_enabled_var,
+            command=self._on_raw_hid_stream_changed,
+        )
+        raw_hid_stream_toggle.grid(row=0, column=3, padx=(0, 7))
+        ttk.Label(
+            display_controls, text=self.gui.tr("軌跡")
+        ).grid(row=0, column=4, padx=(0, 3))
+        trail_scale = ttk.Scale(
+            display_controls,
+            from_=0.5,
+            to=5.0,
+            variable=self.trail_length_var,
+            command=self._update_trail_length_text,
+            orient="horizontal",
+        )
+        trail_scale.grid(row=0, column=5, sticky="ew")
+        trail_value_label = ttk.Label(
+            display_controls,
+            textvariable=self.trail_length_text,
+            width=7,
+            anchor="e",
+        )
+        trail_value_label.grid(row=0, column=6, padx=(3, 7))
+        self._bind_parameter_control(
+            trail_value_label,
+            self.trail_length_var,
+            "軌跡",
+            0.5,
+            5.0,
+            step=0.1,
+            number_format=".1f",
+            on_change=self._update_trail_length_text,
+            state_widget=trail_scale,
+        )
         ttk.Label(
             display_controls, text=self.gui.tr("採樣點")
-        ).grid(row=0, column=3, padx=(0, 3))
+        ).grid(row=0, column=7, padx=(0, 3))
         sample_scale = ttk.Scale(
             display_controls,
-            from_=10.0,
+            from_=1.0,
             to=100.0,
             length=80,
             variable=self.sample_display_percent_var,
             command=self._update_sample_display_percent,
             orient="horizontal",
         )
-        sample_scale.grid(row=0, column=4)
+        sample_scale.grid(row=0, column=8, sticky="ew")
         sample_value_label = ttk.Label(
             display_controls,
             textvariable=self.sample_display_percent_text,
             width=5,
             anchor="e",
         )
-        sample_value_label.grid(row=0, column=5, padx=(3, 3))
+        sample_value_label.grid(row=0, column=9, padx=(3, 3))
         self._bind_parameter_control(
             sample_value_label,
             self.sample_display_percent_var,
             "採樣點",
-            10.0,
+            1.0,
             100.0,
             step=1.0,
             number_format=".0f",
@@ -2103,7 +2251,7 @@ class GamepadTestWindow:
             borderwidth=1,
             cursor="question_arrow",
         )
-        sample_help.grid(row=0, column=6, padx=(0, 8))
+        sample_help.grid(row=0, column=10)
         HoverTip(
             sample_help,
             self.gui.tr(
@@ -2113,39 +2261,12 @@ class GamepadTestWindow:
                 "XInput限制\n"
                 "XInput只保留最新座標，無法把兩次讀取之間已被覆蓋的"
                 "中間座標還原成路徑點。\n\n"
+                "Raw HID 實際採樣\n"
+                "啟用後會直接使用 Windows 收到的每筆 Raw HID 回報；"
+                "此時100%代表顯示緩衝區內全部實際回報點。\n\n"
                 "顯示百分比\n"
                 "降低百分比只會減少畫面上的路徑點，不會改變實際輸入。"
             ),
-        )
-        ttk.Label(
-            display_controls, text=self.gui.tr("軌跡長度")
-        ).grid(row=0, column=7, padx=(0, 4))
-        trail_scale = ttk.Scale(
-            display_controls,
-            from_=0.5,
-            to=5.0,
-            variable=self.trail_length_var,
-            command=self._update_trail_length_text,
-            orient="horizontal",
-        )
-        trail_scale.grid(row=0, column=8, sticky="ew")
-        trail_value_label = ttk.Label(
-            display_controls,
-            textvariable=self.trail_length_text,
-            width=7,
-            anchor="e",
-        )
-        trail_value_label.grid(row=0, column=9, padx=(4, 0))
-        self._bind_parameter_control(
-            trail_value_label,
-            self.trail_length_var,
-            "軌跡長度",
-            0.5,
-            5.0,
-            step=0.1,
-            number_format=".1f",
-            on_change=self._update_trail_length_text,
-            state_widget=trail_scale,
         )
 
         details = ttk.Frame(panel_stack)
@@ -2474,6 +2595,148 @@ class GamepadTestWindow:
         elif self.raw_hid_probe.read_snapshot().get("state") == "idle":
             self.raw_hid_state_var.set(self.gui.tr("尚未量測"))
         self._set_raw_hid_controls_active(False)
+        self._sync_raw_hid_stream()
+
+    def _on_raw_hid_stream_changed(self):
+        self.clear_measurements()
+        self._sync_raw_hid_stream()
+
+    def _stop_raw_hid_stream(self):
+        stopped = self.raw_hid_stream.stop()
+        if stopped:
+            self._raw_hid_stream_path = None
+            self._raw_hid_stream_sequence = 0
+        return stopped
+
+    def _sync_raw_hid_stream(self):
+        """Own exactly one stream for the selected physical input device."""
+        if self.window is None:
+            return
+        probe_state = self.raw_hid_probe.read_snapshot().get("state")
+        selected = self._selected_device()
+        enabled = (
+            self.raw_hid_stream_enabled_var.get()
+            and probe_state not in {"opening", "running"}
+            and selected is not None
+            and selected.kind != "s2p"
+        )
+        device = self._selected_raw_hid_device() if enabled else None
+        path = device.path if device is not None else None
+        if path == self._raw_hid_stream_path and self.raw_hid_stream.active:
+            status = self.raw_hid_stream.status()
+            if status.get("state") == "running":
+                self.raw_hid_stream_status_var.set(
+                    self.gui.tr("正在使用 Raw HID 實際回報")
+                )
+            return
+        if not self._stop_raw_hid_stream():
+            self.raw_hid_stream_status_var.set(
+                self.gui.tr("Raw HID 實際採樣無法停止")
+            )
+            return
+        if not enabled:
+            self.raw_hid_stream_status_var.set("")
+            return
+        if device is None:
+            self.raw_hid_stream_status_var.set(
+                self.gui.tr("目前手把無法對應 Raw HID，使用 Windows 快照")
+            )
+            return
+        if not self.raw_hid_stream.start(path):
+            self.raw_hid_stream_status_var.set(
+                self.gui.tr("Raw HID 實際採樣無法啟動")
+            )
+            return
+        self._raw_hid_stream_path = path
+        self._raw_hid_stream_sequence = 0
+        self._raw_hid_stream_dropped = 0
+        self.raw_hid_stream_status_var.set(
+            self.gui.tr("正在開啟 Raw HID 實際採樣...")
+        )
+
+    def _consume_raw_hid_stream(self, sample, record_trail=True):
+        samples, newest, dropped = self.raw_hid_stream.read_samples(
+            self._raw_hid_stream_sequence
+        )
+        self._raw_hid_stream_sequence = newest
+        self._raw_hid_stream_dropped += dropped
+        if not samples:
+            return sample, False
+        if record_trail:
+            record_shape = self.shape_enabled_var.get()
+            for sample_time, left, right, _sequence in samples:
+                self.histories["left"].add(
+                    left[0], left[1], sample_time, record_shape
+                )
+                self.histories["right"].add(
+                    right[0], right[1], sample_time, record_shape
+                )
+        latest_time, left, right, sequence = samples[-1]
+        self._raw_hid_stream_latest_axes = (left, right)
+        if sample is None:
+            sample = {
+                "buttons": (),
+                "buttons_mask": 0,
+                "triggers": (0.0, 0.0),
+                "source_rate_hz": None,
+                "rate_is_independent": True,
+                "mappings": [],
+                "linear_triggers": [],
+                "layer": "原始輸入",
+            }
+        else:
+            sample = dict(sample)
+        sample.update({
+            "left": left,
+            "right": right,
+            "token": ("raw_hid", sequence),
+        })
+        return sample, True
+
+    def _discard_pending_monitor_samples(self):
+        """Advance every input queue without recording hidden-tab movement."""
+        if self.raw_hid_stream.active:
+            _samples, newest, dropped = self.raw_hid_stream.read_samples(
+                self._raw_hid_stream_sequence
+            )
+            self._raw_hid_stream_sequence = newest
+            self._raw_hid_stream_dropped += dropped
+        if self.native_sampler is not None:
+            self.native_sampler.read_snapshot()
+        self._baseline_trail_sequence()
+        self._last_consumed_token = None
+
+    def _update_raw_hid_stream_status(self):
+        if not self.raw_hid_stream_enabled_var.get():
+            return
+        status = self.raw_hid_stream.status()
+        state = status.get("state")
+        if state == "running":
+            if self._raw_hid_stream_dropped:
+                self.raw_hid_stream_status_var.set(
+                    self.gui.tr("Raw HID 實際回報；緩衝區遺失 {count} 筆")
+                    .format(count=self._raw_hid_stream_dropped)
+                )
+            else:
+                axes = self._raw_hid_stream_latest_axes
+                reports = int(status.get("raw_reports", 0) or 0)
+                if axes is None:
+                    detail = self.gui.tr("等待第一筆座標")
+                else:
+                    left, right = axes
+                    detail = (
+                        f"L {left[0]:+.3f}, {left[1]:+.3f}   "
+                        f"R {right[0]:+.3f}, {right[1]:+.3f}"
+                    )
+                self.raw_hid_stream_status_var.set(
+                    self.gui.tr("Raw HID 實際回報")
+                    + f"  {reports:,}   {detail}"
+                )
+        elif state == "error" and self._raw_hid_stream_path is not None:
+            self.raw_hid_stream_status_var.set(
+                self.gui.tr("Raw HID 實際採樣失敗（錯誤代碼 {code}）")
+                .format(code=int(status.get("error_code", 0) or 0))
+            )
 
     @staticmethod
     def _raw_hid_name_key(value):
@@ -2604,6 +2867,12 @@ class GamepadTestWindow:
         self._update_raw_hid_percentile_info(0)
         self._raw_hid_last_distribution = None
         self._draw_raw_hid_chart((), 0, 0.0, 0.0, 0.0)
+        # A HID collection must have only one active reader. Suspend the
+        # trajectory stream before the finite timing measurement opens it.
+        self._raw_hid_resume_after_measurement = bool(
+            self.raw_hid_stream_enabled_var.get()
+        )
+        self._stop_raw_hid_stream()
         self._raw_hid_pending_start = (device.path, duration)
         self._raw_hid_countdown_deadline = time.perf_counter() + 3.0
         self.raw_hid_state_var.set(self.gui.tr("準備量測..."))
@@ -2619,9 +2888,20 @@ class GamepadTestWindow:
             self.raw_hid_state_var.set(self.gui.tr("已取消量測"))
             self.raw_hid_remaining_var.set(self.gui.tr("已取消量測"))
             self._set_raw_hid_controls_active(False)
+            self._resume_actual_sampling_after_measurement()
             return
         self.raw_hid_probe.stop()
         self._update_raw_hid_measurement()
+
+    def _resume_actual_sampling_after_measurement(self):
+        if not getattr(self, "_raw_hid_resume_after_measurement", False):
+            return False
+        self._raw_hid_resume_after_measurement = False
+        # Ensure the finite measurement no longer owns the HID handle before
+        # reopening it for continuous trajectory sampling.
+        self.raw_hid_probe.stop(timeout=0.1)
+        self._sync_raw_hid_stream()
+        return True
 
     def _cancel_raw_hid_countdown(self):
         was_pending = self._raw_hid_pending_start is not None
@@ -2655,7 +2935,19 @@ class GamepadTestWindow:
         device_path, duration = pending
         self._raw_hid_pending_start = None
         self._raw_hid_countdown_deadline = 0.0
+        # Re-check immediately before opening the measurement handle. This
+        # also covers a stream process that was still shutting down when the
+        # user pressed Start.
+        if not self._stop_raw_hid_stream():
+            self._raw_hid_resume_after_measurement = False
+            self.raw_hid_state_var.set(
+                self.gui.tr("Raw HID 介面仍被實際採樣占用")
+            )
+            self.raw_hid_remaining_var.set(self.gui.tr("量測失敗"))
+            self._set_raw_hid_controls_active(False)
+            return
         if not self.raw_hid_probe.start(device_path, duration):
+            self._raw_hid_resume_after_measurement = False
             self.raw_hid_state_var.set(
                 self.gui.tr("Raw HID 量測器無法啟動")
             )
@@ -2806,6 +3098,11 @@ class GamepadTestWindow:
         self._set_raw_hid_controls_active(
             state in {"opening", "running"}
         )
+        if (
+            state in {"complete", "stopped", "error"}
+            and getattr(self, "_raw_hid_resume_after_measurement", False)
+        ):
+            self._resume_actual_sampling_after_measurement()
 
     def _draw_raw_hid_chart(
         self, counts, histogram_max_us, p50_us, p95_us, p99_us
@@ -3420,7 +3717,7 @@ class GamepadTestWindow:
 
     def _update_sample_display_percent(self, _value=None):
         percentage = int(round(max(
-            10.0, min(100.0, self.sample_display_percent_var.get())
+            1.0, min(100.0, self.sample_display_percent_var.get())
         )))
         self.sample_display_percent_var.set(float(percentage))
         self.sample_display_percent_text.set(f"{percentage}%")
@@ -3442,7 +3739,9 @@ class GamepadTestWindow:
             ) + 1
             self._next_frame_at += missed * frame_interval
         delay_ms = max(
-            1, int(round((self._next_frame_at - current) * 1000.0))
+            1, int(math.ceil(
+                (self._next_frame_at - current) * 1000.0
+            ))
         )
         self._poll_job = self.window.after(delay_ms, self._poll)
 
@@ -3464,8 +3763,13 @@ class GamepadTestWindow:
 
     def _on_test_tab_changed(self, _event=None):
         self._next_frame_at = time.perf_counter()
+        self._draw_times.clear()
+        # Drain at the event boundary. A fast away-and-back switch can happen
+        # before the next background poll and must not replay hidden movement.
+        self._discard_pending_monitor_samples()
         if self._active_test_tab() == "high_rate":
             self._raw_hid_last_distribution = None
+        self._sync_raw_hid_stream()
 
     def _update_display_refresh_rate(self, window=None):
         window = self.window if window is None else window
@@ -3486,13 +3790,20 @@ class GamepadTestWindow:
             return
         self._last_window_geometry = geometry
         self._update_display_refresh_rate()
-        self._window_motion_until = time.perf_counter() + 0.25
+        self._window_motion_until = time.perf_counter() + 0.10
+
+    def _monitor_presentation_allowed(self, active_tab, now):
+        return (
+            active_tab == "input"
+            and float(now) >= self._window_motion_until
+        )
 
     def _poll(self):
         self._poll_job = None
         if self.window is None or not self.window.winfo_exists():
             return
         now = time.perf_counter()
+        monitor_visible = self._active_test_tab() == "input"
         telemetry = self.telemetry.read_latest() if self.telemetry else {}
         telemetry = telemetry or {}
         if telemetry:
@@ -3517,15 +3828,25 @@ class GamepadTestWindow:
                 sample = self._sample_from_native(
                     device, native_state, native_rate
                 )
-                for sample_time, queued_state in native_samples:
-                    self._consume_sample(
-                        self._sample_from_native(
-                            device, queued_state, native_rate
-                        ),
-                        False,
-                        sample_time,
-                    )
-                consumed_trail = bool(native_samples)
+                if monitor_visible and not self.raw_hid_stream.active:
+                    for sample_time, queued_state in native_samples:
+                        self._consume_sample(
+                            self._sample_from_native(
+                                device, queued_state, native_rate
+                            ),
+                            False,
+                            sample_time,
+                        )
+                    consumed_trail = bool(native_samples)
+        if (
+            not is_s2p
+            and device is not None
+            and self.raw_hid_stream.active
+        ):
+            sample, raw_consumed = self._consume_raw_hid_stream(
+                sample, record_trail=monitor_visible
+            )
+            consumed_trail = consumed_trail or raw_consumed
         if sample is not None:
             sample_token = sample.get("token")
             if is_s2p and self.telemetry is not None:
@@ -3536,10 +3857,12 @@ class GamepadTestWindow:
                 )
                 self._last_trail_sequence = newest_sequence
                 self._trail_overwrite_count += dropped
-                if trail_samples:
+                if trail_samples and monitor_visible:
                     self._consume_s2p_trail_samples(trail_samples, now)
                     consumed_trail = True
             if (
+                monitor_visible
+                and
                 not consumed_trail
                 and sample_token != self._last_consumed_token
             ):
@@ -3563,12 +3886,18 @@ class GamepadTestWindow:
             now - self._last_detail_refresh >= 1.0 / 30.0
         )
         active_tab = self._active_test_tab()
-        if active_tab == "input":
-            self._draw_plots(is_s2p, update_details=refresh_details)
-        self._draw_times.append(now)
+        window_in_motion = now < self._window_motion_until
+        if self._monitor_presentation_allowed(active_tab, now):
+            frame_changed = self._draw_plots(
+                is_s2p, update_details=refresh_details
+            )
+            # Count only monitor frames that changed a bitmap, overlay or live
+            # dot; background polls and no-op draws are not presentation FPS.
+            if frame_changed:
+                self._draw_times.append(now)
         while self._draw_times and now - self._draw_times[0] > 1.0:
             self._draw_times.popleft()
-        if refresh_details:
+        if refresh_details and not window_in_motion:
             self._last_detail_refresh = now
             if active_tab == "input":
                 self._update_triggers(sample, is_s2p)
@@ -3696,20 +4025,22 @@ class GamepadTestWindow:
 
     def _draw_plots(self, is_s2p, update_details=True):
         telemetry = self.latest_telemetry if is_s2p else {}
+        frame_changed = False
         for side, plot in self.plots.items():
             history = self.histories[side]
             if history.trail:
                 _, x, y, _sequence = history.trail[-1]
             else:
                 x = y = 0.0
-            plot.draw(
+            frame_changed = plot.draw(
                 history,
                 x,
                 y,
                 telemetry,
                 is_s2p,
                 update_details=update_details,
-            )
+            ) or frame_changed
+        return frame_changed
 
     def _on_source_changed(self, side):
         self.histories[side].reset()
@@ -3904,6 +4235,8 @@ class GamepadTestWindow:
         self.selected_device_var.set(next_name)
         self._configure_source_controls()
         self._configure_native_sampler()
+        if previous_device_key != next_device_key:
+            self._sync_raw_hid_stream()
 
     def _refresh_devices_after_telemetry(self):
         self._device_refresh_job = None
@@ -4129,6 +4462,10 @@ class GamepadTestWindow:
         self._button_events.clear()
         self._recent_events.clear()
         self._baseline_trail_sequence()
+        self._raw_hid_stream_sequence = int(
+            self.raw_hid_stream.status().get("latest_sequence", 0) or 0
+        )
+        self._raw_hid_stream_dropped = 0
 
     def _update_rumble_availability(self, device):
         supported = bool(device and device.supports_rumble)
@@ -4473,6 +4810,7 @@ class GamepadTestWindow:
     def close(self):
         self._cancel_raw_hid_countdown()
         self.raw_hid_probe.stop()
+        self._stop_raw_hid_stream()
         self.stop_rumble()
         parameter_editor = self._parameter_editor_window
         self._parameter_editor_window = None

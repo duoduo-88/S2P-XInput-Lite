@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <cwctype>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -20,6 +21,68 @@ constexpr uint32_t kHistogramMaxUs = 100000;
 constexpr size_t kDistributionBins = 80;
 constexpr DWORD kReadWaitMs = 10;
 constexpr DWORD kPublishIntervalMs = 100;
+constexpr uint32_t kStreamMagic = 0x53524853;  // "SRHS"
+constexpr uint32_t kStreamVersion = 1;
+
+#pragma pack(push, 1)
+struct StreamHeader {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t header_size;
+    uint32_t slot_size;
+    uint32_t capacity;
+    volatile LONG state;
+    volatile LONG error_code;
+    uint32_t axes_mask;
+    volatile LONG64 latest_sequence;
+    volatile LONG64 reports;
+    uint64_t qpc_frequency;
+    uint64_t reserved;
+};
+
+struct StreamSlot {
+    volatile LONG64 sequence;
+    uint64_t timestamp_ticks;
+    float left_x;
+    float left_y;
+    float right_x;
+    float right_y;
+    float left_trigger;
+    float right_trigger;
+    uint32_t buttons;
+    uint32_t reserved;
+};
+#pragma pack(pop)
+
+static_assert(sizeof(StreamHeader) == 64, "stream header layout changed");
+static_assert(sizeof(StreamSlot) == 48, "stream slot layout changed");
+
+enum StreamAxis : uint32_t {
+    StreamLeftX = 1 << 0,
+    StreamLeftY = 1 << 1,
+    StreamRightX = 1 << 2,
+    StreamRightY = 1 << 3,
+};
+
+struct AxisDescriptor {
+    bool valid = false;
+    USAGE usage = 0;
+    UCHAR report_id = 0;
+    USHORT link_collection = 0;
+    USHORT data_index = 0;
+    LONG logical_minimum = 0;
+    LONG logical_maximum = 0;
+};
+
+struct StreamParser {
+    PHIDP_PREPARSED_DATA preparsed = nullptr;
+    AxisDescriptor left_x;
+    AxisDescriptor left_y;
+    AxisDescriptor right_x;
+    AxisDescriptor right_y;
+    USHORT input_data_indices = 0;
+    uint32_t axes_mask = 0;
+};
 
 enum class ProbeState : uint32_t {
     Opening = 0,
@@ -263,7 +326,12 @@ bool read_stop_command() {
     if (input == nullptr || input == INVALID_HANDLE_VALUE) return false;
     DWORD available = 0;
     if (!PeekNamedPipe(input, nullptr, 0, nullptr, &available, nullptr)) {
-        return false;
+        const DWORD error = GetLastError();
+        // The stream helper must not survive its owning tester process. An
+        // orphan would keep the HID collection open and compete with the next
+        // finite report-rate measurement.
+        return error == ERROR_BROKEN_PIPE
+            || error == ERROR_PIPE_NOT_CONNECTED;
     }
     if (available == 0) return false;
     char buffer[64]{};
@@ -529,6 +597,459 @@ int run_self_test(uint32_t rate_hz, uint64_t duration_ms) {
     return 0;
 }
 
+AxisDescriptor find_axis(
+    const std::vector<HIDP_VALUE_CAPS> &caps,
+    USAGE usage,
+    int report_id = -1
+) {
+    for (const auto &cap : caps) {
+        if (cap.UsagePage != 0x01) continue;
+        if (report_id >= 0 && cap.ReportID != report_id) continue;
+        const USAGE first = cap.IsRange ? cap.Range.UsageMin
+                                        : cap.NotRange.Usage;
+        const USAGE last = cap.IsRange ? cap.Range.UsageMax : first;
+        if (usage < first || usage > last) continue;
+        return {
+            true,
+            usage,
+            cap.ReportID,
+            cap.LinkCollection,
+            static_cast<USHORT>(
+                cap.IsRange
+                    ? cap.Range.DataIndexMin
+                        + (usage - cap.Range.UsageMin)
+                    : cap.NotRange.DataIndex
+            ),
+            cap.LogicalMin,
+            cap.LogicalMax,
+        };
+    }
+    return {};
+}
+
+bool initialize_stream_parser(
+    HANDLE device,
+    StreamParser &parser,
+    HIDP_CAPS &device_caps
+) {
+    if (!HidD_GetPreparsedData(device, &parser.preparsed)) return false;
+    if (
+        HidP_GetCaps(parser.preparsed, &device_caps) != HIDP_STATUS_SUCCESS
+        || device_caps.InputReportByteLength == 0
+    ) {
+        HidD_FreePreparsedData(parser.preparsed);
+        parser.preparsed = nullptr;
+        return false;
+    }
+    USHORT count = device_caps.NumberInputValueCaps;
+    std::vector<HIDP_VALUE_CAPS> value_caps(count);
+    if (
+        count != 0
+        && HidP_GetValueCaps(
+            HidP_Input, value_caps.data(), &count, parser.preparsed
+        ) != HIDP_STATUS_SUCCESS
+    ) {
+        HidD_FreePreparsedData(parser.preparsed);
+        parser.preparsed = nullptr;
+        return false;
+    }
+    value_caps.resize(count);
+    parser.input_data_indices = device_caps.NumberInputDataIndices;
+    std::vector<UCHAR> report_ids;
+    for (const auto &cap : value_caps) {
+        if (
+            cap.UsagePage == 0x01
+            && std::find(
+                report_ids.begin(), report_ids.end(), cap.ReportID
+            ) == report_ids.end()
+        ) {
+            report_ids.push_back(cap.ReportID);
+        }
+    }
+    // Usages can be repeated in several report IDs on composite gamepads.
+    // Select a complete stick set from one report instead of independently
+    // taking the first descriptor for each usage.
+    for (const UCHAR report_id : report_ids) {
+        AxisDescriptor left_x = find_axis(
+            value_caps, 0x30, report_id
+        );
+        AxisDescriptor left_y = find_axis(
+            value_caps, 0x31, report_id
+        );
+        AxisDescriptor right_x = find_axis(
+            value_caps, 0x33, report_id
+        );
+        AxisDescriptor right_y = find_axis(
+            value_caps, 0x34, report_id
+        );
+        if (!right_x.valid || !right_y.valid) {
+            right_x = find_axis(value_caps, 0x32, report_id);
+            right_y = find_axis(value_caps, 0x35, report_id);
+        }
+        if (
+            left_x.valid && left_y.valid
+            && right_x.valid && right_y.valid
+        ) {
+            parser.left_x = left_x;
+            parser.left_y = left_y;
+            parser.right_x = right_x;
+            parser.right_y = right_y;
+            break;
+        }
+    }
+    if (!parser.left_x.valid) {
+        parser.left_x = find_axis(value_caps, 0x30);
+        parser.left_y = find_axis(value_caps, 0x31);
+        parser.right_x = find_axis(value_caps, 0x33);
+        parser.right_y = find_axis(value_caps, 0x34);
+        if (!parser.right_x.valid || !parser.right_y.valid) {
+            parser.right_x = find_axis(value_caps, 0x32);
+            parser.right_y = find_axis(value_caps, 0x35);
+        }
+    }
+    if (parser.left_x.valid) parser.axes_mask |= StreamLeftX;
+    if (parser.left_y.valid) parser.axes_mask |= StreamLeftY;
+    if (parser.right_x.valid) parser.axes_mask |= StreamRightX;
+    if (parser.right_y.valid) parser.axes_mask |= StreamRightY;
+    constexpr uint32_t required_axes = (
+        StreamLeftX | StreamLeftY | StreamRightX | StreamRightY
+    );
+    return (parser.axes_mask & required_axes) == required_axes;
+}
+
+bool read_axis(
+    const StreamParser &parser,
+    const AxisDescriptor &axis,
+    const std::vector<uint8_t> &report,
+    bool invert,
+    float &normalized,
+    NTSTATUS *result_status = nullptr
+) {
+    if (!axis.valid || axis.logical_maximum <= axis.logical_minimum) {
+        if (result_status) *result_status = HIDP_STATUS_USAGE_NOT_FOUND;
+        return false;
+    }
+    if (
+        axis.report_id != 0
+        && (
+            report.empty()
+            || report.front() != axis.report_id
+        )
+    ) {
+        return false;
+    }
+    ULONG raw = 0;
+    NTSTATUS status = HidP_GetUsageValue(
+        HidP_Input,
+        0x01,
+        axis.link_collection,
+        axis.usage,
+        &raw,
+        parser.preparsed,
+        reinterpret_cast<PCHAR>(
+            const_cast<uint8_t *>(report.data())
+        ),
+        static_cast<ULONG>(report.size())
+    );
+    if (
+        status != HIDP_STATUS_SUCCESS
+        && axis.link_collection != 0
+    ) {
+        status = HidP_GetUsageValue(
+            HidP_Input,
+            0x01,
+            0,
+            axis.usage,
+            &raw,
+            parser.preparsed,
+            reinterpret_cast<PCHAR>(
+                const_cast<uint8_t *>(report.data())
+            ),
+            static_cast<ULONG>(report.size())
+        );
+    }
+    if (
+        status != HIDP_STATUS_SUCCESS
+        && parser.input_data_indices != 0
+    ) {
+        std::vector<HIDP_DATA> data(parser.input_data_indices);
+        ULONG data_count = static_cast<ULONG>(data.size());
+        status = HidP_GetData(
+            HidP_Input,
+            data.data(),
+            &data_count,
+            parser.preparsed,
+            reinterpret_cast<PCHAR>(
+                const_cast<uint8_t *>(report.data())
+            ),
+            static_cast<ULONG>(report.size())
+        );
+        if (status == HIDP_STATUS_SUCCESS) {
+            const auto match = std::find_if(
+                data.begin(),
+                data.begin() + data_count,
+                [&axis](const HIDP_DATA &item) {
+                    return item.DataIndex == axis.data_index;
+                }
+            );
+            if (match == data.begin() + data_count) {
+                status = HIDP_STATUS_USAGE_NOT_FOUND;
+            } else {
+                raw = match->RawValue;
+            }
+        }
+    }
+    if (result_status) *result_status = status;
+    // Composite controllers commonly interleave several input report IDs.
+    // A report that does not contain this usage is not a centered stick
+    // sample and must not be published as one.
+    if (status != HIDP_STATUS_SUCCESS) return false;
+    LONG value = static_cast<LONG>(raw);
+    if (axis.logical_minimum < 0) {
+        const uint64_t logical_span = static_cast<uint64_t>(
+            static_cast<int64_t>(axis.logical_maximum)
+            - static_cast<int64_t>(axis.logical_minimum)
+        );
+        unsigned bits = 1;
+        while (bits < 32 && ((1ULL << bits) - 1ULL) < logical_span) ++bits;
+        if (bits < 32 && (raw & (1UL << (bits - 1)))) {
+            value = static_cast<LONG>(
+                static_cast<int64_t>(raw) - (1LL << bits)
+            );
+        }
+    }
+    const double unit = (
+        static_cast<double>(value)
+        - static_cast<double>(axis.logical_minimum)
+    ) / (
+        static_cast<double>(axis.logical_maximum)
+        - static_cast<double>(axis.logical_minimum)
+    );
+    normalized = static_cast<float>(
+        std::clamp(unit * 2.0 - 1.0, -1.0, 1.0)
+    );
+    if (invert) normalized = -normalized;
+    return true;
+}
+
+float normalize_xinput_hid_axis(ULONG raw, bool invert) {
+    const double unit = (
+        static_cast<double>(raw & 0xFFFFUL) / 65535.0
+    );
+    float normalized = static_cast<float>(
+        std::clamp(unit * 2.0 - 1.0, -1.0, 1.0)
+    );
+    return invert ? -normalized : normalized;
+}
+
+int run_stream(
+    const std::wstring &path,
+    const std::wstring &mapping_name,
+    uint32_t capacity
+) {
+    if (capacity < 1024 || capacity > 262144) return 2;
+    const size_t mapping_size = sizeof(StreamHeader)
+        + static_cast<size_t>(capacity) * sizeof(StreamSlot);
+    HANDLE mapping = OpenFileMappingW(
+        FILE_MAP_ALL_ACCESS, FALSE, mapping_name.c_str()
+    );
+    if (mapping == nullptr) return 3;
+    auto *base = static_cast<uint8_t *>(MapViewOfFile(
+        mapping, FILE_MAP_ALL_ACCESS, 0, 0, mapping_size
+    ));
+    if (base == nullptr) {
+        CloseHandle(mapping);
+        return 3;
+    }
+    auto *header = reinterpret_cast<StreamHeader *>(base);
+    auto *slots = reinterpret_cast<StreamSlot *>(
+        base + sizeof(StreamHeader)
+    );
+    ZeroMemory(base, mapping_size);
+    header->magic = kStreamMagic;
+    header->version = kStreamVersion;
+    header->header_size = sizeof(StreamHeader);
+    header->slot_size = sizeof(StreamSlot);
+    header->capacity = capacity;
+    header->qpc_frequency = qpc_frequency();
+    InterlockedExchange(&header->state, 0);
+
+    HANDLE device = CreateFileW(
+        path.c_str(), GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_OVERLAPPED, nullptr
+    );
+    if (device == INVALID_HANDLE_VALUE) {
+        InterlockedExchange(
+            &header->error_code, static_cast<LONG>(GetLastError())
+        );
+        InterlockedExchange(&header->state, 3);
+        UnmapViewOfFile(base);
+        CloseHandle(mapping);
+        return 1;
+    }
+    StreamParser parser;
+    HIDP_CAPS caps{};
+    if (!initialize_stream_parser(device, parser, caps)) {
+        InterlockedExchange(&header->error_code, ERROR_INVALID_DATA);
+        InterlockedExchange(&header->state, 3);
+        CloseHandle(device);
+        UnmapViewOfFile(base);
+        CloseHandle(mapping);
+        return 1;
+    }
+    header->axes_mask = parser.axes_mask;
+    HidD_SetNumInputBuffers(device, 512);
+    std::vector<uint8_t> report(caps.InputReportByteLength);
+    HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (event == nullptr) {
+        const DWORD error = GetLastError();
+        HidD_FreePreparsedData(parser.preparsed);
+        CloseHandle(device);
+        InterlockedExchange(&header->error_code, error);
+        InterlockedExchange(&header->state, 3);
+        UnmapViewOfFile(base);
+        CloseHandle(mapping);
+        return 1;
+    }
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+    InterlockedExchange(&header->state, 1);
+    uint64_t sequence = 0;
+    float left_x = 0.0f;
+    float left_y = 0.0f;
+    float right_x = 0.0f;
+    float right_y = 0.0f;
+    std::wstring folded_path = path;
+    std::transform(
+        folded_path.begin(), folded_path.end(), folded_path.begin(),
+        [](wchar_t character) {
+            return static_cast<wchar_t>(std::towupper(character));
+        }
+    );
+    const bool xinput_hid_collection = (
+        folded_path.find(L"&IG_") != std::wstring::npos
+    );
+    bool stopped = false;
+    while (!stopped) {
+        if (read_stop_command()) break;
+        OVERLAPPED overlapped{};
+        overlapped.hEvent = event;
+        ResetEvent(event);
+        DWORD bytes_read = 0;
+        BOOL completed = ReadFile(
+            device, report.data(), static_cast<DWORD>(report.size()),
+            &bytes_read, &overlapped
+        );
+        if (!completed && GetLastError() == ERROR_IO_PENDING) {
+            while (true) {
+                const DWORD wait = WaitForSingleObject(event, kReadWaitMs);
+                if (wait == WAIT_OBJECT_0) {
+                    completed = GetOverlappedResult(
+                        device, &overlapped, &bytes_read, FALSE
+                    );
+                    break;
+                }
+                if (wait != WAIT_TIMEOUT) {
+                    completed = FALSE;
+                    break;
+                }
+                if (read_stop_command()) {
+                    CancelIoEx(device, &overlapped);
+                    WaitForSingleObject(event, INFINITE);
+                    stopped = true;
+                    completed = FALSE;
+                    break;
+                }
+            }
+        }
+        if (!completed) {
+            if (stopped) break;
+            const DWORD error = GetLastError();
+            if (error == ERROR_OPERATION_ABORTED) continue;
+            InterlockedExchange(&header->error_code, error);
+            InterlockedExchange(&header->state, 3);
+            break;
+        }
+        if (bytes_read == 0) continue;
+        InterlockedIncrement64(
+            reinterpret_cast<volatile LONG64 *>(&header->reserved)
+        );
+        uint32_t sample_axes = 0;
+        if (
+            xinput_hid_collection
+            && bytes_read >= 9
+        ) {
+            const auto value_at = [&report](size_t offset) -> ULONG {
+                return static_cast<ULONG>(report[offset])
+                    | (
+                        static_cast<ULONG>(report[offset + 1])
+                        << 8
+                    );
+            };
+            left_x = normalize_xinput_hid_axis(value_at(1), false);
+            left_y = normalize_xinput_hid_axis(value_at(3), true);
+            right_x = normalize_xinput_hid_axis(value_at(5), false);
+            right_y = normalize_xinput_hid_axis(value_at(7), true);
+            sample_axes = (
+                StreamLeftX | StreamLeftY
+                | StreamRightX | StreamRightY
+            );
+        } else {
+            if (read_axis(parser, parser.left_x, report, false, left_x)) {
+                sample_axes |= StreamLeftX;
+            }
+            if (read_axis(parser, parser.left_y, report, true, left_y)) {
+                sample_axes |= StreamLeftY;
+            }
+            if (read_axis(
+                parser, parser.right_x, report, false, right_x
+            )) {
+                sample_axes |= StreamRightX;
+            }
+            if (read_axis(
+                parser, parser.right_y, report, true, right_y
+            )) {
+                sample_axes |= StreamRightY;
+            }
+        }
+        // Composite devices may split axes across report IDs. Preserve the
+        // last value for axes absent from this report, and discard only
+        // reports that contain no stick data at all.
+        if (sample_axes == 0) continue;
+        ++sequence;
+        StreamSlot &slot = slots[(sequence - 1) % capacity];
+        InterlockedExchange64(&slot.sequence, 0);
+        slot.timestamp_ticks = qpc_now();
+        slot.left_x = left_x;
+        slot.left_y = left_y;
+        slot.right_x = right_x;
+        slot.right_y = right_y;
+        slot.left_trigger = 0.0f;
+        slot.right_trigger = 0.0f;
+        slot.buttons = 0;
+        slot.reserved = sample_axes;
+        MemoryBarrier();
+        InterlockedExchange64(
+            &slot.sequence, static_cast<LONG64>(sequence)
+        );
+        InterlockedExchange64(
+            &header->reports, static_cast<LONG64>(sequence)
+        );
+        InterlockedExchange64(
+            &header->latest_sequence, static_cast<LONG64>(sequence)
+        );
+    }
+    CancelIoEx(device, nullptr);
+    CloseHandle(event);
+    HidD_FreePreparsedData(parser.preparsed);
+    CloseHandle(device);
+    if (header->state != 3) InterlockedExchange(&header->state, 2);
+    const bool failed = header->state == 3;
+    UnmapViewOfFile(base);
+    CloseHandle(mapping);
+    return failed ? 1 : 0;
+}
+
 }  // namespace
 
 int wmain(int argc, wchar_t **argv) {
@@ -547,8 +1068,18 @@ int wmain(int argc, wchar_t **argv) {
         const uint64_t duration_ms = std::wcstoull(argv[4], nullptr, 10);
         return run_self_test(rate_hz, duration_ms);
     }
+    if (argc == 7 && std::wstring(argv[1]) == L"--stream"
+        && std::wstring(argv[3]) == L"--mapping"
+        && std::wstring(argv[5]) == L"--capacity") {
+        const uint32_t capacity = static_cast<uint32_t>(
+            std::wcstoul(argv[6], nullptr, 10)
+        );
+        return run_stream(argv[2], argv[4], capacity);
+    }
     std::cerr
         << "usage: raw_hid_probe --measure <device-path> "
-           "--duration-ms <1000..300000>\n";
+           "--duration-ms <1000..300000>\n"
+           "       raw_hid_probe --stream <device-path> "
+           "--mapping <name> --capacity <slots>\n";
     return 2;
 }

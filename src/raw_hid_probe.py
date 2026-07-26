@@ -3,14 +3,22 @@
 from __future__ import annotations
 
 import json
+import mmap
+import struct
 import subprocess
 import sys
 import threading
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
 
 PROBE_EXECUTABLE = Path(__file__).with_name("raw_hid_probe.exe")
+STREAM_MAGIC = 0x53524853
+STREAM_VERSION = 1
+STREAM_CAPACITY = 65536
+STREAM_HEADER = struct.Struct("<IIIIIIIIQQQQ")
+STREAM_SLOT = struct.Struct("<QQffffffII")
 TERMINAL_STATES = frozenset(("complete", "stopped", "error"))
 DEFAULT_SNAPSHOT = {
     "state": "idle",
@@ -320,6 +328,196 @@ class RawHidProbeClient:
                 self._process = None
                 self._reader_thread = None
                 self._stderr_thread = None
+                with self._lock:
+                    if self._snapshot.get("state") not in TERMINAL_STATES:
+                        self._snapshot["state"] = "stopped"
+                        self._snapshot["remaining_ms"] = 0.0
+        return True
+
+    close = stop
+
+
+class RawHidStreamClient:
+    """Batch reader for the helper's race-safe shared-memory report ring."""
+
+    def __init__(
+        self,
+        executable=PROBE_EXECUTABLE,
+        process_factory=subprocess.Popen,
+        capacity=STREAM_CAPACITY,
+    ):
+        self.executable = Path(executable)
+        self.process_factory = process_factory
+        self.capacity = max(1024, min(262144, int(capacity)))
+        self._lock = threading.Lock()
+        self._process = None
+        self._mapping = None
+        self._mapping_name = None
+
+    @property
+    def available(self):
+        return self.executable.is_file()
+
+    @property
+    def active(self):
+        with self._lock:
+            return (
+                self._process is not None
+                and self._process.poll() is None
+                and self._mapping is not None
+            )
+
+    def start(self, device_path):
+        with self._lock:
+            if self._process is not None and self._process.poll() is None:
+                return False
+            mapping_name = (
+                "Local\\S2PRawHidStream_" + uuid.uuid4().hex
+            )
+            mapping_size = (
+                STREAM_HEADER.size + self.capacity * STREAM_SLOT.size
+            )
+            try:
+                mapping = mmap.mmap(
+                    -1, mapping_size, tagname=mapping_name,
+                    access=mmap.ACCESS_WRITE,
+                )
+                process = self.process_factory(
+                    [
+                        str(self.executable),
+                        "--stream",
+                        str(device_path),
+                        "--mapping",
+                        mapping_name,
+                        "--capacity",
+                        str(self.capacity),
+                    ],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=getattr(
+                        subprocess, "CREATE_NO_WINDOW", 0
+                    ),
+                )
+            except (OSError, subprocess.SubprocessError, TypeError):
+                try:
+                    mapping.close()
+                except (NameError, OSError):
+                    pass
+                return False
+            self._mapping_name = mapping_name
+            self._mapping = mapping
+            self._process = process
+            return True
+
+    def status(self):
+        with self._lock:
+            mapping = self._mapping
+            process = self._process
+            if mapping is None:
+                return {"state": "idle", "error_code": 0, "axes_mask": 0}
+            try:
+                header = STREAM_HEADER.unpack_from(mapping, 0)
+            except (OSError, ValueError, struct.error):
+                return {"state": "error", "error_code": 1, "axes_mask": 0}
+            state_names = {0: "opening", 1: "running", 2: "stopped", 3: "error"}
+            state = state_names.get(header[5], "error")
+            if process is not None and process.poll() is not None and state == "opening":
+                state = "error"
+            return {
+                "state": state,
+                "error_code": int(header[6]),
+                "axes_mask": int(header[7]),
+                "latest_sequence": int(header[8]),
+                "raw_reports": int(header[11]),
+            }
+
+    def read_samples(self, after_sequence, maximum=None):
+        """Return stable slots, newest sequence, and overwritten sample count."""
+        with self._lock:
+            mapping = self._mapping
+            if mapping is None:
+                return (), int(after_sequence or 0), 0
+            try:
+                header = STREAM_HEADER.unpack_from(mapping, 0)
+            except (OSError, ValueError, struct.error):
+                return (), int(after_sequence or 0), 0
+            if (
+                header[0] != STREAM_MAGIC
+                or header[1] != STREAM_VERSION
+                or header[2] != STREAM_HEADER.size
+                or header[3] != STREAM_SLOT.size
+                or header[4] != self.capacity
+            ):
+                return (), int(after_sequence or 0), 0
+            latest = int(header[8])
+            frequency = int(header[10])
+            previous = max(0, int(after_sequence or 0))
+            if latest <= previous or frequency <= 0:
+                return (), max(previous, latest), 0
+            first = previous + 1
+            dropped = 0
+            oldest = max(1, latest - self.capacity + 1)
+            if first < oldest:
+                dropped = oldest - first
+                first = oldest
+            if maximum is not None:
+                first = max(first, latest - max(1, int(maximum)) + 1)
+            samples = []
+            for sequence in range(first, latest + 1):
+                offset = STREAM_HEADER.size + (
+                    (sequence - 1) % self.capacity
+                ) * STREAM_SLOT.size
+                try:
+                    before = struct.unpack_from("<Q", mapping, offset)[0]
+                    if before != sequence:
+                        continue
+                    values = STREAM_SLOT.unpack_from(mapping, offset)
+                    after = struct.unpack_from("<Q", mapping, offset)[0]
+                except (OSError, ValueError, struct.error):
+                    continue
+                if before != after or after != sequence:
+                    continue
+                samples.append((
+                    values[1] / frequency,
+                    (values[2], values[3]),
+                    (values[4], values[5]),
+                    sequence,
+                ))
+            return tuple(samples), latest, dropped
+
+    def stop(self, timeout=1.0):
+        with self._lock:
+            process = self._process
+        if process is not None and process.poll() is None:
+            try:
+                process.stdin.write(b"stop\n")
+                process.stdin.flush()
+            except (AttributeError, BrokenPipeError, OSError, ValueError):
+                pass
+            try:
+                process.wait(timeout=max(0.0, float(timeout)))
+            except (OSError, subprocess.TimeoutExpired):
+                try:
+                    process.terminate()
+                    process.wait(timeout=0.5)
+                except (OSError, subprocess.TimeoutExpired):
+                    try:
+                        process.kill()
+                        process.wait(timeout=0.5)
+                    except (OSError, subprocess.TimeoutExpired):
+                        return False
+        with self._lock:
+            if process is self._process:
+                mapping = self._mapping
+                self._process = None
+                self._mapping = None
+                self._mapping_name = None
+                if mapping is not None:
+                    try:
+                        mapping.close()
+                    except OSError:
+                        pass
         return True
 
     close = stop

@@ -1,6 +1,8 @@
 """Traditional Chinese / English text used by the settings GUI."""
 
 EN_TEXT = {
+    "等待第一筆座標": "Waiting for the first coordinates",
+    "Raw HID 實際回報": "Actual Raw HID reports",
     "S2P-XInput-Lite 啟動中…": "Starting S2P-XInput-Lite…",
     "手把測試": "Gamepad Test",
     "手把測試程式初始化中": "Starting Gamepad Test",
@@ -21,6 +23,22 @@ EN_TEXT = {
     "一般手把 {index}": "Generic Gamepad {index}",
     "重新整理": "Refresh",
     "輸入監看": "Input Monitor",
+    "Raw HID 實際採樣": "Raw HID Actual Sampling",
+    "實際採樣": "Actual Sampling",
+    "使用 Windows 收到的每筆 Raw HID 回報":
+        "Use every Raw HID report delivered by Windows",
+    "正在開啟 Raw HID 實際採樣...": "Opening Raw HID actual sampling...",
+    "正在使用 Raw HID 實際回報": "Using actual Raw HID reports",
+    "Raw HID 實際回報；緩衝區遺失 {count} 筆":
+        "Actual Raw HID reports; {count} lost to buffer overwrite",
+    "目前手把無法對應 Raw HID，使用 Windows 快照":
+        "The selected gamepad cannot be matched to Raw HID; using Windows snapshots",
+    "Raw HID 實際採樣無法啟動": "Could not start Raw HID actual sampling",
+    "Raw HID 實際採樣無法停止": "Could not stop Raw HID actual sampling",
+    "Raw HID 介面仍被實際採樣占用":
+        "The Raw HID interface is still in use by actual sampling",
+    "Raw HID 實際採樣失敗（錯誤代碼 {code}）":
+        "Raw HID actual sampling failed (error {code})",
     "震動測試": "Rumble Test",
     "高頻量測": "High-Rate Test",
     "回報率量測": "Report Rate Test",
@@ -163,9 +181,11 @@ EN_TEXT = {
         "at Windows, not input-to-game response latency.",
     "清除軌跡與統計": "Clear",
     "顯示輸出形狀": "Shape",
+    "輸出形狀": "Output Shape",
     "顯示陀螺圖例": "Gyro Legend",
+    "陀螺儀圖例": "Gyro Legend",
     "採樣點": "Samples",
-    "採樣點100%\n顯示目前軌跡長度內，所選Windows輸入介面實際收到的全部座標點。\n\nXInput限制\nXInput只保留最新座標，無法把兩次讀取之間已被覆蓋的中間座標還原成路徑點。\n\n顯示百分比\n降低百分比只會減少畫面上的路徑點，不會改變實際輸入。":
+    "採樣點100%\n顯示目前軌跡長度內，所選Windows輸入介面實際收到的全部座標點。\n\nXInput限制\nXInput只保留最新座標，無法把兩次讀取之間已被覆蓋的中間座標還原成路徑點。\n\nRaw HID 實際採樣\n啟用後會直接使用 Windows 收到的每筆 Raw HID 回報；此時100%代表顯示緩衝區內全部實際回報點。\n\n顯示百分比\n降低百分比只會減少畫面上的路徑點，不會改變實際輸入。":
         "Sample points 100%\n"
         "Shows every coordinate point actually received through the selected "
         "Windows input interface within the current trail length.\n\n"
@@ -173,10 +193,15 @@ EN_TEXT = {
         "XInput only retains the latest coordinates. Intermediate coordinates "
         "overwritten between reads cannot be reconstructed as trail points."
         "\n\n"
+        "Raw HID actual sampling\n"
+        "When enabled, every Raw HID report delivered by Windows is used. "
+        "At 100%, every actual report point retained in the buffer is shown."
+        "\n\n"
         "Display percentage\n"
         "Lowering the percentage only reduces trail points on screen; it does "
         "not change the actual input.",
     "軌跡長度": "Trail",
+    "軌跡": "Trail",
     "實體搖桿": "Stick",
     "陀螺儀": "Gyro",
     "合成結果": "Final",
