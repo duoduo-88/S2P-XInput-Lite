@@ -68,6 +68,22 @@ class RawHidProbeTests(unittest.TestCase):
         self.assertEqual(devices[0].name, "Maker Pad")
         self.assertEqual(devices[0].interface_number, 2)
 
+    def test_enumeration_preserves_interface_zero(self):
+        class InterfaceZeroHid:
+            @staticmethod
+            def enumerate():
+                return [{
+                    "path": b"interface-zero",
+                    "product_string": "Controller",
+                    "usage_page": 1,
+                    "usage": 5,
+                    "interface_number": 0,
+                }]
+
+        devices = enumerate_raw_hid_gamepads(InterfaceZeroHid)
+
+        self.assertEqual(devices[0].interface_number, 0)
+
     def test_snapshot_percentiles_and_bad_values_are_bounded(self):
         payload = {
             "type": "snapshot",
@@ -213,11 +229,40 @@ class RawHidProbeTests(unittest.TestCase):
         samples, newest, dropped = client.read_samples(0)
 
         self.assertEqual(newest, 2)
-        self.assertEqual(dropped, 0)
+        self.assertEqual(dropped, 1)
         self.assertEqual(len(samples), 1)
         self.assertEqual(samples[0][3], 1)
         self.assertAlmostEqual(samples[0][0], 1.0)
         self.assertEqual(samples[0][1], (0.25, -0.5))
+        client._mapping = None
+        mapping.close()
+
+    def test_stream_latest_reads_only_newest_slot(self):
+        capacity = 1024
+        mapping = mmap.mmap(
+            -1, STREAM_HEADER.size + capacity * STREAM_SLOT.size
+        )
+        STREAM_HEADER.pack_into(
+            mapping, 0,
+            STREAM_MAGIC, STREAM_VERSION,
+            STREAM_HEADER.size, STREAM_SLOT.size,
+            capacity, 1, 0, 0x0F,
+            3, 3, 10_000_000, 3,
+        )
+        STREAM_SLOT.pack_into(
+            mapping, STREAM_HEADER.size + STREAM_SLOT.size * 2,
+            3, 30_000_000, 0.5, -0.5, 0.25, -0.25,
+            0.0, 0.0, 0, 0,
+        )
+        client = RawHidStreamClient(capacity=capacity)
+        client._mapping = mapping
+
+        sample, newest, dropped = client.read_latest(0)
+
+        self.assertEqual(newest, 3)
+        self.assertEqual(dropped, 0)
+        self.assertEqual(sample[3], 3)
+        self.assertEqual(sample[1], (0.5, -0.5))
         client._mapping = None
         mapping.close()
 
@@ -236,17 +281,20 @@ class RawHidProbeTests(unittest.TestCase):
         self.assertIn("HidP_GetUsageValue", source)
         self.assertIn("status != HIDP_STATUS_SUCCESS) return false", source)
         self.assertIn(
-            "read_axis(parser, parser.left_x, report, false, left_x)",
+            "parser, parser.left_x, report, bytes_read, hid_data",
             source,
         )
         self.assertIn(
-            "parser.right_y, report, true, right_y",
+            "parser, parser.right_y, report, bytes_read, hid_data",
             source,
         )
         self.assertIn("if (sample_axes == 0) continue", source)
         self.assertIn("slot.reserved = sample_axes", source)
         self.assertIn('folded_path.find(L"&IG_")', source)
+        self.assertIn('folded_path.find(L"VID_413D&PID_2104")', source)
         self.assertIn("bytes_read >= 9", source)
+        self.assertIn("(stop_poll_counter++ & 0x3FU) == 0", source)
+        self.assertIn("std::vector<HIDP_DATA> hid_data", source)
         self.assertIn(
             "normalize_xinput_hid_axis(value_at(1), false)",
             source,

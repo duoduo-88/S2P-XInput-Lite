@@ -92,7 +92,10 @@ def enumerate_raw_hid_gamepads(hid_module=None):
             continue
         vendor_id = int(item.get("vendor_id", 0) or 0)
         product_id = int(item.get("product_id", 0) or 0)
-        interface_number = int(item.get("interface_number", -1) or -1)
+        raw_interface = item.get("interface_number")
+        interface_number = (
+            -1 if raw_interface is None else int(raw_interface)
+        )
         name = product or (
             f"Raw HID {vendor_id:04X}:{product_id:04X}"
         )
@@ -422,15 +425,71 @@ class RawHidStreamClient:
                 return {"state": "error", "error_code": 1, "axes_mask": 0}
             state_names = {0: "opening", 1: "running", 2: "stopped", 3: "error"}
             state = state_names.get(header[5], "error")
-            if process is not None and process.poll() is not None and state == "opening":
+            return_code = process.poll() if process is not None else None
+            if return_code is not None and state in {"opening", "running"}:
                 state = "error"
+                error_code = int(return_code or 1)
+            else:
+                error_code = int(header[6])
             return {
                 "state": state,
-                "error_code": int(header[6]),
+                "error_code": error_code,
                 "axes_mask": int(header[7]),
                 "latest_sequence": int(header[8]),
                 "raw_reports": int(header[11]),
+                "stick_samples": int(header[8]),
+                "ignored_reports": max(0, int(header[11]) - int(header[8])),
             }
+
+    def read_latest(self, after_sequence):
+        """Read only the newest stable slot and advance the stream cursor."""
+        with self._lock:
+            mapping = self._mapping
+            previous = max(0, int(after_sequence or 0))
+            if mapping is None:
+                return None, previous, 0
+            try:
+                header = STREAM_HEADER.unpack_from(mapping, 0)
+            except (OSError, ValueError, struct.error):
+                return None, previous, 0
+            if (
+                header[0] != STREAM_MAGIC
+                or header[1] != STREAM_VERSION
+                or header[2] != STREAM_HEADER.size
+                or header[3] != STREAM_SLOT.size
+                or header[4] != self.capacity
+            ):
+                return None, previous, 0
+            latest = int(header[8])
+            frequency = int(header[10])
+            if latest <= previous or frequency <= 0:
+                return None, max(previous, latest), 0
+            oldest = max(1, latest - self.capacity + 1)
+            dropped = max(0, oldest - (previous + 1))
+            offset = STREAM_HEADER.size + (
+                (latest - 1) % self.capacity
+            ) * STREAM_SLOT.size
+            for _attempt in range(2):
+                try:
+                    before = struct.unpack_from("<Q", mapping, offset)[0]
+                    if before != latest:
+                        continue
+                    values = STREAM_SLOT.unpack_from(mapping, offset)
+                    after = struct.unpack_from("<Q", mapping, offset)[0]
+                except (OSError, ValueError, struct.error):
+                    continue
+                if before == after == latest:
+                    return (
+                        (
+                            values[1] / frequency,
+                            (values[2], values[3]),
+                            (values[4], values[5]),
+                            latest,
+                        ),
+                        latest,
+                        dropped,
+                    )
+            return None, latest, max(dropped, latest - previous)
 
     def read_samples(self, after_sequence, maximum=None):
         """Return stable slots, newest sequence, and overwritten sample count."""
@@ -464,6 +523,7 @@ class RawHidStreamClient:
             if maximum is not None:
                 first = max(first, latest - max(1, int(maximum)) + 1)
             samples = []
+            unstable_slots = 0
             for sequence in range(first, latest + 1):
                 offset = STREAM_HEADER.size + (
                     (sequence - 1) % self.capacity
@@ -471,12 +531,15 @@ class RawHidStreamClient:
                 try:
                     before = struct.unpack_from("<Q", mapping, offset)[0]
                     if before != sequence:
+                        unstable_slots += 1
                         continue
                     values = STREAM_SLOT.unpack_from(mapping, offset)
                     after = struct.unpack_from("<Q", mapping, offset)[0]
                 except (OSError, ValueError, struct.error):
+                    unstable_slots += 1
                     continue
                 if before != after or after != sequence:
+                    unstable_slots += 1
                     continue
                 samples.append((
                     values[1] / frequency,
@@ -484,7 +547,7 @@ class RawHidStreamClient:
                     (values[4], values[5]),
                     sequence,
                 ))
-            return tuple(samples), latest, dropped
+            return tuple(samples), latest, dropped + unstable_slots
 
     def stop(self, timeout=1.0):
         with self._lock:

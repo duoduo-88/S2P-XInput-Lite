@@ -721,6 +721,8 @@ bool read_axis(
     const StreamParser &parser,
     const AxisDescriptor &axis,
     const std::vector<uint8_t> &report,
+    size_t report_length,
+    std::vector<HIDP_DATA> &data,
     bool invert,
     float &normalized,
     NTSTATUS *result_status = nullptr
@@ -732,12 +734,15 @@ bool read_axis(
     if (
         axis.report_id != 0
         && (
-            report.empty()
+            report_length == 0
             || report.front() != axis.report_id
         )
     ) {
         return false;
     }
+    report_length = std::min(report_length, report.size());
+    if (report_length == 0) return false;
+    const ULONG hid_report_length = static_cast<ULONG>(report_length);
     ULONG raw = 0;
     NTSTATUS status = HidP_GetUsageValue(
         HidP_Input,
@@ -749,7 +754,7 @@ bool read_axis(
         reinterpret_cast<PCHAR>(
             const_cast<uint8_t *>(report.data())
         ),
-        static_cast<ULONG>(report.size())
+        hid_report_length
     );
     if (
         status != HIDP_STATUS_SUCCESS
@@ -765,14 +770,13 @@ bool read_axis(
             reinterpret_cast<PCHAR>(
                 const_cast<uint8_t *>(report.data())
             ),
-            static_cast<ULONG>(report.size())
+            hid_report_length
         );
     }
     if (
         status != HIDP_STATUS_SUCCESS
         && parser.input_data_indices != 0
     ) {
-        std::vector<HIDP_DATA> data(parser.input_data_indices);
         ULONG data_count = static_cast<ULONG>(data.size());
         status = HidP_GetData(
             HidP_Input,
@@ -782,7 +786,7 @@ bool read_axis(
             reinterpret_cast<PCHAR>(
                 const_cast<uint8_t *>(report.data())
             ),
-            static_cast<ULONG>(report.size())
+            hid_report_length
         );
         if (status == HIDP_STATUS_SUCCESS) {
             const auto match = std::find_if(
@@ -901,6 +905,10 @@ int run_stream(
     header->axes_mask = parser.axes_mask;
     HidD_SetNumInputBuffers(device, 512);
     std::vector<uint8_t> report(caps.InputReportByteLength);
+    // Reuse the fallback data buffer. Allocating it for every failed
+    // HidP_GetUsageValue call would make the 8 kHz reader itself a source of
+    // scheduler and allocator jitter.
+    std::vector<HIDP_DATA> hid_data(parser.input_data_indices);
     HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     if (event == nullptr) {
         const DWORD error = GetLastError();
@@ -926,12 +934,20 @@ int run_stream(
             return static_cast<wchar_t>(std::towupper(character));
         }
     );
-    const bool xinput_hid_collection = (
+    const bool verified_fixed_xinput_layout = (
         folded_path.find(L"&IG_") != std::wstring::npos
+        && folded_path.find(L"VID_413D&PID_2104") != std::wstring::npos
     );
     bool stopped = false;
+    uint32_t stop_poll_counter = 0;
     while (!stopped) {
-        if (read_stop_command()) break;
+        // A pipe syscall for every 8 kHz report measurably perturbs the
+        // sampler. Poll every 64 read attempts; the pending-I/O wait below
+        // still checks every kReadWaitMs when reports stop arriving.
+        if (
+            (stop_poll_counter++ & 0x3FU) == 0
+            && read_stop_command()
+        ) break;
         OVERLAPPED overlapped{};
         overlapped.hEvent = event;
         ResetEvent(event);
@@ -976,7 +992,7 @@ int run_stream(
         );
         uint32_t sample_axes = 0;
         if (
-            xinput_hid_collection
+            verified_fixed_xinput_layout
             && bytes_read >= 9
         ) {
             const auto value_at = [&report](size_t offset) -> ULONG {
@@ -995,19 +1011,27 @@ int run_stream(
                 | StreamRightX | StreamRightY
             );
         } else {
-            if (read_axis(parser, parser.left_x, report, false, left_x)) {
+            if (read_axis(
+                parser, parser.left_x, report, bytes_read, hid_data,
+                false, left_x
+            )) {
                 sample_axes |= StreamLeftX;
             }
-            if (read_axis(parser, parser.left_y, report, true, left_y)) {
+            if (read_axis(
+                parser, parser.left_y, report, bytes_read, hid_data,
+                true, left_y
+            )) {
                 sample_axes |= StreamLeftY;
             }
             if (read_axis(
-                parser, parser.right_x, report, false, right_x
+                parser, parser.right_x, report, bytes_read, hid_data,
+                false, right_x
             )) {
                 sample_axes |= StreamRightX;
             }
             if (read_axis(
-                parser, parser.right_y, report, true, right_y
+                parser, parser.right_y, report, bytes_read, hid_data,
+                true, right_y
             )) {
                 sample_axes |= StreamRightY;
             }

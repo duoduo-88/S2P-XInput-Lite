@@ -35,6 +35,8 @@ PLOT_CENTER = PLOT_SIZE / 2
 PLOT_RADIUS = 146
 SHAPE_BIN_COUNT = 72
 TRAIL_TILE_SIZE = 40
+MAX_CANVAS_TRAIL_ITEMS = 2000
+TRIGGER_EVENT_THRESHOLD = 30.0 / 255.0
 SHAPE_TRACE_REFRESH_HZ = 60.0
 SHAPE_CAPTURE_SETTLE_SECONDS = 1.0
 TRAIL_COLOR = "#1976D2"
@@ -1163,8 +1165,27 @@ class StickPlot:
             self._trail_selected_sequences.clear()
             self._trail_last_processed_sequence = -1
             self._trail_render_percent = display_percent
-            new_samples = trail
+            new_samples = [
+                sample for sample in trail
+                if (
+                    display_percent >= 100
+                    or (
+                        sample[3] * display_percent
+                    ) % 100 < display_percent
+                )
+            ]
+            selection_preapplied = True
+            if len(new_samples) > MAX_CANVAS_TRAIL_ITEMS:
+                candidate_count = len(new_samples)
+                new_samples = [
+                    new_samples[
+                        index * candidate_count
+                        // MAX_CANVAS_TRAIL_ITEMS
+                    ]
+                    for index in range(MAX_CANVAS_TRAIL_ITEMS)
+                ]
         else:
+            selection_preapplied = False
             new_samples = []
             for sample in reversed(trail):
                 if sample[3] <= self._trail_last_processed_sequence:
@@ -1188,6 +1209,8 @@ class StickPlot:
         for _time_value, x, y, sequence in new_samples:
             self._trail_last_processed_sequence = sequence
             if (
+                not selection_preapplied
+                and
                 display_percent < 100
                 and (sequence * display_percent) % 100 >= display_percent
             ):
@@ -1221,6 +1244,18 @@ class StickPlot:
                 self._trail_bucket_coords[bucket] = coordinates
             if is_new:
                 self.canvas.itemconfigure(item, state="normal")
+            while (
+                len(self._trail_selected_sequences)
+                > MAX_CANVAS_TRAIL_ITEMS
+            ):
+                expired = self._trail_selected_sequences.popleft()
+                expired_item = self._trail_bucket_items.pop(expired, None)
+                self._trail_bucket_coords.pop(expired, None)
+                if expired_item is not None:
+                    self.canvas.itemconfigure(
+                        expired_item, state="hidden"
+                    )
+                    self._trail_free_items.append(expired_item)
 
     def _draw_trail_bitmap(self, history, now=None):
         now = time.perf_counter() if now is None else float(now)
@@ -2655,9 +2690,15 @@ class GamepadTestWindow:
         )
 
     def _consume_raw_hid_stream(self, sample, record_trail=True):
-        samples, newest, dropped = self.raw_hid_stream.read_samples(
-            self._raw_hid_stream_sequence
-        )
+        if record_trail:
+            samples, newest, dropped = self.raw_hid_stream.read_samples(
+                self._raw_hid_stream_sequence
+            )
+        else:
+            latest, newest, dropped = self.raw_hid_stream.read_latest(
+                self._raw_hid_stream_sequence
+            )
+            samples = () if latest is None else (latest,)
         self._raw_hid_stream_sequence = newest
         self._raw_hid_stream_dropped += dropped
         if not samples:
@@ -2696,7 +2737,7 @@ class GamepadTestWindow:
     def _discard_pending_monitor_samples(self):
         """Advance every input queue without recording hidden-tab movement."""
         if self.raw_hid_stream.active:
-            _samples, newest, dropped = self.raw_hid_stream.read_samples(
+            _latest, newest, dropped = self.raw_hid_stream.read_latest(
                 self._raw_hid_stream_sequence
             )
             self._raw_hid_stream_sequence = newest
@@ -2739,13 +2780,6 @@ class GamepadTestWindow:
             )
 
     @staticmethod
-    def _raw_hid_name_key(value):
-        return "".join(
-            character for character in str(value).casefold()
-            if character.isalnum()
-        )
-
-    @staticmethod
     def _is_vigem_xbox_360_raw_hid(device):
         """Ignore this app's virtual Xbox 360 collection when possible."""
         return (
@@ -2755,67 +2789,24 @@ class GamepadTestWindow:
         )
 
     def _selected_raw_hid_device(self):
-        """Resolve the selected tester device without exposing a second UI."""
+        """Return a Raw HID collection only when it is unambiguous.
+
+        Windows does not expose a reliable XInput/WinMM-to-HID collection
+        link. In particular, slot number, display name and enumeration order
+        can all differ when multiple physical controllers or ViGEm are
+        present. Do not guess: a wrong controller is worse than no actual
+        sampling until SetupAPI container-ID matching is available.
+        """
         selected = self._selected_device()
         devices = tuple(self.raw_hid_devices.values())
         if selected is None or not devices:
             return None
-        selected_key = self._raw_hid_name_key(selected.name)
-        matches = [
-            device for device in devices
-            if selected_key
-            and (
-                selected_key in self._raw_hid_name_key(device.name)
-                or self._raw_hid_name_key(device.name) in selected_key
-            )
-        ]
-        if len(matches) == 1:
-            return matches[0]
-        xinput_collections = [
-            device for device in devices
-            if device.usage_page == 0x01
-            and device.usage == 0x05
-            and "ig_" in device.path.casefold()
-        ]
-        vigem_collections = [
-            device for device in xinput_collections
-            if self._is_vigem_xbox_360_raw_hid(device)
-        ]
-        physical_xinput = [
-            device for device in xinput_collections
-            if not self._is_vigem_xbox_360_raw_hid(device)
-        ]
-        if selected.kind in {"xinput", "s2p"}:
-            telemetry = getattr(self, "latest_telemetry", {}) or {}
-            vigem_slot = telemetry.get("xinput_slot")
-            if (
-                isinstance(vigem_slot, int)
-                and selected.index == vigem_slot
-                and len(vigem_collections) == 1
-            ):
-                return vigem_collections[0]
-            physical_slots = [
-                slot for slot in range(4) if slot != vigem_slot
-            ]
-            if selected.index in physical_slots:
-                physical_index = physical_slots.index(selected.index)
-                if physical_index < len(physical_xinput):
-                    return physical_xinput[physical_index]
-        elif (
-            selected.kind == "winmm"
-            and selected.index < len(physical_xinput)
-        ):
-            return physical_xinput[selected.index]
         physical_candidates = [
             device for device in devices
             if not self._is_vigem_xbox_360_raw_hid(device)
         ]
         if len(physical_candidates) == 1:
             return physical_candidates[0]
-        # XInput does not expose a HID device path. With exactly one Raw HID
-        # gamepad collection, it is still unambiguous and safe to use it.
-        if len(devices) == 1:
-            return devices[0]
         return None
 
     def _set_raw_hid_controls_active(self, active):
@@ -4338,10 +4329,27 @@ class GamepadTestWindow:
             for source in sample.get("buttons", ()):
                 mapped.setdefault(str(source), "無")
             return mapped
-        return {
+        active = {
             str(button): "原始輸入"
             for button in sample.get("buttons", ())
         }
+        # XInput exposes LT/RT as axes rather than buttons.  Show their
+        # normal pressed/released state in the event table too, using the
+        # standard XInput trigger threshold, while preserving their analog
+        # readout in the linear-trigger panel.
+        trigger_values = tuple(sample.get("triggers") or ())
+        for index, trigger_name in enumerate(("LT", "RT")):
+            if index >= len(trigger_values):
+                continue
+            try:
+                pressed = float(trigger_values[index]) >= (
+                    TRIGGER_EVENT_THRESHOLD
+                )
+            except (TypeError, ValueError):
+                pressed = False
+            if pressed:
+                active.setdefault(trigger_name, "原始輸入")
+        return active
 
     def _update_triggers(self, sample, is_s2p):
         tr = self.gui.tr

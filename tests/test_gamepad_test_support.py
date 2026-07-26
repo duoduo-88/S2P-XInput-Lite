@@ -277,7 +277,7 @@ class GamepadMathTests(unittest.TestCase):
         tester = object.__new__(GamepadTestWindow)
         tester.raw_hid_stream = SimpleNamespace(
             active=True,
-            read_samples=Mock(return_value=((), 19, 2)),
+            read_latest=Mock(return_value=(None, 19, 2)),
         )
         tester._raw_hid_stream_sequence = 7
         tester._raw_hid_stream_dropped = 3
@@ -290,7 +290,7 @@ class GamepadMathTests(unittest.TestCase):
 
         tester._discard_pending_monitor_samples()
 
-        tester.raw_hid_stream.read_samples.assert_called_once_with(7)
+        tester.raw_hid_stream.read_latest.assert_called_once_with(7)
         tester.native_sampler.read_snapshot.assert_called_once_with()
         self.assertEqual(tester._raw_hid_stream_sequence, 19)
         self.assertEqual(tester._raw_hid_stream_dropped, 5)
@@ -331,7 +331,7 @@ class GamepadMathTests(unittest.TestCase):
 
         self.assertIs(tester._selected_raw_hid_device(), raw_device)
 
-    def test_high_rate_measurement_uses_telemetry_to_exclude_vigem_slot(self):
+    def test_raw_hid_selection_excludes_vigem_without_slot_guessing(self):
         vigem = RawHidDevice(
             key="hid:vigem",
             path=r"\\?\HID#VID_045E&PID_028E&IG_00#virtual",
@@ -357,7 +357,6 @@ class GamepadMathTests(unittest.TestCase):
             vigem.key: vigem,
             physical.key: physical,
         }
-        tester.latest_telemetry = {"xinput_slot": 1}
         tester._selected_device = lambda: GamepadDevice(
             "xinput:0", "xinput", 0, "XInput Gamepad 1", True
         )
@@ -366,7 +365,24 @@ class GamepadMathTests(unittest.TestCase):
         tester._selected_device = lambda: GamepadDevice(
             "s2p", "s2p", 1, "S2P-XInput-Lite", True
         )
-        self.assertIs(tester._selected_raw_hid_device(), vigem)
+        self.assertIs(tester._selected_raw_hid_device(), physical)
+
+    def test_raw_hid_selection_refuses_to_guess_between_controllers(self):
+        first = RawHidDevice(
+            "hid:first", "hid-first", "Generic Controller",
+            0x1111, 0x0001, 1, 5, 0,
+        )
+        second = RawHidDevice(
+            "hid:second", "hid-second", "Generic Controller",
+            0x2222, 0x0002, 1, 5, 1,
+        )
+        tester = object.__new__(GamepadTestWindow)
+        tester.raw_hid_devices = {first.key: first, second.key: second}
+        tester._selected_device = lambda: GamepadDevice(
+            "xinput:0", "xinput", 0, "Generic Controller", True
+        )
+
+        self.assertIsNone(tester._selected_raw_hid_device())
 
     def test_tester_parameter_input_clamps_and_snaps(self):
         self.assertAlmostEqual(
@@ -1292,6 +1308,29 @@ class GamepadMathTests(unittest.TestCase):
         plot._draw_trail(history, 9.0)
         plot.canvas.coords.assert_not_called()
 
+    def test_canvas_fallback_uniformly_caps_high_rate_history(self):
+        plot = object.__new__(StickPlot)
+        plot.trail_color = "#1976D2"
+        plot.zoom = 1.0
+        plot.pan_x = 0.0
+        plot.pan_y = 0.0
+        plot.owner = SimpleNamespace(
+            sample_display_percent_var=Mock(get=Mock(return_value=100.0))
+        )
+        plot.canvas = Mock()
+        plot.canvas.create_oval.side_effect = range(1, 3000)
+        history = StickHistory()
+        for sequence in range(4000):
+            history.add(0.0, 0.0, float(sequence), record_shape=False)
+
+        plot._draw_trail(history, 4000.0)
+
+        self.assertEqual(len(plot._trail_bucket_items), 2000)
+        self.assertEqual(plot.canvas.create_oval.call_count, 2000)
+        selected = tuple(plot._trail_selected_sequences)
+        self.assertEqual(selected[0], history.trail[0][3])
+        self.assertGreater(selected[-1], history.trail[-1][3] - 3)
+
     def test_bitmap_trail_uses_one_canvas_image_and_updates_in_place(self):
         plot = object.__new__(StickPlot)
         plot.trail_color = "#1976D2"
@@ -1526,8 +1565,8 @@ class GamepadMathTests(unittest.TestCase):
     def test_raw_hid_background_samples_do_not_enter_monitor_trail(self):
         tester = object.__new__(GamepadTestWindow)
         tester.raw_hid_stream = SimpleNamespace(
-            read_samples=Mock(return_value=(
-                ((10.0, (0.5, -0.25), (0.0, 0.0), 7),),
+            read_latest=Mock(return_value=(
+                (10.0, (0.5, -0.25), (0.0, 0.0), 7),
                 7,
                 0,
             ))
@@ -1548,6 +1587,18 @@ class GamepadMathTests(unittest.TestCase):
         self.assertEqual(sample["left"], (0.5, -0.25))
         self.assertEqual(len(tester.histories["left"].trail), 0)
         self.assertEqual(len(tester.histories["right"].trail), 0)
+
+    def test_native_trigger_axes_appear_as_pressed_events(self):
+        tester = object.__new__(GamepadTestWindow)
+
+        active = tester._event_inputs({
+            "buttons": ("A",),
+            "triggers": (30.0 / 255.0, 0.1),
+        }, is_s2p=False)
+
+        self.assertEqual(active["A"], "原始輸入")
+        self.assertEqual(active["LT"], "原始輸入")
+        self.assertNotIn("RT", active)
 
     def test_source_change_seeds_latest_value_without_center_flash(self):
         tester = object.__new__(GamepadTestWindow)
