@@ -5,8 +5,8 @@
 ![S2P-XInput-Lite 橫幅](image/S2P-XInput-Lite-banner.jpg)
 
 <p align="center">
-  <img src="image/GUI.gif" alt="S2P-XInput-Lite 設定介面" width="46%">
-  <img src="image/test.gif" alt="S2P-XInput-Lite 手把測試" width="46%">
+  <img src="image/GUI.gif" alt="S2P-XInput-Lite 設定介面" height="360">
+  <img src="image/test.gif" alt="S2P-XInput-Lite 手把測試" height="360">
 </p>
 
 S2P-XInput-Lite 可在 Windows 為 Switch 2 Pro Controller 提供 XInput 相容控制器輸出，支援 USB 有線、ESP32-S3 USB 橋接器及 Windows 原生 BLE。
