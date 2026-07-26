@@ -1179,8 +1179,10 @@ class StickPlot:
                 candidate_count = len(new_samples)
                 new_samples = [
                     new_samples[
-                        index * candidate_count
-                        // MAX_CANVAS_TRAIL_ITEMS
+                        round(
+                            index * (candidate_count - 1)
+                            / (MAX_CANVAS_TRAIL_ITEMS - 1)
+                        )
                     ]
                     for index in range(MAX_CANVAS_TRAIL_ITEMS)
                 ]
@@ -2495,6 +2497,13 @@ class GamepadTestWindow:
             width=20,
         )
         self.raw_hid_stop_button.grid(row=0, column=3, sticky="ew")
+        ttk.Label(
+            controls,
+            text=self.gui.tr(
+                "量測來源：實體 Raw HID 輸入（非 XInput／ViGEm 輸出）"
+            ),
+            foreground="#666666",
+        ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(5, 0))
 
         summary = ttk.Frame(parent)
         summary.grid(row=1, column=0, sticky="ew", pady=(10, 8))
@@ -2805,9 +2814,19 @@ class GamepadTestWindow:
             device for device in devices
             if not self._is_vigem_xbox_360_raw_hid(device)
         ]
-        if len(physical_candidates) == 1:
+        native_devices = [
+            device for device in self.devices.values()
+            if device.kind != "s2p"
+        ]
+        if len(physical_candidates) != 1 or len(native_devices) != 1:
+            return None
+        # Selecting the S2P output deliberately measures the one physical
+        # input feeding it; the measurement tab labels this distinction.
+        if selected.kind == "s2p":
             return physical_candidates[0]
-        return None
+        if native_devices[0].key != selected.key:
+            return None
+        return physical_candidates[0]
 
     def _set_raw_hid_controls_active(self, active):
         if self.raw_hid_start_button is None:
@@ -2830,7 +2849,6 @@ class GamepadTestWindow:
         self.raw_hid_stop_button.configure(
             state="normal" if active else "disabled"
         )
-
     def _start_raw_hid_measurement(self):
         self._refresh_raw_hid_devices()
         device = self._selected_raw_hid_device()

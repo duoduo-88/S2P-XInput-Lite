@@ -266,6 +266,29 @@ class RawHidProbeTests(unittest.TestCase):
         client._mapping = None
         mapping.close()
 
+    def test_stream_latest_counts_one_unstable_newest_slot(self):
+        capacity = 16384
+        mapping = mmap.mmap(
+            -1, STREAM_HEADER.size + capacity * STREAM_SLOT.size
+        )
+        STREAM_HEADER.pack_into(
+            mapping, 0,
+            STREAM_MAGIC, STREAM_VERSION,
+            STREAM_HEADER.size, STREAM_SLOT.size,
+            capacity, 1, 0, 0x0F,
+            9000, 9000, 10_000_000, 9000,
+        )
+        client = RawHidStreamClient(capacity=capacity)
+        client._mapping = mapping
+
+        sample, newest, dropped = client.read_latest(1000)
+
+        self.assertIsNone(sample)
+        self.assertEqual(newest, 9000)
+        self.assertEqual(dropped, 1)
+        client._mapping = None
+        mapping.close()
+
     def test_native_stream_commits_slot_before_latest_sequence(self):
         source = (
             ROOT / "native" / "raw_hid_probe.cpp"
@@ -293,7 +316,8 @@ class RawHidProbeTests(unittest.TestCase):
         self.assertIn('folded_path.find(L"&IG_")', source)
         self.assertIn('folded_path.find(L"VID_413D&PID_2104")', source)
         self.assertIn("bytes_read >= 9", source)
-        self.assertIn("(stop_poll_counter++ & 0x3FU) == 0", source)
+        self.assertIn("++stop_poll_counter >= 64", source)
+        self.assertIn("stop_poll_interval", source)
         self.assertIn("std::vector<HIDP_DATA> hid_data", source)
         self.assertIn(
             "normalize_xinput_hid_axis(value_at(1), false)",

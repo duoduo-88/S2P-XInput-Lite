@@ -89,6 +89,9 @@ EN_TEXT = {
     "回報時間差分佈": "Time Between Reports Distribution",
     "尚未量測": "Not measured",
     "Raw HID 量測元件不可用": "Raw HID measurement component unavailable",
+    "量測來源：實體 Raw HID 輸入（非 XInput／ViGEm 輸出）":
+        "Measurement source: physical Raw HID input "
+        "(not XInput/ViGEm output)",
     "找不到 Raw HID 遊戲手把介面":
         "No Raw HID gamepad interface found",
     "無法將目前測試手把對應至 Raw HID 介面":

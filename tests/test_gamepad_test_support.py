@@ -325,9 +325,11 @@ class GamepadMathTests(unittest.TestCase):
         )
         tester = object.__new__(GamepadTestWindow)
         tester.raw_hid_devices = {raw_device.key: raw_device}
-        tester._selected_device = lambda: GamepadDevice(
+        selected = GamepadDevice(
             "winmm:0", "winmm", 0, "Wireless Controller", False
         )
+        tester.devices = {"Wireless Controller": selected}
+        tester._selected_device = lambda: selected
 
         self.assertIs(tester._selected_raw_hid_device(), raw_device)
 
@@ -357,14 +359,18 @@ class GamepadMathTests(unittest.TestCase):
             vigem.key: vigem,
             physical.key: physical,
         }
-        tester._selected_device = lambda: GamepadDevice(
+        selected = GamepadDevice(
             "xinput:0", "xinput", 0, "XInput Gamepad 1", True
         )
+        tester.devices = {"XInput Gamepad 1": selected}
+        tester._selected_device = lambda: selected
 
         self.assertIs(tester._selected_raw_hid_device(), physical)
-        tester._selected_device = lambda: GamepadDevice(
+        s2p = GamepadDevice(
             "s2p", "s2p", 1, "S2P-XInput-Lite", True
         )
+        tester.devices["S2P-XInput-Lite"] = s2p
+        tester._selected_device = lambda: s2p
         self.assertIs(tester._selected_raw_hid_device(), physical)
 
     def test_raw_hid_selection_refuses_to_guess_between_controllers(self):
@@ -378,9 +384,32 @@ class GamepadMathTests(unittest.TestCase):
         )
         tester = object.__new__(GamepadTestWindow)
         tester.raw_hid_devices = {first.key: first, second.key: second}
-        tester._selected_device = lambda: GamepadDevice(
+        selected = GamepadDevice(
             "xinput:0", "xinput", 0, "Generic Controller", True
         )
+        tester.devices = {"Generic Controller": selected}
+        tester._selected_device = lambda: selected
+
+        self.assertIsNone(tester._selected_raw_hid_device())
+
+    def test_raw_hid_selection_refuses_unique_raw_for_other_controller(self):
+        raw_device = RawHidDevice(
+            "hid:pad", "hid-path", "Raw Controller",
+            0x1111, 0x0001, 1, 5, 0,
+        )
+        selected = GamepadDevice(
+            "winmm:old", "winmm", 0, "Legacy Controller", False
+        )
+        other = GamepadDevice(
+            "xinput:0", "xinput", 0, "Raw Controller", True
+        )
+        tester = object.__new__(GamepadTestWindow)
+        tester.raw_hid_devices = {raw_device.key: raw_device}
+        tester.devices = {
+            "Legacy Controller": selected,
+            "Raw Controller": other,
+        }
+        tester._selected_device = lambda: selected
 
         self.assertIsNone(tester._selected_raw_hid_device())
 

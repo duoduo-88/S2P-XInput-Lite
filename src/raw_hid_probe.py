@@ -489,7 +489,10 @@ class RawHidStreamClient:
                         latest,
                         dropped,
                     )
-            return None, latest, max(dropped, latest - previous)
+            # Hidden tabs intentionally skip intermediate reports.  A torn
+            # newest slot is only one unreadable sample, not every sequence
+            # between the old cursor and latest.
+            return None, latest, dropped + 1
 
     def read_samples(self, after_sequence, maximum=None):
         """Return stable slots, newest sequence, and overwritten sample count."""

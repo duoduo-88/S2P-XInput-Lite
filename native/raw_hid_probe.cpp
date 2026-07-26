@@ -940,14 +940,24 @@ int run_stream(
     );
     bool stopped = false;
     uint32_t stop_poll_counter = 0;
+    const uint64_t stop_poll_interval = std::max<uint64_t>(
+        1, header->qpc_frequency / 100
+    );
+    uint64_t last_stop_poll = 0;
     while (!stopped) {
         // A pipe syscall for every 8 kHz report measurably perturbs the
-        // sampler. Poll every 64 read attempts; the pending-I/O wait below
-        // still checks every kReadWaitMs when reports stop arriving.
+        // sampler. Poll after 64 read attempts or 10 ms, whichever comes
+        // first; the pending-I/O wait below still checks every kReadWaitMs
+        // when reports stop arriving.
+        const uint64_t now_ticks = qpc_now();
         if (
-            (stop_poll_counter++ & 0x3FU) == 0
-            && read_stop_command()
-        ) break;
+            ++stop_poll_counter >= 64
+            || now_ticks - last_stop_poll >= stop_poll_interval
+        ) {
+            stop_poll_counter = 0;
+            last_stop_poll = now_ticks;
+            if (read_stop_command()) break;
+        }
         OVERLAPPED overlapped{};
         overlapped.hEvent = event;
         ResetEvent(event);
