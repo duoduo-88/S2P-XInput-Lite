@@ -135,6 +135,47 @@ class StandaloneFirmwareContractTests(unittest.TestCase):
             "wake_output_if_pending(true)", XINPUT_SOURCE
         )
 
+    def test_latency_diagnostics_cover_source_shadow_and_usb(self):
+        self.assertIn('"latency status"', MAIN_SOURCE)
+        self.assertIn('"latency reset"', MAIN_SOURCE)
+        self.assertIn("note_ble_input_report(", MAIN_SOURCE)
+        self.assertIn("source_gap_events", MAIN_SOURCE)
+        self.assertIn("shadow_overwrites", MAIN_SOURCE)
+        self.assertIn("notify_queue_drops", MAIN_SOURCE)
+        self.assertIn("busy_events", XINPUT_SOURCE)
+        self.assertIn("pending_overwrites", XINPUT_SOURCE)
+        self.assertIn("wait_total_us", XINPUT_SOURCE)
+        self.assertIn(
+            "standalone_xinput_reset_latency_metrics", XINPUT_HEADER
+        )
+
+    def test_direction_mapping_consumes_native_stick_before_gyro(self):
+        helper = XINPUT_SOURCE.index(
+            "static bool stick_direction_consumes_native_output"
+        )
+        self.assertIn(
+            "config->mode == STICK_DIRECTION_LT",
+            XINPUT_SOURCE[helper:],
+        )
+        self.assertIn(
+            "config->targets[index] != 0",
+            XINPUT_SOURCE[helper:],
+        )
+        mapping = XINPUT_SOURCE.index(
+            "direction_targets |= apply_stick_direction"
+        )
+        consume = XINPUT_SOURCE.index(
+            "stick_direction_consumes_native_output(&directions[0])",
+            mapping,
+        )
+        zero_axis = XINPUT_SOURCE.index("report.left_x = 0", consume)
+        gyro = XINPUT_SOURCE.index(
+            "apply_gyro_to_report_runtime(", zero_axis
+        )
+        self.assertLess(mapping, consume)
+        self.assertLess(consume, zero_axis)
+        self.assertLess(zero_axis, gyro)
+
     def test_connection_watchdog_covers_unready_channels(self):
         self.assertIn("connect_deadline_ms", MAIN_SOURCE)
         self.assertIn("pump_connection_watchdogs", MAIN_SOURCE)

@@ -308,6 +308,91 @@ static int  s_rx_len = 0;
 static in_report_t s_in_shadow[MAX_CH];
 static volatile bool s_in_dirty[MAX_CH];
 static portMUX_TYPE s_in_mux = portMUX_INITIALIZER_UNLOCKED;
+typedef struct {
+    uint32_t ble_input_reports;
+    uint32_t source_gap_events;
+    uint32_t source_gap_max_ms;
+    uint32_t shadow_overwrites;
+    uint32_t notify_queue_drops;
+} input_latency_metrics_t;
+static input_latency_metrics_t s_input_latency_metrics;
+static uint32_t s_last_input_report_time[MAX_CH];
+static bool s_last_input_report_time_valid[MAX_CH];
+
+static void note_ble_input_report(
+    int channel, const uint8_t *data, uint8_t length
+) {
+    if (
+        channel < 0 || channel >= MAX_CH || !data || length < 4
+    ) return;
+    uint32_t report_time =
+        (uint32_t)data[0] |
+        ((uint32_t)data[1] << 8) |
+        ((uint32_t)data[2] << 16) |
+        ((uint32_t)data[3] << 24);
+    portENTER_CRITICAL(&s_in_mux);
+    s_input_latency_metrics.ble_input_reports++;
+    if (s_last_input_report_time_valid[channel]) {
+        uint32_t delta =
+            report_time - s_last_input_report_time[channel];
+        /*
+         * Normal 132 Hz reports alternate between 7 and 8 ms.  A delta of
+         * 12..999 ms means at least one complete source interval was skipped;
+         * longer gaps are reconnects or controller timer resets.
+         */
+        if (delta >= 12u && delta < 1000u) {
+            s_input_latency_metrics.source_gap_events++;
+            if (delta > s_input_latency_metrics.source_gap_max_ms)
+                s_input_latency_metrics.source_gap_max_ms = delta;
+        }
+    }
+    s_last_input_report_time[channel] = report_time;
+    s_last_input_report_time_valid[channel] = true;
+    portEXIT_CRITICAL(&s_in_mux);
+}
+
+static void reset_input_latency_metrics(void) {
+    portENTER_CRITICAL(&s_in_mux);
+    memset(
+        &s_input_latency_metrics, 0, sizeof(s_input_latency_metrics)
+    );
+    memset(
+        s_last_input_report_time_valid, 0,
+        sizeof(s_last_input_report_time_valid)
+    );
+    portEXIT_CRITICAL(&s_in_mux);
+    standalone_xinput_reset_latency_metrics();
+}
+
+static void format_input_latency_metrics(char *output, size_t size) {
+    input_latency_metrics_t input;
+    standalone_usb_latency_metrics_t usb;
+    portENTER_CRITICAL(&s_in_mux);
+    input = s_input_latency_metrics;
+    portEXIT_CRITICAL(&s_in_mux);
+    standalone_xinput_get_latency_metrics(&usb);
+    uint64_t wait_average_us = usb.wait_samples
+        ? usb.wait_total_us / usb.wait_samples : 0;
+    snprintf(
+        output, size,
+        "{\"cmd\":\"latency_status\",\"ok\":1,"
+        "\"ble_input_reports\":%lu,\"source_gap_events\":%lu,"
+        "\"source_gap_max_ms\":%lu,\"shadow_overwrites\":%lu,"
+        "\"notify_queue_drops\":%lu,\"usb_busy_events\":%lu,"
+        "\"usb_pending_overwrites\":%lu,\"usb_wait_samples\":%lu,"
+        "\"usb_wait_avg_us\":%llu,\"usb_wait_max_us\":%lu}\n",
+        (unsigned long)input.ble_input_reports,
+        (unsigned long)input.source_gap_events,
+        (unsigned long)input.source_gap_max_ms,
+        (unsigned long)input.shadow_overwrites,
+        (unsigned long)input.notify_queue_drops,
+        (unsigned long)usb.busy_events,
+        (unsigned long)usb.pending_overwrites,
+        (unsigned long)usb.wait_samples,
+        (unsigned long long)wait_average_us,
+        (unsigned long)usb.wait_max_us
+    );
+}
 
 // --- Jitter Buffer (FIFO) for Audio Haptics ---
 #define RUMBLE_QUEUE_SIZE 5
@@ -1413,6 +1498,15 @@ static void handle_command(char *cmd) {
         ble_callback_metrics_reset();
         send_json("{\"cmd\":\"ble_timing_reset\",\"ok\":1}\n");
     }
+    else if (strcmp(cmd, "latency status") == 0) {
+        char status[512];
+        format_input_latency_metrics(status, sizeof(status));
+        send_json(status);
+    }
+    else if (strcmp(cmd, "latency reset") == 0) {
+        reset_input_latency_metrics();
+        send_json("{\"cmd\":\"latency_reset\",\"ok\":1}\n");
+    }
     else if (strncmp(cmd, "algorithm test ", 15) == 0) {
         char result[256];
         if (standalone_xinput_format_algorithm_test(
@@ -2055,14 +2149,28 @@ static void gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
         int64_t callback_started_us = ble_callback_metrics_start();
         uint8_t len = param->notify.value_len > REPORT_SIZE ? REPORT_SIZE : param->notify.value_len;
         if (ch_uses_notify_all(ch)) {
+            bool is_input =
+                param->notify.handle == s_ch[ch].input_handle;
+            if (is_input)
+                note_ble_input_report(ch, param->notify.value, len);
             in_report_t n;
             n.ch = ch; n.len = len; n.handle = param->notify.handle;
             n.generation = s_ch[ch].generation;
             memcpy(n.data, param->notify.value, len);
-            if (s_notify_queue && xQueueSend(s_notify_queue, &n, 0) == pdTRUE && s_cdc_task_h)
-                xTaskNotifyGive(s_cdc_task_h);
+            if (s_notify_queue) {
+                if (xQueueSend(s_notify_queue, &n, 0) == pdTRUE) {
+                    if (s_cdc_task_h) xTaskNotifyGive(s_cdc_task_h);
+                } else if (is_input) {
+                    portENTER_CRITICAL(&s_in_mux);
+                    s_input_latency_metrics.notify_queue_drops++;
+                    portEXIT_CRITICAL(&s_in_mux);
+                }
+            }
         } else if (param->notify.handle == s_ch[ch].input_handle) {
+            note_ble_input_report(ch, param->notify.value, len);
             portENTER_CRITICAL(&s_in_mux);
+            if (s_in_dirty[ch])
+                s_input_latency_metrics.shadow_overwrites++;
             s_in_shadow[ch].ch = ch; s_in_shadow[ch].len = len;
             s_in_shadow[ch].handle = 0;
             s_in_shadow[ch].generation = s_ch[ch].generation;

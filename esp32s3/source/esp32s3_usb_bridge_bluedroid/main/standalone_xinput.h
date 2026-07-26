@@ -15,6 +15,14 @@ typedef enum {
 
 typedef void (*standalone_xinput_wakeup_cb_t)(void);
 
+typedef struct {
+    uint32_t busy_events;
+    uint32_t pending_overwrites;
+    uint32_t wait_samples;
+    uint32_t wait_max_us;
+    uint64_t wait_total_us;
+} standalone_usb_latency_metrics_t;
+
 standalone_output_mode_t standalone_output_mode_load(void);
 esp_err_t standalone_output_mode_store(standalone_output_mode_t mode);
 void standalone_xinput_configure(
@@ -23,6 +31,10 @@ void standalone_xinput_configure(
 void standalone_xinput_set_wakeup_cb(
     standalone_xinput_wakeup_cb_t callback
 );
+void standalone_xinput_get_latency_metrics(
+    standalone_usb_latency_metrics_t *metrics
+);
+void standalone_xinput_reset_latency_metrics(void);
 void standalone_xinput_accept_switch_report(
     int channel, const uint8_t *payload, size_t length
 );

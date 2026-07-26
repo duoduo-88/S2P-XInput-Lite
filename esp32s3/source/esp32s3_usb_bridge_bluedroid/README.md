@@ -46,6 +46,8 @@ profile begin <schema> <length> <crc32-hex>
 profile chunk <offset> <payload-hex>
 profile commit
 profile abort
+latency status
+latency reset
 mode standalone
 mode standalone_hid
 mode bridge
@@ -54,6 +56,13 @@ restart
 
 An interrupted or rejected transfer leaves the previous active slot unchanged.
 The current profile size limit is 8192 bytes.
+
+`latency reset` clears the transport counters before a controlled run.
+`latency status` reports received BLE input, source timestamp gaps, input
+shadow overwrites, notify-queue drops, USB endpoint busy episodes, pending USB
+state overwrites, and completed USB wait average/maximum time. A source gap
+with zero shadow, queue, and USB counters indicates that the skipped interval
+already existed before the standalone output path.
 
 The development XInput interface uses a non-retail development VID/PID plus a
 Microsoft OS 2.0 `XUSB20` compatible-ID descriptor. It does not copy the

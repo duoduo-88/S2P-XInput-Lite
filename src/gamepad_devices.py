@@ -242,6 +242,9 @@ class WindowsGamepadBackend:
         self.xinput = xinput if xinput is not None else self._load_xinput()
         self.winmm = winmm if winmm is not None else self._load_winmm()
         self._winmm_caps = {}
+        self._s2p_mobile_hid = None
+        self._s2p_mobile_hid_path = None
+        self._s2p_mobile_hid_triggers = None
         self._configure_functions()
 
     @staticmethod
@@ -289,6 +292,7 @@ class WindowsGamepadBackend:
 
     def enumerate_devices(self, excluded_xinput_slot=None):
         devices = []
+        found_s2p_mobile = False
         if self.xinput is not None:
             for index in range(4):
                 state = XINPUT_STATE()
@@ -322,6 +326,7 @@ class WindowsGamepadBackend:
                 name = str(caps.szPname).strip() or f"一般手把 {index + 1}"
                 is_s2p_mobile = is_s2p_mobile_hid_device(caps, name)
                 if is_s2p_mobile:
+                    found_s2p_mobile = True
                     # WinMM sometimes replaces the USB product string with a
                     # generic Microsoft joystick-driver name. The VID/PID is
                     # stable, so restore the meaningful selector label.
@@ -345,7 +350,76 @@ class WindowsGamepadBackend:
                     supports_rumble=False,
                     input_profile=input_profile,
                 ))
+        if found_s2p_mobile:
+            self._open_s2p_mobile_hid()
+        else:
+            self._close_s2p_mobile_hid()
         return devices
+
+    def _close_s2p_mobile_hid(self):
+        device = getattr(self, "_s2p_mobile_hid", None)
+        self._s2p_mobile_hid = None
+        self._s2p_mobile_hid_path = None
+        self._s2p_mobile_hid_triggers = None
+        if device is not None:
+            try:
+                device.close()
+            except (OSError, RuntimeError):
+                pass
+
+    def _open_s2p_mobile_hid(self):
+        if getattr(self, "_s2p_mobile_hid", None) is not None:
+            return True
+        try:
+            import hid
+
+            interfaces = hid.enumerate(
+                S2P_MOBILE_HID_VID, S2P_MOBILE_HID_PID
+            )
+            interface = next(
+                (
+                    item for item in interfaces
+                    if int(item.get("usage_page", 0) or 0) == 0x01
+                    and int(item.get("usage", 0) or 0) == 0x05
+                ),
+                None,
+            )
+            if interface is None:
+                return False
+            device = hid.device()
+            device.open_path(interface["path"])
+            device.set_nonblocking(1)
+        except (ImportError, OSError, RuntimeError, StopIteration):
+            return False
+        self._s2p_mobile_hid = device
+        self._s2p_mobile_hid_path = interface["path"]
+        self._s2p_mobile_hid_triggers = None
+        return True
+
+    def _read_s2p_mobile_hid_triggers(self):
+        """Read LT/RT directly when WinMM hides the HID Brake/Accelerator axes."""
+        if (
+            getattr(self, "_s2p_mobile_hid", None) is None
+            and not self._open_s2p_mobile_hid()
+        ):
+            return None
+        device = self._s2p_mobile_hid
+        try:
+            while True:
+                report = device.read(64)
+                if not report:
+                    break
+                # The 13-byte mobile report stores analog Brake/Accelerator
+                # after buttons, hat and four signed stick axes.
+                if len(report) >= 13:
+                    self._s2p_mobile_hid_triggers = (
+                        int(report[11]) / 255.0,
+                        int(report[12]) / 255.0,
+                    )
+        except (OSError, RuntimeError):
+            self._close_s2p_mobile_hid()
+            return None
+        return getattr(self, "_s2p_mobile_hid_triggers", None)
 
     def read_state(self, device):
         if device.kind == "xinput":
@@ -458,6 +532,10 @@ class WindowsGamepadBackend:
             )
         else:
             left_trigger = right_trigger = None
+        if is_s2p_mobile:
+            raw_triggers = self._read_s2p_mobile_hid_triggers()
+            if raw_triggers is not None:
+                left_trigger, right_trigger = raw_triggers
         return GamepadState(
             packet_number=0,
             buttons_mask=button_mask,

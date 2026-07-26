@@ -327,6 +327,41 @@ class GamepadMathTests(unittest.TestCase):
         self.assertEqual(normalize_trigger_axis(128, 0, 255), 128 / 255)
         self.assertEqual(normalize_trigger_axis(300, 0, 255), 1.0)
 
+    def test_mobile_hid_raw_report_supplies_triggers_hidden_by_winmm(self):
+        caps = JOYCAPSW()
+        for minimum_name in (
+            "wXmin", "wYmin", "wZmin", "wRmin", "wUmin", "wVmin"
+        ):
+            setattr(caps, minimum_name, 0)
+        for maximum_name in (
+            "wXmax", "wYmax", "wZmax", "wRmax", "wUmax", "wVmax"
+        ):
+            setattr(caps, maximum_name, 65535)
+        caps.wCaps = JOYCAPS_HASZ | JOYCAPS_HASR
+        caps.wNumAxes = 4
+        backend = object.__new__(WindowsGamepadBackend)
+        backend._winmm_caps = {0: caps}
+        backend._s2p_mobile_hid = SimpleNamespace(
+            read=Mock(side_effect=[
+                [0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 64, 192],
+                [],
+            ])
+        )
+        backend._s2p_mobile_hid_triggers = None
+
+        def fill_state(_index, pointer):
+            info = pointer._obj
+            info.dwXpos = info.dwYpos = 32768
+            info.dwZpos = info.dwRpos = 32768
+            info.dwPOV = 0xFFFF
+            return 0
+
+        backend.winmm = SimpleNamespace(joyGetPosEx=fill_state)
+        state = backend._read_winmm(0, S2P_MOBILE_HID_PROFILE)
+
+        self.assertAlmostEqual(state.left_trigger, 64 / 255)
+        self.assertAlmostEqual(state.right_trigger, 192 / 255)
+
     def test_mobile_hid_winmm_buttons_follow_usage_numbers(self):
         expected_by_usage = {
             1: "A",
