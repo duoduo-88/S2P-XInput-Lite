@@ -1677,6 +1677,13 @@ static void cdc_task(void *arg) {
                 send_notify_handle_frame(ntf.ch, ntf.handle, ntf.data, ntf.len);
             }
         }
+        /*
+         * Input accepted above marks the standalone USB report dirty.  Pump it
+         * in the same wakeup instead of reaching the 2 ms maintenance wait and
+         * deferring the new state to the next loop.  Keep the pump at the top
+         * of the loop as well so a report whose endpoint was busy is retried.
+         */
+        standalone_xinput_pump();
         line_t out;
         while (xQueueReceive(s_out_queue, &out, 0) == pdTRUE)
             safe_cdc_write((const uint8_t *)out.text, strlen(out.text));
@@ -1688,6 +1695,10 @@ static void cdc_task(void *arg) {
         // deferred GAP maintenance deadlines progressing when fully idle.
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2));
     }
+}
+
+static void wake_standalone_output(void) {
+    if (s_cdc_task_h) xTaskNotifyGive(s_cdc_task_h);
 }
 
 // --- GATT discovery helpers ---
@@ -2318,6 +2329,7 @@ void app_main(void) {
             cdc_task, "cdc_task", 8192, NULL, 10, &s_cdc_task_h, 1
         ) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM
     );
+    standalone_xinput_set_wakeup_cb(wake_standalone_output);
 
     ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();

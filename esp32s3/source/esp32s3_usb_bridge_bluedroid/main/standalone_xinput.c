@@ -289,6 +289,7 @@ static bool s_report_dirty;
 static bool s_hid_report_dirty;
 static bool s_usb_hid_mode;
 static bool s_usb_xinput_mode;
+static standalone_xinput_wakeup_cb_t s_wakeup_cb;
 static int s_active_channel = -1;
 static uint8_t s_endpoint_in;
 static uint8_t s_endpoint_out;
@@ -3054,6 +3055,12 @@ void standalone_xinput_configure(
     }
 }
 
+void standalone_xinput_set_wakeup_cb(
+    standalone_xinput_wakeup_cb_t callback
+) {
+    s_wakeup_cb = callback;
+}
+
 void standalone_xinput_accept_switch_report(
     int channel, const uint8_t *payload, size_t length
 ) {
@@ -3224,6 +3231,14 @@ static void arm_out_endpoint(void) {
     usbd_edpt_claim(0, s_endpoint_out);
     usbd_edpt_xfer(0, s_endpoint_out, s_out_buffer, sizeof(s_out_buffer));
     usbd_edpt_release(0, s_endpoint_out);
+}
+
+static void wake_output_if_pending(bool hid_mode) {
+    bool pending;
+    portENTER_CRITICAL(&s_state_mux);
+    pending = hid_mode ? s_hid_report_dirty : s_report_dirty;
+    portEXIT_CRITICAL(&s_state_mux);
+    if (pending && s_wakeup_cb) s_wakeup_cb();
 }
 
 void standalone_xinput_pump(void) {
@@ -3402,6 +3417,14 @@ static bool xinput_transfer(
     uint32_t transferred
 ) {
     (void)rhport;
+    if (endpoint == s_endpoint_in) {
+        /*
+         * A newer BLE state may have arrived while the IN endpoint was busy.
+         * Wake the output task as soon as the host completes this transfer
+         * instead of relying on its 2 ms maintenance timeout.
+         */
+        wake_output_if_pending(false);
+    }
     if (endpoint == s_endpoint_out && result == XFER_RESULT_SUCCESS) {
         if (transferred >= 5 &&
             s_out_buffer[0] == 0x00 && s_out_buffer[1] == 0x08) {
@@ -3493,4 +3516,13 @@ void tud_hid_set_report_cb(
     (void)report_type;
     (void)buffer;
     (void)size;
+}
+
+void tud_hid_report_complete_cb(
+    uint8_t instance, uint8_t const *report, uint16_t len
+) {
+    (void)instance;
+    (void)report;
+    (void)len;
+    wake_output_if_pending(true);
 }

@@ -108,6 +108,33 @@ class StandaloneFirmwareContractTests(unittest.TestCase):
         self.assertIn("handle_command", task)
         self.assertIn("standalone_xinput_accept_switch_report", task)
 
+    def test_standalone_usb_is_pumped_after_fresh_input(self):
+        task_start = MAIN_SOURCE.index("static void cdc_task")
+        task_end = MAIN_SOURCE.index("static void gap_cb", task_start)
+        task = MAIN_SOURCE[task_start:task_end]
+        accepted = task.rindex("standalone_xinput_accept_switch_report")
+        post_input_pump = task.rindex("standalone_xinput_pump()")
+        command_output = task.index(
+            "while (xQueueReceive(s_out_queue", accepted
+        )
+        self.assertLess(accepted, post_input_pump)
+        self.assertLess(post_input_pump, command_output)
+
+    def test_standalone_usb_completion_wakes_pending_output(self):
+        self.assertIn(
+            "standalone_xinput_set_wakeup_cb(wake_standalone_output)",
+            MAIN_SOURCE,
+        )
+        self.assertIn(
+            "wake_output_if_pending(false)", XINPUT_SOURCE
+        )
+        self.assertIn(
+            "void tud_hid_report_complete_cb(", XINPUT_SOURCE
+        )
+        self.assertIn(
+            "wake_output_if_pending(true)", XINPUT_SOURCE
+        )
+
     def test_connection_watchdog_covers_unready_channels(self):
         self.assertIn("connect_deadline_ms", MAIN_SOURCE)
         self.assertIn("pump_connection_watchdogs", MAIN_SOURCE)

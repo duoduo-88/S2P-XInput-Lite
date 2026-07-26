@@ -13,10 +13,15 @@ typedef enum {
     STANDALONE_OUTPUT_HID = 2,
 } standalone_output_mode_t;
 
+typedef void (*standalone_xinput_wakeup_cb_t)(void);
+
 standalone_output_mode_t standalone_output_mode_load(void);
 esp_err_t standalone_output_mode_store(standalone_output_mode_t mode);
 void standalone_xinput_configure(
     tinyusb_config_t *config, bool enabled, bool usb_hid_mode
+);
+void standalone_xinput_set_wakeup_cb(
+    standalone_xinput_wakeup_cb_t callback
 );
 void standalone_xinput_accept_switch_report(
     int channel, const uint8_t *payload, size_t length
