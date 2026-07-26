@@ -19,43 +19,163 @@ EN_TEXT = {
     "測試手把": "Device",
     "XInput 手把 {index}": "XInput Gamepad {index}",
     "一般手把 {index}": "Generic Gamepad {index}",
-    "輸入回報率 {rate:.0f} Hz": "Report rate {rate:.0f} Hz",
-    "狀態更新率 {rate:.0f} Hz": "State update rate {rate:.0f} Hz",
-    "狀態更新率 — Hz": "State update rate — Hz",
     "重新整理": "Refresh",
-    "輸入更新率（Hz）\nS2P橋接顯示原始輸入報告率。一般XInput／WinMM裝置只能在操作時估算Windows可觀測的狀態更新率。\n\n視窗繪製率（FPS）\n最高目標為視窗所在螢幕的刷新率。Hz與FPS用途不同，數值不需要相等。\n\nXInput與8000 Hz裝置\nXInput不提供原始USB封包時間戳。程式會利用dwPacketNumber的差值計入兩次輪詢間的更新；如果驅動程式不提供連續計數，8000 Hz裝置仍可能只顯示接近輪詢率。此時必須使用該裝置專用的Raw HID工具，才能驗證真正USB回報率。\n\n注意：這些數值不代表輸入延遲。":
-        "Input update rate (Hz)\n"
-        "S2P bridge mode shows the raw input report rate. Generic XInput/"
-        "WinMM devices can only estimate Windows-observable state updates "
-        "while the controller is operated.\n\n"
-        "Window render rate (FPS)\n"
-        "The maximum target is the refresh rate of the display containing "
-        "the window. Hz and FPS serve different purposes and do not need "
-        "to match.\n\n"
-        "XInput and 8000 Hz devices\n"
-        "XInput does not expose raw USB report timestamps. The app uses "
-        "dwPacketNumber gaps to include updates between polls. If the driver "
-        "does not expose a continuous counter, an 8000 Hz device may still "
-        "show a value near the polling rate. A device-specific Raw HID tool "
-        "is then required to verify the true USB report rate.\n\n"
-        "Note: These values do not represent input latency.",
     "輸入監看": "Input Monitor",
     "震動測試": "Rumble Test",
+    "高頻量測": "High-Rate Test",
+    "回報率量測": "Report Rate Test",
+    "量測設定": "Measurement Settings",
+    "量測秒數": "Duration (s)",
+    "開始量測": "Start",
+    "提前停止": "Stop Early",
+    "目前到達率": "Current Delivery Rate",
+    "累計 reports": "Reports Collected",
+    "目前回報率": "Current Report Rate",
+    "收到回報數": "Reports Received",
+    "剩餘時間": "Time Remaining",
+    "Report 到達間隔（ms）": "Report Arrival Intervals (ms)",
+    "前後兩筆回報的時間差（ms）": "Time Between Reports (ms)",
+    "綠色：接近預期": "Green: near expected",
+    "橘色：稍有波動": "Orange: some variation",
+    "紅色：偏差明顯": "Red: significant deviation",
+    "尚無足夠資料可供判讀。": "Not enough data to evaluate this value.",
+    "綠色：接近目前回報率的預期時間差，回報穩定。":
+        "Green: close to the expected timing for the current report rate; "
+        "delivery is stable.",
+    "橘色：與預期時間差有些差距，可能存在輕微波動。":
+        "Orange: somewhat different from the expected timing; minor "
+        "variation may be present.",
+    "紅色：與預期時間差偏差明顯，可能有集中到達或較大的抖動。":
+        "Red: significantly different from the expected timing; reports may "
+        "be arriving in bursts or with substantial jitter.",
+    "綠色：與本次平均時間差接近，回報分佈穩定。":
+        "Green: close to the mean timing in this measurement; report delivery "
+        "is consistent.",
+    "橘色：與本次平均時間差有些差距，可能存在輕微波動。":
+        "Orange: somewhat different from the mean timing in this measurement; "
+        "minor variation may be present.",
+    "紅色：與本次平均時間差偏差明顯，可能有集中到達或較大的抖動。":
+        "Red: significantly different from the mean timing in this "
+        "measurement; reports may be arriving in bursts or with substantial "
+        "jitter.",
+    "平均值是本次量測的比較基準，不單獨判定好壞。":
+        "The mean is the comparison baseline for this measurement and is not "
+        "rated by itself.",
+    "最小值與最大值是單筆極端資料，不適合單獨判定好壞。":
+        "Minimum and maximum are single extreme samples and should not be "
+        "rated by themselves.",
+    "最小": "Minimum",
+    "平均": "Mean",
+    "最大": "Maximum",
+    "P50／P95／P99 間隔分佈": "P50 / P95 / P99 Interval Distribution",
+    "回報時間差分佈": "Time Between Reports Distribution",
+    "尚未量測": "Not measured",
+    "Raw HID 量測元件不可用": "Raw HID measurement component unavailable",
+    "找不到 Raw HID 遊戲手把介面":
+        "No Raw HID gamepad interface found",
+    "無法將目前測試手把對應至 Raw HID 介面":
+        "Could not match the selected test gamepad to a Raw HID interface",
+    "量測秒數必須介於 1 到 300 秒":
+        "Duration must be between 1 and 300 seconds",
+    "Raw HID 量測器無法啟動": "Could not start the Raw HID probe",
+    "正在開啟 Raw HID 介面...": "Opening Raw HID interface...",
+    "準備量測...": "Preparing measurement...",
+    "{seconds:.1f} 秒後開始": "Starts in {seconds:.1f} s",
+    "已取消量測": "Measurement cancelled",
+    "量測中": "Measuring",
+    "量測完成": "Measurement complete",
+    "已提前停止": "Stopped early",
+    "量測失敗": "Measurement failed",
+    "Raw HID 量測失敗（錯誤代碼 {code}）":
+        "Raw HID measurement failed (error {code})",
+    "P50：50% 的 report 間隔不超過此值":
+        "P50: 50% of report intervals are at or below this value",
+    "P95：95% 的 report 間隔不超過此值":
+        "P95: 95% of report intervals are at or below this value",
+    "P99：99% 的 report 間隔不超過此值；最適合看偶發抖動":
+        "P99: 99% of report intervals are at or below this value; best for "
+        "viewing occasional jitter",
+    "P50｜典型間隔：50% 的 report 間隔不超過此值":
+        "P50 | Typical: 50% of report intervals are at or below this value",
+    "P95｜多數間隔：95% 的 report 間隔不超過此值":
+        "P95 | Most: 95% of report intervals are at or below this value",
+    "P99｜尾端抖動：99% 的 report 間隔不超過此值":
+        "P99 | Tail jitter: 99% of report intervals are at or below this value",
+    "P50｜典型間隔：50% 的間隔不超過此值　{count}／{total} 筆":
+        "P50 | Typical: 50% of intervals are at or below this value  "
+        "{count} / {total}",
+    "P95｜多數間隔：95% 的間隔不超過此值　{count}／{total} 筆":
+        "P95 | Most: 95% of intervals are at or below this value  "
+        "{count} / {total}",
+    "P99｜尾端抖動：99% 的間隔不超過此值　{count}／{total} 筆":
+        "P99 | Tail jitter: 99% of intervals are at or below this value  "
+        "{count} / {total}",
+    "P50｜典型間隔：50% 的間隔不超過此值":
+        "P50 | Typical: 50% of intervals are at or below this value",
+    "P95｜多數間隔：95% 的間隔不超過此值":
+        "P95 | Most: 95% of intervals are at or below this value",
+    "P99｜尾端抖動：99% 的間隔不超過此值":
+        "P99 | Tail jitter: 99% of intervals are at or below this value",
+    "P50｜一般表現：一半的回報時間差不超過這個數值":
+        "P50 | Typical: half of report gaps are at or below this value",
+    "P95｜大多數表現：95% 的回報時間差不超過這個數值":
+        "P95 | Most: 95% of report gaps are at or below this value",
+    "P99｜偶發抖動：99% 的回報時間差不超過這個數值":
+        "P99 | Occasional jitter: 99% of report gaps are at or below this value",
+    "{count}／{total} 筆": "{count} / {total}",
+    "{count}／{total} 筆資料": "{count} / {total} samples",
+    "{count} 筆資料": "{count} samples",
+    "判讀：數值越小、三者越接近，回報越穩定。理論間隔可用「1000 ÷ 回報率（Hz）」計算；P50 接近理論間隔，且 P99 沒有明顯升高，即屬穩定。":
+        "Reading the result: lower and closer values mean more consistent "
+        "delivery. Calculate the theoretical interval as 1000 divided by the "
+        "report rate in Hz; delivery is stable when P50 is near that interval "
+        "and P99 is not significantly higher.",
+    "判讀：數值越小且三者越接近，回報越穩定。\n理論間隔（ms）＝1000 ÷ Hz；P50 接近理論值且 P99 接近 P50，即屬穩定。":
+        "Reading the result: lower and closer values mean more consistent "
+        "delivery.\nTheoretical interval (ms) = 1000 / Hz; delivery is stable "
+        "when P50 is near that value and P99 is close to P50.",
+    "判讀：三個數值越小、彼此越接近，代表回報越穩定。\n預期時間差（ms）＝1000 ÷ 回報率（Hz）；P50 接近預期值、P99 接近 P50，表示表現穩定。":
+        "Reading the result: lower and closer values mean more consistent "
+        "delivery.\nExpected time between reports (ms) = 1000 / report rate "
+        "(Hz); performance is stable when P50 is near the expected value and "
+        "P99 is close to P50.",
+    "尚未開始量測\n無數據顯示":
+        "Measurement not started\nNo data to display",
+    "怎樣算好：數值越小、P50／P95／P99 越接近，代表回報越穩定。以 8000 Hz 為例，理想間隔約為 0.125 ms；P50 接近 0.125 ms 且 P99 沒有明顯升高，表示只有少量排程抖動。":
+        "What is good: lower values and closer P50 / P95 / P99 values mean "
+        "more consistent delivery. At 8000 Hz the ideal interval is about "
+        "0.125 ms; a P50 near 0.125 ms with no large P99 increase indicates "
+        "only minor scheduling jitter.",
+    "山形代表所有已收集 report 間隔的分佈；這些數值是 Windows Raw HID 到達間隔，不是端到端輸入延遲。":
+        "The mountain shape represents the distribution of all collected "
+        "report intervals. These are Windows Raw HID arrival intervals, not "
+        "end-to-end input latency.",
+    "山形顯示量測期間前後兩筆回報時間差的分佈。數值只代表資料到達 Windows 的時間規律，不代表按下按鍵到遊戲反應的延遲。":
+        "The mountain shape shows the distribution of time between reports "
+        "during measurement. It describes delivery timing at Windows, not the "
+        "delay from pressing a control to seeing a response in a game.",
+    "山形顯示量測期間，前後兩筆回報時間差的分佈。\n這只反映資料送到 Windows 是否穩定，不代表按下按鍵到遊戲反應的延遲。":
+        "The mountain shape shows the distribution of time between reports.\n"
+        "It reflects delivery stability at Windows, not the delay from "
+        "pressing a control to seeing a response in a game.",
+    "山形顯示回報時間差分佈；僅反映資料到達 Windows 的穩定度，不代表按鍵到遊戲反應的延遲。":
+        "The mountain shows report timing distribution and delivery stability "
+        "at Windows, not input-to-game response latency.",
     "清除軌跡與統計": "Clear",
     "顯示輸出形狀": "Shape",
     "顯示陀螺圖例": "Gyro Legend",
     "採樣點": "Samples",
-    "採樣點100%\n顯示目前軌跡長度內，所選Windows輸入介面實際收到的全部座標點。\n\nXInput限制\nHz統計可利用packet number差值計入輪詢間的更新次數；但XInput只保留最新座標，無法把已被覆蓋的中間座標還原成路徑點。\n\n顯示百分比\n降低百分比只會減少畫面上的路徑點，不會改變輸入更新率統計。":
+    "採樣點100%\n顯示目前軌跡長度內，所選Windows輸入介面實際收到的全部座標點。\n\nXInput限制\nXInput只保留最新座標，無法把兩次讀取之間已被覆蓋的中間座標還原成路徑點。\n\n顯示百分比\n降低百分比只會減少畫面上的路徑點，不會改變實際輸入。":
         "Sample points 100%\n"
         "Shows every coordinate point actually received through the selected "
         "Windows input interface within the current trail length.\n\n"
         "XInput limitation\n"
-        "The Hz statistics can use packet-number gaps to count updates between "
-        "polls, but XInput retains only the latest coordinates. Overwritten "
-        "intermediate coordinates cannot be reconstructed as trail points.\n\n"
+        "XInput only retains the latest coordinates. Intermediate coordinates "
+        "overwritten between reads cannot be reconstructed as trail points."
+        "\n\n"
         "Display percentage\n"
         "Lowering the percentage only reduces trail points on screen; it does "
-        "not change the input-update-rate statistics.",
+        "not change the actual input.",
     "軌跡長度": "Trail",
     "實體搖桿": "Stick",
     "陀螺儀": "Gyro",

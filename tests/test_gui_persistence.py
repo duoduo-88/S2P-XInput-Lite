@@ -455,6 +455,44 @@ class GuiPersistenceTests(unittest.TestCase):
         ready_event.set.assert_called_once_with()
         closing_event.set.assert_called_once_with()
 
+    def test_language_change_does_not_reopen_a_closing_gamepad_tester(self):
+        gui = object.__new__(config_gui.ConfigGUI)
+        process = Mock()
+        process.poll.return_value = None
+        gui.gamepad_test_process = process
+        gui._gamepad_test_closing_event = Mock(
+            is_set=Mock(return_value=True)
+        )
+        gui._gamepad_test_language_restart_job = "restart-job"
+        gui._gamepad_test_startup_job = None
+        gui._close_gamepad_test_process = Mock()
+        gui.open_gamepad_test_window = Mock()
+
+        gui._restart_gamepad_test_after_language_change(process)
+
+        self.assertIsNone(gui._gamepad_test_language_restart_job)
+        gui._close_gamepad_test_process.assert_not_called()
+        gui.open_gamepad_test_window.assert_not_called()
+
+    def test_language_change_restarts_a_still_open_gamepad_tester(self):
+        gui = object.__new__(config_gui.ConfigGUI)
+        process = Mock()
+        process.poll.return_value = None
+        gui.gamepad_test_process = process
+        gui._gamepad_test_closing_event = Mock(
+            is_set=Mock(return_value=False)
+        )
+        gui._gamepad_test_language_restart_job = "restart-job"
+        gui._gamepad_test_startup_job = None
+        gui._close_gamepad_test_process = Mock()
+        gui.open_gamepad_test_window = Mock()
+
+        gui._restart_gamepad_test_after_language_change(process)
+
+        self.assertIsNone(gui._gamepad_test_language_restart_job)
+        gui._close_gamepad_test_process.assert_called_once_with()
+        gui.open_gamepad_test_window.assert_called_once_with()
+
     def test_gamepad_tester_stderr_is_continuously_drained_and_bounded(self):
         process = Mock()
         process.stderr.readline.side_effect = (

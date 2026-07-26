@@ -1981,6 +1981,7 @@ class ConfigGUI:
         self.gamepad_test_process = None
         self._gamepad_test_startup_job = None
         self._gamepad_test_exit_job = None
+        self._gamepad_test_language_restart_job = None
         self._gamepad_test_closing_event = None
         self._gamepad_test_ready_event = None
         self._gamepad_test_stderr_lines = deque(maxlen=100)
@@ -6572,9 +6573,10 @@ class ConfigGUI:
 
     def toggle_language(self):
         """切換中英文並立即保存 GUI 語言偏好。"""
+        gamepad_test_process = self.gamepad_test_process
         restart_gamepad_test = bool(
-            self.gamepad_test_process is not None
-            and self.gamepad_test_process.poll() is None
+            gamepad_test_process is not None
+            and gamepad_test_process.poll() is None
         )
         self.language = "en" if self.language == "zh" else "zh"
         global _GUI_LANGUAGE
@@ -6596,17 +6598,44 @@ class ConfigGUI:
 
         self.apply_language()
         if restart_gamepad_test:
-            if self._gamepad_test_startup_job is not None:
+            if self._gamepad_test_language_restart_job is not None:
                 try:
                     self.root.after_cancel(
-                        self._gamepad_test_startup_job
+                        self._gamepad_test_language_restart_job
                     )
                 except tk.TclError:
                     pass
-                self._gamepad_test_startup_job = None
-            self._close_gamepad_test_process()
-            self.open_gamepad_test_window()
+            self._gamepad_test_language_restart_job = self.root.after(
+                50,
+                lambda target=gamepad_test_process:
+                    self._restart_gamepad_test_after_language_change(target),
+            )
         self.request_adaptive_window_update()
+
+    def _restart_gamepad_test_after_language_change(self, process):
+        """Restart only if the tester is still genuinely open."""
+        self._gamepad_test_language_restart_job = None
+        if process is not self.gamepad_test_process:
+            return
+        closing_event = getattr(
+            self, "_gamepad_test_closing_event", None
+        )
+        if (
+            process.poll() is not None
+            or (
+                closing_event is not None
+                and closing_event.is_set()
+            )
+        ):
+            return
+        if self._gamepad_test_startup_job is not None:
+            try:
+                self.root.after_cancel(self._gamepad_test_startup_job)
+            except tk.TclError:
+                pass
+            self._gamepad_test_startup_job = None
+        self._close_gamepad_test_process()
+        self.open_gamepad_test_window()
 
     def show_idle_disconnect_menu(self):
         """Show the global wireless idle timeout choices."""
@@ -10578,6 +10607,15 @@ class ConfigGUI:
             except tk.TclError:
                 pass
             self._gamepad_test_exit_job = None
+        language_restart_job = getattr(
+            self, "_gamepad_test_language_restart_job", None
+        )
+        if language_restart_job is not None:
+            try:
+                self.root.after_cancel(language_restart_job)
+            except tk.TclError:
+                pass
+            self._gamepad_test_language_restart_job = None
         self._gamepad_test_reopen_requested = False
         self._close_gamepad_test_process()
 

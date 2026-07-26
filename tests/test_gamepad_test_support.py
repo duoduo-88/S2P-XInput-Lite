@@ -62,6 +62,7 @@ from gamepad_test_window import (
     shape_ease_amount,
 )
 from stick_processing import apply_output_shape
+from raw_hid_probe import RawHidDevice
 import test_telemetry
 from test_telemetry import SharedTestTelemetry, TELEMETRY_SIZE
 
@@ -200,26 +201,87 @@ class GamepadMathTests(unittest.TestCase):
 
         self.assertEqual(translated, "XInput Gamepad 1")
 
-    def test_rate_label_distinguishes_reports_from_state_updates(self):
+    def test_high_rate_interval_formatter_preserves_sub_millisecond_detail(self):
+        self.assertEqual(
+            GamepadTestWindow._format_interval_us(125.0), "0.125"
+        )
+        self.assertEqual(
+            GamepadTestWindow._format_interval_us(1500.0), "1.50"
+        )
+        self.assertEqual(GamepadTestWindow._format_interval_us(0.0), "—")
+
+    def test_high_rate_ui_does_not_force_bold_metric_fonts(self):
+        source = (ROOT / "src" / "gamepad_test_window.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertNotIn("_raw_hid_metric_font", source)
+        self.assertNotIn('(\"Segoe UI\", 16, \"bold\")', source)
+
+    def test_high_rate_tab_is_detected_without_drawing_hidden_input_plots(self):
         tester = object.__new__(GamepadTestWindow)
-        tester.gui = SimpleNamespace(tr=lambda text: text)
-        tester.rate_var = Mock()
-        tester._display_refresh_hz = 144.0
-        tester._sample_times = []
+        tester.test_notebook = Mock(select=Mock(return_value=".high_rate"))
+        tester.input_tab = ".input"
+        tester.rumble_tab = ".rumble"
+        tester.high_rate_tab = ".high_rate"
 
-        tester._update_rate(
-            {"source_rate_hz": 132.0}, now=1.0
-        )
-        tester.rate_var.set.assert_called_with("輸入回報率 132 Hz")
+        self.assertEqual(tester._active_test_tab(), "high_rate")
 
-        tester._update_rate(
-            {
-                "source_rate_hz": 63.0,
-                "rate_is_independent": True,
-            },
-            now=2.0,
+    def test_high_rate_measurement_follows_selected_device(self):
+        raw_device = RawHidDevice(
+            key="hid:pad",
+            path="hid-path",
+            name="Example Wireless Controller",
+            vendor_id=0x1234,
+            product_id=0x5678,
+            usage_page=1,
+            usage=5,
+            interface_number=1,
         )
-        tester.rate_var.set.assert_called_with("狀態更新率 63 Hz")
+        tester = object.__new__(GamepadTestWindow)
+        tester.raw_hid_devices = {raw_device.key: raw_device}
+        tester._selected_device = lambda: GamepadDevice(
+            "winmm:0", "winmm", 0, "Wireless Controller", False
+        )
+
+        self.assertIs(tester._selected_raw_hid_device(), raw_device)
+
+    def test_high_rate_measurement_uses_telemetry_to_exclude_vigem_slot(self):
+        vigem = RawHidDevice(
+            key="hid:vigem",
+            path=r"\\?\HID#VID_045E&PID_028E&IG_00#virtual",
+            name="Microsoft Controller (XBOX 360 For Windows)",
+            vendor_id=0x045E,
+            product_id=0x028E,
+            usage_page=1,
+            usage=5,
+            interface_number=-1,
+        )
+        physical = RawHidDevice(
+            key="hid:physical",
+            path=r"\\?\HID#VID_413D&PID_2104&IG_03#physical",
+            name="Microsoft Controller (XBOX 360 For Windows)",
+            vendor_id=0x413D,
+            product_id=0x2104,
+            usage_page=1,
+            usage=5,
+            interface_number=-1,
+        )
+        tester = object.__new__(GamepadTestWindow)
+        tester.raw_hid_devices = {
+            vigem.key: vigem,
+            physical.key: physical,
+        }
+        tester.latest_telemetry = {"xinput_slot": 1}
+        tester._selected_device = lambda: GamepadDevice(
+            "xinput:0", "xinput", 0, "XInput Gamepad 1", True
+        )
+
+        self.assertIs(tester._selected_raw_hid_device(), physical)
+        tester._selected_device = lambda: GamepadDevice(
+            "s2p", "s2p", 1, "S2P-XInput-Lite", True
+        )
+        self.assertIs(tester._selected_raw_hid_device(), vigem)
 
     def test_tester_parameter_input_clamps_and_snaps(self):
         self.assertAlmostEqual(

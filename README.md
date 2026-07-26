@@ -33,7 +33,8 @@ Current release: **v0.7.0**
   standards-based mobile USB HID without keeping the Windows application open
 - Gyroscope mapping to an XInput stick or mouse
 - Standalone gamepad tester with live input/output plots, button mapping
-  details, report rates, shape capture, and vibration tests
+  details, shape capture, vibration tests, and a Raw HID high-rate measurement
+  page with report count, P50/P95/P99, interval statistics, and a timeline
 - Full game profiles for switching stick, gyro, rumble, audio-haptics, and mapping settings together, with automatic UI refresh
 - Traditional Chinese and English interface
 - Live connection, battery, ESP32, ViGEmBus, WASAPI, and HidHide status

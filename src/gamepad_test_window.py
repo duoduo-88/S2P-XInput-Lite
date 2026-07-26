@@ -21,6 +21,7 @@ from gamepad_devices import (
     WindowsGamepadBackend,
 )
 from gyro_processing import _apply_gyro_response_curve
+from raw_hid_probe import RawHidProbeClient, enumerate_raw_hid_gamepads
 from test_telemetry import SharedTestTelemetry
 from tooltip_layout import wrap_tooltip_text
 
@@ -137,6 +138,7 @@ class HoverTip:
         if self._window is not None:
             return
         try:
+            text = self.text() if callable(self.text) else self.text
             owner = self.widget.winfo_toplevel()
             tip = tk.Toplevel(owner)
             tip.withdraw()
@@ -160,7 +162,7 @@ class HoverTip:
             )
             label_font = tkfont.Font(font=label.cget("font"))
             label.configure(text=wrap_tooltip_text(
-                self.text,
+                text,
                 effective_wrap,
                 label_font.measure,
             ))
@@ -1800,6 +1802,10 @@ class GamepadTestWindow:
         self.gui = gui
         self.root = gui.root
         self.window = None
+        self.test_notebook = None
+        self.input_tab = None
+        self.rumble_tab = None
+        self.high_rate_tab = None
         self.backend = WindowsGamepadBackend()
         self.native_sampler = None
         self.telemetry = None
@@ -1810,8 +1816,38 @@ class GamepadTestWindow:
         self.status_var = tk.StringVar(
             value=self.gui.tr("正在搜尋手把...")
         )
-        self.rate_var = tk.StringVar(value="")
         self.draw_fps_var = tk.StringVar(value="— FPS")
+        self.raw_hid_probe = RawHidProbeClient()
+        self.raw_hid_devices = {}
+        self.raw_hid_duration_var = tk.StringVar(value="10")
+        self.raw_hid_state_var = tk.StringVar(value=self.gui.tr("尚未量測"))
+        self.raw_hid_rate_var = tk.StringVar(value="— Hz")
+        self.raw_hid_count_var = tk.StringVar(value="0")
+        self.raw_hid_remaining_var = tk.StringVar(value="—")
+        self.raw_hid_stats_vars = {
+            key: tk.StringVar(value="—")
+            for key in ("p50", "p95", "p99", "min", "mean", "max")
+        }
+        self.raw_hid_stat_labels = {}
+        self.raw_hid_stat_quality = {
+            key: "neutral"
+            for key in ("p50", "p95", "p99", "min", "mean", "max")
+        }
+        self.raw_hid_percentile_info_vars = {
+            key: tk.StringVar()
+            for key in ("p50", "p95", "p99")
+        }
+        self._update_raw_hid_percentile_info(0)
+        self.raw_hid_canvas = None
+        self.raw_hid_start_button = None
+        self.raw_hid_stop_button = None
+        self.raw_hid_duration_combo = None
+        self._raw_hid_countdown_job = None
+        self._raw_hid_countdown_deadline = 0.0
+        self._raw_hid_pending_start = None
+        self._raw_hid_countdown_cancelled = False
+        self._raw_hid_last_distribution = None
+        self._raw_hid_chart_data = ((), 0, 0.0, 0.0, 0.0)
         self.shape_enabled_var = tk.BooleanVar(value=False)
         self._shape_capture_signature = None
         self.show_gyro_legend_var = tk.BooleanVar(value=True)
@@ -1849,17 +1885,14 @@ class GamepadTestWindow:
         self.rumble_strength_text = tk.StringVar(value="100%")
         self.template_lf_enabled_var = tk.BooleanVar(value=True)
         self.template_hf_enabled_var = tk.BooleanVar(value=True)
-        self._last_sample_token = None
         self._last_consumed_token = None
         self._last_trail_sequence = 0
         self._trail_overwrite_count = 0
-        self._sample_times = deque(maxlen=128)
         self._draw_times = deque(maxlen=512)
         self._button_events = {}
         self._recent_events = deque(maxlen=8)
         self._last_state = None
         self._display_refresh_hz = 60.0
-        self._fps_reference_hz = None
         self._frame_interval = 1.0 / 60.0
         self._next_frame_at = 0.0
         self._last_detail_refresh = 0.0
@@ -1945,7 +1978,7 @@ class GamepadTestWindow:
 
         selector = ttk.Frame(content)
         selector.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        selector.columnconfigure(4, weight=1)
+        selector.columnconfigure(3, weight=1)
         ttk.Label(selector, text=self.gui.tr("測試手把")).grid(
             row=0, column=0, sticky="w", padx=(0, 6)
         )
@@ -1965,54 +1998,34 @@ class GamepadTestWindow:
             width=8,
             command=lambda: self._refresh_devices(force=True),
         ).grid(row=0, column=2, padx=(5, 0))
-        refresh_help = tk.Label(
-            selector,
-            text="?",
-            width=2,
-            relief="solid",
-            borderwidth=1,
-            cursor="question_arrow",
-        )
-        refresh_help.grid(row=0, column=3, padx=(4, 0))
-        HoverTip(
-            refresh_help,
-            self.gui.tr(
-                "輸入更新率（Hz）\n"
-                "S2P橋接顯示原始輸入報告率。一般XInput／WinMM裝置只能在"
-                "操作時估算Windows可觀測的狀態更新率。\n\n"
-                "視窗繪製率（FPS）\n"
-                "最高目標為視窗所在螢幕的刷新率。Hz與FPS用途不同，數值"
-                "不需要相等。\n\n"
-                "XInput與8000 Hz裝置\n"
-                "XInput不提供原始USB封包時間戳。程式會利用dwPacketNumber"
-                "的差值計入兩次輪詢間的更新；如果驅動程式不提供連續計數，"
-                "8000 Hz裝置仍可能只顯示接近輪詢率。此時必須使用該裝置"
-                "專用的Raw HID工具，才能驗證真正USB回報率。\n\n"
-                "注意：這些數值不代表輸入延遲。"
-            ),
-        )
         self.status_label = ttk.Label(
             selector, textvariable=self.status_var, foreground="#138A36"
         )
         self.status_label.grid(
-            row=0, column=4, sticky="e", padx=(10, 0)
-        )
-        ttk.Label(selector, textvariable=self.rate_var).grid(
-            row=0, column=5, sticky="e", padx=(8, 0)
+            row=0, column=3, sticky="e", padx=(10, 0)
         )
         self.draw_fps_label = ttk.Label(
             selector, textvariable=self.draw_fps_var, foreground="#777777"
         )
         self.draw_fps_label.grid(
-            row=0, column=6, sticky="e", padx=(8, 0)
+            row=0, column=4, sticky="e", padx=(8, 0)
         )
 
         notebook = ttk.Notebook(content)
         notebook.grid(row=1, column=0, sticky="nsew")
         input_tab = ttk.Frame(notebook, padding=(8, 6))
         rumble_tab = ttk.Frame(notebook, padding=(10, 8))
+        high_rate_tab = ttk.Frame(notebook, padding=(10, 8))
+        self.test_notebook = notebook
+        self.input_tab = input_tab
+        self.rumble_tab = rumble_tab
+        self.high_rate_tab = high_rate_tab
         notebook.add(input_tab, text=f" {self.gui.tr('輸入監看')} ")
         notebook.add(rumble_tab, text=f" {self.gui.tr('震動測試')} ")
+        notebook.add(high_rate_tab, text=f" {self.gui.tr('回報率量測')} ")
+        notebook.bind(
+            "<<NotebookTabChanged>>", self._on_test_tab_changed, add="+"
+        )
         input_tab.columnconfigure(0, weight=1)
         input_tab.rowconfigure(0, weight=1)
 
@@ -2098,11 +2111,10 @@ class GamepadTestWindow:
                 "顯示目前軌跡長度內，所選Windows輸入介面實際收到的全部"
                 "座標點。\n\n"
                 "XInput限制\n"
-                "Hz統計可利用packet number差值計入輪詢間的更新次數；但"
-                "XInput只保留最新座標，無法把已被覆蓋的中間座標還原成"
-                "路徑點。\n\n"
+                "XInput只保留最新座標，無法把兩次讀取之間已被覆蓋的"
+                "中間座標還原成路徑點。\n\n"
                 "顯示百分比\n"
-                "降低百分比只會減少畫面上的路徑點，不會改變輸入更新率統計。"
+                "降低百分比只會減少畫面上的路徑點，不會改變實際輸入。"
             ),
         )
         ttk.Label(
@@ -2236,7 +2248,9 @@ class GamepadTestWindow:
         self.event_tree.grid(row=0, column=0, sticky="nsew")
 
         self._build_rumble_tab(rumble_tab)
+        self._build_high_rate_tab(high_rate_tab)
         self._refresh_devices(force=True)
+        self._refresh_raw_hid_devices()
         # The first telemetry frame is published only after read_latest() has
         # established the reader heartbeat. Continue scanning at a low rate so
         # controllers that connect later appear without a manual refresh.
@@ -2287,6 +2301,593 @@ class GamepadTestWindow:
             )
         except tk.TclError:
             pass
+
+    def _build_high_rate_tab(self, parent):
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(3, weight=0)
+
+        controls = ttk.LabelFrame(
+            parent, text=self.gui.tr("量測設定"), padding=(10, 8)
+        )
+        controls.grid(row=0, column=0, sticky="ew")
+        controls.columnconfigure(2, weight=1, uniform="raw_actions")
+        controls.columnconfigure(3, weight=1, uniform="raw_actions")
+        ttk.Label(
+            controls, text=self.gui.tr("量測秒數")
+        ).grid(row=0, column=0, padx=(0, 5))
+        self.raw_hid_duration_combo = ttk.Combobox(
+            controls,
+            textvariable=self.raw_hid_duration_var,
+            values=("5", "10", "30", "60"),
+            width=5,
+        )
+        self.raw_hid_duration_combo.grid(row=0, column=1)
+        self.raw_hid_start_button = ttk.Button(
+            controls,
+            text=self.gui.tr("開始量測"),
+            command=self._start_raw_hid_measurement,
+            width=22,
+        )
+        self.raw_hid_start_button.grid(
+            row=0, column=2, sticky="ew", padx=(14, 4)
+        )
+        self.raw_hid_stop_button = ttk.Button(
+            controls,
+            text=self.gui.tr("提前停止"),
+            command=self._stop_raw_hid_measurement,
+            state="disabled",
+            width=20,
+        )
+        self.raw_hid_stop_button.grid(row=0, column=3, sticky="ew")
+
+        summary = ttk.Frame(parent)
+        summary.grid(row=1, column=0, sticky="ew", pady=(10, 8))
+        for column in range(3):
+            summary.columnconfigure(column, weight=1, uniform="raw_summary")
+        summary_items = (
+            ("目前回報率", self.raw_hid_rate_var),
+            ("收到回報數", self.raw_hid_count_var),
+            ("剩餘時間", self.raw_hid_remaining_var),
+        )
+        for column, (title, variable) in enumerate(summary_items):
+            box = ttk.LabelFrame(
+                summary, text=self.gui.tr(title), padding=(8, 5)
+            )
+            box.grid(
+                row=0, column=column, sticky="ew",
+                padx=(0 if column == 0 else 4, 0 if column == 2 else 4),
+            )
+            ttk.Label(
+                box,
+                textvariable=variable,
+                anchor="center",
+            ).pack(fill="both", expand=True, pady=(3, 5))
+
+        stats = ttk.LabelFrame(
+            parent, text=self.gui.tr("前後兩筆回報的時間差（ms）"), padding=(8, 6)
+        )
+        stats.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        stat_items = (
+            ("P50", "p50"),
+            ("P95", "p95"),
+            ("P99", "p99"),
+            ("最小", "min"),
+            ("平均", "mean"),
+            ("最大", "max"),
+        )
+        for column, (title, key) in enumerate(stat_items):
+            stats.columnconfigure(column, weight=1, uniform="raw_stat")
+            ttk.Label(stats, text=self.gui.tr(title), anchor="center").grid(
+                row=0, column=column, sticky="ew"
+            )
+            value_label = tk.Label(
+                stats,
+                textvariable=self.raw_hid_stats_vars[key],
+                anchor="center",
+                cursor="question_arrow",
+            )
+            value_label.grid(
+                row=1, column=column, sticky="nsew", pady=(3, 2)
+            )
+            self.raw_hid_stat_labels[key] = value_label
+            HoverTip(
+                value_label,
+                lambda stat_key=key: self._raw_hid_stat_tooltip_text(
+                    stat_key
+                ),
+            )
+        chart_frame = ttk.LabelFrame(
+            parent, text=self.gui.tr("回報時間差分佈"), padding=(8, 5)
+        )
+        chart_frame.grid(row=3, column=0, sticky="ew")
+        chart_frame.columnconfigure(0, weight=1)
+        self.raw_hid_canvas = tk.Canvas(
+            chart_frame,
+            width=680,
+            height=240,
+            background="#FFFFFF",
+            highlightthickness=0,
+        )
+        self.raw_hid_canvas.grid(row=0, column=0, sticky="ew")
+        self.raw_hid_canvas.bind(
+            "<Configure>", lambda _event: self._redraw_raw_hid_chart()
+        )
+        legend = ttk.Frame(parent)
+        legend.grid(row=4, column=0, sticky="ew", pady=(5, 0))
+        legend.columnconfigure(2, weight=1)
+        for row, (key, color, text) in enumerate((
+            ("p50", "#42A5F5", "P50｜一般表現：一半的回報時間差不超過這個數值"),
+            ("p95", "#FB8C00", "P95｜大多數表現：95% 的回報時間差不超過這個數值"),
+            ("p99", "#E53935", "P99｜偶發抖動：99% 的回報時間差不超過這個數值"),
+        )):
+            tk.Label(legend, text="■", foreground=color).grid(
+                row=row, column=0, sticky="nw"
+            )
+            ttk.Label(
+                legend,
+                text=self.gui.tr(text),
+                justify="left",
+            ).grid(
+                row=row, column=1, sticky="ew", padx=(2, 0),
+            )
+            ttk.Label(
+                legend,
+                textvariable=self.raw_hid_percentile_info_vars[key],
+                anchor="w",
+            ).grid(
+                row=row, column=2, sticky="w", padx=(10, 0),
+            )
+        ttk.Label(
+            parent,
+            text=self.gui.tr("判讀：三個數值越小、彼此越接近，代表回報越穩定。\n預期時間差（ms）＝1000 ÷ 回報率（Hz）；P50 接近預期值、P99 接近 P50，表示表現穩定。"),
+            foreground="#666666",
+            anchor="w",
+            justify="left",
+            wraplength=670,
+        ).grid(row=5, column=0, sticky="ew", pady=(3, 0))
+        ttk.Label(
+            parent,
+            text=self.gui.tr("山形顯示回報時間差分佈；僅反映資料到達 Windows 的穩定度，不代表按鍵到遊戲反應的延遲。"),
+            foreground="#666666",
+            anchor="w",
+            justify="left",
+        ).grid(row=6, column=0, sticky="ew", pady=(2, 0))
+        self._draw_raw_hid_chart((), 0, 0.0, 0.0, 0.0)
+
+    def _refresh_raw_hid_devices(self):
+        if self.raw_hid_probe.read_snapshot().get("state") in {
+            "opening", "running"
+        }:
+            return
+        self.raw_hid_devices = {
+            device.key: device
+            for device in enumerate_raw_hid_gamepads()
+        }
+        if not self.raw_hid_probe.available:
+            self.raw_hid_state_var.set(
+                self.gui.tr("Raw HID 量測元件不可用")
+            )
+        elif not self.raw_hid_devices:
+            self.raw_hid_state_var.set(
+                self.gui.tr("找不到 Raw HID 遊戲手把介面")
+            )
+        elif self.raw_hid_probe.read_snapshot().get("state") == "idle":
+            self.raw_hid_state_var.set(self.gui.tr("尚未量測"))
+        self._set_raw_hid_controls_active(False)
+
+    @staticmethod
+    def _raw_hid_name_key(value):
+        return "".join(
+            character for character in str(value).casefold()
+            if character.isalnum()
+        )
+
+    @staticmethod
+    def _is_vigem_xbox_360_raw_hid(device):
+        """Ignore this app's virtual Xbox 360 collection when possible."""
+        return (
+            device.vendor_id == 0x045E
+            and device.product_id == 0x028E
+            and "ig_" in device.path.casefold()
+        )
+
+    def _selected_raw_hid_device(self):
+        """Resolve the selected tester device without exposing a second UI."""
+        selected = self._selected_device()
+        devices = tuple(self.raw_hid_devices.values())
+        if selected is None or not devices:
+            return None
+        selected_key = self._raw_hid_name_key(selected.name)
+        matches = [
+            device for device in devices
+            if selected_key
+            and (
+                selected_key in self._raw_hid_name_key(device.name)
+                or self._raw_hid_name_key(device.name) in selected_key
+            )
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        xinput_collections = [
+            device for device in devices
+            if device.usage_page == 0x01
+            and device.usage == 0x05
+            and "ig_" in device.path.casefold()
+        ]
+        vigem_collections = [
+            device for device in xinput_collections
+            if self._is_vigem_xbox_360_raw_hid(device)
+        ]
+        physical_xinput = [
+            device for device in xinput_collections
+            if not self._is_vigem_xbox_360_raw_hid(device)
+        ]
+        if selected.kind in {"xinput", "s2p"}:
+            telemetry = getattr(self, "latest_telemetry", {}) or {}
+            vigem_slot = telemetry.get("xinput_slot")
+            if (
+                isinstance(vigem_slot, int)
+                and selected.index == vigem_slot
+                and len(vigem_collections) == 1
+            ):
+                return vigem_collections[0]
+            physical_slots = [
+                slot for slot in range(4) if slot != vigem_slot
+            ]
+            if selected.index in physical_slots:
+                physical_index = physical_slots.index(selected.index)
+                if physical_index < len(physical_xinput):
+                    return physical_xinput[physical_index]
+        elif (
+            selected.kind == "winmm"
+            and selected.index < len(physical_xinput)
+        ):
+            return physical_xinput[selected.index]
+        physical_candidates = [
+            device for device in devices
+            if not self._is_vigem_xbox_360_raw_hid(device)
+        ]
+        if len(physical_candidates) == 1:
+            return physical_candidates[0]
+        # XInput does not expose a HID device path. With exactly one Raw HID
+        # gamepad collection, it is still unambiguous and safe to use it.
+        if len(devices) == 1:
+            return devices[0]
+        return None
+
+    def _set_raw_hid_controls_active(self, active):
+        if self.raw_hid_start_button is None:
+            return
+        if self.device_combo is not None:
+            self.device_combo.configure(
+                state="disabled" if active else "readonly"
+            )
+        self.raw_hid_duration_combo.configure(
+            state="disabled" if active else "normal"
+        )
+        can_start = (
+            not active
+            and self.raw_hid_probe.available
+            and self._selected_raw_hid_device() is not None
+        )
+        self.raw_hid_start_button.configure(
+            state="normal" if can_start else "disabled"
+        )
+        self.raw_hid_stop_button.configure(
+            state="normal" if active else "disabled"
+        )
+
+    def _start_raw_hid_measurement(self):
+        self._refresh_raw_hid_devices()
+        device = self._selected_raw_hid_device()
+        if device is None:
+            self.raw_hid_state_var.set(
+                self.gui.tr("無法將目前測試手把對應至 Raw HID 介面")
+            )
+            return
+        try:
+            duration = float(self.raw_hid_duration_var.get().strip())
+        except (TypeError, ValueError):
+            duration = 0.0
+        if not math.isfinite(duration) or not 1.0 <= duration <= 300.0:
+            self.raw_hid_state_var.set(
+                self.gui.tr("量測秒數必須介於 1 到 300 秒")
+            )
+            return
+        self.raw_hid_duration_var.set(f"{duration:g}")
+        self._raw_hid_countdown_cancelled = False
+        self.raw_hid_rate_var.set("— Hz")
+        self.raw_hid_count_var.set("0")
+        for variable in self.raw_hid_stats_vars.values():
+            variable.set("—")
+        self._update_raw_hid_stat_colors({})
+        self._update_raw_hid_percentile_info(0)
+        self._raw_hid_last_distribution = None
+        self._draw_raw_hid_chart((), 0, 0.0, 0.0, 0.0)
+        self._raw_hid_pending_start = (device.path, duration)
+        self._raw_hid_countdown_deadline = time.perf_counter() + 3.0
+        self.raw_hid_state_var.set(self.gui.tr("準備量測..."))
+        self.raw_hid_remaining_var.set(
+            self.gui.tr("{seconds:.1f} 秒後開始").format(seconds=3.0)
+        )
+        self._set_raw_hid_controls_active(True)
+        self._tick_raw_hid_countdown()
+
+    def _stop_raw_hid_measurement(self):
+        if self._cancel_raw_hid_countdown():
+            self._raw_hid_countdown_cancelled = True
+            self.raw_hid_state_var.set(self.gui.tr("已取消量測"))
+            self.raw_hid_remaining_var.set(self.gui.tr("已取消量測"))
+            self._set_raw_hid_controls_active(False)
+            return
+        self.raw_hid_probe.stop()
+        self._update_raw_hid_measurement()
+
+    def _cancel_raw_hid_countdown(self):
+        was_pending = self._raw_hid_pending_start is not None
+        job = self._raw_hid_countdown_job
+        self._raw_hid_countdown_job = None
+        self._raw_hid_countdown_deadline = 0.0
+        self._raw_hid_pending_start = None
+        if job is not None and self.window is not None:
+            try:
+                self.window.after_cancel(job)
+            except tk.TclError:
+                pass
+        return was_pending
+
+    def _tick_raw_hid_countdown(self):
+        self._raw_hid_countdown_job = None
+        pending = self._raw_hid_pending_start
+        if pending is None or self.window is None:
+            return
+        remaining = self._raw_hid_countdown_deadline - time.perf_counter()
+        if remaining > 0:
+            self.raw_hid_remaining_var.set(
+                self.gui.tr("{seconds:.1f} 秒後開始").format(
+                    seconds=remaining
+                )
+            )
+            self._raw_hid_countdown_job = self.window.after(
+                50, self._tick_raw_hid_countdown
+            )
+            return
+        device_path, duration = pending
+        self._raw_hid_pending_start = None
+        self._raw_hid_countdown_deadline = 0.0
+        if not self.raw_hid_probe.start(device_path, duration):
+            self.raw_hid_state_var.set(
+                self.gui.tr("Raw HID 量測器無法啟動")
+            )
+            self.raw_hid_remaining_var.set(self.gui.tr("量測失敗"))
+            self._set_raw_hid_controls_active(False)
+            return
+        self._raw_hid_countdown_cancelled = False
+        self.raw_hid_remaining_var.set(
+            self.gui.tr("{seconds:.1f} 秒").format(seconds=duration)
+        )
+        self.raw_hid_state_var.set(self.gui.tr("正在開啟 Raw HID 介面..."))
+
+    @staticmethod
+    def _format_interval_us(value):
+        value = float(value or 0.0) / 1000.0
+        if value <= 0.0:
+            return "—"
+        if value < 1.0:
+            return f"{value:.3f}"
+        if value < 10.0:
+            return f"{value:.2f}"
+        return f"{value:.1f}"
+
+    def _update_raw_hid_percentile_info(self, interval_count):
+        total = max(0, int(interval_count or 0))
+        values = (
+            ("p50", 0.50),
+            ("p95", 0.95),
+            ("p99", 0.99),
+        )
+        for key, percentile in values:
+            covered = math.ceil(total * percentile) if total else 0
+            self.raw_hid_percentile_info_vars[key].set(
+                self.gui.tr("{count} 筆資料").format(
+                    count=f"{covered:,}",
+                )
+            )
+
+    def _update_raw_hid_stat_colors(self, snapshot):
+        neutral = "#333333"
+        mean_us = float(snapshot.get("mean_us", 0.0) or 0.0)
+        if mean_us <= 0:
+            for key, label in self.raw_hid_stat_labels.items():
+                self.raw_hid_stat_quality[key] = "neutral"
+                label.configure(foreground=neutral)
+            return
+        for key, label in self.raw_hid_stat_labels.items():
+            value_us = float(snapshot.get(f"{key}_us", 0.0) or 0.0)
+            if key in {"min", "mean", "max"} or value_us <= 0:
+                quality = "neutral"
+                color = neutral
+            else:
+                ratio = value_us / mean_us
+                if 0.75 <= ratio <= 1.25:
+                    quality = "good"
+                    color = "#2E7D32"
+                elif 0.50 <= ratio <= 2.00:
+                    quality = "fair"
+                    color = "#B26A00"
+                else:
+                    quality = "poor"
+                    color = "#C62828"
+            self.raw_hid_stat_quality[key] = quality
+            label.configure(foreground=color)
+
+    def _raw_hid_stat_tooltip_text(self, key):
+        if key == "mean":
+            return self.gui.tr(
+                "平均值是本次量測的比較基準，不單獨判定好壞。"
+            )
+        if key in {"min", "max"}:
+            return self.gui.tr(
+                "最小值與最大值是單筆極端資料，不適合單獨判定好壞。"
+            )
+        quality_text = {
+            "good": "綠色：與本次平均時間差接近，回報分佈穩定。",
+            "fair": "橘色：與本次平均時間差有些差距，可能存在輕微波動。",
+            "poor": "紅色：與本次平均時間差偏差明顯，可能有集中到達或較大的抖動。",
+        }.get(
+            self.raw_hid_stat_quality.get(key),
+            "尚無足夠資料可供判讀。",
+        )
+        return self.gui.tr(quality_text)
+
+    def _update_raw_hid_measurement(self, redraw_chart=True):
+        if (
+            self._raw_hid_pending_start is not None
+            or self._raw_hid_countdown_cancelled
+        ):
+            return
+        snapshot = self.raw_hid_probe.read_snapshot()
+        state = snapshot.get("state", "idle")
+        if state == "idle":
+            return
+        rate = float(snapshot.get("rate_hz", 0.0) or 0.0)
+        self.raw_hid_rate_var.set(f"{rate:,.0f} Hz" if rate > 0 else "— Hz")
+        self.raw_hid_count_var.set(f"{int(snapshot.get('reports', 0)):,}")
+        self._update_raw_hid_percentile_info(
+            snapshot.get("intervals", 0)
+        )
+        remaining = float(snapshot.get("remaining_ms", 0.0) or 0.0)
+        remaining_text = {
+            "complete": "量測完成",
+            "stopped": "已提前停止",
+            "error": "量測失敗",
+        }.get(state)
+        self.raw_hid_remaining_var.set(
+            self.gui.tr("{seconds:.1f} 秒").format(
+                seconds=remaining / 1000.0
+            )
+            if state in {"opening", "running"}
+            else self.gui.tr(remaining_text) if remaining_text else "—"
+        )
+        for key in ("p50", "p95", "p99", "min", "mean", "max"):
+            self.raw_hid_stats_vars[key].set(
+                self._format_interval_us(snapshot.get(f"{key}_us"))
+            )
+        self._update_raw_hid_stat_colors(snapshot)
+        percentile_markers = tuple(
+            float(snapshot.get(f"{key}_us", 0.0) or 0.0)
+            for key in ("p50", "p95", "p99")
+        )
+        counts = tuple(snapshot.get("histogram_counts") or ())
+        histogram_max_us = int(snapshot.get("histogram_max_us", 0) or 0)
+        distribution = (counts, histogram_max_us, percentile_markers)
+        if (
+            redraw_chart
+            and distribution != self._raw_hid_last_distribution
+        ):
+            self._raw_hid_last_distribution = distribution
+            self._draw_raw_hid_chart(
+                counts,
+                histogram_max_us,
+                *percentile_markers,
+            )
+        state_text = {
+            "opening": "正在開啟 Raw HID 介面...",
+            "running": "量測中",
+            "complete": "量測完成",
+            "stopped": "已提前停止",
+            "error": "Raw HID 量測失敗（錯誤代碼 {code}）",
+        }.get(state, "尚未量測")
+        self.raw_hid_state_var.set(
+            self.gui.tr(state_text).format(
+                code=int(snapshot.get("error_code", 0) or 0)
+            )
+        )
+        self._set_raw_hid_controls_active(
+            state in {"opening", "running"}
+        )
+
+    def _draw_raw_hid_chart(
+        self, counts, histogram_max_us, p50_us, p95_us, p99_us
+    ):
+        self._raw_hid_chart_data = (
+            tuple(counts),
+            int(histogram_max_us or 0),
+            float(p50_us or 0.0),
+            float(p95_us or 0.0),
+            float(p99_us or 0.0),
+        )
+        canvas = self.raw_hid_canvas
+        if canvas is None:
+            return
+        canvas.delete("all")
+        if not counts or max(counts, default=0) <= 0:
+            width = max(640, int(canvas.winfo_width() or 680))
+            height = max(200, int(canvas.winfo_height() or 240))
+            canvas.create_text(
+                width / 2,
+                height / 2,
+                text=self.gui.tr("尚未開始量測\n無數據顯示"),
+                fill="#888888",
+                justify="center",
+            )
+            return
+        width = max(640, int(canvas.winfo_width() or 680))
+        height = max(200, int(canvas.winfo_height() or 240))
+        left, top, right, bottom = 10, 8, width - 8, height - 34
+        canvas.create_rectangle(
+            left, top, right, bottom, outline="#B8B8B8"
+        )
+        values = (float(p50_us), float(p95_us), float(p99_us))
+        x_max_us = max(1.0, float(histogram_max_us or 0))
+        for index in range(5):
+            x = left + (right - left) * index / 4
+            value_ms = x_max_us * index / 4 / 1000.0
+            canvas.create_line(x, top, x, bottom, fill="#E8E8E8")
+            label_x = min(max(x, 22), width - 22)
+            canvas.create_text(
+                label_x, bottom + 8, text=f"{value_ms:.3f}",
+                anchor="n",
+                fill="#666666",
+            )
+            y = top + (bottom - top) * index / 4
+            canvas.create_line(left, y, right, y, fill="#E8E8E8")
+        peak = max(counts)
+        points = [(left, bottom)]
+        for index, count in enumerate(counts):
+            x = left + (right - left) * index / max(1, len(counts) - 1)
+            # Preserve visible headroom for percentile labels and make a
+            # narrow high-frequency peak easier to read.
+            y = bottom - count / peak * (bottom - top) * 0.82
+            points.append((x, y))
+        points.append((right, bottom))
+        canvas.create_polygon(
+            *[coordinate for point in points for coordinate in point],
+            fill="#BBDEFB", outline="#1976D2", width=2,
+        )
+        label_y_offsets = (8, 30, 52)
+        for label_index, (color, label, value) in enumerate(zip(
+            ("#42A5F5", "#FB8C00", "#E53935"),
+            ("P50", "P95", "P99"),
+            values,
+        )):
+            x = left + min(value, x_max_us) / x_max_us * (right - left)
+            canvas.create_line(x, top, x, bottom, fill=color, width=2)
+            text_id = canvas.create_text(
+                x, top + label_y_offsets[label_index],
+                text=label, fill=color, anchor="n"
+            )
+            bounds = canvas.bbox(text_id)
+            if bounds is not None:
+                box_id = canvas.create_rectangle(
+                    bounds[0] - 3, bounds[1] - 2,
+                    bounds[2] + 3, bounds[3] + 2,
+                    fill="#FFFFFF", outline=color,
+                )
+                canvas.tag_lower(box_id, text_id)
+
+    def _redraw_raw_hid_chart(self):
+        self._draw_raw_hid_chart(*self._raw_hid_chart_data)
 
     def _enable_high_resolution_timer(self):
         """Request 1 ms Windows timer granularity while this tester is open."""
@@ -2829,6 +3430,8 @@ class GamepadTestWindow:
             return
         current = time.perf_counter()
         frame_interval = self._frame_interval
+        if self._active_test_tab() == "high_rate":
+            frame_interval = max(frame_interval, 1.0 / 30.0)
         if current < self._window_motion_until:
             # A Canvas redraw competes with Windows' move/resize loop. Keep
             # the tester responsive while the user is dragging its window.
@@ -2842,6 +3445,27 @@ class GamepadTestWindow:
             1, int(round((self._next_frame_at - current) * 1000.0))
         )
         self._poll_job = self.window.after(delay_ms, self._poll)
+
+    def _active_test_tab(self):
+        notebook = self.test_notebook
+        if notebook is None:
+            return "input"
+        try:
+            selected = notebook.select()
+        except tk.TclError:
+            return "input"
+        if self.high_rate_tab is not None and selected == str(
+            self.high_rate_tab
+        ):
+            return "high_rate"
+        if self.rumble_tab is not None and selected == str(self.rumble_tab):
+            return "rumble"
+        return "input"
+
+    def _on_test_tab_changed(self, _event=None):
+        self._next_frame_at = time.perf_counter()
+        if self._active_test_tab() == "high_rate":
+            self._raw_hid_last_distribution = None
 
     def _update_display_refresh_rate(self, window=None):
         window = self.window if window is None else window
@@ -2903,23 +3527,7 @@ class GamepadTestWindow:
                     )
                 consumed_trail = bool(native_samples)
         if sample is not None:
-            source_rate = sample.get("source_rate_hz")
-            try:
-                has_source_rate = float(source_rate or 0.0) > 0.0
-            except (TypeError, ValueError):
-                has_source_rate = False
             sample_token = sample.get("token")
-            if (
-                not has_source_rate
-                and not sample.get("rate_is_independent")
-                and sample_token != self._last_sample_token
-            ):
-                # XInput only exposes observable state updates through
-                # dwPacketNumber; WinMM has no report sequence, so its token
-                # changes when the returned state changes. This is an update
-                # estimate while moving, never the tester API-call cadence.
-                self._last_sample_token = sample_token
-                self._sample_times.append(now)
             if is_s2p and self.telemetry is not None:
                 trail_samples, newest_sequence, dropped = (
                     self.telemetry.read_trail_samples(
@@ -2954,20 +3562,27 @@ class GamepadTestWindow:
         refresh_details = (
             now - self._last_detail_refresh >= 1.0 / 30.0
         )
-        self._draw_plots(is_s2p, update_details=refresh_details)
+        active_tab = self._active_test_tab()
+        if active_tab == "input":
+            self._draw_plots(is_s2p, update_details=refresh_details)
         self._draw_times.append(now)
         while self._draw_times and now - self._draw_times[0] > 1.0:
             self._draw_times.popleft()
         if refresh_details:
             self._last_detail_refresh = now
-            self._update_triggers(sample, is_s2p)
+            if active_tab == "input":
+                self._update_triggers(sample, is_s2p)
             if now - self._last_connection_refresh >= 0.25:
                 self._last_connection_refresh = now
                 self._sync_connection_status(sample)
-            self._update_events(sample, is_s2p, now)
-            self._update_rate(sample, now)
+            if active_tab == "input":
+                self._update_events(sample, is_s2p, now)
             self._update_draw_fps()
-            self._update_rumble_availability(device)
+            if active_tab == "rumble":
+                self._update_rumble_availability(device)
+            self._update_raw_hid_measurement(
+                redraw_chart=active_tab == "high_rate"
+            )
         self._schedule_poll()
 
     @staticmethod
@@ -3192,11 +3807,10 @@ class GamepadTestWindow:
         self.stop_rumble()
         self.clear_measurements()
         self._configure_source_controls()
-        self._last_sample_token = None
         self._last_consumed_token = None
         self._baseline_trail_sequence()
-        self._sample_times.clear()
         self._configure_native_sampler()
+        self._refresh_raw_hid_devices()
 
     def _selected_device(self):
         return self.devices.get(self.selected_device_var.get())
@@ -3367,57 +3981,6 @@ class GamepadTestWindow:
             foreground="#138A36" if connected else "#777777"
         )
 
-    def _update_rate(self, sample, now):
-        if sample is None:
-            self.rate_var.set("")
-            self._fps_reference_hz = None
-            self._sample_times.clear()
-            return
-        source_rate = sample.get("source_rate_hz")
-        if source_rate is not None:
-            try:
-                source_rate = float(source_rate)
-            except (TypeError, ValueError):
-                source_rate = 0.0
-            if source_rate > 0.0:
-                key = (
-                    "狀態更新率 {rate:.0f} Hz"
-                    if sample.get("rate_is_independent")
-                    else "輸入回報率 {rate:.0f} Hz"
-                )
-                self.rate_var.set(
-                    self.gui.tr(key).format(rate=source_rate)
-                )
-                self._fps_reference_hz = min(
-                    source_rate, self._display_refresh_hz
-                )
-                self._sample_times.clear()
-                return
-        if sample.get("rate_is_independent"):
-            self.rate_var.set(self.gui.tr("狀態更新率 — Hz"))
-            self._fps_reference_hz = None
-            self._sample_times.clear()
-            return
-        while self._sample_times and now - self._sample_times[0] > 1.0:
-            self._sample_times.popleft()
-        if len(self._sample_times) >= 3:
-            elapsed = self._sample_times[-1] - self._sample_times[0]
-            rate = (
-                (len(self._sample_times) - 1) / elapsed
-                if elapsed > 0.0 else 0.0
-            )
-            self.rate_var.set(
-                self.gui.tr("狀態更新率 {rate:.0f} Hz").format(rate=rate)
-            )
-            self._fps_reference_hz = min(
-                rate, self._display_refresh_hz
-            )
-        else:
-            # Keep the rate field visible for a connected device, but do not
-            # fabricate a number until enough real state updates are observed.
-            self.rate_var.set(self.gui.tr("狀態更新率 — Hz"))
-            self._fps_reference_hz = None
-
     def _update_draw_fps(self):
         if len(self._draw_times) < 2:
             self.draw_fps_var.set("— FPS")
@@ -3428,17 +3991,7 @@ class GamepadTestWindow:
             return
         fps = (len(self._draw_times) - 1) / elapsed
         self.draw_fps_var.set(f"{fps:.0f} FPS")
-        target = self._fps_reference_hz
-        if target is None or target <= 0.0:
-            self.draw_fps_label.configure(foreground="#777777")
-            return
-        if fps >= target * 0.90:
-            color = "#138A36"
-        elif fps >= target * 0.70:
-            color = "#D97A00"
-        else:
-            color = "#C62828"
-        self.draw_fps_label.configure(foreground=color)
+        self.draw_fps_label.configure(foreground="#777777")
 
     def _event_inputs(self, sample, is_s2p):
         if sample is None:
@@ -3918,6 +4471,8 @@ class GamepadTestWindow:
             self._play_rumble_pattern(name, layer_id)
 
     def close(self):
+        self._cancel_raw_hid_countdown()
+        self.raw_hid_probe.stop()
         self.stop_rumble()
         parameter_editor = self._parameter_editor_window
         self._parameter_editor_window = None
