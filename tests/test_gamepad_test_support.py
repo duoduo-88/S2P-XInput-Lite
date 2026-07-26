@@ -56,11 +56,13 @@ from gamepad_test_window import (
     curve_output_radii,
     display_refresh_rate,
     encode_rgba_png,
+    localized_device_name,
     normalize_test_parameter,
     primary_display_refresh_rate,
     shape_ease_amount,
 )
 from stick_processing import apply_output_shape
+import test_telemetry
 from test_telemetry import SharedTestTelemetry, TELEMETRY_SIZE
 
 
@@ -147,8 +149,78 @@ class SharedTelemetryTests(unittest.TestCase):
         finally:
             channel.close()
 
+    def test_trail_slot_is_invalidated_before_wrapped_payload_write(self):
+        mapping = mmap.mmap(-1, TELEMETRY_SIZE)
+        channel = SharedTestTelemetry(mapping=mapping)
+        try:
+            with patch(
+                "test_telemetry.struct.pack_into",
+                wraps=struct.pack_into,
+            ) as pack_into:
+                channel.write_trail_sample(
+                    1,
+                    (0.0, 0.0),
+                    (0.0, 0.0),
+                    (0.0, 0.0),
+                    (0.0, 0.0),
+                    (0.0, 0.0),
+                )
+
+            calls = [entry.args for entry in pack_into.call_args_list]
+            invalidated = next(
+                index for index, args in enumerate(calls)
+                if args[0] == "<Q" and args[3] == 0
+            )
+            payload = next(
+                index for index, args in enumerate(calls)
+                if args[0] == "<Q10f"
+            )
+            self.assertLess(invalidated, payload)
+        finally:
+            channel.close()
+
 
 class GamepadMathTests(unittest.TestCase):
+    def test_generated_device_names_follow_ui_language(self):
+        device = GamepadDevice(
+            "xinput:0",
+            "xinput",
+            0,
+            "XInput Gamepad 1",
+            True,
+            name_translation_key="XInput 手把 {index}",
+        )
+
+        translated = localized_device_name(
+            device,
+            lambda text: {
+                "XInput 手把 {index}": "XInput Gamepad {index}",
+            }.get(text, text),
+        )
+
+        self.assertEqual(translated, "XInput Gamepad 1")
+
+    def test_rate_label_distinguishes_reports_from_state_updates(self):
+        tester = object.__new__(GamepadTestWindow)
+        tester.gui = SimpleNamespace(tr=lambda text: text)
+        tester.rate_var = Mock()
+        tester._display_refresh_hz = 144.0
+        tester._sample_times = []
+
+        tester._update_rate(
+            {"source_rate_hz": 132.0}, now=1.0
+        )
+        tester.rate_var.set.assert_called_with("輸入回報率 132 Hz")
+
+        tester._update_rate(
+            {
+                "source_rate_hz": 63.0,
+                "rate_is_independent": True,
+            },
+            now=2.0,
+        )
+        tester.rate_var.set.assert_called_with("狀態更新率 63 Hz")
+
     def test_tester_parameter_input_clamps_and_snaps(self):
         self.assertAlmostEqual(
             normalize_test_parameter("2.54", 0.5, 5.0, 0.1),
@@ -1204,6 +1276,20 @@ class GamepadMathTests(unittest.TestCase):
 
 
 class NativeSamplerTests(unittest.TestCase):
+    def test_stop_retains_live_thread_reference_after_timeout(self):
+        sampler = NativeGamepadSampler(SimpleNamespace())
+        thread = Mock()
+        thread.is_alive.return_value = True
+        sampler._thread = thread
+
+        self.assertFalse(sampler.stop(timeout=0.01))
+        self.assertIs(sampler._thread, thread)
+        thread.join.assert_called_once_with(timeout=0.01)
+
+        thread.is_alive.return_value = False
+        self.assertTrue(sampler.stop(timeout=0.01))
+        self.assertIsNone(sampler._thread)
+
     def test_generic_rate_and_samples_are_independent_of_drawing(self):
         clock = [10.0]
         states = [

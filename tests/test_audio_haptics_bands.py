@@ -129,6 +129,39 @@ class AudioHapticsBandTests(unittest.TestCase):
 
         self.assertEqual(callbacks, [])
 
+    def test_game_mode_clears_fft_history_before_audio_resumes(self):
+        callbacks = []
+        audio = self._default_audio(
+            lambda lf, hf: callbacks.append((lf, hf))
+        )
+
+        class SwitchingStream:
+            calls = 0
+
+            @staticmethod
+            def get_read_available():
+                return 240
+
+            def read(self, *_args, **_kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    audio.mode = "AUDIO"
+                    return np.ones(240, dtype=np.float32).tobytes()
+                if self.calls == 2:
+                    audio.mode = "GAME"
+                    return np.zeros(240, dtype=np.float32).tobytes()
+                audio.mode = "AUDIO"
+                audio._running = False
+                return np.zeros(240, dtype=np.float32).tobytes()
+
+        audio.mode = "AUDIO"
+        audio._stream = SwitchingStream()
+        audio._running = True
+        audio._process_stream(48000, 1, 240, 960)
+
+        self.assertGreater(max(callbacks[0]), 0.0)
+        self.assertEqual(callbacks[-1], (0.0, 0.0))
+
 
 if __name__ == "__main__":
     unittest.main()

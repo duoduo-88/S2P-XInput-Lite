@@ -277,6 +277,7 @@ class AudioHaptics:
                 # Keep draining the live stream so switching back to AUDIO/MIX
                 # cannot replay stale buffered sound, but skip all DSP and
                 # callback traffic while game rumble owns the output.
+                rolling_audio.fill(0.0)
                 lf_envelope = 0.0
                 hf_envelope = 0.0
                 continue

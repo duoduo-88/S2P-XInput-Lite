@@ -147,6 +147,7 @@ class GamepadDevice:
     name: str
     supports_rumble: bool
     input_profile: str = "generic"
+    name_translation_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -302,8 +303,9 @@ class WindowsGamepadBackend:
                         key=f"xinput:{index}",
                         kind="xinput",
                         index=index,
-                        name=f"XInput 手把 {index + 1}",
+                        name=f"XInput Gamepad {index + 1}",
                         supports_rumble=True,
+                        name_translation_key="XInput 手把 {index}",
                     ))
 
         self._winmm_caps = {}
@@ -323,7 +325,11 @@ class WindowsGamepadBackend:
                     index, ctypes.byref(info)
                 ) != JOYERR_NOERROR:
                     continue
-                name = str(caps.szPname).strip() or f"一般手把 {index + 1}"
+                name = str(caps.szPname).strip()
+                name_translation_key = None
+                if not name:
+                    name = f"Generic Gamepad {index + 1}"
+                    name_translation_key = "一般手把 {index}"
                 is_s2p_mobile = is_s2p_mobile_hid_device(caps, name)
                 if is_s2p_mobile:
                     found_s2p_mobile = True
@@ -349,6 +355,7 @@ class WindowsGamepadBackend:
                     name=name,
                     supports_rumble=False,
                     input_profile=input_profile,
+                    name_translation_key=name_translation_key,
                 ))
         if found_s2p_mobile:
             self._open_s2p_mobile_hid()
@@ -532,7 +539,10 @@ class WindowsGamepadBackend:
             )
         else:
             left_trigger = right_trigger = None
-        if is_s2p_mobile:
+        if (
+            is_s2p_mobile
+            and (left_trigger is None or right_trigger is None)
+        ):
             raw_triggers = self._read_s2p_mobile_hid_triggers()
             if raw_triggers is not None:
                 left_trigger, right_trigger = raw_triggers
@@ -625,9 +635,16 @@ class NativeGamepadSampler:
         self._stop.set()
         self._wake.set()
         thread = self._thread
-        if thread is not None and thread is not threading.current_thread():
-            thread.join(timeout=max(0.0, float(timeout)))
-        self._thread = None
+        if thread is None:
+            return True
+        if thread is threading.current_thread():
+            return False
+        thread.join(timeout=max(0.0, float(timeout)))
+        if thread.is_alive():
+            return False
+        if self._thread is thread:
+            self._thread = None
+        return True
 
     def set_device(self, device):
         if device is not None and device.kind not in {"xinput", "winmm"}:

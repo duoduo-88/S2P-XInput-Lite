@@ -17,6 +17,11 @@ EN_TEXT = {
     "無法讀取 Windows 手把介面。":
         "Could not access the Windows gamepad interface.",
     "測試手把": "Device",
+    "XInput 手把 {index}": "XInput Gamepad {index}",
+    "一般手把 {index}": "Generic Gamepad {index}",
+    "輸入回報率 {rate:.0f} Hz": "Report rate {rate:.0f} Hz",
+    "狀態更新率 {rate:.0f} Hz": "State update rate {rate:.0f} Hz",
+    "狀態更新率 — Hz": "State update rate — Hz",
     "重新整理": "Refresh",
     "輸入更新率（Hz）\nS2P橋接顯示原始輸入報告率。一般XInput／WinMM裝置只能在操作時估算Windows可觀測的狀態更新率。\n\n視窗繪製率（FPS）\n最高目標為視窗所在螢幕的刷新率。Hz與FPS用途不同，數值不需要相等。\n\nXInput與8000 Hz裝置\nXInput不提供原始USB封包時間戳。程式會利用dwPacketNumber的差值計入兩次輪詢間的更新；如果驅動程式不提供連續計數，8000 Hz裝置仍可能只顯示接近輪詢率。此時必須使用該裝置專用的Raw HID工具，才能驗證真正USB回報率。\n\n注意：這些數值不代表輸入延遲。":
         "Input update rate (Hz)\n"

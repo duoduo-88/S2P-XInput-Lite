@@ -15,6 +15,7 @@ import time
 import tkinter as tk
 import uuid
 import webbrowser
+from collections import deque
 from tkinter import ttk, messagebox, simpledialog, filedialog, font as tkfont
 from ctypes import wintypes
 from pathlib import Path
@@ -1982,6 +1983,8 @@ class ConfigGUI:
         self._gamepad_test_exit_job = None
         self._gamepad_test_closing_event = None
         self._gamepad_test_ready_event = None
+        self._gamepad_test_stderr_lines = deque(maxlen=100)
+        self._gamepad_test_stderr_thread = None
         self._gamepad_test_reopen_requested = False
         self._gamepad_test_loading_window = None
         self._stick_zoom_trace_bindings = []
@@ -7536,7 +7539,22 @@ class ConfigGUI:
             process = self.gamepad_test_process
             self._gamepad_test_closing_event = closing_event
             self._gamepad_test_ready_event = ready_event
+            stderr_lines = getattr(
+                self, "_gamepad_test_stderr_lines", None
+            )
+            if stderr_lines is None:
+                stderr_lines = deque(maxlen=100)
+                self._gamepad_test_stderr_lines = stderr_lines
+            else:
+                stderr_lines.clear()
             self._gamepad_test_reopen_requested = False
+            self._gamepad_test_stderr_thread = threading.Thread(
+                target=self._drain_gamepad_test_stderr,
+                args=(process, stderr_lines),
+                daemon=True,
+                name="GamepadTestStderr",
+            )
+            self._gamepad_test_stderr_thread.start()
             threading.Thread(
                 target=self._watch_gamepad_test_lifecycle,
                 args=(process, closing_event, ready_event),
@@ -7589,6 +7607,22 @@ class ConfigGUI:
                     ready_event.set()
                 elif message == b"closing":
                     closing_event.set()
+        except (AttributeError, OSError, ValueError):
+            return
+
+    @staticmethod
+    def _drain_gamepad_test_stderr(process, lines):
+        """Continuously drain tester diagnostics without mixing its stdout IPC."""
+        try:
+            while True:
+                line = process.stderr.readline()
+                if not line:
+                    return
+                if isinstance(line, bytes):
+                    line = line.decode("utf-8", errors="replace")
+                elif not isinstance(line, str):
+                    return
+                lines.append(line.rstrip())
         except (AttributeError, OSError, ValueError):
             return
 
@@ -7683,13 +7717,14 @@ class ConfigGUI:
             )
             return
         self._close_gamepad_test_loading_window()
-        detail = ""
-        try:
-            detail = process.stderr.read().decode(
-                "utf-8", errors="replace"
-            ).strip()
-        except (AttributeError, OSError, ValueError):
-            pass
+        stderr_thread = getattr(
+            self, "_gamepad_test_stderr_thread", None
+        )
+        if stderr_thread is not None:
+            stderr_thread.join(timeout=0.2)
+        detail = "\n".join(
+            getattr(self, "_gamepad_test_stderr_lines", ())
+        ).strip()
         self._close_gamepad_test_process(timeout=0.0)
         if return_code == 0:
             return
@@ -7715,6 +7750,10 @@ class ConfigGUI:
         self.gamepad_test_process = None
         self._gamepad_test_closing_event = None
         self._gamepad_test_ready_event = None
+        stderr_thread = getattr(
+            self, "_gamepad_test_stderr_thread", None
+        )
+        self._gamepad_test_stderr_thread = None
         if not keep_loading:
             self._close_gamepad_test_loading_window()
         if process is None:
@@ -7738,6 +7777,11 @@ class ConfigGUI:
                 stream.close()
             except (AttributeError, OSError, ValueError):
                 pass
+        if (
+            stderr_thread is not None
+            and stderr_thread is not threading.current_thread()
+        ):
+            stderr_thread.join(timeout=0.2)
 
     def _center_child_window(self, window, width=None, height=None):
         """Place a modal over the current settings window, clamped on-screen."""

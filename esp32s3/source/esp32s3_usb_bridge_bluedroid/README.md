@@ -62,7 +62,9 @@ The current profile size limit is 8192 bytes.
 shadow overwrites, notify-queue drops, USB endpoint busy episodes, pending USB
 state overwrites, and completed USB wait average/maximum time. A source gap
 with zero shadow, queue, and USB counters indicates that the skipped interval
-already existed before the standalone output path.
+already existed before the standalone output path. Source-gap detection scales
+with each channel's configured 7.5 or 15 ms BLE interval, and USB disconnect or
+re-enumeration time is excluded from endpoint-wait measurements.
 
 The development XInput interface uses a non-retail development VID/PID plus a
 Microsoft OS 2.0 `XUSB20` compatible-ID descriptor. It does not copy the

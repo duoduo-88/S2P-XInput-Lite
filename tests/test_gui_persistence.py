@@ -1,6 +1,7 @@
 import sys
 import tempfile
 import unittest
+from collections import deque
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
@@ -454,6 +455,20 @@ class GuiPersistenceTests(unittest.TestCase):
         ready_event.set.assert_called_once_with()
         closing_event.set.assert_called_once_with()
 
+    def test_gamepad_tester_stderr_is_continuously_drained_and_bounded(self):
+        process = Mock()
+        process.stderr.readline.side_effect = (
+            b"first warning\n",
+            b"second warning\n",
+            b"",
+        )
+        lines = deque(maxlen=1)
+
+        config_gui.ConfigGUI._drain_gamepad_test_stderr(process, lines)
+
+        self.assertEqual(list(lines), ["second warning"])
+        self.assertEqual(process.stderr.readline.call_count, 3)
+
     def test_running_gamepad_tester_is_raised_without_duplicate_window(self):
         gui = object.__new__(config_gui.ConfigGUI)
         gui.gamepad_test_process = Mock()
@@ -540,9 +555,10 @@ class GuiPersistenceTests(unittest.TestCase):
         gui.root = Mock()
         process = Mock()
         process.poll.return_value = 1
-        process.stderr.read.return_value = b"startup traceback"
         gui.gamepad_test_process = process
         gui._gamepad_test_startup_job = "job"
+        gui._gamepad_test_stderr_lines = deque(["startup traceback"])
+        gui._gamepad_test_stderr_thread = None
 
         with patch.object(config_gui.messagebox, "showerror") as showerror:
             gui._check_gamepad_test_startup(process)

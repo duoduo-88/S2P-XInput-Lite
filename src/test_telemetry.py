@@ -141,8 +141,10 @@ class SharedTestTelemetry:
         )
         if len(values) != 10:
             raise ValueError("trail sample requires ten axis values")
-        # Commit the slot sequence and global sequence only after its payload is
-        # complete. Readers validate the slot sequence before accepting it.
+        # A wrapped slot still contains its previous committed sequence. Mark
+        # it invalid before replacing the payload so a concurrent reader can
+        # never accept partially overwritten coordinates as that old sample.
+        struct.pack_into("<Q", self._mapping, offset, 0)
         struct.pack_into(
             "<Q10f",
             self._mapping,
@@ -150,6 +152,8 @@ class SharedTestTelemetry:
             int(timestamp_ns),
             *(float(value) for value in values),
         )
+        # Commit the slot sequence and global sequence only after its payload is
+        # complete. Readers validate the slot sequence before accepting it.
         struct.pack_into("<Q", self._mapping, offset, sequence)
         struct.pack_into(
             "<Q", self._mapping, _TRAIL_SEQUENCE_OFFSET, sequence

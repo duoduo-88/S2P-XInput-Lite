@@ -294,6 +294,7 @@ static standalone_xinput_wakeup_cb_t s_wakeup_cb;
 static standalone_usb_latency_metrics_t s_usb_latency_metrics;
 static bool s_usb_wait_active;
 static int64_t s_usb_wait_started_us;
+static void cancel_usb_wait(void);
 static int s_active_channel = -1;
 static uint8_t s_endpoint_in;
 static uint8_t s_endpoint_out;
@@ -3053,6 +3054,7 @@ void standalone_xinput_configure(
     tinyusb_config_t *config, bool enabled, bool usb_hid_mode
 ) {
     if (!config) return;
+    cancel_usb_wait();
     s_usb_hid_mode = enabled && usb_hid_mode;
     s_usb_xinput_mode = enabled && !usb_hid_mode;
     if (s_usb_hid_mode) {
@@ -3320,6 +3322,13 @@ static void note_usb_wait_if_pending(bool hid_mode) {
     portEXIT_CRITICAL(&s_state_mux);
 }
 
+static void cancel_usb_wait(void) {
+    portENTER_CRITICAL(&s_state_mux);
+    s_usb_wait_active = false;
+    s_usb_wait_started_us = 0;
+    portEXIT_CRITICAL(&s_state_mux);
+}
+
 static void finish_usb_wait(void) {
     int64_t now_us = esp_timer_get_time();
     portENTER_CRITICAL(&s_state_mux);
@@ -3341,7 +3350,10 @@ static void finish_usb_wait(void) {
 
 void standalone_xinput_pump(void) {
     if (s_usb_hid_mode) {
-        if (!tud_ready()) return;
+        if (!tud_ready()) {
+            cancel_usb_wait();
+            return;
+        }
         if (!tud_hid_ready()) {
             note_usb_wait_if_pending(true);
             return;
@@ -3366,7 +3378,10 @@ void standalone_xinput_pump(void) {
         }
         return;
     }
-    if (!tud_ready() || !s_endpoint_in) return;
+    if (!tud_ready() || !s_endpoint_in) {
+        cancel_usb_wait();
+        return;
+    }
     arm_out_endpoint();
     if (usbd_edpt_busy(0, s_endpoint_in)) {
         note_usb_wait_if_pending(false);
@@ -3485,6 +3500,7 @@ static void xinput_reset(uint8_t rhport) {
     (void)rhport;
     s_endpoint_in = 0;
     s_endpoint_out = 0;
+    cancel_usb_wait();
 }
 
 static uint16_t xinput_open(

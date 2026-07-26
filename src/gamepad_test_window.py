@@ -11,7 +11,7 @@ import time
 import tkinter as tk
 import zlib
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from tkinter import ttk, font as tkfont, messagebox
 
@@ -92,6 +92,15 @@ def build_device_display_mapping(devices):
             label = f"{label} <{device.key}>"
         mapping[label] = device
     return mapping
+
+
+def localized_device_name(device, translate):
+    """Translate only app-generated fallback names, never driver product names."""
+    if not device.name_translation_key:
+        return device.name
+    return translate(device.name_translation_key).format(
+        index=device.index + 1
+    )
 
 
 XINPUT_OUTPUT_BUTTONS = (
@@ -1901,7 +1910,7 @@ class GamepadTestWindow:
         self._last_trail_sequence = self.telemetry.latest_trail_sequence()
         if self.native_sampler is None:
             self.native_sampler = NativeGamepadSampler(self.backend)
-            self.native_sampler.start()
+        self.native_sampler.start()
         self._enable_high_resolution_timer()
         self._display_refresh_hz = primary_display_refresh_rate()
         self._frame_interval = 1.0 / self._display_refresh_hz
@@ -3202,6 +3211,14 @@ class GamepadTestWindow:
                 excluded_xinput_slot=s2p_slot
             )
         devices.extend(native_devices)
+        devices = [
+            replace(
+                device,
+                name=localized_device_name(device, self.gui.tr),
+            )
+            if device.name_translation_key else device
+            for device in devices
+        ]
         mapping = build_device_display_mapping(devices)
         current_keys = {device.key for device in self.devices.values()}
         new_keys = {device.key for device in mapping.values()}
@@ -3341,14 +3358,21 @@ class GamepadTestWindow:
             except (TypeError, ValueError):
                 source_rate = 0.0
             if source_rate > 0.0:
-                self.rate_var.set(f"{source_rate:.0f} Hz")
+                key = (
+                    "狀態更新率 {rate:.0f} Hz"
+                    if sample.get("rate_is_independent")
+                    else "輸入回報率 {rate:.0f} Hz"
+                )
+                self.rate_var.set(
+                    self.gui.tr(key).format(rate=source_rate)
+                )
                 self._fps_reference_hz = min(
                     source_rate, self._display_refresh_hz
                 )
                 self._sample_times.clear()
                 return
         if sample.get("rate_is_independent"):
-            self.rate_var.set("— Hz")
+            self.rate_var.set(self.gui.tr("狀態更新率 — Hz"))
             self._fps_reference_hz = None
             self._sample_times.clear()
             return
@@ -3360,14 +3384,16 @@ class GamepadTestWindow:
                 (len(self._sample_times) - 1) / elapsed
                 if elapsed > 0.0 else 0.0
             )
-            self.rate_var.set(f"{rate:.0f} Hz")
+            self.rate_var.set(
+                self.gui.tr("狀態更新率 {rate:.0f} Hz").format(rate=rate)
+            )
             self._fps_reference_hz = min(
                 rate, self._display_refresh_hz
             )
         else:
             # Keep the rate field visible for a connected device, but do not
             # fabricate a number until enough real state updates are observed.
-            self.rate_var.set("— Hz")
+            self.rate_var.set(self.gui.tr("狀態更新率 — Hz"))
             self._fps_reference_hz = None
 
     def _update_draw_fps(self):
@@ -3890,8 +3916,8 @@ class GamepadTestWindow:
         self._device_refresh_job = None
         self._disable_high_resolution_timer()
         if self.native_sampler is not None:
-            self.native_sampler.stop()
-            self.native_sampler = None
+            if self.native_sampler.stop():
+                self.native_sampler = None
         try:
             if self.telemetry is not None:
                 self.telemetry.close()

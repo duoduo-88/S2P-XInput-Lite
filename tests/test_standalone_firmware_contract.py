@@ -148,6 +148,17 @@ class StandaloneFirmwareContractTests(unittest.TestCase):
         self.assertIn(
             "standalone_xinput_reset_latency_metrics", XINPUT_HEADER
         )
+        self.assertIn("s_ch[channel].itvl", MAIN_SOURCE)
+        self.assertIn("gap_threshold_ms", MAIN_SOURCE)
+        self.assertIn("static void cancel_usb_wait(void)", XINPUT_SOURCE)
+        self.assertIn(
+            "if (!tud_ready()) {\n"
+            "            cancel_usb_wait();",
+            XINPUT_SOURCE,
+        )
+        reset = XINPUT_SOURCE.index("static void xinput_reset(")
+        opened = XINPUT_SOURCE.index("static uint16_t xinput_open(", reset)
+        self.assertIn("cancel_usb_wait();", XINPUT_SOURCE[reset:opened])
 
     def test_direction_mapping_consumes_native_stick_before_gyro(self):
         helper = XINPUT_SOURCE.index(
@@ -245,13 +256,15 @@ class StandaloneFirmwareContractTests(unittest.TestCase):
             )
         )
         command = (
-            f'call "{idf_path / "export.bat"}" && '
-            "set IDF_CCACHE_ENABLE=0 && idf.py build"
+            f'set "S2P_IDF_EXPORT={idf_path / "export.bat"}" && '
+            'call "%S2P_IDF_EXPORT%" && '
+            'set "IDF_CCACHE_ENABLE=0" && idf.py build'
         )
         subprocess.run(
-            ["cmd.exe", "/d", "/s", "/c", command],
+            command,
             cwd=FIRMWARE,
             check=True,
+            shell=True,
         )
 
 

@@ -330,17 +330,24 @@ static void note_ble_input_report(
         ((uint32_t)data[1] << 8) |
         ((uint32_t)data[2] << 16) |
         ((uint32_t)data[3] << 24);
+    uint32_t expected_interval_ms =
+        ((uint32_t)(s_ch[channel].itvl ? s_ch[channel].itvl : 6u)
+            * 5u + 3u) / 4u;
+    uint32_t gap_threshold_ms =
+        expected_interval_ms + expected_interval_ms / 2u;
     portENTER_CRITICAL(&s_in_mux);
     s_input_latency_metrics.ble_input_reports++;
     if (s_last_input_report_time_valid[channel]) {
         uint32_t delta =
             report_time - s_last_input_report_time[channel];
         /*
-         * Normal 132 Hz reports alternate between 7 and 8 ms.  A delta of
-         * 12..999 ms means at least one complete source interval was skipped;
-         * longer gaps are reconnects or controller timer resets.
+         * Allow one negotiated BLE interval plus 50% timestamp tolerance.
+         * This yields 12 ms for a 7.5 ms link and 22 ms for a 15 ms link,
+         * avoiding false gaps while three controllers intentionally run at
+         * the wider interval. Longer gaps below one second still indicate a
+         * skipped source interval; larger values are reconnects or resets.
          */
-        if (delta >= 12u && delta < 1000u) {
+        if (delta >= gap_threshold_ms && delta < 1000u) {
             s_input_latency_metrics.source_gap_events++;
             if (delta > s_input_latency_metrics.source_gap_max_ms)
                 s_input_latency_metrics.source_gap_max_ms = delta;
