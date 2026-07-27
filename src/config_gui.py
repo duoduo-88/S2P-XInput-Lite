@@ -383,6 +383,10 @@ if PYTHON_EXE.name.lower() == "pythonw.exe":
     )
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+HIDHIDE_APPLICATION_PATHS = (
+    PYTHON_EXE,
+    PROJECT_ROOT / "src" / "raw_hid_probe.exe",
+)
 STARTUP_IMAGE_PATH = (
     PROJECT_ROOT
     / "image"
@@ -4081,7 +4085,7 @@ class ConfigGUI:
     def update_hidhide_status(self, status=None):
         """Refresh the compact HidHide indicator without periodic CLI polling."""
         if status is None:
-            status = inspect_hidhide(PYTHON_EXE)
+            status = inspect_hidhide(HIDHIDE_APPLICATION_PATHS)
         self.hidhide_status = status
         state = status.get("state", "error")
         display = {
@@ -4273,7 +4277,8 @@ class ConfigGUI:
 
         message = self.tr(
             "偵測到 USB 有線手把。為避免遊戲同時收到實體 HID 與虛擬 Xbox 手把，"
-            "程式可以將實體手把加入 HidHide 隱藏清單，並允許攜帶版 Python 繼續讀取。"
+            "程式可以將實體手把加入 HidHide 隱藏清單，並允許攜帶版 Python "
+            "與 Raw HID 量測器繼續讀取。"
         )
         if not status.get("cloak_active"):
             message += "\n\n" + self.tr(
@@ -4291,7 +4296,9 @@ class ConfigGUI:
             self._set_hidhide_setup_prompt_dismissed(True)
             return True
 
-        configured = configure_hidhide(PYTHON_EXE, enable_cloak=True)
+        configured = configure_hidhide(
+            HIDHIDE_APPLICATION_PATHS, enable_cloak=True
+        )
         self.update_hidhide_status(configured)
         if configured.get("state") == "ready":
             self._set_hidhide_setup_prompt_dismissed(False)
@@ -9822,7 +9829,9 @@ class ConfigGUI:
 
         # Reset only this application's HidHide entries. Other applications and
         # devices remain untouched; global cloaking is disabled only when empty.
-        hidhide_result = remove_hidhide_configuration(PYTHON_EXE)
+        hidhide_result = remove_hidhide_configuration(
+            HIDHIDE_APPLICATION_PATHS
+        )
         self.hidhide_prompt_shown = False
         self._reset_prompt_preferences_to_defaults()
         self.update_hidhide_status(hidhide_result)

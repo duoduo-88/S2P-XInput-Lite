@@ -33,7 +33,8 @@ Current release: **v0.7.0**
   standards-based mobile USB HID without keeping the Windows application open
 - Gyroscope mapping to an XInput stick or mouse
 - Standalone gamepad tester with live input/output plots, button mapping
-  details, shape capture, vibration tests, and a Raw HID high-rate measurement
+  details, shape capture, vibration tests, and directly selectable Raw HID
+  collections for stick monitoring and high-rate measurement
   page with report count, P50/P95/P99, interval statistics, and a timeline
 - Full game profiles for switching stick, gyro, rumble, audio-haptics, and mapping settings together, with automatic UI refresh
 - Traditional Chinese and English interface
@@ -62,7 +63,7 @@ The packaged release includes a portable Python runtime and all required package
 
 The application checks wired USB first, then ESP32, and finally native BLE. Keep the connection program running while playing.
 
-If HidHide is missing, the application offers to open its official download page. Declining suppresses the reminder on later launches and does not block the connection; click **HidHide: Missing** at the bottom of the window to open the download page later. When a wired controller is detected and HidHide is installed but not configured, the application asks before adding the portable `runtime\python.exe` and the selected physical Nintendo HID to HidHide. Declining also suppresses later reminders; click **HidHide: Off/Setup** to reopen the setup confirmation. Accepting may enable global cloaking; existing HidHide entries belonging to other applications are preserved. **Restore Defaults** removes this application and the selected controller from HidHide while preserving unrelated entries; reconnect the USB controller first if it is currently hidden.
+If HidHide is missing, the application offers to open its official download page. Declining suppresses the reminder on later launches and does not block the connection; click **HidHide: Missing** at the bottom of the window to open the download page later. When a wired controller is detected and HidHide is installed but not configured, the application asks before adding the portable `runtime\python.exe`, `src\raw_hid_probe.exe`, and the selected physical Nintendo HID to HidHide. Declining also suppresses later reminders; click **HidHide: Off/Setup** to reopen the setup confirmation. Accepting may enable global cloaking; existing HidHide entries belonging to other applications are preserved. **Restore Defaults** removes these two application entries and the selected controller from HidHide while preserving unrelated entries; reconnect the USB controller first if it is currently hidden.
 
 For first-time native BLE pairing, start the connection program and hold the controller's **SYNC** button. A previously paired controller can normally be woken with any button.
 

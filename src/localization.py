@@ -39,6 +39,7 @@ EN_TEXT = {
         "The Raw HID interface is still in use by actual sampling",
     "Raw HID 實際採樣失敗（錯誤代碼 {code}）":
         "Raw HID actual sampling failed (error {code})",
+    "Raw HID 實際採樣已停止": "Raw HID actual sampling stopped",
     "震動測試": "Rumble Test",
     "高頻量測": "High-Rate Test",
     "回報率量測": "Report Rate Test",
@@ -46,6 +47,8 @@ EN_TEXT = {
     "量測秒數": "Duration (s)",
     "開始量測": "Start",
     "提前停止": "Stop Early",
+    "回報率量測需要先在「測試手把」選擇 Raw HID collection。XInput、WinMM 與 S2P 橋接輸出本身不能直接量測原始 HID 回報率。":
+        "Select a Raw HID collection in Test Device before measuring report rate. XInput, WinMM, and the S2P bridge output cannot directly measure raw HID report timing.",
     "目前到達率": "Current Delivery Rate",
     "累計 reports": "Reports Collected",
     "目前回報率": "Current Report Rate",
@@ -89,9 +92,17 @@ EN_TEXT = {
     "回報時間差分佈": "Time Between Reports Distribution",
     "尚未量測": "Not measured",
     "Raw HID 量測元件不可用": "Raw HID measurement component unavailable",
-    "量測來源：實體 Raw HID 輸入（非 XInput／ViGEm 輸出）":
-        "Measurement source: physical Raw HID input "
-        "(not XInput/ViGEm output)",
+    "量測來源：實體 Raw HID 輸入":
+        "Measurement source: physical Raw HID input",
+    "請先選擇要量測的 Raw HID collection":
+        "Select the Raw HID collection to measure first",
+    "選取的 Raw HID collection 已不存在":
+        "The selected Raw HID collection is no longer present",
+    "可用軸：{axes}": "Available axes: {axes}",
+    "無法解析：{axes}": "Unavailable: {axes}",
+    "無法解析標準搖桿軸；仍可量測原始 HID reports":
+        "No standard stick axes parsed; raw HID reports remain measurable",
+    "虛擬": "Virtual",
     "找不到 Raw HID 遊戲手把介面":
         "No Raw HID gamepad interface found",
     "無法將目前測試手把對應至 Raw HID 介面":
@@ -823,8 +834,11 @@ EN_TEXT = {
         "Adjustable settings were reset, but HidHide could not be disabled. Close HidHide Configuration Client and try again.",
     "無法讀取 HidHide 設定。請先關閉 HidHide Configuration Client，再重新啟動連接程式。":
         "Could not read HidHide settings. Close HidHide Configuration Client, then restart the connector.",
-    "偵測到 USB 有線手把。為避免遊戲同時收到實體 HID 與虛擬 Xbox 手把，程式可以將實體手把加入 HidHide 隱藏清單，並允許攜帶版 Python 繼續讀取。":
-        "A wired USB controller was detected. To prevent games from receiving both the physical HID and virtual Xbox controller, the app can hide the physical device while allowing the portable Python runtime to read it.",
+    "偵測到 USB 有線手把。為避免遊戲同時收到實體 HID 與虛擬 Xbox 手把，程式可以將實體手把加入 HidHide 隱藏清單，並允許攜帶版 Python 與 Raw HID 量測器繼續讀取。":
+        "A wired USB controller was detected. To prevent games from receiving "
+        "both the physical HID and virtual Xbox controller, the app can hide "
+        "the physical device while allowing the portable Python runtime and "
+        "Raw HID probe to read it.",
     "HidHide 全域隱藏目前關閉；繼續將會開啟它。":
         "Global HidHide cloaking is off; continuing will enable it.",
     "HidHide 清單內另有其他隱藏裝置；開啟後也會套用到它們。":

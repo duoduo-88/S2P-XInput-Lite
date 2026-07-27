@@ -58,6 +58,12 @@ COMMAND_PATH = Path(__file__).with_name(
     "controller_command.txt"
 )
 STATUS_PATH = Path(__file__).with_name("controller_status.json")
+HIDHIDE_APPLICATION_PATHS = (
+    Path(sys.executable),
+    Path(__file__).with_name("raw_hid_probe.exe"),
+)
+
+
 def tr(zh, en):
     return en if current_language() == "en" else zh
 
@@ -254,7 +260,7 @@ def main():
         input(tr("\n按 Enter 鍵關閉...", "\nPress Enter to close..."))
         return
 
-    hidhide_status = reconcile_active_hidhide(sys.executable)
+    hidhide_status = reconcile_active_hidhide(HIDHIDE_APPLICATION_PATHS)
     if hidhide_status.get("state") == "ready":
         print(tr(
             "HidHide 已隱藏實體 USB 手把。",

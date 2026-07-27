@@ -83,6 +83,24 @@ def _normalize_application_path(value):
     return os.path.normcase(os.path.abspath(os.fspath(value)))
 
 
+def _application_paths(value):
+    """Return distinct absolute application paths from one path or an iterable."""
+    if isinstance(value, (str, bytes, os.PathLike)):
+        values = (value,)
+    else:
+        values = tuple(value or ())
+    paths = []
+    seen = set()
+    for item in values:
+        path = Path(os.fsdecode(item)).resolve()
+        normalized = _normalize_application_path(path)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        paths.append(path)
+    return tuple(paths)
+
+
 def _preferred_hid_symbolic_link():
     """Match the same first physical controller selected by wired_controller."""
     try:
@@ -139,7 +157,7 @@ def _physical_nintendo_devices(output, preferred_symbolic_link=None):
     return [devices[0][0]] if devices else []
 
 
-def inspect_hidhide(application_path):
+def inspect_hidhide(application_paths):
     """Read shared HidHide state without modifying any existing configuration."""
     cli_path = locate_hidhide_cli()
     status = {
@@ -148,6 +166,8 @@ def inspect_hidhide(application_path):
         "cli_path": cli_path,
         "cloak_active": False,
         "app_registered": False,
+        "application_paths": [],
+        "missing_application_paths": [],
         "physical_devices": [],
         "hidden_devices": [],
         "hidden_count": 0,
@@ -174,12 +194,20 @@ def inspect_hidhide(application_path):
         status["error"] = str(exc)
         return status
 
-    normalized_target = _normalize_application_path(application_path)
+    managed_paths = _application_paths(application_paths)
+    registered_normalized = {
+        _normalize_application_path(path) for path in applications
+    }
+    missing_paths = [
+        path for path in managed_paths
+        if _normalize_application_path(path) not in registered_normalized
+    ]
     status["cloak_active"] = "--cloak-on" in cloak_output.splitlines()
-    status["app_registered"] = any(
-        _normalize_application_path(path) == normalized_target
-        for path in applications
-    )
+    status["application_paths"] = [str(path) for path in managed_paths]
+    status["missing_application_paths"] = [
+        str(path) for path in missing_paths
+    ]
+    status["app_registered"] = bool(managed_paths) and not missing_paths
     status["physical_devices"] = physical_devices
     status["hidden_devices"] = hidden_devices
     status["hidden_count"] = len(hidden_devices)
@@ -199,9 +227,10 @@ def inspect_hidhide(application_path):
     return status
 
 
-def configure_hidhide(application_path, enable_cloak=True):
+def configure_hidhide(application_paths, enable_cloak=True):
     """Add only this app/device to shared lists, then verify the resulting state."""
-    status = inspect_hidhide(application_path)
+    managed_paths = _application_paths(application_paths)
+    status = inspect_hidhide(managed_paths)
     cli_path = status.get("cli_path")
     if not status.get("installed") or cli_path is None or status.get("error"):
         return status
@@ -209,8 +238,14 @@ def configure_hidhide(application_path, enable_cloak=True):
         return status
 
     arguments = []
-    if not status.get("app_registered"):
-        arguments.extend(("--app-reg", str(Path(application_path).resolve())))
+    missing_paths = status.get("missing_application_paths")
+    if missing_paths is None:
+        missing_paths = (
+            [str(path) for path in managed_paths]
+            if not status.get("app_registered") else []
+        )
+    for path in missing_paths:
+        arguments.extend(("--app-reg", path))
     hidden_upper = {
         value.upper() for value in status.get("hidden_devices", ())
     }
@@ -227,12 +262,13 @@ def configure_hidhide(application_path, enable_cloak=True):
             status["state"] = "error"
             status["error"] = str(exc)
             return status
-    return inspect_hidhide(application_path)
+    return inspect_hidhide(managed_paths)
 
 
-def remove_hidhide_configuration(application_path):
+def remove_hidhide_configuration(application_paths):
     """Remove this app and the selected controller without touching other entries."""
-    status = inspect_hidhide(application_path)
+    managed_paths = _application_paths(application_paths)
+    status = inspect_hidhide(managed_paths)
     cli_path = status.get("cli_path")
     if not status.get("installed") or cli_path is None or status.get("error"):
         return status
@@ -254,8 +290,13 @@ def remove_hidhide_configuration(application_path):
     for instance_id in status.get("hidden_devices", ()):
         if instance_id.upper() in selected_upper:
             arguments.extend(("--dev-unhide", instance_id))
-    if status.get("app_registered"):
-        arguments.extend(("--app-unreg", str(Path(application_path).resolve())))
+    missing_normalized = {
+        _normalize_application_path(path)
+        for path in status.get("missing_application_paths", ())
+    }
+    for path in managed_paths:
+        if _normalize_application_path(path) not in missing_normalized:
+            arguments.extend(("--app-unreg", str(path)))
 
     remaining_hidden = [
         value for value in status.get("hidden_devices", ())
@@ -271,15 +312,17 @@ def remove_hidhide_configuration(application_path):
             status["state"] = "error"
             status["error"] = str(exc)
             return status
-    return inspect_hidhide(application_path)
-def reconcile_active_hidhide(application_path):
+    return inspect_hidhide(managed_paths)
+
+
+def reconcile_active_hidhide(application_paths):
     """Repair our entries only when the user has already enabled global hiding."""
-    status = inspect_hidhide(application_path)
+    status = inspect_hidhide(application_paths)
     if (
         status.get("installed")
         and status.get("cloak_active")
         and status.get("physical_devices")
         and status.get("state") != "ready"
     ):
-        return configure_hidhide(application_path, enable_cloak=False)
+        return configure_hidhide(application_paths, enable_cloak=False)
     return status

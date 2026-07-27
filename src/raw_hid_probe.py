@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import json
 import mmap
 import struct
@@ -11,6 +12,7 @@ import threading
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from ctypes import wintypes
 
 
 PROBE_EXECUTABLE = Path(__file__).with_name("raw_hid_probe.exe")
@@ -49,6 +51,7 @@ class RawHidDevice:
     usage_page: int
     usage: int
     interface_number: int
+    is_virtual: bool = False
 
 
 def _decode_hid_path(value):
@@ -57,13 +60,83 @@ def _decode_hid_path(value):
     return str(value or "")
 
 
+def _hid_parent_device_ids(device_path):
+    """Return the Config Manager parent chain for one HID interface path."""
+    path = _decode_hid_path(device_path)
+    parts = path[4:].split("#") if path.startswith("\\\\?\\") else ()
+    if len(parts) < 3 or sys.platform != "win32":
+        return ()
+    instance_id = "\\".join(parts[:3])
+    try:
+        cfgmgr32 = ctypes.WinDLL("cfgmgr32")
+        cfgmgr32.CM_Locate_DevNodeW.argtypes = (
+            ctypes.POINTER(wintypes.DWORD),
+            wintypes.LPWSTR,
+            wintypes.ULONG,
+        )
+        cfgmgr32.CM_Locate_DevNodeW.restype = wintypes.ULONG
+        cfgmgr32.CM_Get_Parent.argtypes = (
+            ctypes.POINTER(wintypes.DWORD),
+            wintypes.DWORD,
+            wintypes.ULONG,
+        )
+        cfgmgr32.CM_Get_Parent.restype = wintypes.ULONG
+        cfgmgr32.CM_Get_Device_IDW.argtypes = (
+            wintypes.DWORD,
+            wintypes.LPWSTR,
+            wintypes.ULONG,
+            wintypes.ULONG,
+        )
+        cfgmgr32.CM_Get_Device_IDW.restype = wintypes.ULONG
+        current = wintypes.DWORD()
+        if cfgmgr32.CM_Locate_DevNodeW(
+            ctypes.byref(current), instance_id, 0
+        ):
+            return ()
+        parents = []
+        for _depth in range(16):
+            parent = wintypes.DWORD()
+            if cfgmgr32.CM_Get_Parent(
+                ctypes.byref(parent), current, 0
+            ):
+                break
+            buffer = ctypes.create_unicode_buffer(512)
+            if cfgmgr32.CM_Get_Device_IDW(
+                parent, buffer, len(buffer), 0
+            ):
+                break
+            parent_id = buffer.value
+            if not parent_id:
+                break
+            parents.append(parent_id)
+            current = parent
+        return tuple(parents)
+    except (AttributeError, OSError, TypeError, ValueError):
+        return ()
+
+
+def _is_virtual_hid_path(device_path):
+    """Identify root-enumerated virtual HID devices without relying on VID/PID."""
+    return any(
+        parent_id.upper().startswith(("ROOT\\SYSTEM\\", "ROOT\\VIGEM"))
+        for parent_id in _hid_parent_device_ids(device_path)
+    )
+
+
 def enumerate_raw_hid_gamepads(hid_module=None):
     """Return user-readable HID gamepad collections, not XInput snapshots."""
     if hid_module is None:
-        try:
-            import hid as hid_module
-        except ImportError:
-            return []
+        return _enumerate_raw_hid_gamepads_isolated()
+    return _enumerate_raw_hid_gamepads_direct(hid_module)
+
+
+def _enumerate_raw_hid_gamepads_direct(hid_module):
+    """Enumerate in the current process.
+
+    The tester normally uses the isolated wrapper above.  Keeping the HID DLL
+    in a short-lived child process prevents a hot-plug race inside hidapi from
+    corrupting the long-running Tk/Python process.
+    """
     try:
         interfaces = hid_module.enumerate()
     except (OSError, RuntimeError):
@@ -110,6 +183,7 @@ def enumerate_raw_hid_gamepads(hid_module=None):
             usage_page=usage_page,
             usage=usage,
             interface_number=interface_number,
+            is_virtual=_is_virtual_hid_path(path),
         ))
     devices.sort(key=lambda device: (
         device.name.casefold(),
@@ -119,6 +193,80 @@ def enumerate_raw_hid_gamepads(hid_module=None):
         device.path.casefold(),
     ))
     return devices
+
+
+def _raw_hid_device_payload(device):
+    return {
+        "key": device.key,
+        "path": device.path,
+        "name": device.name,
+        "vendor_id": device.vendor_id,
+        "product_id": device.product_id,
+        "usage_page": device.usage_page,
+        "usage": device.usage,
+        "interface_number": device.interface_number,
+        "is_virtual": device.is_virtual,
+    }
+
+
+def _enumerate_raw_hid_gamepads_isolated(timeout=5.0):
+    """Run hidapi enumeration out of process so native crashes stay contained."""
+    command = (sys.executable, str(Path(__file__).resolve()), "--enumerate-json")
+    creationflags = (
+        getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        if sys.platform == "win32" else 0
+    )
+    try:
+        completed = subprocess.run(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=max(0.1, float(timeout)),
+            check=False,
+            creationflags=creationflags,
+        )
+    except (OSError, subprocess.SubprocessError, TypeError, ValueError):
+        return []
+    if completed.returncode != 0:
+        return []
+    try:
+        payload = json.loads(completed.stdout.decode("utf-8"))
+        if not isinstance(payload, list):
+            return []
+        return [
+            RawHidDevice(
+                key=str(item["key"]),
+                path=str(item["path"]),
+                name=str(item["name"]),
+                vendor_id=int(item["vendor_id"]),
+                product_id=int(item["product_id"]),
+                usage_page=int(item["usage_page"]),
+                usage=int(item["usage"]),
+                interface_number=int(item["interface_number"]),
+                is_virtual=bool(item.get("is_virtual", False)),
+            )
+            for item in payload
+            if isinstance(item, dict)
+        ]
+    except (
+        KeyError, TypeError, ValueError, UnicodeError, json.JSONDecodeError
+    ):
+        return []
+
+
+def _enumerate_json_main():
+    try:
+        import hid
+    except ImportError:
+        devices = []
+    else:
+        devices = _enumerate_raw_hid_gamepads_direct(hid)
+    payload = [_raw_hid_device_payload(device) for device in devices]
+    sys.stdout.buffer.write(
+        json.dumps(payload, ensure_ascii=True).encode("utf-8")
+    )
+    sys.stdout.buffer.flush()
 
 
 def normalize_probe_snapshot(payload):
@@ -338,6 +486,10 @@ class RawHidProbeClient:
         return True
 
     close = stop
+
+
+if __name__ == "__main__" and "--enumerate-json" in sys.argv[1:]:
+    _enumerate_json_main()
 
 
 class RawHidStreamClient:

@@ -88,7 +88,9 @@ def build_device_display_mapping(devices):
     mapping = {}
     for device in devices:
         label = device.name
-        if name_counts[device.name] > 1:
+        if device.display_suffix:
+            label = f"{device.name} [{device.display_suffix}]"
+        elif name_counts[device.name] > 1:
             label = (
                 f"{device.name} "
                 f"[{device.kind.upper()} {device.index + 1}]"
@@ -96,9 +98,33 @@ def build_device_display_mapping(devices):
         # A driver-supplied name can itself look like our suffix. Retain every
         # device even in that unusual case.
         if label in mapping:
-            label = f"{label} <{device.key}>"
+            identity = device.raw_hid_key or device.key
+            if device.kind == "raw_hid":
+                identity = identity.rsplit("#", 1)[-1][-16:]
+            label = f"{label} <{identity}>"
         mapping[label] = device
     return mapping
+
+
+def raw_hid_test_device(raw_device, index, translate=lambda text: text):
+    """Expose one HID collection as an independently selectable test device."""
+    interface = (
+        str(raw_device.interface_number)
+        if raw_device.interface_number >= 0 else "?"
+    )
+    virtual = f" {translate('虛擬')}" if raw_device.is_virtual else ""
+    return GamepadDevice(
+        key=f"raw_hid:{raw_device.key}",
+        kind="raw_hid",
+        index=int(index),
+        name=raw_device.name,
+        supports_rumble=False,
+        raw_hid_key=raw_device.key,
+        display_suffix=(
+            f"Raw HID {raw_device.vendor_id:04X}:"
+            f"{raw_device.product_id:04X} IF {interface}{virtual}"
+        ),
+    )
 
 
 def localized_device_name(device, translate):
@@ -1151,9 +1177,30 @@ class StickPlot:
                 float(self.owner.sample_display_percent_var.get()),
             ),
         )))
+        requested_count = (
+            len(trail) * display_percent + 99
+        ) // 100
+        cap_stride = (
+            max(1, math.ceil(len(trail) / MAX_CANVAS_TRAIL_ITEMS))
+            if requested_count > MAX_CANVAS_TRAIL_ITEMS
+            else 1
+        )
+        selection_key = (display_percent, cap_stride)
+
+        def selected_for_canvas(sample):
+            sequence = sample[3]
+            if cap_stride > 1:
+                return sequence % cap_stride == 0
+            return (
+                display_percent >= 100
+                or (
+                    sequence * display_percent
+                ) % 100 < display_percent
+            )
+
         newest_sequence = trail[-1][3]
         rebuild = (
-            self._trail_render_percent != display_percent
+            self._trail_render_percent != selection_key
             or newest_sequence < self._trail_last_processed_sequence
         )
         if rebuild:
@@ -1164,28 +1211,17 @@ class StickPlot:
             self._trail_bucket_coords.clear()
             self._trail_selected_sequences.clear()
             self._trail_last_processed_sequence = -1
-            self._trail_render_percent = display_percent
+            self._trail_render_percent = selection_key
             new_samples = [
                 sample for sample in trail
-                if (
-                    display_percent >= 100
-                    or (
-                        sample[3] * display_percent
-                    ) % 100 < display_percent
-                )
+                if selected_for_canvas(sample)
             ]
             selection_preapplied = True
-            if len(new_samples) > MAX_CANVAS_TRAIL_ITEMS:
-                candidate_count = len(new_samples)
-                new_samples = [
-                    new_samples[
-                        round(
-                            index * (candidate_count - 1)
-                            / (MAX_CANVAS_TRAIL_ITEMS - 1)
-                        )
-                    ]
-                    for index in range(MAX_CANVAS_TRAIL_ITEMS)
-                ]
+            if cap_stride > 1 and new_samples:
+                # Keep the full requested time span represented on the first
+                # fallback frame without increasing the bounded item count.
+                new_samples[0] = trail[0]
+                new_samples[-1] = trail[-1]
         else:
             selection_preapplied = False
             new_samples = []
@@ -1212,9 +1248,9 @@ class StickPlot:
             self._trail_last_processed_sequence = sequence
             if (
                 not selection_preapplied
-                and
-                display_percent < 100
-                and (sequence * display_percent) % 100 >= display_percent
+                and not selected_for_canvas(
+                    (_time_value, x, y, sequence)
+                )
             ):
                 continue
             bucket = sequence
@@ -1258,6 +1294,7 @@ class StickPlot:
                         expired_item, state="hidden"
                     )
                     self._trail_free_items.append(expired_item)
+        self._trail_last_processed_sequence = newest_sequence
 
     def _draw_trail_bitmap(self, history, now=None):
         now = time.perf_counter() if now is None else float(now)
@@ -1945,11 +1982,18 @@ class GamepadTestWindow:
         self.input_tab = None
         self.rumble_tab = None
         self.high_rate_tab = None
-        self.backend = WindowsGamepadBackend()
+        # hidapi has been observed corrupting its heap when a device is
+        # removed while a handle is open. Keep this long-running Tk process on
+        # XInput/WinMM only; Raw HID work is owned by crash-isolated helpers.
+        self.backend = WindowsGamepadBackend(
+            enable_s2p_mobile_hid=False
+        )
         self.native_sampler = None
         self.telemetry = None
         self.latest_telemetry = {}
         self.devices = {}
+        self._native_test_devices = ()
+        self._device_enumeration_initialized = False
         self._device_selection_explicit = False
         self.selected_device_var = tk.StringVar()
         self.status_var = tk.StringVar(
@@ -1959,11 +2003,13 @@ class GamepadTestWindow:
         self.raw_hid_probe = RawHidProbeClient()
         self.raw_hid_stream = RawHidStreamClient()
         self.raw_hid_stream_enabled_var = tk.BooleanVar(value=True)
+        self.raw_hid_stream_toggle = None
         self.raw_hid_stream_status_var = tk.StringVar(value="")
         self._raw_hid_stream_path = None
         self._raw_hid_stream_sequence = 0
         self._raw_hid_stream_dropped = 0
         self._raw_hid_stream_latest_axes = None
+        self._raw_hid_stream_latest_sample = None
         self.raw_hid_devices = {}
         self.raw_hid_duration_var = tk.StringVar(value="10")
         self.raw_hid_state_var = tk.StringVar(value=self.gui.tr("尚未量測"))
@@ -2010,6 +2056,8 @@ class GamepadTestWindow:
         self.plots = {}
         self._poll_job = None
         self._device_refresh_job = None
+        self._device_refresh_in_progress = False
+        self.device_refresh_button = None
         self._rumble_jobs = {}
         self._rumble_layers = {}
         self._repeat_rumble_jobs = {}
@@ -2125,7 +2173,7 @@ class GamepadTestWindow:
 
         selector = ttk.Frame(content)
         selector.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        selector.columnconfigure(3, weight=1)
+        selector.columnconfigure(1, weight=1)
         ttk.Label(selector, text=self.gui.tr("測試手把")).grid(
             row=0, column=0, sticky="w", padx=(0, 6)
         )
@@ -2133,30 +2181,28 @@ class GamepadTestWindow:
             selector,
             textvariable=self.selected_device_var,
             state="readonly",
-            width=30,
+            width=20,
         )
-        self.device_combo.grid(row=0, column=1, sticky="w")
+        self.device_combo.grid(row=0, column=1, sticky="ew")
         self.device_combo.bind(
             "<<ComboboxSelected>>", self._on_device_selected
         )
-        ttk.Button(
+        self.device_refresh_button = ttk.Button(
             selector,
             text=self.gui.tr("重新整理"),
             width=8,
-            command=lambda: self._refresh_devices(force=True),
-        ).grid(row=0, column=2, padx=(5, 0))
-        self.status_label = ttk.Label(
-            selector, textvariable=self.status_var, foreground="#138A36"
+            command=self._request_device_refresh,
         )
-        self.status_label.grid(
-            row=0, column=3, sticky="e", padx=(10, 0)
-        )
+        self.device_refresh_button.grid(row=0, column=2, padx=(5, 0))
+        self.status_label = None
         self.draw_fps_label = ttk.Label(
-            selector, textvariable=self.draw_fps_var, foreground="#777777"
+            selector,
+            textvariable=self.draw_fps_var,
+            foreground="#777777",
+            width=7,
+            anchor="e",
         )
-        self.draw_fps_label.grid(
-            row=0, column=4, sticky="e", padx=(8, 0)
-        )
+        self.draw_fps_label.grid(row=0, column=3, sticky="e", padx=(8, 0))
 
         notebook = ttk.Notebook(content)
         notebook.grid(row=1, column=0, sticky="nsew")
@@ -2218,6 +2264,7 @@ class GamepadTestWindow:
             variable=self.raw_hid_stream_enabled_var,
             command=self._on_raw_hid_stream_changed,
         )
+        self.raw_hid_stream_toggle = raw_hid_stream_toggle
         raw_hid_stream_toggle.grid(row=0, column=3, padx=(0, 7))
         ttk.Label(
             display_controls, text=self.gui.tr("軌跡")
@@ -2408,7 +2455,7 @@ class GamepadTestWindow:
         self._build_rumble_tab(rumble_tab)
         self._build_high_rate_tab(high_rate_tab)
         self._refresh_devices(force=True)
-        self._refresh_raw_hid_devices()
+        self._update_raw_hid_availability()
         # The first telemetry frame is published only after read_latest() has
         # established the reader heartbeat. Continue scanning at a low rate so
         # controllers that connect later appear without a manual refresh.
@@ -2468,8 +2515,8 @@ class GamepadTestWindow:
             parent, text=self.gui.tr("量測設定"), padding=(10, 8)
         )
         controls.grid(row=0, column=0, sticky="ew")
-        controls.columnconfigure(2, weight=1, uniform="raw_actions")
         controls.columnconfigure(3, weight=1, uniform="raw_actions")
+        controls.columnconfigure(4, weight=1, uniform="raw_actions")
         ttk.Label(
             controls, text=self.gui.tr("量測秒數")
         ).grid(row=0, column=0, padx=(0, 5))
@@ -2480,31 +2527,39 @@ class GamepadTestWindow:
             width=5,
         )
         self.raw_hid_duration_combo.grid(row=0, column=1)
+        raw_hid_help = tk.Label(
+            controls,
+            text="?",
+            width=2,
+            relief="solid",
+            borderwidth=1,
+            cursor="question_arrow",
+        )
+        raw_hid_help.grid(row=0, column=2, padx=(9, 6))
+        HoverTip(
+            raw_hid_help,
+            self.gui.tr(
+                "回報率量測需要先在「測試手把」選擇 Raw HID collection。"
+                "XInput、WinMM 與 S2P 橋接輸出本身不能直接量測原始 HID 回報率。"
+            ),
+        )
         self.raw_hid_start_button = ttk.Button(
             controls,
             text=self.gui.tr("開始量測"),
             command=self._start_raw_hid_measurement,
-            width=22,
+            width=16,
         )
         self.raw_hid_start_button.grid(
-            row=0, column=2, sticky="ew", padx=(14, 4)
+            row=0, column=3, sticky="ew", padx=(0, 4)
         )
         self.raw_hid_stop_button = ttk.Button(
             controls,
             text=self.gui.tr("提前停止"),
             command=self._stop_raw_hid_measurement,
             state="disabled",
-            width=20,
+            width=15,
         )
-        self.raw_hid_stop_button.grid(row=0, column=3, sticky="ew")
-        ttk.Label(
-            controls,
-            text=self.gui.tr(
-                "量測來源：實體 Raw HID 輸入（非 XInput／ViGEm 輸出）"
-            ),
-            foreground="#666666",
-        ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(5, 0))
-
+        self.raw_hid_stop_button.grid(row=0, column=4, sticky="ew")
         summary = ttk.Frame(parent)
         summary.grid(row=1, column=0, sticky="ew", pady=(10, 8))
         for column in range(3):
@@ -2619,15 +2674,13 @@ class GamepadTestWindow:
         ).grid(row=6, column=0, sticky="ew", pady=(2, 0))
         self._draw_raw_hid_chart((), 0, 0.0, 0.0, 0.0)
 
-    def _refresh_raw_hid_devices(self):
+    def _update_raw_hid_availability(self):
         if self.raw_hid_probe.read_snapshot().get("state") in {
             "opening", "running"
         }:
             return
-        self.raw_hid_devices = {
-            device.key: device
-            for device in enumerate_raw_hid_gamepads()
-        }
+        selected = self._selected_device()
+        is_raw_hid = selected is not None and selected.kind == "raw_hid"
         if not self.raw_hid_probe.available:
             self.raw_hid_state_var.set(
                 self.gui.tr("Raw HID 量測元件不可用")
@@ -2636,7 +2689,10 @@ class GamepadTestWindow:
             self.raw_hid_state_var.set(
                 self.gui.tr("找不到 Raw HID 遊戲手把介面")
             )
-        elif self.raw_hid_probe.read_snapshot().get("state") == "idle":
+        elif (
+            is_raw_hid
+            and self.raw_hid_probe.read_snapshot().get("state") == "idle"
+        ):
             self.raw_hid_state_var.set(self.gui.tr("尚未量測"))
         self._set_raw_hid_controls_active(False)
         self._sync_raw_hid_stream()
@@ -2650,10 +2706,12 @@ class GamepadTestWindow:
         if stopped:
             self._raw_hid_stream_path = None
             self._raw_hid_stream_sequence = 0
+            self._raw_hid_stream_latest_axes = None
+            self._raw_hid_stream_latest_sample = None
         return stopped
 
     def _sync_raw_hid_stream(self):
-        """Own exactly one stream for the selected physical input device."""
+        """Own exactly one stream for the explicitly selected Raw HID device."""
         if self.window is None:
             return
         probe_state = self.raw_hid_probe.read_snapshot().get("state")
@@ -2662,7 +2720,7 @@ class GamepadTestWindow:
             self.raw_hid_stream_enabled_var.get()
             and probe_state not in {"opening", "running"}
             and selected is not None
-            and selected.kind != "s2p"
+            and selected.kind == "raw_hid"
         )
         device = self._selected_raw_hid_device() if enabled else None
         path = device.path if device is not None else None
@@ -2683,7 +2741,7 @@ class GamepadTestWindow:
             return
         if device is None:
             self.raw_hid_stream_status_var.set(
-                self.gui.tr("目前手把無法對應 Raw HID，使用 Windows 快照")
+                self.gui.tr("選取的 Raw HID collection 已不存在")
             )
             return
         if not self.raw_hid_stream.start(path):
@@ -2694,6 +2752,8 @@ class GamepadTestWindow:
         self._raw_hid_stream_path = path
         self._raw_hid_stream_sequence = 0
         self._raw_hid_stream_dropped = 0
+        self._raw_hid_stream_latest_axes = None
+        self._raw_hid_stream_latest_sample = None
         self.raw_hid_stream_status_var.set(
             self.gui.tr("正在開啟 Raw HID 實際採樣...")
         )
@@ -2711,6 +2771,11 @@ class GamepadTestWindow:
         self._raw_hid_stream_sequence = newest
         self._raw_hid_stream_dropped += dropped
         if not samples:
+            cached = getattr(
+                self, "_raw_hid_stream_latest_sample", None
+            )
+            if sample is None and cached is not None:
+                return dict(cached), False
             return sample, False
         if record_trail:
             record_shape = self.shape_enabled_var.get()
@@ -2741,6 +2806,7 @@ class GamepadTestWindow:
             "right": right,
             "token": ("raw_hid", sequence),
         })
+        self._raw_hid_stream_latest_sample = dict(sample)
         return sample, True
 
     def _discard_pending_monitor_samples(self):
@@ -2762,21 +2828,53 @@ class GamepadTestWindow:
         status = self.raw_hid_stream.status()
         state = status.get("state")
         if state == "running":
+            axes_mask = int(status.get("axes_mask", 0) or 0)
+            axis_names = ("LX", "LY", "RX", "RY")
+            available_axes = [
+                name for index, name in enumerate(axis_names)
+                if axes_mask & (1 << index)
+            ]
+            unavailable_axes = [
+                name for index, name in enumerate(axis_names)
+                if not axes_mask & (1 << index)
+            ]
+            if available_axes:
+                capability = (
+                    self.gui.tr("可用軸：{axes}").format(
+                        axes=", ".join(available_axes)
+                    )
+                )
+                if unavailable_axes:
+                    capability += (
+                        "；"
+                        + self.gui.tr("無法解析：{axes}").format(
+                            axes=", ".join(unavailable_axes)
+                        )
+                    )
+            else:
+                capability = self.gui.tr(
+                    "無法解析標準搖桿軸；仍可量測原始 HID reports"
+                )
             if self._raw_hid_stream_dropped:
                 self.raw_hid_stream_status_var.set(
                     self.gui.tr("Raw HID 實際回報；緩衝區遺失 {count} 筆")
                     .format(count=self._raw_hid_stream_dropped)
+                    + f"；{capability}"
                 )
             else:
                 axes = self._raw_hid_stream_latest_axes
                 reports = int(status.get("raw_reports", 0) or 0)
                 if axes is None:
-                    detail = self.gui.tr("等待第一筆座標")
+                    detail = (
+                        f"{self.gui.tr('等待第一筆座標')}   {capability}"
+                        if available_axes else capability
+                    )
                 else:
                     left, right = axes
                     detail = (
                         f"L {left[0]:+.3f}, {left[1]:+.3f}   "
                         f"R {right[0]:+.3f}, {right[1]:+.3f}"
+                        f"   {capability}"
                     )
                 self.raw_hid_stream_status_var.set(
                     self.gui.tr("Raw HID 實際回報")
@@ -2787,46 +2885,21 @@ class GamepadTestWindow:
                 self.gui.tr("Raw HID 實際採樣失敗（錯誤代碼 {code}）")
                 .format(code=int(status.get("error_code", 0) or 0))
             )
-
-    @staticmethod
-    def _is_vigem_xbox_360_raw_hid(device):
-        """Ignore this app's virtual Xbox 360 collection when possible."""
-        return (
-            device.vendor_id == 0x045E
-            and device.product_id == 0x028E
-            and "ig_" in device.path.casefold()
-        )
+        elif state == "stopped" and self._raw_hid_stream_path is not None:
+            self.raw_hid_stream_status_var.set(
+                self.gui.tr("Raw HID 實際採樣已停止")
+            )
 
     def _selected_raw_hid_device(self):
-        """Return a Raw HID collection only when it is unambiguous.
-
-        Windows does not expose a reliable XInput/WinMM-to-HID collection
-        link. In particular, slot number, display name and enumeration order
-        can all differ when multiple physical controllers or ViGEm are
-        present. Do not guess: a wrong controller is worse than no actual
-        sampling until SetupAPI container-ID matching is available.
-        """
+        """Return the explicitly selected Raw HID collection."""
         selected = self._selected_device()
-        devices = tuple(self.raw_hid_devices.values())
-        if selected is None or not devices:
+        if (
+            selected is None
+            or selected.kind != "raw_hid"
+            or not selected.raw_hid_key
+        ):
             return None
-        physical_candidates = [
-            device for device in devices
-            if not self._is_vigem_xbox_360_raw_hid(device)
-        ]
-        native_devices = [
-            device for device in self.devices.values()
-            if device.kind != "s2p"
-        ]
-        if len(physical_candidates) != 1 or len(native_devices) != 1:
-            return None
-        # Selecting the S2P output deliberately measures the one physical
-        # input feeding it; the measurement tab labels this distinction.
-        if selected.kind == "s2p":
-            return physical_candidates[0]
-        if native_devices[0].key != selected.key:
-            return None
-        return physical_candidates[0]
+        return self.raw_hid_devices.get(selected.raw_hid_key)
 
     def _set_raw_hid_controls_active(self, active):
         if self.raw_hid_start_button is None:
@@ -2835,13 +2908,21 @@ class GamepadTestWindow:
             self.device_combo.configure(
                 state="disabled" if active else "readonly"
             )
+        if getattr(self, "device_refresh_button", None) is not None:
+            self.device_refresh_button.configure(
+                state="disabled" if active else "normal"
+            )
         self.raw_hid_duration_combo.configure(
             state="disabled" if active else "normal"
         )
+        selected = self._selected_device()
+        is_raw_hid = selected is not None and selected.kind == "raw_hid"
+        device = self._selected_raw_hid_device()
         can_start = (
             not active
             and self.raw_hid_probe.available
-            and self._selected_raw_hid_device() is not None
+            and is_raw_hid
+            and device is not None
         )
         self.raw_hid_start_button.configure(
             state="normal" if can_start else "disabled"
@@ -2849,12 +2930,13 @@ class GamepadTestWindow:
         self.raw_hid_stop_button.configure(
             state="normal" if active else "disabled"
         )
+
     def _start_raw_hid_measurement(self):
-        self._refresh_raw_hid_devices()
+        self._update_raw_hid_availability()
         device = self._selected_raw_hid_device()
         if device is None:
             self.raw_hid_state_var.set(
-                self.gui.tr("無法將目前測試手把對應至 Raw HID 介面")
+                self.gui.tr("請先選擇要量測的 Raw HID collection")
             )
             return
         try:
@@ -3921,6 +4003,7 @@ class GamepadTestWindow:
             self._update_raw_hid_measurement(
                 redraw_chart=active_tab == "high_rate"
             )
+            self._update_raw_hid_stream_status()
         self._schedule_poll()
 
     @staticmethod
@@ -4150,12 +4233,67 @@ class GamepadTestWindow:
         self._last_consumed_token = None
         self._baseline_trail_sequence()
         self._configure_native_sampler()
-        self._refresh_raw_hid_devices()
+        self._update_raw_hid_availability()
 
     def _selected_device(self):
         return self.devices.get(self.selected_device_var.get())
 
+    def _request_device_refresh(self):
+        """Safely replace device snapshots after a physical hot-plug."""
+        if self._device_refresh_in_progress:
+            return
+        self._device_refresh_in_progress = True
+        if self.device_refresh_button is not None:
+            self.device_refresh_button.configure(state="disabled")
+        self.stop_rumble()
+        if self.native_sampler is not None:
+            self.native_sampler.set_device(None)
+        self._stop_raw_hid_stream()
+        try:
+            self._refresh_devices(force=True)
+        except Exception:
+            # Do not let a Python/backend enumeration error escape a Tk
+            # callback. Native hidapi enumeration is additionally isolated in
+            # a child process because access violations cannot be caught here.
+            self._configure_native_sampler()
+            self._sync_raw_hid_stream()
+        finally:
+            self._device_refresh_in_progress = False
+            if (
+                self.device_refresh_button is not None
+                and self.window is not None
+                and self.window.winfo_exists()
+            ):
+                probe_state = self.raw_hid_probe.read_snapshot().get("state")
+                self.device_refresh_button.configure(
+                    state=(
+                        "disabled"
+                        if probe_state in {"opening", "running"}
+                        else "normal"
+                    )
+                )
+
     def _refresh_devices(self, force=False):
+        probe_state = self.raw_hid_probe.read_snapshot().get("state")
+        should_enumerate = (
+            (force or not self._device_enumeration_initialized)
+            and probe_state not in {"opening", "running"}
+        )
+        if should_enumerate:
+            self.raw_hid_devices = {
+                device.key: device
+                for device in enumerate_raw_hid_gamepads()
+            }
+            if self.native_sampler is not None:
+                native_devices = self.native_sampler.enumerate_devices(
+                    excluded_xinput_slot=None
+                )
+            else:
+                native_devices = self.backend.enumerate_devices(
+                    excluded_xinput_slot=None
+                )
+            self._native_test_devices = tuple(native_devices)
+            self._device_enumeration_initialized = True
         previous_label = self.selected_device_var.get()
         previous_device = self.devices.get(previous_label)
         previous_device_key = (
@@ -4178,21 +4316,40 @@ class GamepadTestWindow:
                 name=self.gui.tr("S2P-XInput-Lite（目前橋接輸出）"),
                 supports_rumble=s2p_slot is not None,
             ))
-        if self.native_sampler is not None:
-            native_devices = self.native_sampler.enumerate_devices(
-                excluded_xinput_slot=s2p_slot
+        native_devices = [
+            device for device in self._native_test_devices
+            if not (
+                s2p_slot is not None
+                and device.kind == "xinput"
+                and device.index == s2p_slot
             )
-        else:
-            native_devices = self.backend.enumerate_devices(
-                excluded_xinput_slot=s2p_slot
-            )
+        ]
         devices.extend(native_devices)
+        for raw_index, raw_device in enumerate(
+            self.raw_hid_devices.values()
+        ):
+            devices.append(raw_hid_test_device(
+                raw_device, raw_index, self.gui.tr
+            ))
         devices = [
             replace(
                 device,
                 name=localized_device_name(device, self.gui.tr),
             )
             if device.name_translation_key else device
+            for device in devices
+        ]
+        devices = [
+            replace(
+                device,
+                display_suffix=(
+                    f"XInput {device.index + 1}"
+                    if device.kind == "xinput"
+                    else f"WinMM {device.index + 1}"
+                    if device.kind == "winmm"
+                    else device.display_suffix
+                ),
+            )
             for device in devices
         ]
         mapping = build_device_display_mapping(devices)
@@ -4204,6 +4361,9 @@ class GamepadTestWindow:
             and tuple(mapping) == tuple(self.devices)
         ):
             self.devices = mapping
+            self._set_raw_hid_controls_active(
+                probe_state in {"opening", "running"}
+            )
             return
         self.devices = mapping
         names = tuple(mapping)
@@ -4244,8 +4404,10 @@ class GamepadTestWindow:
         self.selected_device_var.set(next_name)
         self._configure_source_controls()
         self._configure_native_sampler()
-        if previous_device_key != next_device_key:
-            self._sync_raw_hid_stream()
+        self._set_raw_hid_controls_active(
+            probe_state in {"opening", "running"}
+        )
+        self._sync_raw_hid_stream()
 
     def _refresh_devices_after_telemetry(self):
         self._device_refresh_job = None
@@ -4265,6 +4427,12 @@ class GamepadTestWindow:
     def _configure_source_controls(self):
         device = self._selected_device()
         is_s2p = device is not None and device.kind == "s2p"
+        is_raw_hid = device is not None and device.kind == "raw_hid"
+        raw_hid_toggle = getattr(self, "raw_hid_stream_toggle", None)
+        if raw_hid_toggle is not None:
+            raw_hid_toggle.configure(
+                state="normal" if is_raw_hid else "disabled"
+            )
         gyro = self.latest_telemetry.get("gyro") or {}
         target = (
             gyro.get("target")
@@ -4289,14 +4457,25 @@ class GamepadTestWindow:
 
     def _sync_connection_status(self, sample):
         """Mirror the settings UI's connection summary in the tester header."""
+        def set_status(text, color):
+            self.status_var.set(text)
+            if self.status_label is not None:
+                self.status_label.configure(foreground=color)
+
         device = self._selected_device()
+        if device is not None and device.kind == "raw_hid":
+            stream_status = self.raw_hid_stream.status()
+            connected = stream_status.get("state") in {"opening", "running"}
+            set_status(
+                self.gui.tr("● 已連線" if connected else "● 未連線"),
+                "#138A36" if connected else "#777777",
+            )
+            return
         if device is not None and device.kind != "s2p":
             connected = sample is not None
-            self.status_var.set(
-                self.gui.tr("● 已連線" if connected else "● 未連線")
-            )
-            self.status_label.configure(
-                foreground="#138A36" if connected else "#777777"
+            set_status(
+                self.gui.tr("● 已連線" if connected else "● 未連線"),
+                "#138A36" if connected else "#777777",
             )
             return
         source_label = getattr(self.gui, "controller_status_label", None)
@@ -4305,22 +4484,18 @@ class GamepadTestWindow:
                 text = str(source_label.cget("text") or "")
                 color = str(source_label.cget("fg") or "#777777")
                 if text:
-                    self.status_var.set(text)
-                    self.status_label.configure(foreground=color)
+                    set_status(text, color)
                     return
             except (AttributeError, tk.TclError):
                 pass
         text, color = read_connection_status_summary(self.gui.tr)
         if text:
-            self.status_var.set(text)
-            self.status_label.configure(foreground=color)
+            set_status(text, color)
             return
         connected = sample is not None
-        self.status_var.set(
-            self.gui.tr("● 已連線" if connected else "● 未連線")
-        )
-        self.status_label.configure(
-            foreground="#138A36" if connected else "#777777"
+        set_status(
+            self.gui.tr("● 已連線" if connected else "● 未連線"),
+            "#138A36" if connected else "#777777",
         )
 
     def _update_draw_fps(self):
@@ -4492,6 +4667,7 @@ class GamepadTestWindow:
             self.raw_hid_stream.status().get("latest_sequence", 0) or 0
         )
         self._raw_hid_stream_dropped = 0
+        self._raw_hid_stream_latest_axes = None
 
     def _update_rumble_availability(self, device):
         supported = bool(device and device.supports_rumble)

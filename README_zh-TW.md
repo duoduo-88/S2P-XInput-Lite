@@ -40,7 +40,7 @@ S2P-XInput-Lite 可在 Windows 為 Switch 2 Pro Controller 提供 XInput 相容�
 - 可將相容設定檔寫入 ESP32，讓它不開啟 Windows 程式也能提供 PC XInput
   相容輸出或標準手機 USB HID
 - 將陀螺儀映射至 XInput 搖桿或滑鼠
-- 獨立手把測試工具：即時顯示輸入／輸出軌跡、按鍵映射、輸出形狀與震動測試，並提供 Raw HID 回報率量測頁面，顯示回報筆數、P50／P95／P99、前後兩筆回報的時間差與分佈圖
+- 獨立手把測試工具：XInput、WinMM、S2P 橋接輸出與每個 Raw HID collection 都可直接選擇；可即時顯示可解析的搖桿軌跡、按鍵映射、輸出形狀與震動測試，Raw HID 回報率頁面則顯示原始回報筆數、P50／P95／P99、前後兩筆回報的時間差與分佈圖
 - 完整遊戲設定檔，可一起切換搖桿、陀螺儀、震動、音訊觸覺與映射設定
 - 繁體中文與英文介面
 - 即時顯示連線、電量、ESP32、ViGEmBus、WASAPI 及 HidHide 狀態
@@ -70,7 +70,7 @@ S2P-XInput-Lite 可在 Windows 為 Switch 2 Pro Controller 提供 XInput 相容�
 
 第一次使用原生 BLE 配對時，啟動連線後按住控制器的 **SYNC** 鍵。已配對的控制器通常按任意鍵即可喚醒。
 
-若未安裝 HidHide，程式會詢問是否開啟官方下載頁；選擇略過後不會在每次啟動時重複提醒，也不會阻止連線。需要時可點擊視窗下方的 **HidHide：缺少** 狀態開啟下載頁。USB 控制器已連接且 HidHide 尚未設定時，程式會先詢問，再將可攜式 `runtime\python.exe` 與選定的 Nintendo HID 加入 HidHide；若選擇暫不設定，之後也不會重複提醒，可點擊 **HidHide：關閉／設定** 重新叫出設定確認。其他應用程式既有的 HidHide 項目會保留。**恢復預設值** 只會移除本程式與選定控制器的項目，並保留無關項目。
+若未安裝 HidHide，程式會詢問是否開啟官方下載頁；選擇略過後不會在每次啟動時重複提醒，也不會阻止連線。需要時可點擊視窗下方的 **HidHide：缺少** 狀態開啟下載頁。USB 控制器已連接且 HidHide 尚未設定時，程式會先詢問，再將可攜式 `runtime\python.exe`、`src\raw_hid_probe.exe` 與選定的 Nintendo HID 加入 HidHide；若選擇暫不設定，之後也不會重複提醒，可點擊 **HidHide：關閉／設定** 重新叫出設定確認。其他應用程式既有的 HidHide 項目會保留。**恢復預設值** 只會移除本程式管理的兩個應用程式與選定控制器項目，並保留無關項目。
 
 ## 設定檔與 Mapping Layers
 

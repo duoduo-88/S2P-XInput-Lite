@@ -552,10 +552,26 @@ int run_measurement(const std::wstring &path, uint64_t duration_ms) {
                     * 1000000000.0 / static_cast<double>(span);
             }
         }
-        publish_snapshot(measurement, now_ns, rate_hz);
         const ProbeState state = measurement.state.load(
             std::memory_order_acquire
         );
+        if (
+            (state == ProbeState::Complete || state == ProbeState::Stopped)
+            && reports > 1
+        ) {
+            const uint64_t started_ns = measurement.started_ns.load(
+                std::memory_order_relaxed
+            );
+            const uint64_t finished_ns = measurement.finished_ns.load(
+                std::memory_order_relaxed
+            );
+            if (finished_ns > started_ns) {
+                rate_hz = static_cast<double>(reports - 1)
+                    * 1000000000.0
+                    / static_cast<double>(finished_ns - started_ns);
+            }
+        }
+        publish_snapshot(measurement, now_ns, rate_hz);
         if (
             state == ProbeState::Complete
             || state == ProbeState::Stopped
@@ -649,9 +665,10 @@ bool initialize_stream_parser(
             HidP_Input, value_caps.data(), &count, parser.preparsed
         ) != HIDP_STATUS_SUCCESS
     ) {
-        HidD_FreePreparsedData(parser.preparsed);
-        parser.preparsed = nullptr;
-        return false;
+        // A malformed or vendor-specific value descriptor must not prevent
+        // raw report timing. Keep the stream alive with axes_mask == 0 so the
+        // UI can state that coordinates are unavailable.
+        count = 0;
     }
     value_caps.resize(count);
     parser.input_data_indices = device_caps.NumberInputDataIndices;
@@ -711,10 +728,10 @@ bool initialize_stream_parser(
     if (parser.left_y.valid) parser.axes_mask |= StreamLeftY;
     if (parser.right_x.valid) parser.axes_mask |= StreamRightX;
     if (parser.right_y.valid) parser.axes_mask |= StreamRightY;
-    constexpr uint32_t required_axes = (
-        StreamLeftX | StreamLeftY | StreamRightX | StreamRightY
-    );
-    return (parser.axes_mask & required_axes) == required_axes;
+    // Timing measurement only needs raw reports, and the monitor can still
+    // present a useful partial-axis view. A valid input report descriptor is
+    // therefore enough to start even when no standard stick usage is found.
+    return true;
 }
 
 bool read_axis(
@@ -927,6 +944,7 @@ int run_stream(
     float left_y = 0.0f;
     float right_x = 0.0f;
     float right_y = 0.0f;
+    uint32_t seen_axes = 0;
     std::wstring folded_path = path;
     std::transform(
         folded_path.begin(), folded_path.end(), folded_path.begin(),
@@ -1047,9 +1065,15 @@ int run_stream(
             }
         }
         // Composite devices may split axes across report IDs. Preserve the
-        // last value for axes absent from this report, and discard only
-        // reports that contain no stick data at all.
+        // last value for axes absent from this report and publish once every
+        // axis advertised by this collection has been observed. Collections
+        // with no recognizable axes still keep raw_reports moving so their
+        // availability and report rate remain visible.
         if (sample_axes == 0) continue;
+        seen_axes |= sample_axes;
+        if (
+            (seen_axes & parser.axes_mask) != parser.axes_mask
+        ) continue;
         ++sequence;
         StreamSlot &slot = slots[(sequence - 1) % capacity];
         InterlockedExchange64(&slot.sequence, 0);

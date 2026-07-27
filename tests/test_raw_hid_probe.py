@@ -6,6 +6,7 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,7 +20,9 @@ from raw_hid_probe import (
     STREAM_MAGIC,
     STREAM_SLOT,
     STREAM_VERSION,
+    _enumerate_raw_hid_gamepads_isolated,
     enumerate_raw_hid_gamepads,
+    _is_virtual_hid_path,
     normalize_probe_snapshot,
 )
 
@@ -60,6 +63,61 @@ class FakeHid:
 
 
 class RawHidProbeTests(unittest.TestCase):
+    def test_isolated_enumeration_contains_child_process_crash(self):
+        crashed = subprocess.CompletedProcess(
+            args=("python",), returncode=0xC0000374, stdout=b"", stderr=b""
+        )
+        with patch("raw_hid_probe.subprocess.run", return_value=crashed):
+            devices = _enumerate_raw_hid_gamepads_isolated()
+
+        self.assertEqual(devices, [])
+
+    def test_isolated_enumeration_decodes_child_payload(self):
+        payload = [{
+            "key": "raw:key",
+            "path": "raw-path",
+            "name": "Controller",
+            "vendor_id": 0x1234,
+            "product_id": 0x5678,
+            "usage_page": 1,
+            "usage": 5,
+            "interface_number": 2,
+            "is_virtual": False,
+        }]
+        completed = subprocess.CompletedProcess(
+            args=("python",),
+            returncode=0,
+            stdout=json.dumps(payload).encode("utf-8"),
+            stderr=b"",
+        )
+        with patch("raw_hid_probe.subprocess.run", return_value=completed):
+            devices = _enumerate_raw_hid_gamepads_isolated()
+
+        self.assertEqual(len(devices), 1)
+        self.assertEqual(devices[0].path, "raw-path")
+        self.assertEqual(devices[0].interface_number, 2)
+
+    def test_root_system_parent_identifies_virtual_hid(self):
+        with patch(
+            "raw_hid_probe._hid_parent_device_ids",
+            return_value=(
+                r"USB\VID_045E&PID_028E\01",
+                r"ROOT\SYSTEM\0002",
+            ),
+        ):
+            self.assertTrue(_is_virtual_hid_path("hid-path"))
+
+    def test_usb_parent_chain_remains_physical(self):
+        with patch(
+            "raw_hid_probe._hid_parent_device_ids",
+            return_value=(
+                r"USB\VID_413D&PID_2104\PAD",
+                r"USB\ROOT_HUB30\0",
+                r"PCI\VEN_1022&DEV_43F7\BUS",
+            ),
+        ):
+            self.assertFalse(_is_virtual_hid_path("hid-path"))
+
     def test_enumeration_keeps_gamepad_collections_only(self):
         devices = enumerate_raw_hid_gamepads(FakeHid)
 
@@ -312,6 +370,19 @@ class RawHidProbeTests(unittest.TestCase):
             source,
         )
         self.assertIn("if (sample_axes == 0) continue", source)
+        self.assertIn("seen_axes |= sample_axes", source)
+        self.assertIn(
+            "(seen_axes & parser.axes_mask) != parser.axes_mask",
+            source,
+        )
+        self.assertIn(
+            "even when no standard stick usage is found",
+            source,
+        )
+        self.assertIn(
+            "raw report timing",
+            source,
+        )
         self.assertIn("slot.reserved = sample_axes", source)
         self.assertIn('folded_path.find(L"&IG_")', source)
         self.assertIn('folded_path.find(L"VID_413D&PID_2104")', source)

@@ -60,6 +60,7 @@ from gamepad_test_window import (
     localized_device_name,
     normalize_test_parameter,
     primary_display_refresh_rate,
+    raw_hid_test_device,
     shape_ease_amount,
 )
 from stick_processing import apply_output_shape
@@ -183,6 +184,25 @@ class SharedTelemetryTests(unittest.TestCase):
 
 
 class GamepadMathTests(unittest.TestCase):
+    def test_raw_hid_collection_is_a_first_class_virtual_test_device(self):
+        raw = RawHidDevice(
+            "hid:vigem", "hid-path", "Xbox Controller",
+            0x045E, 0x028E, 1, 5, 3, True,
+        )
+
+        device = raw_hid_test_device(
+            raw, 2, lambda text: "Virtual" if text == "虛擬" else text
+        )
+        mapping = build_device_display_mapping((device,))
+
+        self.assertEqual(device.kind, "raw_hid")
+        self.assertEqual(device.raw_hid_key, raw.key)
+        self.assertFalse(device.supports_rumble)
+        self.assertIn(
+            "Xbox Controller [Raw HID 045E:028E IF 3 Virtual]",
+            mapping,
+        )
+
     def test_generated_device_names_follow_ui_language(self):
         device = GamepadDevice(
             "xinput:0",
@@ -261,7 +281,8 @@ class GamepadMathTests(unittest.TestCase):
         tester._raw_hid_stream_sequence = 0
         tester._raw_hid_stream_dropped = 0
         tester._selected_device = lambda: GamepadDevice(
-            "xinput:1", "xinput", 1, "XInput Gamepad 2", True
+            "raw_hid:pad", "raw_hid", 0, "Raw Controller", False,
+            raw_hid_key="hid:pad",
         )
         tester._selected_raw_hid_device = lambda: raw_device
         tester._active_test_tab = Mock(
@@ -297,6 +318,85 @@ class GamepadMathTests(unittest.TestCase):
         self.assertEqual(tester._last_trail_sequence, 23)
         self.assertIsNone(tester._last_consumed_token)
 
+    def test_unexpected_raw_hid_stop_updates_monitor_status(self):
+        tester = object.__new__(GamepadTestWindow)
+        tester.raw_hid_stream_enabled_var = Mock(
+            get=Mock(return_value=True)
+        )
+        tester.raw_hid_stream = Mock()
+        tester.raw_hid_stream.status.return_value = {
+            "state": "stopped",
+            "error_code": 0,
+        }
+        tester._raw_hid_stream_path = "hid-path"
+        tester.raw_hid_stream_status_var = Mock()
+        tester.gui = SimpleNamespace(tr=lambda text: text)
+
+        tester._update_raw_hid_stream_status()
+
+        tester.raw_hid_stream_status_var.set.assert_called_once_with(
+            "Raw HID 實際採樣已停止"
+        )
+
+    def test_partial_raw_hid_axes_are_reported_without_disabling_stream(self):
+        tester = object.__new__(GamepadTestWindow)
+        tester.raw_hid_stream_enabled_var = Mock(
+            get=Mock(return_value=True)
+        )
+        tester.raw_hid_stream = Mock()
+        tester.raw_hid_stream.status.return_value = {
+            "state": "running",
+            "axes_mask": 0b0011,
+            "raw_reports": 25,
+        }
+        tester._raw_hid_stream_dropped = 0
+        tester._raw_hid_stream_latest_axes = ((0.25, -0.5), (0.0, 0.0))
+        tester.raw_hid_stream_status_var = Mock()
+        tester.gui = SimpleNamespace(tr=lambda text: text)
+
+        tester._update_raw_hid_stream_status()
+
+        status = tester.raw_hid_stream_status_var.set.call_args.args[0]
+        self.assertIn("可用軸：LX, LY", status)
+        self.assertIn("無法解析：RX, RY", status)
+        self.assertIn("25", status)
+
+    def test_raw_hid_without_stick_axes_remains_rate_measurable(self):
+        tester = object.__new__(GamepadTestWindow)
+        tester.raw_hid_stream_enabled_var = Mock(
+            get=Mock(return_value=True)
+        )
+        tester.raw_hid_stream = Mock()
+        tester.raw_hid_stream.status.return_value = {
+            "state": "running",
+            "axes_mask": 0,
+            "raw_reports": 120,
+        }
+        tester._raw_hid_stream_dropped = 0
+        tester._raw_hid_stream_latest_axes = None
+        tester.raw_hid_stream_status_var = Mock()
+        tester.gui = SimpleNamespace(tr=lambda text: text)
+
+        tester._update_raw_hid_stream_status()
+
+        status = tester.raw_hid_stream_status_var.set.call_args.args[0]
+        self.assertIn("無法解析標準搖桿軸", status)
+        self.assertIn("120", status)
+
+    def test_stopping_raw_hid_stream_clears_previous_axes(self):
+        tester = object.__new__(GamepadTestWindow)
+        tester.raw_hid_stream = Mock()
+        tester.raw_hid_stream.stop.return_value = True
+        tester._raw_hid_stream_path = "hid-path"
+        tester._raw_hid_stream_sequence = 9
+        tester._raw_hid_stream_latest_axes = ((0.5, 0.25), (0.0, 0.0))
+
+        self.assertTrue(tester._stop_raw_hid_stream())
+
+        self.assertIsNone(tester._raw_hid_stream_latest_axes)
+        self.assertIsNone(tester._raw_hid_stream_path)
+        self.assertEqual(tester._raw_hid_stream_sequence, 0)
+
     def test_completed_measurement_resumes_actual_sampling_once(self):
         tester = object.__new__(GamepadTestWindow)
         tester._raw_hid_resume_after_measurement = True
@@ -326,14 +426,15 @@ class GamepadMathTests(unittest.TestCase):
         tester = object.__new__(GamepadTestWindow)
         tester.raw_hid_devices = {raw_device.key: raw_device}
         selected = GamepadDevice(
-            "winmm:0", "winmm", 0, "Wireless Controller", False
+            "raw_hid:pad", "raw_hid", 0, "Wireless Controller", False,
+            raw_hid_key=raw_device.key,
         )
         tester.devices = {"Wireless Controller": selected}
         tester._selected_device = lambda: selected
 
         self.assertIs(tester._selected_raw_hid_device(), raw_device)
 
-    def test_raw_hid_selection_excludes_vigem_without_slot_guessing(self):
+    def test_raw_hid_selection_keeps_virtual_and_physical_collections(self):
         vigem = RawHidDevice(
             key="hid:vigem",
             path=r"\\?\HID#VID_045E&PID_028E&IG_00#virtual",
@@ -343,6 +444,7 @@ class GamepadMathTests(unittest.TestCase):
             usage_page=1,
             usage=5,
             interface_number=-1,
+            is_virtual=True,
         )
         physical = RawHidDevice(
             key="hid:physical",
@@ -359,21 +461,92 @@ class GamepadMathTests(unittest.TestCase):
             vigem.key: vigem,
             physical.key: physical,
         }
-        selected = GamepadDevice(
-            "xinput:0", "xinput", 0, "XInput Gamepad 1", True
+        selected_physical = GamepadDevice(
+            "raw_hid:physical", "raw_hid", 0, physical.name, False,
+            raw_hid_key=physical.key,
         )
-        tester.devices = {"XInput Gamepad 1": selected}
-        tester._selected_device = lambda: selected
-
+        selected_virtual = GamepadDevice(
+            "raw_hid:vigem", "raw_hid", 1, vigem.name, False,
+            raw_hid_key=vigem.key,
+        )
+        tester._selected_device = lambda: selected_physical
         self.assertIs(tester._selected_raw_hid_device(), physical)
-        s2p = GamepadDevice(
+        tester._selected_device = lambda: selected_virtual
+        self.assertIs(tester._selected_raw_hid_device(), vigem)
+
+    def test_native_and_s2p_rows_do_not_implicitly_select_raw_hid(self):
+        tester = object.__new__(GamepadTestWindow)
+        tester.raw_hid_devices = {}
+        for selected in (
+            GamepadDevice(
+                "xinput:0", "xinput", 0, "Physical Controller", True
+            ),
+            GamepadDevice(
+                "winmm:0", "winmm", 0, "Legacy Controller", False
+            ),
+            GamepadDevice(
+                "s2p", "s2p", 1, "S2P-XInput-Lite", True
+            ),
+        ):
+            tester._selected_device = lambda selected=selected: selected
+            self.assertIsNone(tester._selected_raw_hid_device())
+
+    def test_s2p_output_measurement_requires_selecting_raw_collection(self):
+        tester = object.__new__(GamepadTestWindow)
+        selected = GamepadDevice(
             "s2p", "s2p", 1, "S2P-XInput-Lite", True
         )
-        tester.devices["S2P-XInput-Lite"] = s2p
-        tester._selected_device = lambda: s2p
-        self.assertIs(tester._selected_raw_hid_device(), physical)
+        tester._selected_device = lambda: selected
+        tester.raw_hid_devices = {}
+        tester.raw_hid_probe = SimpleNamespace(available=True)
+        tester.raw_hid_start_button = Mock()
+        tester.raw_hid_stop_button = Mock()
+        tester.raw_hid_duration_combo = Mock()
+        tester.device_combo = Mock()
+        tester.gui = SimpleNamespace(tr=lambda text: text)
 
-    def test_raw_hid_selection_refuses_to_guess_between_controllers(self):
+        tester._set_raw_hid_controls_active(False)
+
+        tester.raw_hid_start_button.configure.assert_called_once_with(
+            state="disabled"
+        )
+
+    def test_missing_selected_raw_hid_collection_is_rejected(self):
+        tester = object.__new__(GamepadTestWindow)
+        tester.raw_hid_devices = {}
+        selected = GamepadDevice(
+            "raw_hid:missing", "raw_hid", 0, "Missing", False,
+            raw_hid_key="hid:missing",
+        )
+        tester._selected_device = lambda: selected
+        self.assertIsNone(tester._selected_raw_hid_device())
+
+    def test_raw_hid_output_measurement_is_available_for_explicit_collection(self):
+        raw_device = RawHidDevice(
+            "hid:bridge", "hid-path", "Virtual Controller",
+            0x045E, 0x028E, 1, 5, 0, True,
+        )
+        selected = GamepadDevice(
+            "raw_hid:bridge", "raw_hid", 0, raw_device.name, False,
+            raw_hid_key=raw_device.key,
+        )
+        tester = object.__new__(GamepadTestWindow)
+        tester.raw_hid_devices = {raw_device.key: raw_device}
+        tester._selected_device = lambda: selected
+        tester.raw_hid_probe = SimpleNamespace(available=True)
+        tester.raw_hid_start_button = Mock()
+        tester.raw_hid_stop_button = Mock()
+        tester.raw_hid_duration_combo = Mock()
+        tester.device_combo = Mock()
+        tester.gui = SimpleNamespace(tr=lambda text: text)
+
+        tester._set_raw_hid_controls_active(False)
+
+        tester.raw_hid_start_button.configure.assert_called_once_with(
+            state="normal"
+        )
+
+    def test_multiple_raw_hid_collections_select_exact_requested_path(self):
         first = RawHidDevice(
             "hid:first", "hid-first", "Generic Controller",
             0x1111, 0x0001, 1, 5, 0,
@@ -385,33 +558,11 @@ class GamepadMathTests(unittest.TestCase):
         tester = object.__new__(GamepadTestWindow)
         tester.raw_hid_devices = {first.key: first, second.key: second}
         selected = GamepadDevice(
-            "xinput:0", "xinput", 0, "Generic Controller", True
+            "raw_hid:second", "raw_hid", 1, second.name, False,
+            raw_hid_key=second.key,
         )
-        tester.devices = {"Generic Controller": selected}
         tester._selected_device = lambda: selected
-
-        self.assertIsNone(tester._selected_raw_hid_device())
-
-    def test_raw_hid_selection_refuses_unique_raw_for_other_controller(self):
-        raw_device = RawHidDevice(
-            "hid:pad", "hid-path", "Raw Controller",
-            0x1111, 0x0001, 1, 5, 0,
-        )
-        selected = GamepadDevice(
-            "winmm:old", "winmm", 0, "Legacy Controller", False
-        )
-        other = GamepadDevice(
-            "xinput:0", "xinput", 0, "Raw Controller", True
-        )
-        tester = object.__new__(GamepadTestWindow)
-        tester.raw_hid_devices = {raw_device.key: raw_device}
-        tester.devices = {
-            "Legacy Controller": selected,
-            "Raw Controller": other,
-        }
-        tester._selected_device = lambda: selected
-
-        self.assertIsNone(tester._selected_raw_hid_device())
+        self.assertIs(tester._selected_raw_hid_device(), second)
 
     def test_tester_parameter_input_clamps_and_snaps(self):
         self.assertAlmostEqual(
@@ -777,6 +928,57 @@ class GamepadMathTests(unittest.TestCase):
             1000, tester._refresh_devices_after_telemetry
         )
         self.assertEqual(tester._device_refresh_job, "next-refresh")
+
+    def test_periodic_device_refresh_uses_cached_enumeration(self):
+        tester = object.__new__(GamepadTestWindow)
+        tester.raw_hid_probe = Mock(
+            read_snapshot=Mock(return_value={"state": "idle"})
+        )
+        tester._device_enumeration_initialized = True
+        tester._native_test_devices = ()
+        tester.raw_hid_devices = {}
+        tester.selected_device_var = Mock(get=Mock(return_value=""))
+        tester.devices = {}
+        tester.latest_telemetry = {}
+        tester.native_sampler = Mock()
+        tester.gui = SimpleNamespace(tr=lambda text: text)
+        tester._set_raw_hid_controls_active = Mock()
+
+        with patch(
+            "gamepad_test_window.enumerate_raw_hid_gamepads"
+        ) as enumerate_raw:
+            tester._refresh_devices(force=False)
+
+        enumerate_raw.assert_not_called()
+        tester.native_sampler.enumerate_devices.assert_not_called()
+
+    def test_manual_refresh_quiesces_readers_and_contains_errors(self):
+        tester = object.__new__(GamepadTestWindow)
+        tester._device_refresh_in_progress = False
+        tester.device_refresh_button = Mock()
+        tester.stop_rumble = Mock()
+        tester.native_sampler = Mock()
+        tester._stop_raw_hid_stream = Mock(return_value=True)
+        tester._refresh_devices = Mock(side_effect=RuntimeError("hot plug"))
+        tester._configure_native_sampler = Mock()
+        tester._sync_raw_hid_stream = Mock()
+        tester.window = Mock()
+        tester.window.winfo_exists.return_value = True
+        tester.raw_hid_probe = Mock(
+            read_snapshot=Mock(return_value={"state": "idle"})
+        )
+
+        tester._request_device_refresh()
+
+        tester.native_sampler.set_device.assert_called_once_with(None)
+        tester._stop_raw_hid_stream.assert_called_once_with()
+        tester._configure_native_sampler.assert_called_once_with()
+        tester._sync_raw_hid_stream.assert_called_once_with()
+        self.assertFalse(tester._device_refresh_in_progress)
+        self.assertEqual(
+            tester.device_refresh_button.configure.call_args_list[-1].kwargs,
+            {"state": "normal"},
+        )
 
     def test_winmm_pov_hat_reports_cardinal_and_diagonal_buttons(self):
         self.assertEqual(winmm_pov_buttons(0), ("↑",))
@@ -1358,7 +1560,16 @@ class GamepadMathTests(unittest.TestCase):
         self.assertEqual(plot.canvas.create_oval.call_count, 2000)
         selected = tuple(plot._trail_selected_sequences)
         self.assertEqual(selected[0], history.trail[0][3])
-        self.assertGreater(selected[-1], history.trail[-1][3] - 3)
+        self.assertEqual(selected[-1], history.trail[-1][3])
+
+        for sequence in range(4000, 8000):
+            history.add(0.0, 0.0, float(sequence), record_shape=False)
+        plot._draw_trail(history, 8000.0)
+
+        selected = tuple(plot._trail_selected_sequences)
+        self.assertLessEqual(len(selected), 2000)
+        self.assertEqual(selected[0], history.trail[0][3])
+        self.assertEqual(selected[-1], history.trail[-1][3])
 
     def test_bitmap_trail_uses_one_canvas_image_and_updates_in_place(self):
         plot = object.__new__(StickPlot)
@@ -1616,6 +1827,40 @@ class GamepadMathTests(unittest.TestCase):
         self.assertEqual(sample["left"], (0.5, -0.25))
         self.assertEqual(len(tester.histories["left"].trail), 0)
         self.assertEqual(len(tester.histories["right"].trail), 0)
+
+    def test_raw_hid_monitor_keeps_latest_details_between_reports(self):
+        tester = object.__new__(GamepadTestWindow)
+        tester.raw_hid_stream = SimpleNamespace(
+            read_latest=Mock(side_effect=(
+                (
+                    (10.0, (0.5, -0.25), (0.1, 0.2), 7),
+                    7,
+                    0,
+                ),
+                (None, 7, 0),
+            ))
+        )
+        tester._raw_hid_stream_sequence = 0
+        tester._raw_hid_stream_dropped = 0
+        tester._raw_hid_stream_latest_sample = None
+        tester.shape_enabled_var = Mock(get=Mock(return_value=False))
+        tester.histories = {
+            "left": StickHistory(),
+            "right": StickHistory(),
+        }
+
+        first, first_consumed = tester._consume_raw_hid_stream(
+            None, record_trail=False
+        )
+        held, held_consumed = tester._consume_raw_hid_stream(
+            None, record_trail=False
+        )
+
+        self.assertTrue(first_consumed)
+        self.assertFalse(held_consumed)
+        self.assertEqual(held, first)
+        self.assertEqual(held["layer"], "原始輸入")
+        self.assertEqual(held["triggers"], (0.0, 0.0))
 
     def test_native_trigger_axes_appear_as_pressed_events(self):
         tester = object.__new__(GamepadTestWindow)

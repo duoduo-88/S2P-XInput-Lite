@@ -148,6 +148,8 @@ class GamepadDevice:
     supports_rumble: bool
     input_profile: str = "generic"
     name_translation_key: str | None = None
+    raw_hid_key: str | None = None
+    display_suffix: str | None = None
 
 
 @dataclass(frozen=True)
@@ -239,9 +241,15 @@ def winmm_pov_buttons(value):
 class WindowsGamepadBackend:
     """Enumerate XInput plus legacy WinMM/DirectInput-compatible devices."""
 
-    def __init__(self, xinput=None, winmm=None):
+    def __init__(
+        self,
+        xinput=None,
+        winmm=None,
+        enable_s2p_mobile_hid=True,
+    ):
         self.xinput = xinput if xinput is not None else self._load_xinput()
         self.winmm = winmm if winmm is not None else self._load_winmm()
+        self.enable_s2p_mobile_hid = bool(enable_s2p_mobile_hid)
         self._winmm_caps = {}
         self._s2p_mobile_hid = None
         self._s2p_mobile_hid_path = None
@@ -357,10 +365,11 @@ class WindowsGamepadBackend:
                     input_profile=input_profile,
                     name_translation_key=name_translation_key,
                 ))
-        if found_s2p_mobile:
-            self._open_s2p_mobile_hid()
-        else:
-            self._close_s2p_mobile_hid()
+        if getattr(self, "enable_s2p_mobile_hid", True):
+            if found_s2p_mobile:
+                self._open_s2p_mobile_hid()
+            else:
+                self._close_s2p_mobile_hid()
         return devices
 
     def _close_s2p_mobile_hid(self):
@@ -546,6 +555,7 @@ class WindowsGamepadBackend:
             left_trigger = right_trigger = None
         if (
             is_s2p_mobile
+            and getattr(self, "enable_s2p_mobile_hid", True)
             and (left_trigger is None or right_trigger is None)
         ):
             raw_triggers = self._read_s2p_mobile_hid_triggers()
