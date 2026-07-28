@@ -13,9 +13,9 @@ FIRMWARE_ROOT = (
 
 
 class ReleaseBaselineTests(unittest.TestCase):
-    def test_desktop_release_version_is_070(self):
+    def test_desktop_development_version_is_071_beta(self):
         source = (ROOT / "src" / "version.py").read_text(encoding="utf-8")
-        self.assertRegex(source, r'VERSION\s*=\s*"0\.7\.0"')
+        self.assertRegex(source, r'VERSION\s*=\s*"0\.7\.1 beta"')
 
     def test_bundled_firmware_is_s2p_101(self):
         main_source = (

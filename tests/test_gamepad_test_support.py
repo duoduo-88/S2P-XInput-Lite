@@ -133,7 +133,7 @@ class DiagnosticDeviceSelectionTests(unittest.TestCase):
     def test_gamepad_tester_title_includes_product_and_version(self):
         self.assertEqual(
             GAMEPAD_TESTER_TITLE,
-            "S2P-XInput-Lite v0.7.0 GamepadTester",
+            "S2P-XInput-Lite v0.7.1 beta GamepadTester",
         )
 
 
