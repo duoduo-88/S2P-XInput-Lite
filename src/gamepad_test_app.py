@@ -10,7 +10,7 @@ import tkinter as tk
 from config_utils import CONFIG_PATH, load_config
 from gamepad_test_window import GamepadTestWindow, TEST_ICON_PATH
 from localization import translate_text
-from raw_hid_effective_rate import (
+from raw_hid_effective_rate_runtime import (
     install_effective_rate_patch,
     translate_effective_rate,
 )
