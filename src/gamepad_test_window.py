@@ -37,6 +37,7 @@ from raw_hid_probe import (
     enumerate_raw_hid_gamepads,
 )
 from switch2_input import SWITCH_BUTTONS
+from support_log import format_support_log
 from test_telemetry import SharedTestTelemetry
 from tooltip_layout import wrap_tooltip_text
 from version import APP_NAME, VERSION
@@ -75,11 +76,32 @@ THIRD_PARTY_NOTICES_PATH = PROJECT_ROOT / "THIRD_PARTY_NOTICES.md"
 GITHUB_URL = "https://github.com/duoduo-88/S2P-XInput-Lite/tree/main"
 SPONSOR_URL = "https://ko-fi.com/duoduo88"
 CONTROLLER_STATUS_PATH = Path(__file__).with_name("controller_status.json")
+GAMEPAD_TESTER_TITLE = f"{APP_NAME} v{VERSION} GamepadTester"
 
 
 def _gyro_mapping_enabled(gyro):
     """Return whether gyro mapping is enabled in the current telemetry."""
     return str(gyro.get("activation_mode") or "").strip().upper() != "OFF"
+
+
+def diagnostic_telemetry_for_device(
+    device,
+    s2p_telemetry,
+    selected_device_telemetry,
+    s2p_telemetry_is_fresh,
+):
+    """Return telemetry only when it belongs to the diagnostic target."""
+    if device is None:
+        return {}
+    if device.kind == "s2p":
+        return (
+            dict(s2p_telemetry or {})
+            if s2p_telemetry_is_fresh else {}
+        )
+    selected_device_telemetry = selected_device_telemetry or {}
+    if selected_device_telemetry.get("device_key") != device.key:
+        return {}
+    return dict(selected_device_telemetry)
 
 
 def _gyro_targets_side(gyro, side):
@@ -2207,6 +2229,10 @@ class GamepadTestWindow:
         self.diagnostic_event_text = None
         self._diagnostic_last_event_signature = None
         self._diagnostic_firmware_update_notice_shown = False
+        self._diagnostic_target_key = None
+        self._diagnostic_target_kind = None
+        self._diagnostic_target_name = None
+        self._diagnostic_firmware_source = None
 
     def _apply_window_icon(self, window):
         """Apply the dedicated tester icon without changing the main app icon."""
@@ -2263,7 +2289,7 @@ class GamepadTestWindow:
         self._last_shape_advance_at = self._next_frame_at
         window = self._create_hidden_window(self.root)
         self.window = window
-        window.title(self.gui.tr("手把測試"))
+        window.title(GAMEPAD_TESTER_TITLE)
         self._apply_window_icon(window)
         # Keep the tester layout and its two high-refresh canvases at the
         # validated size. This also disables the native maximize button.
@@ -4101,9 +4127,8 @@ class GamepadTestWindow:
         self.diagnostic_stop_button.grid(row=0, column=1, padx=(0, 5))
         self.diagnostic_export_button = ttk.Button(
             controls,
-            text=self.gui.tr("匯出診斷 Log"),
+            text=self.gui.tr("匯出支援 Log"),
             command=self.export_diagnostic_log,
-            state="disabled",
         )
         self.diagnostic_export_button.grid(row=0, column=2, padx=(0, 12))
         ttk.Label(controls, text=self.gui.tr("診斷時間")).grid(
@@ -4128,7 +4153,10 @@ class GamepadTestWindow:
         HoverTip(
             diagnostic_help,
             self.gui.tr(
-                "\u8a3a\u65b7\u6a21\u5f0f\u6703\u5728\u9078\u64c7\u7684\u6642\u9593\u5167\u8a18\u9304\u624b\u628a\u8f38\u5165\u983b\u7387\u3001\u5ef6\u9072\u3001\u6821\u6b63\u72c0\u614b\u8207\u9707\u52d5\u8cc7\u6599\u3002\n\n\u6e2c\u8a66\u671f\u9593\u4ecd\u53ef\u7e7c\u7e8c\u64cd\u4f5c\u624b\u628a\uff0c\u4e5f\u53ef\u4ee5\u7e2e\u5c0f\u6b64\u8996\u7a97\u3002\n\n\u5b8c\u6210\u5f8c\u53ef\u532f\u51fa TXT Log\uff0c\u4f9b AI \u6216\u652f\u63f4\u4eba\u54e1\u5206\u6790\u3002"
+                "診斷模式會在選擇的時間內記錄手把輸入頻率、延遲、校正狀態與震動資料。\n\n"
+                "測試期間仍可繼續操作手把，也可以縮小此視窗。\n\n"
+                "「匯出支援 Log」可隨時使用，會包含程式啟動紀錄；完成診斷後，"
+                "還會一併包含手把診斷資料，供 AI 或支援人員分析。"
             ),
             wraplength=380,
         )
@@ -4255,7 +4283,70 @@ class GamepadTestWindow:
             return "\u504f\u5f31"
         return "\u5f88\u5f31"
 
+    def _is_s2p_standalone_device(self, device):
+        """Return whether a tester entry belongs to S2P standalone USB."""
+        if device is None:
+            return False
+        if device.kind == "raw_hid" and device.raw_hid_key:
+            raw = self.raw_hid_devices.get(device.raw_hid_key)
+            return bool(
+                raw is not None
+                and int(raw.vendor_id) == 0xCAFE
+                and int(raw.product_id) in {0x4020, 0x4021}
+            )
+        if device.kind == "xinput":
+            has_standalone_xinput = any(
+                int(raw.vendor_id) == 0xCAFE
+                and int(raw.product_id) == 0x4020
+                for raw in self.raw_hid_devices.values()
+            )
+            xinput_devices = tuple(
+                item for item in self._native_test_devices
+                if item.kind == "xinput"
+            )
+            return bool(
+                has_standalone_xinput
+                and len(xinput_devices) == 1
+                and xinput_devices[0].key == device.key
+            )
+        if device.kind == "winmm":
+            caps = getattr(self.backend, "_winmm_caps", {}).get(
+                device.index
+            )
+            return bool(
+                (
+                    caps is not None
+                    and int(getattr(caps, "wMid", -1)) == 0xCAFE
+                    and int(getattr(caps, "wPid", -1)) == 0x4021
+                )
+                or "s2p mobile gamepad" in device.name.casefold()
+            )
+        return False
+
+    def _diagnostic_target_device(self):
+        target_key = self._diagnostic_target_key
+        if not target_key:
+            return None
+        selected = self._selected_device()
+        if selected is not None and selected.key == target_key:
+            return selected
+        return next(
+            (
+                device for device in self.devices.values()
+                if device.key == target_key
+            ),
+            None,
+        )
+
     def start_diagnostic(self):
+        target = self._selected_device()
+        if target is None:
+            messagebox.showinfo(
+                self.gui.tr("診斷模式"),
+                self.gui.tr("請先選擇要診斷的測試手把。"),
+                parent=self.window,
+            )
+            return
         try:
             duration = float(self.diagnostic_duration_var.get())
         except (TypeError, ValueError, tk.TclError):
@@ -4264,25 +4355,51 @@ class GamepadTestWindow:
         self.diagnostic_session.start()
         self._diagnostic_last_event_signature = None
         self._diagnostic_firmware_update_notice_shown = False
+        self._diagnostic_target_key = target.key
+        self._diagnostic_target_kind = target.kind
+        self._diagnostic_target_name = (
+            self.selected_device_var.get() or target.name
+        )
+        self._diagnostic_firmware_source = None
+        self.latest_diagnostic_input = {}
+        self.diagnostic_session.add_event(
+            "diagnostic_target_selected",
+            device_key=target.key,
+            device_kind=target.kind,
+            device_name=self._diagnostic_target_name,
+        )
         self.diagnostic_state_var.set(self.gui.tr("診斷執行中"))
         self.diagnostic_progress_var.set(0.0)
         self.diagnostic_start_button.configure(state="disabled")
         self.diagnostic_stop_button.configure(state="normal")
-        self.diagnostic_export_button.configure(state="disabled")
 
         connector = read_controller_status(CONTROLLER_STATUS_PATH)
+        connector_mode = connector.get("mode")
         bridge_owns_port = (
-            connector.get("state") == "connected"
-            and connector.get("mode") == "esp32"
+            target.kind == "s2p"
+            and connector.get("state") == "connected"
+            and connector_mode == "esp32"
         )
         if bridge_owns_port:
+            self._diagnostic_firmware_source = "bridge"
             enqueue_controller_command("diagnostic_start")
             self.diagnostic_session.add_event(
                 "firmware_channel",
                 state="owned_by_bridge_connector",
             )
-        else:
+        elif target.kind == "s2p":
+            self.diagnostic_session.add_event(
+                "basic_diagnostic_channel",
+                mode=connector_mode or "unknown",
+            )
+        elif self._is_s2p_standalone_device(target):
+            self._diagnostic_firmware_source = "standalone"
             self.diagnostic_reader.start()
+        else:
+            self.diagnostic_session.add_event(
+                "basic_diagnostic_channel",
+                mode=target.kind,
+            )
 
     def _show_diagnostic_firmware_update_notice(self):
         if self._diagnostic_firmware_update_notice_shown:
@@ -4310,8 +4427,7 @@ class GamepadTestWindow:
 
     def stop_diagnostic(self, reason="stopped_by_user"):
         session = self.diagnostic_session
-        connector = read_controller_status(CONTROLLER_STATUS_PATH)
-        if connector.get("mode") == "esp32":
+        if self._diagnostic_firmware_source == "bridge":
             enqueue_controller_command("diagnostic_stop")
         if session.running:
             session.stop(reason)
@@ -4324,30 +4440,26 @@ class GamepadTestWindow:
         )
         self.diagnostic_start_button.configure(state="normal")
         self.diagnostic_stop_button.configure(state="disabled")
-        self.diagnostic_export_button.configure(
-            state="normal" if session.samples else "disabled"
-        )
+        self.diagnostic_export_button.configure(state="normal")
         self._update_diagnostic_display()
         if session.completed:
             self.diagnostic_progress_var.set(100.0)
 
     def export_diagnostic_log(self):
         session = self.diagnostic_session
-        if session.started_monotonic is None or not session.samples:
-            messagebox.showinfo(
-                self.gui.tr("匯出診斷 Log"),
-                self.gui.tr("目前沒有可匯出的診斷資料。"),
-                parent=self.window,
-            )
-            return
+        diagnostic_log = (
+            session.format_log()
+            if session.started_monotonic is not None
+            else None
+        )
         default_name = (
-            "S2P-Diagnostic-"
+            "S2P-Support-"
             + time.strftime("%Y%m%d-%H%M%S")
             + ".txt"
         )
         filename = filedialog.asksaveasfilename(
             parent=self.window,
-            title=self.gui.tr("匯出診斷 Log"),
+            title=self.gui.tr("匯出支援 Log"),
             defaultextension=".txt",
             initialfile=default_name,
             filetypes=((self.gui.tr("文字檔"), "*.txt"),),
@@ -4356,18 +4468,19 @@ class GamepadTestWindow:
             return
         try:
             Path(filename).write_text(
-                session.format_log(), encoding="utf-8"
+                format_support_log(diagnostic_log),
+                encoding="utf-8",
             )
         except OSError as exc:
             messagebox.showerror(
-                self.gui.tr("匯出診斷 Log"),
-                self.gui.tr("無法寫入診斷 Log：{error}").format(error=exc),
+                self.gui.tr("匯出支援 Log"),
+                self.gui.tr("無法寫入支援 Log：{error}").format(error=exc),
                 parent=self.window,
             )
             return
         messagebox.showinfo(
-            self.gui.tr("匯出診斷 Log"),
-            self.gui.tr("診斷 Log 已匯出。"),
+            self.gui.tr("匯出支援 Log"),
+            self.gui.tr("支援 Log 已匯出。"),
             parent=self.window,
         )
 
@@ -4375,25 +4488,75 @@ class GamepadTestWindow:
         session = self.diagnostic_session
         if not session.running:
             return
-        connector = read_controller_status(CONTROLLER_STATUS_PATH)
-        firmware = self.diagnostic_reader.snapshot()
-        bridge_firmware = connector.get("firmware_diagnostics")
-        if isinstance(bridge_firmware, dict) and bridge_firmware:
-            firmware.update(bridge_firmware)
-        if session.due(now):
-            telemetry = (
-                self.latest_telemetry
-                if self._telemetry_is_fresh(self.latest_telemetry)
-                else self.latest_diagnostic_input
+        target = self._diagnostic_target_device()
+        selected = self._selected_device()
+        if (
+            target is None
+            or selected is None
+            or selected.key != self._diagnostic_target_key
+        ):
+            self.stop_diagnostic("device_changed")
+            self.diagnostic_state_var.set(
+                self.gui.tr("診斷已停止：測試手把已變更")
             )
+            return
+
+        connector = read_controller_status(CONTROLLER_STATUS_PATH)
+        selected_input = self.latest_diagnostic_input
+        sampled_at = selected_input.get("sampled_at_monotonic")
+        if (
+            isinstance(sampled_at, (int, float))
+            and now - float(sampled_at) > 1.5
+        ):
+            selected_input = {}
+        telemetry = diagnostic_telemetry_for_device(
+            target,
+            self.latest_telemetry,
+            selected_input,
+            self._telemetry_is_fresh(self.latest_telemetry),
+        )
+
+        if target.kind == "s2p":
+            status = dict(connector)
+            status.setdefault(
+                "state", "connected" if telemetry else "disconnected"
+            )
+            status.setdefault("mode", "s2p")
+        else:
+            status = {
+                "state": "connected" if telemetry else "disconnected",
+                "mode": (
+                    "standalone"
+                    if self._diagnostic_firmware_source == "standalone"
+                    else target.kind
+                ),
+            }
+        status["diagnostic_target"] = {
+            "device_key": target.key,
+            "device_kind": target.kind,
+            "device_name": self._diagnostic_target_name or target.name,
+        }
+
+        firmware = {}
+        if self._diagnostic_firmware_source == "bridge":
+            bridge_firmware = connector.get("firmware_diagnostics")
+            if isinstance(bridge_firmware, dict):
+                firmware.update(bridge_firmware)
+        elif self._diagnostic_firmware_source == "standalone":
+            firmware.update(self.diagnostic_reader.snapshot())
+
+        if session.due(now):
             session.add_sample(
                 telemetry,
-                connector,
+                status,
                 firmware,
                 now=now,
             )
-        if diagnostic_firmware_needs_update(
-            firmware, connector, session.elapsed(now)
+        if (
+            self._diagnostic_firmware_source is not None
+            and diagnostic_firmware_needs_update(
+                firmware, status, session.elapsed(now)
+            )
         ):
             self._show_diagnostic_firmware_update_notice()
             return
@@ -4881,6 +5044,19 @@ class GamepadTestWindow:
             "wired": text("USB \u6709\u7dda\u6a21\u5f0f", "Wired USB mode"),
             "bluetooth": text("Windows BLE \u6a21\u5f0f", "Windows BLE mode"),
         }.get(str(mode), str(mode))
+        full_firmware_diagnostics = (
+            str(mode) in {"esp32", "standalone", "standalone_hid"}
+            and bool(capabilities)
+        )
+        diagnostic_level = (
+            text("\u5b8c\u6574\u97cc\u9ad4\u8a3a\u65b7", "Full firmware diagnostics")
+            if full_firmware_diagnostics
+            else text("\u6709\u7dda\u50b3\u8f38\u8a3a\u65b7", "Wired transport diagnostics")
+            if str(mode) == "wired"
+            else text("\u57fa\u672c\u85cd\u7259\u8a3a\u65b7", "Basic Bluetooth diagnostics")
+            if str(mode) == "bluetooth"
+            else text("\u57fa\u672c\u8f38\u5165\u8a3a\u65b7", "Basic input diagnostics")
+        )
         reader_state = firmware.get("state")
         port = firmware.get("port")
         bridge_owned = (
@@ -4901,10 +5077,20 @@ class GamepadTestWindow:
                 source_text += f" ({port})"
         elif reader_state == "opening":
             source_text = text("\u6b63\u5728\u9023\u7dda ESP32", "Connecting to ESP32")
+        elif str(mode) == "wired":
+            source_text = text(
+                "Windows \u6709\u7dda\u624b\u628a\u8f38\u5165",
+                "Windows wired controller input",
+            )
+        elif str(mode) == "bluetooth":
+            source_text = text(
+                "Windows \u85cd\u7259\u624b\u628a\u8f38\u5165",
+                "Windows Bluetooth controller input",
+            )
         else:
             source_text = text(
-                "\u672a\u53d6\u5f97 ESP32 \u8a3a\u65b7\u901a\u9053",
-                "ESP32 diagnostic channel unavailable",
+                "Windows \u624b\u628a\u8f38\u5165",
+                "Windows controller input",
             )
 
         ready_link = bool(stats.get("controller_mac"))
@@ -4924,8 +5110,23 @@ class GamepadTestWindow:
             else text("\u624b\u628a\u672a\u9023\u7dda", "Controller not connected")
         )
 
+        diagnostic_target = status.get("diagnostic_target") or {}
+        target_name = (
+            diagnostic_target.get("device_name")
+            or self._diagnostic_target_name
+            or "—"
+        )
+        target_kind = (
+            diagnostic_target.get("device_kind")
+            or self._diagnostic_target_kind
+            or "unknown"
+        )
         details = [
+            text("\u6e2c\u8a66\u624b\u628a\uff1a", "Test controller: ")
+            + f"{target_name} [{target_kind}]",
             text("\u8cc7\u6599\u4f86\u6e90\uff1a", "Source: ") + source_text,
+            text("\u8a3a\u65b7\u5c64\u7d1a\uff1a", "Diagnostic level: ")
+            + diagnostic_level,
             text("\u72c0\u614b\uff1a", "Status: ")
             + connection_text
             + text("\uff1b\u6a21\u5f0f\uff1a", "; mode: ")
@@ -4941,7 +5142,10 @@ class GamepadTestWindow:
                 + f"{capabilities.get('protocol_version') or '?'}"
             )
 
-        if stats.get("controller_mac") or stats.get("bridge_mac"):
+        if (
+            full_firmware_diagnostics
+            and (stats.get("controller_mac") or stats.get("bridge_mac"))
+        ):
             device_parts = []
             if stats.get("bridge_mac"):
                 device_parts.append(
@@ -4985,14 +5189,14 @@ class GamepadTestWindow:
                     text("BLE \u8a0a\u865f\uff1a", "BLE signal: ")
                     + "\uff1b".join(link_parts)
                 )
-        elif mode in {"standalone", "standalone_hid", "esp32"}:
+        elif full_firmware_diagnostics:
             details.append(text(
                 "BLE \u9023\u7dda\uff1a\u97cc\u9ad4\u672a\u63d0\u4f9b MAC / RSSI \u8cc7\u6599",
                 "BLE link: firmware did not provide MAC / RSSI data",
             ))
 
         raw_average = stats.get("ble_raw_report_rate_hz_avg")
-        if raw_average is not None:
+        if full_firmware_diagnostics and raw_average is not None:
             details.append(
                 text("BLE \u539f\u59cb\u56de\u5831\u7387\uff1a", "BLE raw report rate: ")
                 + text("\u5e73\u5747 ", "average ")
@@ -5001,7 +5205,7 @@ class GamepadTestWindow:
                 + f"\uff1bP95 {number(stats.get('ble_raw_report_rate_hz_p95'), 1, ' Hz')}"
                 + f"\uff1bP99 {number(stats.get('ble_raw_report_rate_hz_p99'), 1, ' Hz')}"
             )
-        else:
+        elif full_firmware_diagnostics:
             details.append(text(
                 "BLE \u539f\u59cb\u56de\u5831\u7387\uff1a\u6536\u96c6\u4e2d\u6216\u97cc\u9ad4\u672a\u63d0\u4f9b",
                 "BLE raw report rate: collecting or unavailable from firmware",
@@ -5016,34 +5220,35 @@ class GamepadTestWindow:
                 + f"\uff1bP99 {number(stats.get('input_interval_ms_p99'), 2, ' ms')}"
             )
 
-        gap_ratio_percent = (
-            float(gap_ratio) * 100.0 if gap_ratio is not None else None
-        )
-        gap_state = (
-            text("\u8d85\u904e\u8b66\u793a\u9580\u6abb", "above warning threshold")
-            if "INPUT_SOURCE_GAPS" in warnings
-            else text("\u672a\u8d85\u904e\u8b66\u793a\u9580\u6abb", "below warning threshold")
-        )
-        details.append(
-            text("\u539f\u59cb\u9593\u9694\uff1a", "Raw input gaps: ")
-            + f"{stats.get('source_gap_events', 0)}"
-            + (
-                f" ({gap_ratio_percent:.2f}%)"
-                if gap_ratio_percent is not None else ""
+        if full_firmware_diagnostics:
+            gap_ratio_percent = (
+                float(gap_ratio) * 100.0 if gap_ratio is not None else None
             )
-            + text("\uff1b\u6700\u5927 ", "; maximum ")
-            + f"{stats.get('source_gap_max_ms', 0)} ms"
-            + "\uff1b"
-            + gap_state
-        )
-        details.append(
-            text("\u50b3\u8f38\uff1a\u4f47\u5217\u4e1f\u68c4 ", "Transport: queue drops ")
-            + str(stats.get("notify_queue_drops", 0))
-            + text("\uff1bUSB \u7b49\u5f85\u5e73\u5747 ", "; average USB wait ")
-            + number(stats.get("usb_wait_avg_us", 0) / 1000.0, 2, " ms")
-            + text("\uff1b\u6700\u5927 ", "; maximum ")
-            + number(stats.get("usb_wait_max_us", 0) / 1000.0, 2, " ms")
-        )
+            gap_state = (
+                text("\u8d85\u904e\u8b66\u793a\u9580\u6abb", "above warning threshold")
+                if "INPUT_SOURCE_GAPS" in warnings
+                else text("\u672a\u8d85\u904e\u8b66\u793a\u9580\u6abb", "below warning threshold")
+            )
+            details.append(
+                text("\u539f\u59cb\u9593\u9694\uff1a", "Raw input gaps: ")
+                + f"{stats.get('source_gap_events', 0)}"
+                + (
+                    f" ({gap_ratio_percent:.2f}%)"
+                    if gap_ratio_percent is not None else ""
+                )
+                + text("\uff1b\u6700\u5927 ", "; maximum ")
+                + f"{stats.get('source_gap_max_ms', 0)} ms"
+                + "\uff1b"
+                + gap_state
+            )
+            details.append(
+                text("\u50b3\u8f38\uff1a\u4f47\u5217\u4e1f\u68c4 ", "Transport: queue drops ")
+                + str(stats.get("notify_queue_drops", 0))
+                + text("\uff1bUSB \u7b49\u5f85\u5e73\u5747 ", "; average USB wait ")
+                + number(stats.get("usb_wait_avg_us", 0) / 1000.0, 2, " ms")
+                + text("\uff1b\u6700\u5927 ", "; maximum ")
+                + number(stats.get("usb_wait_max_us", 0) / 1000.0, 2, " ms")
+            )
 
         sensor_mode = status.get("sensor_mode")
         gyro = status.get("gyro_raw") or runtime.get("gyro_rate")
@@ -5056,14 +5261,15 @@ class GamepadTestWindow:
         calibration_state = str(
             status.get("gyro_calibration_state") or "idle"
         )
-        details.append(
-            text("\u611f\u6e2c\u5668\uff1a", "Sensors: ")
-            + str(sensor_mode or "—")
-            + text("\uff1b\u6821\u6b63\u72c0\u614b ", "; calibration ")
-            + calibration_state
-            + text("\uff1b\u9640\u87ba\u5100 ", "; gyro ")
-            + gyro_text
-        )
+        if full_firmware_diagnostics or sensor_mode or gyro:
+            details.append(
+                text("\u611f\u6e2c\u5668\uff1a", "Sensors: ")
+                + str(sensor_mode or "—")
+                + text("\uff1b\u6821\u6b63\u72c0\u614b ", "; calibration ")
+                + calibration_state
+                + text("\uff1b\u9640\u87ba\u5100 ", "; gyro ")
+                + gyro_text
+            )
 
         raw_rumble = self._diagnostic_pair(
             rumble.get("input") or rumble.get("latest_input")
@@ -5087,13 +5293,14 @@ class GamepadTestWindow:
                 or 0
             )
         )
-        details.append(
-            text("\u97cc\u9ad4\u81ea\u6e2c\uff1a", "Firmware self-tests: ")
-            + f"{stats.get('self_test_replies', 0)} "
-            + text("\u9805\u5df2\u56de\u8986", "replies")
-            + f"\uff1b{stats.get('self_test_failures', 0)} "
-            + text("\u9805\u672a\u5b8c\u6210", "incomplete")
-        )
+        if full_firmware_diagnostics:
+            details.append(
+                text("\u97cc\u9ad4\u81ea\u6e2c\uff1a", "Firmware self-tests: ")
+                + f"{stats.get('self_test_replies', 0)} "
+                + text("\u9805\u5df2\u56de\u8986", "replies")
+                + f"\uff1b{stats.get('self_test_failures', 0)} "
+                + text("\u9805\u672a\u5b8c\u6210", "incomplete")
+            )
 
         signature = tuple(details)
         if (
@@ -5570,6 +5777,7 @@ class GamepadTestWindow:
                 "device_key": device.key,
                 "device_kind": device.kind,
                 "device_name": device.name,
+                "sampled_at_monotonic": time.monotonic(),
                 "source_rate_hz": sample.get("source_rate_hz"),
                 "buttons": list(sample.get("buttons") or ()),
                 "buttons_mask": int(sample.get("buttons_mask", 0) or 0),
@@ -5875,6 +6083,11 @@ class GamepadTestWindow:
 
     def _on_device_selected(self, _event=None):
         self._device_selection_explicit = True
+        if self.diagnostic_session.running:
+            self.stop_diagnostic("device_changed")
+            self.diagnostic_state_var.set(
+                self.gui.tr("診斷已停止：測試手把已變更")
+            )
         self.stop_rumble()
         self.clear_measurements()
         self._configure_source_controls()

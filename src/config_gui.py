@@ -1,3 +1,21 @@
+import os
+import sys
+
+from support_log import (
+    STARTUP_LOG_PATH_ENV,
+    attach_gui_startup_capture,
+    write_startup_field,
+)
+
+
+_STARTUP_LOG_STREAM = None
+if (
+    STARTUP_LOG_PATH_ENV in os.environ
+    or getattr(sys, "stderr", None) is None
+):
+    _STARTUP_LOG_STREAM = attach_gui_startup_capture(__file__)
+
+
 import configparser
 import ctypes
 import hashlib
@@ -5,11 +23,9 @@ import importlib.util
 import json
 import logging
 import math
-import os
 import queue
 import subprocess
 import signal
-import sys
 import threading
 import time
 import tkinter as tk
@@ -10826,6 +10842,10 @@ def show_startup_window(root):
 
 
 def main():
+    if _STARTUP_LOG_STREAM is not None:
+        write_startup_field(
+            _STARTUP_LOG_STREAM, "PHASE", "creating_tk_root"
+        )
     root = tk.Tk()
     # Tk starts a new root at its small default geometry. Keep it hidden until
     # every widget has been created and the final centred geometry is ready.
@@ -10838,11 +10858,19 @@ def main():
         root._s2p_startup_overlay = None
         startup_window.destroy()
         raise
+    if _STARTUP_LOG_STREAM is not None:
+        write_startup_field(
+            _STARTUP_LOG_STREAM, "PHASE", "config_gui_built"
+        )
     root._s2p_startup_overlay = None
     gui.show_initial_window()
     root.update_idletasks()
     gui._flush_dwm_composition()
     startup_window.destroy()
+    if _STARTUP_LOG_STREAM is not None:
+        write_startup_field(
+            _STARTUP_LOG_STREAM, "PHASE", "gui_visible"
+        )
     root.mainloop()
 
 if __name__ == "__main__":

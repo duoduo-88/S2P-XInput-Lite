@@ -15,6 +15,7 @@ dist/
 # Bundled release-only runtime and launcher
 /runtime/
 /S2P-XInput-Lite.exe
+/GamepadTester.exe
 
 # Temporary GitHub maintenance checkouts
 /.github-maintenance-*/

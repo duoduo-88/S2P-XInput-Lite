@@ -1,3 +1,7 @@
+"""Small windowed launcher for opening Gamepad Tester directly."""
+
+from __future__ import annotations
+
 import configparser
 import ctypes
 import os
@@ -9,6 +13,7 @@ from pathlib import Path
 from support_log import (
     STARTUP_LOG_PATH_ENV,
     open_startup_log,
+    startup_log_paths,
     write_startup_field,
 )
 
@@ -17,11 +22,15 @@ if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
     SCRIPT_DIR = Path(__file__).resolve().parent
-    BASE_DIR = SCRIPT_DIR.parent if SCRIPT_DIR.name.lower() == "src" else SCRIPT_DIR
+    BASE_DIR = (
+        SCRIPT_DIR.parent
+        if SCRIPT_DIR.name.lower() == "src"
+        else SCRIPT_DIR
+    )
 
 
 PYTHONW = BASE_DIR / "runtime" / "pythonw.exe"
-GUI = BASE_DIR / "src" / "config_gui.py"
+TEST_APP = BASE_DIR / "src" / "gamepad_test_app.py"
 CONFIG = BASE_DIR / "src" / "config.ini"
 
 
@@ -29,41 +38,46 @@ def get_language():
     config = configparser.ConfigParser()
     try:
         config.read(CONFIG, encoding="utf-8")
-        language = config.get("gui", "language", fallback="zh").strip().lower()
+        language = config.get(
+            "gui", "language", fallback="zh"
+        ).strip().lower()
         return "en" if language == "en" else "zh"
     except (OSError, configparser.Error):
         return "zh"
 
 
+def _log_environment():
+    environment = os.environ.copy()
+    current, _previous = startup_log_paths(environment)
+    environment[STARTUP_LOG_PATH_ENV] = str(
+        current.with_name("gamepad-tester-startup-latest.txt")
+    )
+    return environment
+
+
 def show_startup_error(detail, log_path=None):
-    log_text = ""
-    if log_path is not None:
-        if get_language() == "en":
-            log_text = (
+    if get_language() == "en":
+        message = (
+            "Gamepad Tester could not start.\n\n"
+            f"Details: {detail}"
+        )
+        title = "Gamepad Tester Startup Error"
+        if log_path is not None:
+            message += (
                 f"\n\nA support log was saved to:\n{log_path}"
                 "\n\nOpen the log folder now?"
             )
-        else:
-            log_text = (
+    else:
+        message = (
+            "手把測試程式無法啟動。\n\n"
+            f"詳細資訊：{detail}"
+        )
+        title = "手把測試程式啟動錯誤"
+        if log_path is not None:
+            message += (
                 f"\n\n支援 Log 已儲存至：\n{log_path}"
                 "\n\n是否立即開啟 Log 資料夾？"
             )
-    if get_language() == "en":
-        message = (
-            "The settings UI could not start.\n\n"
-            "Check that the release package is complete, then try again.\n\n"
-            f"Details: {detail}"
-            f"{log_text}"
-        )
-        title = "S2P-XInput-Lite Startup Error"
-    else:
-        message = (
-            "設定介面無法啟動。\n\n"
-            "請確認發佈包檔案完整後再試一次。\n\n"
-            f"詳細資訊：{detail}"
-            f"{log_text}"
-        )
-        title = "S2P-XInput-Lite 啟動錯誤"
     style = 0x10 | (0x04 if log_path is not None else 0x00)
     result = ctypes.windll.user32.MessageBoxW(
         None, message, title, style
@@ -76,11 +90,13 @@ def show_startup_error(detail, log_path=None):
 
 
 def main():
+    environment = _log_environment()
     try:
         log_stream, log_path = open_startup_log(
             BASE_DIR,
             PYTHONW,
-            GUI,
+            TEST_APP,
+            environment,
         )
     except OSError as exc:
         show_startup_error(f"could not create startup log: {exc}")
@@ -93,49 +109,51 @@ def main():
             write_startup_field(log_stream, "ERROR", detail)
             show_startup_error(detail, log_path)
             return 1
-        if not GUI.is_file():
-            detail = f"config_gui.py not found: {GUI}"
-            write_startup_field(log_stream, "RESULT", "GUI_SCRIPT_NOT_FOUND")
+        if not TEST_APP.is_file():
+            detail = f"gamepad_test_app.py not found: {TEST_APP}"
+            write_startup_field(
+                log_stream, "RESULT", "TEST_APP_NOT_FOUND"
+            )
             write_startup_field(log_stream, "ERROR", detail)
             show_startup_error(detail, log_path)
             return 1
 
-        environment = os.environ.copy()
         environment[STARTUP_LOG_PATH_ENV] = str(log_path)
         environment["PYTHONFAULTHANDLER"] = "1"
         environment["PYTHONUNBUFFERED"] = "1"
-        write_startup_field(log_stream, "PHASE", "starting_gui_process")
-
+        write_startup_field(
+            log_stream, "PHASE", "starting_gamepad_tester"
+        )
         try:
             process = subprocess.Popen(
-                [str(PYTHONW), str(GUI)],
+                [str(PYTHONW), str(TEST_APP)],
                 cwd=str(BASE_DIR),
                 stdout=log_stream,
                 stderr=subprocess.STDOUT,
                 env=environment,
             )
         except OSError as exc:
-            write_startup_field(log_stream, "RESULT", "GUI_SPAWN_FAILED")
+            write_startup_field(
+                log_stream, "RESULT", "TEST_APP_SPAWN_FAILED"
+            )
             write_startup_field(log_stream, "ERROR", exc)
             show_startup_error(str(exc), log_path)
             return 1
 
-        write_startup_field(log_stream, "GUI_PID", process.pid)
-
-        # pythonw normally hides import tracebacks. Watch the startup window
-        # long enough to turn an early non-zero exit into a visible native
-        # dialog while retaining stderr in the startup log.
+        write_startup_field(log_stream, "TEST_APP_PID", process.pid)
         try:
             return_code = process.wait(timeout=8.0)
         except subprocess.TimeoutExpired:
             write_startup_field(
                 log_stream,
                 "RESULT",
-                "GUI_RUNNING_AFTER_STARTUP_WINDOW",
+                "GAMEPAD_TESTER_RUNNING_AFTER_STARTUP_WINDOW",
             )
             return 0
 
-        write_startup_field(log_stream, "RESULT", "GUI_EXITED_EARLY")
+        write_startup_field(
+            log_stream, "RESULT", "GAMEPAD_TESTER_EXITED_EARLY"
+        )
         write_startup_field(
             log_stream,
             "EXIT_CODE",
@@ -147,7 +165,7 @@ def main():
         )
         if return_code != 0:
             show_startup_error(
-                f"config_gui.py exited with code {return_code}",
+                f"gamepad_test_app.py exited with code {return_code}",
                 log_path,
             )
         return return_code

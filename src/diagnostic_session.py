@@ -277,6 +277,7 @@ class DiagnosticSession:
         firmware = latest.get("firmware") or {}
         capabilities = firmware.get("capabilities") or {}
         runtime = firmware.get("runtime_status") or {}
+        diagnostic_target = status.get("diagnostic_target") or {}
         mode = (
             capabilities.get("mode")
             or status.get("mode")
@@ -315,7 +316,11 @@ class DiagnosticSession:
         if int(rumble.get("send_failures", 0) or 0) > 0:
             warnings.append("RUMBLE_SEND_FAILURES")
         sensor_mode = status.get("sensor_mode")
-        if status.get("state") == "connected" and not sensor_mode:
+        if (
+            mode == "esp32"
+            and status.get("state") == "connected"
+            and sensor_mode is False
+        ):
             warnings.append("SENSOR_MODE_UNAVAILABLE")
         link_status = firmware.get("link_status") or {}
         ready_links = [
@@ -364,6 +369,9 @@ class DiagnosticSession:
                 "running" if self.running else "not_started"
             ),
             "mode": mode,
+            "device_key": diagnostic_target.get("device_key"),
+            "device_kind": diagnostic_target.get("device_kind"),
+            "device_name": diagnostic_target.get("device_name"),
             "connector_state": status.get("state"),
             "firmware_product": capabilities.get("product"),
             "firmware_version": capabilities.get("version"),
@@ -449,6 +457,9 @@ class DiagnosticSession:
             f"requested_duration_s={self.duration_seconds:g}",
             f"result={summary['result']}",
             f"mode={summary['mode']}",
+            f"device_key={summary['device_key'] or 'unknown'}",
+            f"device_kind={summary['device_kind'] or 'unknown'}",
+            f"device_name={summary['device_name'] or 'unknown'}",
             f"verdict={summary['verdict']}",
             f"warnings={_json_value(summary['warnings'])}",
             "",
