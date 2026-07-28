@@ -17,11 +17,20 @@ The automated suite covers:
 - keyboard modifiers, mouse-button source counting, mouse movement, and wheel integration;
 - input-dispatch edge preservation and callback serialization;
 - Windows taskbar minimize/restore repaint behavior;
-- source compilation and module-boundary checks.
+- source compilation and module-boundary checks;
 - transport shutdown ordering and blocking standalone writes;
+- diagnostic-reader cancellation, worker-generation cleanup, and serial-port
+  release during an in-progress response;
+- Raw HID collection parsing, shared-memory publication, and report-rate
+  analysis;
+- Traditional Chinese/English key coverage, formatting placeholders, and
+  compact English labels used by constrained GUI rows;
 - standalone A/B fallback, commit ordering, schema validation, and callback
   fast-path contracts;
 - multi-controller calibration selection.
+
+The v0.7.0 release baseline contains 448 automated tests. One optional full
+ESP-IDF rebuild test is skipped unless `S2P_RUN_IDF_BUILD=1` is set.
 
 Desktop-output tests use a fake Windows backend. They do not connect to a
 controller, create a ViGEm target, or send real keyboard or mouse input.

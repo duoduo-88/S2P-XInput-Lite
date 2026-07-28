@@ -11,10 +11,16 @@ ESPRESSIF_VID = 0x303A
 S2P_STANDALONE_VID = 0xCAFE
 S2P_STANDALONE_PIDS = frozenset((0x4020, 0x4021))
 COMMON_USB_SERIAL_VIDS = frozenset((0x0403, 0x10C4, 0x1A86))
-SUPPORTED_FIRMWARE_BUILDS = frozenset((
-    "cdc_bridge_1",
-    "cdc_bridge_2_lowlatency",
-))
+S2P_FIRMWARE_PRODUCT = "S2P-FW"
+S2P_PROTOCOL = "s2p_bridge"
+S2P_PROTOCOL_VERSION = "1.0.0"
+S2P_FIRMWARE_PROFILE = "s2p_usb_bridge"
+SUPPORTED_FIRMWARE_BUILDS = frozenset(("standalone_diagnostics",))
+LEGACY_S2P_RELEASE = {
+    "version": "0.14.3",
+    "profile": "tinyusb_direct",
+    "build": "cdc_bridge_2_lowlatency",
+}
 
 
 def _port_priority(port_info):
@@ -40,11 +46,24 @@ def ordered_serial_ports(port_infos=None):
 
 
 def _is_bridge_status(data):
-    return (
+    current = (
         data.get("cmd") in ("status", "status lite")
-        and data.get("profile") == "tinyusb_direct"
+        and data.get("product") == S2P_FIRMWARE_PRODUCT
+        and data.get("protocol") == S2P_PROTOCOL
+        and data.get("protocol_version") == S2P_PROTOCOL_VERSION
+        and data.get("profile") == S2P_FIRMWARE_PROFILE
         and data.get("build") in SUPPORTED_FIRMWARE_BUILDS
     )
+    # Accept only the last pre-1.0 S2P bundle as an upgrade path. Earlier
+    # upstream releases are intentionally not treated as compatible firmware.
+    legacy = (
+        data.get("cmd") in ("status", "status lite")
+        and all(
+            data.get(key) == value
+            for key, value in LEGACY_S2P_RELEASE.items()
+        )
+    )
+    return current or legacy
 
 
 def find_esp32_port(baudrate=2_000_000, port_infos=None):

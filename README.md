@@ -34,8 +34,11 @@ Current release: **v0.7.0**
 - Gyroscope mapping to an XInput stick or mouse
 - Standalone gamepad tester with live input/output plots, button mapping
   details, shape capture, vibration tests, and directly selectable Raw HID
-  collections for stick monitoring and high-rate measurement
-  page with report count, P50/P95/P99, interval statistics, and a timeline
+  collections for stick monitoring. Its report-rate page shows report count,
+  P50/P95/P99 intervals, distribution statistics, and a timeline.
+- Built-in ESP32 diagnostics with timed tests, a clear pass/warn/fail verdict,
+  and exportable text reports
+- About page with project links, the software license, and third-party notices
 - Full game profiles for switching stick, gyro, rumble, audio-haptics, and mapping settings together, with automatic UI refresh
 - Traditional Chinese and English interface
 - Live connection, battery, ESP32, ViGEmBus, WASAPI, and HidHide status
@@ -111,9 +114,10 @@ Reusable hardware probes and automated tests are maintained in the development r
 - ESP32 standalone mode does not support Windows keyboard/mouse output, audio
   haptics, process-based profile switching, phone rumble, or BLE HID output
 - Motion is mapped to a stick or mouse; XInput does not expose raw motion sensors
-- The ESP32 connection requires compatible firmware. Standalone profile writing
-  and direct USB controller output require the bundled `0.14.0` firmware;
-  older bridge-only firmware cannot provide those features.
+- The ESP32 connection requires compatible firmware. Standalone profile
+  writing, direct USB controller output, and the diagnostic page require the
+  bundled `S2P-FW 1.0.1`; older S2P builds and upstream firmware cannot provide
+  the complete `s2p_bridge 1.0.0` feature set.
 - The GitHub repository includes the complete ESP32 source. Packaged releases
   contain only the flashing tool and required firmware images under `esp32s3`.
 - HidHide is not bundled and is not required for ESP32 or BLE. Without it, wired input still works, but games may detect both the physical HID and virtual XInput controller.

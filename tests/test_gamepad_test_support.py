@@ -5,6 +5,7 @@ import sys
 import time
 import unittest
 import zlib
+from collections import deque
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
@@ -24,8 +25,10 @@ from gamepad_devices import (
     NativeGamepadSampler,
     S2P_MOBILE_HID_PROFILE,
     WindowsGamepadBackend,
+    _decode_isolated_enumeration,
     is_s2p_mobile_hid_device,
     is_s2p_mobile_hid_name,
+    is_s2p_standalone_xinput_winmm_mirror,
     normalize_signed_axis,
     normalize_trigger_axis,
     normalize_unsigned_axis,
@@ -230,6 +233,76 @@ class GamepadMathTests(unittest.TestCase):
             GamepadTestWindow._format_interval_us(1500.0), "1.50"
         )
         self.assertEqual(GamepadTestWindow._format_interval_us(0.0), "—")
+
+    def test_high_rate_chart_zooms_to_the_observed_distribution(self):
+        start, end = GamepadTestWindow._raw_hid_chart_visible_range(
+            (0, 0, 0, 12, 40, 18, 0, 0, 0, 0),
+            10_000.0,
+            (4_000.0, 5_000.0, 6_000.0),
+        )
+
+        self.assertLessEqual(start, 3)
+        self.assertGreaterEqual(end, 5)
+        self.assertLess(end - start, 9)
+
+    def test_effective_rate_requires_sufficient_stick_activity(self):
+        base = {
+            "axes_available": True,
+            "effective_rate_hz": 250.0,
+            "activity_sufficient": False,
+        }
+        self.assertFalse(
+            GamepadTestWindow._raw_hid_effective_rate_visible(base)
+        )
+        base["activity_sufficient"] = True
+        self.assertTrue(
+            GamepadTestWindow._raw_hid_effective_rate_visible(base)
+        )
+
+    def test_analysis_explains_isolated_double_period_maximum(self):
+        tester = object.__new__(GamepadTestWindow)
+        tester.gui = SimpleNamespace(tr=lambda text: text)
+        text = tester._raw_hid_analysis_text({
+            "state": "complete",
+            "rate_hz": 1000.0,
+            "p50_us": 1000.0,
+            "p95_us": 1100.0,
+            "p99_us": 1200.0,
+            "max_us": 2000.0,
+            "axes_available": False,
+        })
+        self.assertIn("最大間隔約為典型間隔的 2 倍", text)
+        self.assertIn("不代表平均輸入延遲加倍", text)
+
+    def test_analysis_flags_frequent_double_period_tail(self):
+        tester = object.__new__(GamepadTestWindow)
+        tester.gui = SimpleNamespace(tr=lambda text: text)
+        text = tester._raw_hid_analysis_text({
+            "state": "complete",
+            "rate_hz": 1000.0,
+            "p50_us": 1000.0,
+            "p95_us": 1200.0,
+            "p99_us": 1900.0,
+            "max_us": 2100.0,
+            "axes_available": False,
+        })
+        self.assertIn("跨週期情形並非單一極端值", text)
+        self.assertIn("較頻繁", text)
+
+    def test_each_radar_reports_its_own_presentation_fps(self):
+        plot = object.__new__(StickPlot)
+        plot.canvas = Mock(create_text=Mock(return_value=19))
+        plot._presentation_times = deque(maxlen=512)
+        plot._fps_item = None
+        plot._fps_text = None
+        plot._last_fps_draw_at = 0.0
+
+        plot.record_presentation_fps(0.0, True)
+        plot.record_presentation_fps(0.25, True)
+
+        plot.canvas.itemconfigure.assert_called_with(19, text="4 FPS")
+        plot.record_presentation_fps(1.5, False)
+        plot.canvas.itemconfigure.assert_called_with(19, text="0 FPS")
 
     def test_high_rate_ui_does_not_force_bold_metric_fonts(self):
         source = (ROOT / "src" / "gamepad_test_window.py").read_text(
@@ -564,6 +637,87 @@ class GamepadMathTests(unittest.TestCase):
         tester._selected_device = lambda: selected
         self.assertIs(tester._selected_raw_hid_device(), second)
 
+    def test_raw_hid_monitor_pairs_exact_third_party_winmm_vid_pid(self):
+        raw = RawHidDevice(
+            "hid:third-party", "hid-path", "Third Party Pad",
+            0x1234, 0x5678, 1, 5, 0,
+        )
+        native = GamepadDevice(
+            "winmm:2", "winmm", 2, "Third Party Pad", False
+        )
+        caps = JOYCAPSW()
+        caps.wMid = 0x1234
+        caps.wPid = 0x5678
+        tester = object.__new__(GamepadTestWindow)
+        tester._selected_raw_hid_device = lambda: raw
+        tester._native_test_devices = (native,)
+        tester.backend = SimpleNamespace(_winmm_caps={2: caps})
+        tester.latest_telemetry = {}
+
+        self.assertIs(tester._native_device_for_raw_hid(), native)
+
+    def test_standalone_xinput_prefers_xinput_over_matching_winmm(self):
+        raw = RawHidDevice(
+            "hid:standalone", "hid-path", "S2P Standalone",
+            0xCAFE, 0x4020, 1, 5, 0,
+        )
+        xinput = GamepadDevice(
+            "xinput:0", "xinput", 0, "XInput Gamepad 1", True
+        )
+        winmm = GamepadDevice(
+            "winmm:0", "winmm", 0, "Microsoft PC joystick", False
+        )
+        caps = JOYCAPSW()
+        caps.wMid = 0xCAFE
+        caps.wPid = 0x4020
+        tester = object.__new__(GamepadTestWindow)
+        tester._selected_raw_hid_device = lambda: raw
+        tester._native_test_devices = (xinput, winmm)
+        tester.backend = SimpleNamespace(_winmm_caps={0: caps})
+        tester.latest_telemetry = {}
+
+        self.assertIs(tester._native_device_for_raw_hid(), xinput)
+
+    def test_raw_hid_monitor_pairs_single_xinput_ig_collection(self):
+        raw = RawHidDevice(
+            "hid:xinput",
+            r"\\?\HID#VID_9999&PID_0001&IG_00#pad",
+            "XInput-compatible Pad",
+            0x9999, 0x0001, 1, 5, 0,
+        )
+        native = GamepadDevice(
+            "xinput:1", "xinput", 1, "XInput Gamepad 2", True
+        )
+        tester = object.__new__(GamepadTestWindow)
+        tester._selected_raw_hid_device = lambda: raw
+        tester._native_test_devices = (native,)
+        tester.backend = SimpleNamespace(_winmm_caps={})
+        tester.latest_telemetry = {}
+
+        self.assertIs(tester._native_device_for_raw_hid(), native)
+
+    def test_raw_hid_monitor_does_not_guess_between_xinput_devices(self):
+        raw = RawHidDevice(
+            "hid:xinput",
+            r"\\?\HID#VID_9999&PID_0001&IG_00#pad",
+            "XInput-compatible Pad",
+            0x9999, 0x0001, 1, 5, 0,
+        )
+        tester = object.__new__(GamepadTestWindow)
+        tester._selected_raw_hid_device = lambda: raw
+        tester._native_test_devices = (
+            GamepadDevice(
+                "xinput:0", "xinput", 0, "XInput Gamepad 1", True
+            ),
+            GamepadDevice(
+                "xinput:1", "xinput", 1, "XInput Gamepad 2", True
+            ),
+        )
+        tester.backend = SimpleNamespace(_winmm_caps={})
+        tester.latest_telemetry = {}
+
+        self.assertIsNone(tester._native_device_for_raw_hid())
+
     def test_tester_parameter_input_clamps_and_snaps(self):
         self.assertAlmostEqual(
             normalize_test_parameter("2.54", 0.5, 5.0, 0.1),
@@ -696,6 +850,14 @@ class GamepadMathTests(unittest.TestCase):
         self.assertFalse(
             is_s2p_mobile_hid_device(caps, "Microsoft PC joystick driver")
         )
+
+    def test_standalone_xinput_winmm_mirror_is_identified_by_vid_pid(self):
+        caps = JOYCAPSW()
+        caps.wMid = 0xCAFE
+        caps.wPid = 0x4020
+        self.assertTrue(is_s2p_standalone_xinput_winmm_mirror(caps))
+        caps.wPid = 0x4021
+        self.assertFalse(is_s2p_standalone_xinput_winmm_mirror(caps))
 
     def test_mobile_hid_uses_semantic_buttons_axes_and_triggers(self):
         caps = JOYCAPSW()
@@ -1828,6 +1990,55 @@ class GamepadMathTests(unittest.TestCase):
         self.assertEqual(len(tester.histories["left"].trail), 0)
         self.assertEqual(len(tester.histories["right"].trail), 0)
 
+    def test_raw_hid_trail_ignores_invalid_axes_per_stick(self):
+        tester = object.__new__(GamepadTestWindow)
+        tester.raw_hid_stream = SimpleNamespace(
+            read_samples=Mock(return_value=(
+                (
+                    (
+                        10.0,
+                        (0.1, 0.2),
+                        (0.7, 0.3),
+                        7,
+                        0x3F,
+                        (0.25, 0.75),
+                    ),
+                    (
+                        10.01,
+                        (0.2, 0.3),
+                        (0.0, -0.8),
+                        8,
+                        0x03,
+                    ),
+                ),
+                8,
+                0,
+            ))
+        )
+        tester._raw_hid_stream_sequence = 0
+        tester._raw_hid_stream_dropped = 0
+        tester._raw_hid_stream_latest_axes = None
+        tester._raw_hid_stream_latest_sample = None
+        tester.shape_enabled_var = Mock(get=Mock(return_value=False))
+        tester.histories = {
+            "left": StickHistory(),
+            "right": StickHistory(),
+        }
+
+        sample, consumed = tester._consume_raw_hid_stream(
+            None, record_trail=True
+        )
+
+        self.assertTrue(consumed)
+        tester.raw_hid_stream.read_samples.assert_called_once_with(
+            0, include_axes=True, include_controls=True, include_buttons=True
+        )
+        self.assertEqual(len(tester.histories["left"].trail), 2)
+        self.assertEqual(len(tester.histories["right"].trail), 1)
+        self.assertEqual(sample["left"], (0.2, 0.3))
+        self.assertEqual(sample["right"], (0.7, 0.3))
+        self.assertEqual(sample["triggers"], (0.25, 0.75))
+
     def test_raw_hid_monitor_keeps_latest_details_between_reports(self):
         tester = object.__new__(GamepadTestWindow)
         tester.raw_hid_stream = SimpleNamespace(
@@ -1862,6 +2073,29 @@ class GamepadMathTests(unittest.TestCase):
         self.assertEqual(held["layer"], "原始輸入")
         self.assertEqual(held["triggers"], (0.0, 0.0))
 
+    def test_raw_hid_cached_controls_do_not_flicker_against_native_sample(self):
+        tester = object.__new__(GamepadTestWindow)
+        tester.raw_hid_stream = SimpleNamespace(
+            read_latest=Mock(return_value=(None, 9, 0))
+        )
+        tester._raw_hid_stream_sequence = 9
+        tester._raw_hid_stream_dropped = 0
+        tester._raw_hid_stream_latest_sample = {
+            "left": (0.2, -0.1),
+            "right": (0.4, 0.3),
+            "triggers": (0.75, 0.25),
+            "token": ("raw_hid", 9),
+        }
+
+        merged, consumed = tester._consume_raw_hid_stream({
+            "buttons": ("A",), "triggers": (None, None),
+        }, record_trail=False)
+
+        self.assertFalse(consumed)
+        self.assertEqual(merged["buttons"], ("A",))
+        self.assertEqual(merged["triggers"], (0.75, 0.25))
+        self.assertEqual(merged["left"], (0.2, -0.1))
+
     def test_native_trigger_axes_appear_as_pressed_events(self):
         tester = object.__new__(GamepadTestWindow)
 
@@ -1873,6 +2107,18 @@ class GamepadMathTests(unittest.TestCase):
         self.assertEqual(active["A"], "原始輸入")
         self.assertEqual(active["LT"], "原始輸入")
         self.assertNotIn("RT", active)
+
+    def test_analog_mobile_triggers_replace_digital_l2_r2_mirrors(self):
+        tester = object.__new__(GamepadTestWindow)
+
+        active = tester._event_inputs({
+            "buttons": ("L2", "R2"),
+            "triggers": (0.5, 0.0),
+        }, is_s2p=False)
+
+        self.assertEqual(active["LT"], "原始輸入")
+        self.assertNotIn("L2", active)
+        self.assertNotIn("R2", active)
 
     def test_source_change_seeds_latest_value_without_center_flash(self):
         tester = object.__new__(GamepadTestWindow)
@@ -1981,6 +2227,51 @@ class GamepadMathTests(unittest.TestCase):
 
 
 class NativeSamplerTests(unittest.TestCase):
+    def test_isolated_enumeration_restores_winmm_capabilities(self):
+        devices, caps_by_index = _decode_isolated_enumeration({
+            "devices": [{
+                "key": "winmm:2",
+                "kind": "winmm",
+                "index": 2,
+                "name": "Hotplug Pad",
+                "supports_rumble": False,
+                "input_profile": "generic",
+            }],
+            "winmm_caps": {
+                "2": {
+                    "wMid": 0x1234,
+                    "wPid": 0x5678,
+                    "szPname": "Hotplug Pad",
+                    "wXmin": 0,
+                    "wXmax": 65535,
+                },
+            },
+        })
+
+        self.assertEqual(devices[0].key, "winmm:2")
+        self.assertEqual(caps_by_index[2].wPid, 0x5678)
+        self.assertEqual(caps_by_index[2].szPname, "Hotplug Pad")
+
+    def test_sampler_uses_isolated_enumeration_when_requested(self):
+        device = GamepadDevice(
+            "xinput:1", "xinput", 1, "XInput Gamepad 2", True
+        )
+        caps = JOYCAPSW()
+        caps.szPname = "Pad"
+        backend = SimpleNamespace(_winmm_caps={})
+        sampler = NativeGamepadSampler(
+            backend, isolate_enumeration=True
+        )
+
+        with patch(
+            "gamepad_devices.enumerate_windows_gamepads_isolated",
+            return_value=((device,), {3: caps}),
+        ):
+            result = sampler.enumerate_devices(excluded_xinput_slot=0)
+
+        self.assertEqual(result, [device])
+        self.assertIs(backend._winmm_caps[3], caps)
+
     def test_stop_retains_live_thread_reference_after_timeout(self):
         sampler = NativeGamepadSampler(SimpleNamespace())
         thread = Mock()

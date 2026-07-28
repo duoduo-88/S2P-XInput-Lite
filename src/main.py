@@ -194,6 +194,8 @@ def main():
         "settings_reload_state": "idle",
         "settings_reload_message": "",
         "settings_reload_updated_at": 0.0,
+        "rumble": {},
+        "firmware_diagnostics": {},
         "updated_at": time.time(),
     }
 
@@ -1005,7 +1007,28 @@ def main():
         while not stop_requested:
             now = time.time()
             if now - last_heartbeat >= 0.5:
-                publish_status()
+                rumble_status = xinput.get_rumble_diagnostics()
+                try:
+                    transport_rumble = getattr(
+                        controller, "get_rumble_diagnostics", lambda: {}
+                    )()
+                except Exception:
+                    transport_rumble = {}
+                if isinstance(transport_rumble, dict):
+                    rumble_status.update({
+                        f"transport_{key}": value
+                        for key, value in transport_rumble.items()
+                    })
+                firmware_diagnostics = {}
+                if connection_mode == "esp32":
+                    controller.poll_diagnostics()
+                    firmware_diagnostics = (
+                        controller.get_firmware_diagnostics()
+                    )
+                publish_status(
+                    rumble=rumble_status,
+                    firmware_diagnostics=firmware_diagnostics,
+                )
                 last_heartbeat = now
             if (
                 connection_mode != "wired"
@@ -1064,6 +1087,26 @@ def main():
 
                         if controller_is_connected():
                             controller.pin_rumble()
+
+                    elif command == "diagnostic_start":
+                        clear_legacy_command()
+                        if connection_mode == "esp32":
+                            controller.start_diagnostics()
+                            publish_status(
+                                firmware_diagnostics=(
+                                    controller.get_firmware_diagnostics()
+                                )
+                            )
+
+                    elif command == "diagnostic_stop":
+                        clear_legacy_command()
+                        if connection_mode == "esp32":
+                            controller.stop_diagnostics()
+                            publish_status(
+                                firmware_diagnostics=(
+                                    controller.get_firmware_diagnostics()
+                                )
+                            )
 
                     elif command == "calibrate_gyro":
                         clear_legacy_command()

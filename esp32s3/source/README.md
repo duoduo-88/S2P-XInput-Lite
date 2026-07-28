@@ -3,16 +3,21 @@
 `esp32s3_usb_bridge_bluedroid/` is the complete source for the bundled
 ESP32-S3 bridge firmware.
 
-- Upstream: https://github.com/TommyWabg/Switch2Connect
-- Base commit: `d63b044e66cfb93f8377a3596e3f00c82715b029`
-- Firmware build version: `0.14.2`
-- Bridge command compatibility: `0.12.4`
-- Lite build: `cdc_bridge_2_lowlatency`
+- Product: `S2P-FW`
+- Firmware version: `1.0.1`
+- S2P bridge protocol: `1.0.0`
+- Firmware profile: `s2p_usb_bridge`
+- Build: `standalone_diagnostics`
+- Derived from: https://github.com/TommyWabg/Switch2Connect
+- Historical base commit: `d63b044e66cfb93f8377a3596e3f00c82715b029`
 - Target: ESP32-S3
 - Verified toolchain: official ESP-IDF `v5.5.4`, performance optimization
 
-The Lite build keeps the upstream protocol and adds a latency-focused CDC
-schedule:
+S2P-FW is an independent firmware line. It does not claim runtime or command
+compatibility with upstream Switch2Connect firmware. The historical source
+and commit above are retained for attribution and code provenance.
+
+The S2P bridge protocol uses a latency-focused CDC schedule:
 
 - newest BLE input shadow is forwarded before command and diagnostic queues;
 - BLE callbacks wake the CDC task immediately instead of waiting for its 2 ms
@@ -27,12 +32,15 @@ schedule:
 - rumble uses direct `wr` latest-only output from the host, avoiding the legacy
   five-packet `rs` FIFO.
 
-The current images in `../firmware/` were built from this source and verified
-on real hardware. The exact upstream revision is linked above for comparison.
+The current images in `../firmware/` were built from this source. The
+transport baseline was verified on real hardware; the `S2P-FW 1.0.1`
+diagnostic build has passed compilation, automated contract tests, and the
+documented controller-side reconnect regression checks. The exact upstream
+revision is linked above for comparison.
 
 | Current file | SHA-256 |
 |---|---|
-| `esp32s3_bluedroid_bridge.bin` | `A7F167E23D42D97490C978EC12113163C106E2478372119DA52A0618824CCC63` |
+| `esp32s3_bluedroid_bridge.bin` | `23C05CB19CB6745B960FB81B6529956521113CDACB0FEC68CBAC2569C4273F79` |
 | `bootloader.bin` | `1E6B5148E11223F7E50E98549B0D220C77CF48F55D6F7397365A7EFBAF3711D4` |
 | `partition-table.bin` | `7F00B6C042A89B15B0CAC534F82ED988CAF29278FF5700B0C511EB1B5BB7C820` |
 
@@ -42,7 +50,7 @@ only the newest 668 of 2,003 submitted states, reported 1,334 intentional
 overwrites and zero send failures, while input remained above 132 Hz with no
 dispatcher backlog or dropped analog reports.
 
-The development standalone firmware also provides mutually exclusive USB
+The standalone firmware also provides mutually exclusive USB
 output personalities: XInput-compatible output for PCs and a standards-based HID
 Gamepad for direct USB connection to phones. The HID path reuses the same
 calibration, curves, mappings and gyro runtime as XInput. Host-side hardware

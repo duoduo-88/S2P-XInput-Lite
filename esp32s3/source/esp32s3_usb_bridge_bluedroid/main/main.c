@@ -61,9 +61,12 @@
 
 static const char *TAG = "S3_BLUEDROID";
 
-#define APP_FIRMWARE_VERSION      "0.14.2"
-#define EXPECTED_FIRMWARE_PROFILE "tinyusb_direct"
-#define EXPECTED_FIRMWARE_BUILD   "cdc_bridge_2_lowlatency"
+#define APP_FIRMWARE_PRODUCT      "S2P-FW"
+#define APP_FIRMWARE_VERSION      "1.0.1"
+#define APP_PROTOCOL_NAME         "s2p_bridge"
+#define APP_PROTOCOL_VERSION      "1.0.0"
+#define EXPECTED_FIRMWARE_PROFILE "s2p_usb_bridge"
+#define EXPECTED_FIRMWARE_BUILD   "standalone_diagnostics"
 #define CDC_LINE_STATE_DTR        0x01
 #define CDC_TX_BUFFER_SIZE        512
 #define CDC_TX_PHASE_BUDGET_US    5000
@@ -132,6 +135,10 @@ typedef struct {
     uint16_t cmd_handle;
     uint16_t rumble_handle;
     uint16_t itvl;           // connection interval in 1.25 ms units (6=7.5ms, 12=15ms)
+    int8_t   rssi_dbm;       // most recently sampled link RSSI
+    bool     rssi_valid;
+    uint32_t rssi_requested_ms;
+    uint32_t rssi_updated_ms;
     uint8_t  input_src;      // which UUID set input_handle: 1=FD2, 2=legacy (diagnostic)
     bool     prefer_legacy;  // NSO GameCube: input is on the LEGACY char, not FD2
     // GCN only: every NOTIFY char handle in the SW2 service (collected during discovery).
@@ -420,6 +427,52 @@ static void format_input_latency_metrics(char *output, size_t size) {
     );
 }
 
+static void request_link_rssi(void) {
+    uint32_t now = now_ms();
+    for (int ch = 0; ch < MAX_CH; ch++) {
+        if (!s_ch[ch].used || !s_ch[ch].link_open) continue;
+        if (now - s_ch[ch].rssi_requested_ms < 750u) continue;
+        s_ch[ch].rssi_requested_ms = now;
+        if (esp_ble_gap_read_rssi(s_ch[ch].bda) != ESP_OK)
+            s_ch[ch].rssi_valid = false;
+    }
+}
+
+static void format_link_status(char *output, size_t size) {
+    size_t used = 0;
+    int written = snprintf(
+        output, size,
+        "{\"cmd\":\"link_status\",\"ok\":1,\"bridge_mac\":\"%s\",\"links\":[",
+        s_own_mac
+    );
+    if (written < 0 || (size_t)written >= size) return;
+    used = (size_t)written;
+    uint32_t now = now_ms();
+    bool first = true;
+    uint8_t link_count = 0;
+    for (int ch = 0; ch < MAX_CH && link_count < 4; ch++) {
+        if (!s_ch[ch].used) continue;
+        uint32_t age = s_ch[ch].rssi_valid
+            ? now - s_ch[ch].rssi_updated_ms : 0u;
+        written = snprintf(
+            output + used, size - used,
+            "%s[%d,\"%02X:%02X:%02X:%02X:%02X:%02X\",%d,%.2f,%d,%lu]",
+            first ? "" : ",", ch,
+            s_ch[ch].bda[0], s_ch[ch].bda[1], s_ch[ch].bda[2],
+            s_ch[ch].bda[3], s_ch[ch].bda[4], s_ch[ch].bda[5],
+            s_ch[ch].ready ? 1 : 0,
+            (double)s_ch[ch].itvl * 1.25,
+            s_ch[ch].rssi_valid ? (int)s_ch[ch].rssi_dbm : 127,
+            (unsigned long)age
+        );
+        if (written < 0 || (size_t)written >= size - used) break;
+        used += (size_t)written;
+        first = false;
+        link_count++;
+    }
+    if (used + 4u < size) snprintf(output + used, size - used, "]}\n");
+}
+
 // --- Jitter Buffer (FIFO) for Audio Haptics ---
 #define RUMBLE_QUEUE_SIZE 5
 typedef struct {
@@ -611,15 +664,20 @@ static size_t parse_hex(const char *s, uint8_t *out, size_t max);
 static void send_status_response(void) {
     char b[512];
     snprintf(b, sizeof(b),
-        "{\"cmd\":\"status\",\"version\":\"%s\",\"profile\":\"%s\",\"build\":\"%s\","
+        "{\"cmd\":\"status\",\"product\":\"%s\",\"version\":\"%s\","
+        "\"protocol\":\"%s\",\"protocol_version\":\"%s\","
+        "\"profile\":\"%s\",\"build\":\"%s\","
         "\"ble_channels\":%u,\"mac\":\"%s\","
         "\"event_queue_drops\":%lu,"
         "\"features\":{\"wrpair\":1,\"shadow\":1,"
+        "\"diagnostics\":1,\"rumble_diagnostics\":1,"
         "\"standalone_profile_write\":1,\"standalone_profile_runtime\":1,"
         "\"standalone_usb_xinput\":1,"
         "\"standalone_usb_hid\":1,"
         "\"standalone_ble_hid\":0},\"profile_schemas\":[1]}\n",
-        APP_FIRMWARE_VERSION, EXPECTED_FIRMWARE_PROFILE, EXPECTED_FIRMWARE_BUILD,
+        APP_FIRMWARE_PRODUCT, APP_FIRMWARE_VERSION,
+        APP_PROTOCOL_NAME, APP_PROTOCOL_VERSION,
+        EXPECTED_FIRMWARE_PROFILE, EXPECTED_FIRMWARE_BUILD,
         (unsigned)ch_active_mask(), s_own_mac,
         (unsigned long)__atomic_load_n(
             &s_event_queue_drops, __ATOMIC_RELAXED
@@ -628,16 +686,20 @@ static void send_status_response(void) {
 }
 
 static void send_capabilities_response(void) {
-    char b[384];
+    char b[512];
     snprintf(b, sizeof(b),
-        "{\"cmd\":\"capabilities\",\"ok\":1,\"version\":\"%s\","
+        "{\"cmd\":\"capabilities\",\"ok\":1,\"product\":\"%s\","
+        "\"version\":\"%s\",\"protocol\":\"%s\","
+        "\"protocol_version\":\"%s\","
         "\"mode\":\"%s\",\"features\":{\"bridge\":1,"
+        "\"diagnostics\":1,\"rumble_diagnostics\":1,"
         "\"standalone_profile_write\":1,\"standalone_profile_runtime\":1,"
         "\"standalone_usb_xinput\":1,"
         "\"standalone_usb_hid\":1,"
         "\"standalone_ble_hid\":0},\"profile_schemas\":[%u],"
         "\"profile_max_bytes\":%u}\n",
-        APP_FIRMWARE_VERSION,
+        APP_FIRMWARE_PRODUCT, APP_FIRMWARE_VERSION,
+        APP_PROTOCOL_NAME, APP_PROTOCOL_VERSION,
         !s_standalone_mode ? "bridge" :
             (s_standalone_usb_hid ? "standalone_hid" : "standalone"),
         (unsigned)STANDALONE_PROFILE_SCHEMA,
@@ -1130,12 +1192,57 @@ static uint8_t s_standalone_large_motor;
 static uint8_t s_standalone_small_motor;
 static uint32_t s_standalone_rumble_next_ms;
 static uint8_t s_standalone_zero_flush;
+static uint32_t s_standalone_rumble_received;
+static uint32_t s_standalone_rumble_sent;
+static uint8_t s_standalone_rumble_peak_large;
+static uint8_t s_standalone_rumble_peak_small;
+static uint16_t s_standalone_rumble_lf_frequency;
+static uint16_t s_standalone_rumble_lf_amplitude;
+static uint16_t s_standalone_rumble_hf_frequency;
+static uint16_t s_standalone_rumble_hf_amplitude;
+static uint16_t s_standalone_rumble_peak_lf_amplitude;
+static uint16_t s_standalone_rumble_peak_hf_amplitude;
 
 #define STANDALONE_RUMBLE_REFRESH_MS 16u
 #define STANDALONE_RUMBLE_ZERO_FLUSH_COUNT 3u
 #define STANDALONE_FEEDBACK_LF_FREQUENCY 225u
 #define STANDALONE_FEEDBACK_HF_FREQUENCY 481u
 #define STANDALONE_FEEDBACK_AMPLITUDE 800u
+
+static void reset_standalone_rumble_metrics(void) {
+    s_standalone_rumble_received = 0;
+    s_standalone_rumble_sent = 0;
+    s_standalone_rumble_peak_large = s_standalone_large_motor;
+    s_standalone_rumble_peak_small = s_standalone_small_motor;
+    s_standalone_rumble_peak_lf_amplitude =
+        s_standalone_rumble_lf_amplitude;
+    s_standalone_rumble_peak_hf_amplitude =
+        s_standalone_rumble_hf_amplitude;
+}
+
+static void format_standalone_rumble_metrics(char *output, size_t size) {
+    snprintf(
+        output, size,
+        "{\"cmd\":\"rumble_status\",\"ok\":1,"
+        "\"received\":%lu,\"sent\":%lu,"
+        "\"input\":[%u,%u],\"peak_input\":[%u,%u],"
+        "\"frequency\":[%u,%u],\"output\":[%u,%u],"
+        "\"peak_output\":[%u,%u],\"zero_flush\":%u}\n",
+        (unsigned long)s_standalone_rumble_received,
+        (unsigned long)s_standalone_rumble_sent,
+        (unsigned)s_standalone_large_motor,
+        (unsigned)s_standalone_small_motor,
+        (unsigned)s_standalone_rumble_peak_large,
+        (unsigned)s_standalone_rumble_peak_small,
+        (unsigned)s_standalone_rumble_lf_frequency,
+        (unsigned)s_standalone_rumble_hf_frequency,
+        (unsigned)s_standalone_rumble_lf_amplitude,
+        (unsigned)s_standalone_rumble_hf_amplitude,
+        (unsigned)s_standalone_rumble_peak_lf_amplitude,
+        (unsigned)s_standalone_rumble_peak_hf_amplitude,
+        (unsigned)s_standalone_zero_flush
+    );
+}
 
 typedef struct {
     uint8_t command_id;
@@ -1487,6 +1594,11 @@ static void pump_standalone_xinput_rumble(void) {
         standalone_xinput_take_rumble(&large_motor, &small_motor);
     uint32_t now = now_ms();
     if (changed) {
+        s_standalone_rumble_received++;
+        if (large_motor > s_standalone_rumble_peak_large)
+            s_standalone_rumble_peak_large = large_motor;
+        if (small_motor > s_standalone_rumble_peak_small)
+            s_standalone_rumble_peak_small = small_motor;
         bool was_active =
             s_standalone_large_motor != 0 ||
             s_standalone_small_motor != 0;
@@ -1560,6 +1672,14 @@ static void pump_standalone_xinput_rumble(void) {
     uint16_t hf_amplitude = (uint16_t)(
         hf_value > max_amplitude ? max_amplitude : hf_value
     );
+    s_standalone_rumble_lf_frequency = lf_frequency;
+    s_standalone_rumble_hf_frequency = hf_frequency;
+    s_standalone_rumble_lf_amplitude = lf_amplitude;
+    s_standalone_rumble_hf_amplitude = hf_amplitude;
+    if (lf_amplitude > s_standalone_rumble_peak_lf_amplitude)
+        s_standalone_rumble_peak_lf_amplitude = lf_amplitude;
+    if (hf_amplitude > s_standalone_rumble_peak_hf_amplitude)
+        s_standalone_rumble_peak_hf_amplitude = hf_amplitude;
     standalone_xinput_set_rumble_ratio(
         fmaxf((float)lf_amplitude, (float)hf_amplitude) /
         fmaxf(1.0f, (float)max_amplitude)
@@ -1568,6 +1688,7 @@ static void pump_standalone_xinput_rumble(void) {
         channel, lf_frequency, lf_amplitude,
         hf_frequency, hf_amplitude
     );
+    s_standalone_rumble_sent++;
     s_standalone_rumble_next_ms =
         now + STANDALONE_RUMBLE_REFRESH_MS;
     if (!active && s_standalone_zero_flush > 0)
@@ -1606,6 +1727,12 @@ static void handle_query_command(char *cmd) {
         ble_callback_metrics_format(timing, sizeof(timing));
         send_json(timing);
     }
+    else if (strcmp(cmd, "link status") == 0) {
+        char status[512];
+        request_link_rssi();
+        format_link_status(status, sizeof(status));
+        send_json(status);
+    }
     else if (strcmp(cmd, "ble timing reset") == 0) {
         ble_callback_metrics_reset();
         send_json("{\"cmd\":\"ble_timing_reset\",\"ok\":1}\n");
@@ -1618,6 +1745,15 @@ static void handle_query_command(char *cmd) {
     else if (strcmp(cmd, "latency reset") == 0) {
         reset_input_latency_metrics();
         send_json("{\"cmd\":\"latency_reset\",\"ok\":1}\n");
+    }
+    else if (strcmp(cmd, "rumble status") == 0) {
+        char status[384];
+        format_standalone_rumble_metrics(status, sizeof(status));
+        send_json(status);
+    }
+    else if (strcmp(cmd, "rumble reset") == 0) {
+        reset_standalone_rumble_metrics();
+        send_json("{\"cmd\":\"rumble_reset\",\"ok\":1}\n");
     }
     else if (strncmp(cmd, "algorithm test ", 15) == 0) {
         char result[256];
@@ -2516,6 +2652,20 @@ static void gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) 
         }
         break;
     }
+    case ESP_GAP_BLE_READ_RSSI_COMPLETE_EVT: {
+        int ch = ch_by_bda(param->read_rssi_cmpl.remote_addr);
+        if (ch >= 0 && s_ch[ch].used) {
+            s_ch[ch].rssi_valid = (
+                param->read_rssi_cmpl.status == ESP_BT_STATUS_SUCCESS &&
+                param->read_rssi_cmpl.rssi != 127
+            );
+            if (s_ch[ch].rssi_valid) {
+                s_ch[ch].rssi_dbm = param->read_rssi_cmpl.rssi;
+                s_ch[ch].rssi_updated_ms = now_ms();
+            }
+        }
+        break;
+    }
     case ESP_GAP_BLE_SCAN_STOP_COMPLETE_EVT:
         s_scan_stop_pending = false;
         if (param->scan_stop_cmpl.status == ESP_BT_STATUS_SUCCESS) {
@@ -2591,7 +2741,11 @@ static void gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) 
 }
 
 void app_main(void) {
-    ESP_LOGI(TAG, "Bluedroid bridge %s", APP_FIRMWARE_VERSION);
+    ESP_LOGI(
+        TAG, "%s %s (%s %s)",
+        APP_FIRMWARE_PRODUCT, APP_FIRMWARE_VERSION,
+        APP_PROTOCOL_NAME, APP_PROTOCOL_VERSION
+    );
     for (int i = 0; i < MAX_CH; i++) s_ch[i].gattc_if = ESP_GATT_IF_NONE;
 
     esp_err_t ret = nvs_flash_init();

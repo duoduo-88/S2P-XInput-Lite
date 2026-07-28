@@ -115,6 +115,9 @@ class ESP32Bridge:
         self._closing = False
         self._bridge_failure_reported = False
         self._last_foreign_pairing_notice = None
+        self._diagnostic_lock = threading.Lock()
+        self._diagnostic_snapshot = {}
+        self._diagnostic_last_poll = 0.0
 
     @property
     def is_ready(self):
@@ -693,6 +696,87 @@ class ESP32Bridge:
         add_distribution("priority_interval", priority_intervals)
         add_distribution("zero_latency", zero_latencies)
         return result
+
+    def start_diagnostics(self):
+        """Reset firmware counters and run non-mutating algorithm self-tests."""
+        with self._diagnostic_lock:
+            self._diagnostic_snapshot = {
+                "state": "running",
+                "started_at": time.time(),
+                "self_tests": [],
+            }
+            self._diagnostic_last_poll = 0.0
+        commands = (
+            "latency reset",
+            "ble timing reset",
+            "rumble reset",
+            "algorithm test stick L 2048 2048 0 2048 2048 8",
+            "algorithm test stick R 2048 2048 0 2048 2048 8",
+            "algorithm test direction L 0 0 0 0",
+            "gyro test reset",
+        )
+        return all(self.send(command) for command in commands)
+
+    def poll_diagnostics(self, minimum_interval=0.25):
+        """Request one asynchronous firmware diagnostic snapshot."""
+        now = time.monotonic()
+        with self._diagnostic_lock:
+            if self._diagnostic_snapshot.get("state") != "running":
+                return False
+            if now - self._diagnostic_last_poll < float(minimum_interval):
+                return False
+            self._diagnostic_last_poll = now
+        commands = (
+            "capabilities",
+            "runtime status",
+            "latency status",
+            "ble timing",
+            "link status",
+            "rumble status",
+            "profile status",
+        )
+        return all(self.send(command) for command in commands)
+
+    def stop_diagnostics(self):
+        with self._diagnostic_lock:
+            if self._diagnostic_snapshot:
+                self._diagnostic_snapshot["state"] = "stopped"
+                self._diagnostic_snapshot["ended_at"] = time.time()
+
+    def get_firmware_diagnostics(self):
+        with self._diagnostic_lock:
+            return json.loads(json.dumps(self._diagnostic_snapshot))
+
+    def _store_diagnostic_response(self, command, response):
+        if not hasattr(self, "_diagnostic_lock"):
+            return
+        keys = {
+            "capabilities",
+            "runtime_status",
+            "latency_status",
+            "ble_timing",
+            "link_status",
+            "rumble_status",
+            "profile_status",
+        }
+        with self._diagnostic_lock:
+            if command in {"algorithm_test", "gyro_test"}:
+                tests = self._diagnostic_snapshot.setdefault(
+                    "self_tests", []
+                )
+                tests.append(response)
+                del tests[:-16]
+            elif command in keys:
+                self._diagnostic_snapshot[command] = response
+            elif command in {
+                "latency_reset", "ble_timing_reset", "rumble_reset"
+            }:
+                resets = self._diagnostic_snapshot.setdefault("resets", [])
+                resets.append(command)
+            else:
+                return
+            self._diagnostic_snapshot["state"] = "running"
+            self._diagnostic_snapshot["updated_at"] = time.time()
 
     def _report_bridge_failure(self):
         if self._bridge_failure_reported or self._closing:
@@ -1550,6 +1634,7 @@ class ESP32Bridge:
             end = text.rfind("}")
             obj = json.loads(text[start:end + 1])
             cmd = obj.get("cmd")
+            self._store_diagnostic_response(cmd, obj)
 
             if cmd in ("status", "status lite"):
                 self._status_event.set()

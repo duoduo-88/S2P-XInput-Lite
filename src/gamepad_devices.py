@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import ctypes
+import json
+import subprocess
+import sys
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass
+from pathlib import Path
 
 
 ERROR_SUCCESS = 0
@@ -22,6 +26,10 @@ S2P_MOBILE_HID_PROFILE = "s2p_mobile_hid"
 S2P_MOBILE_HID_PRODUCT_NAME = "S2P Mobile Gamepad"
 S2P_MOBILE_HID_VID = 0xCAFE
 S2P_MOBILE_HID_PID = 0x4021
+S2P_STANDALONE_XINPUT_PID = 0x4020
+NINTENDO_PRO2_PROFILE = "nintendo_pro2_hid"
+NINTENDO_PRO2_VID = 0x057E
+NINTENDO_PRO2_PID = 0x2069
 
 # WinMM exposes dwButtons by HID Button usage number (bit 0 is Button 1),
 # rather than by the physical bit position in the USB input report. The
@@ -208,6 +216,17 @@ def is_s2p_mobile_hid_device(caps, name=""):
     return is_s2p_mobile_hid_name(name)
 
 
+def is_s2p_standalone_xinput_winmm_mirror(caps):
+    """Recognize the legacy WinMM view of our standalone XInput device."""
+    try:
+        return (
+            int(caps.wMid) == S2P_MOBILE_HID_VID
+            and int(caps.wPid) == S2P_STANDALONE_XINPUT_PID
+        )
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+
 def s2p_mobile_hid_winmm_buttons(button_mask):
     """Decode WinMM button bits using the mobile descriptor's HID usages."""
     button_mask = int(button_mask)
@@ -339,6 +358,10 @@ class WindowsGamepadBackend:
                     name = f"Generic Gamepad {index + 1}"
                     name_translation_key = "一般手把 {index}"
                 is_s2p_mobile = is_s2p_mobile_hid_device(caps, name)
+                is_nintendo_pro2 = (
+                    int(caps.wMid) == NINTENDO_PRO2_VID
+                    and int(caps.wPid) == NINTENDO_PRO2_PID
+                )
                 if is_s2p_mobile:
                     found_s2p_mobile = True
                     # WinMM sometimes replaces the USB product string with a
@@ -348,12 +371,29 @@ class WindowsGamepadBackend:
                 folded = name.casefold()
                 # XInput pads are already represented above; hiding the common
                 # legacy mirror prevents an obviously duplicated selector row.
-                if "xbox" in folded or "xinput" in folded:
+                is_xbox_360_winmm_mirror = (
+                    int(caps.wMid) == 0x045E and int(caps.wPid) == 0x028E
+                )
+                is_s2p_standalone_xinput_mirror = (
+                    is_s2p_standalone_xinput_winmm_mirror(caps)
+                )
+                if (
+                    "xbox" in folded
+                    or "xinput" in folded
+                    or (
+                        (
+                            is_xbox_360_winmm_mirror
+                            or is_s2p_standalone_xinput_mirror
+                        )
+                        and any(device.kind == "xinput" for device in devices)
+                    )
+                ):
                     continue
                 self._winmm_caps[index] = caps
                 input_profile = (
                     S2P_MOBILE_HID_PROFILE
                     if is_s2p_mobile
+                    else NINTENDO_PRO2_PROFILE if is_nintendo_pro2
                     else "generic"
                 )
                 devices.append(GamepadDevice(
@@ -591,6 +631,112 @@ class WindowsGamepadBackend:
         ) == ERROR_SUCCESS
 
 
+def _gamepad_device_payload(device):
+    return {
+        name: getattr(device, name)
+        for name in GamepadDevice.__dataclass_fields__
+    }
+
+
+def _joycaps_payload(caps):
+    payload = {}
+    for name, _field_type in JOYCAPSW._fields_:
+        value = getattr(caps, name)
+        payload[name] = value if isinstance(value, str) else int(value)
+    return payload
+
+
+def _decode_isolated_enumeration(payload):
+    if not isinstance(payload, dict):
+        return (), {}
+    devices = []
+    for item in payload.get("devices", ()):
+        if not isinstance(item, dict):
+            continue
+        try:
+            devices.append(GamepadDevice(
+                key=str(item["key"]),
+                kind=str(item["kind"]),
+                index=int(item["index"]),
+                name=str(item["name"]),
+                supports_rumble=bool(item["supports_rumble"]),
+                input_profile=str(item.get("input_profile") or "generic"),
+                name_translation_key=item.get("name_translation_key"),
+                raw_hid_key=item.get("raw_hid_key"),
+                display_suffix=item.get("display_suffix"),
+            ))
+        except (KeyError, TypeError, ValueError):
+            continue
+    caps_by_index = {}
+    raw_caps = payload.get("winmm_caps", {})
+    if isinstance(raw_caps, dict):
+        for raw_index, item in raw_caps.items():
+            if not isinstance(item, dict):
+                continue
+            try:
+                caps = JOYCAPSW()
+                for name, _field_type in JOYCAPSW._fields_:
+                    is_text = name in {"szPname", "szRegKey", "szOEMVxD"}
+                    value = item.get(name, "" if is_text else 0)
+                    setattr(
+                        caps,
+                        name,
+                        str(value) if is_text else int(value),
+                    )
+                caps_by_index[int(raw_index)] = caps
+            except (AttributeError, TypeError, ValueError):
+                continue
+    return tuple(devices), caps_by_index
+
+
+def enumerate_windows_gamepads_isolated(timeout=5.0):
+    """Keep hot-plug-sensitive WinMM enumeration outside the Tk process."""
+    command = (
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--enumerate-gamepads-json",
+    )
+    creationflags = (
+        getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        if sys.platform == "win32" else 0
+    )
+    try:
+        completed = subprocess.run(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=max(0.1, float(timeout)),
+            check=False,
+            creationflags=creationflags,
+        )
+    except (OSError, subprocess.SubprocessError, TypeError, ValueError):
+        return (), {}
+    if completed.returncode != 0:
+        return (), {}
+    try:
+        payload = json.loads(completed.stdout.decode("utf-8"))
+    except (UnicodeError, ValueError, json.JSONDecodeError):
+        return (), {}
+    return _decode_isolated_enumeration(payload)
+
+
+def _enumerate_gamepads_json_main():
+    backend = WindowsGamepadBackend(enable_s2p_mobile_hid=False)
+    devices = backend.enumerate_devices(excluded_xinput_slot=None)
+    payload = {
+        "devices": [_gamepad_device_payload(device) for device in devices],
+        "winmm_caps": {
+            str(index): _joycaps_payload(caps)
+            for index, caps in backend._winmm_caps.items()
+        },
+    }
+    sys.stdout.buffer.write(
+        json.dumps(payload, ensure_ascii=True).encode("utf-8")
+    )
+    sys.stdout.buffer.flush()
+
+
 class NativeGamepadSampler:
     """Poll generic gamepads independently from the Tk drawing cadence.
 
@@ -606,10 +752,12 @@ class NativeGamepadSampler:
         backend,
         clock=time.perf_counter,
         poll_interval=0.001,
+        isolate_enumeration=False,
     ):
         self.backend = backend
         self.clock = clock
         self.poll_interval = max(0.0005, float(poll_interval))
+        self.isolate_enumeration = bool(isolate_enumeration)
         self._lock = threading.Lock()
         self._backend_lock = threading.Lock()
         self._lifecycle_lock = threading.Lock()
@@ -687,6 +835,18 @@ class NativeGamepadSampler:
         self._wake.set()
 
     def enumerate_devices(self, excluded_xinput_slot=None):
+        if self.isolate_enumeration:
+            devices, winmm_caps = enumerate_windows_gamepads_isolated()
+            with self._backend_lock:
+                self.backend._winmm_caps = winmm_caps
+            return [
+                device for device in devices
+                if not (
+                    excluded_xinput_slot is not None
+                    and device.kind == "xinput"
+                    and device.index == excluded_xinput_slot
+                )
+            ]
         with self._backend_lock:
             return self.backend.enumerate_devices(
                 excluded_xinput_slot=excluded_xinput_slot
@@ -767,3 +927,10 @@ class NativeGamepadSampler:
             with self._lifecycle_lock:
                 if self._thread is thread:
                     self._thread = None
+
+
+if (
+    __name__ == "__main__"
+    and "--enumerate-gamepads-json" in sys.argv[1:]
+):
+    _enumerate_gamepads_json_main()

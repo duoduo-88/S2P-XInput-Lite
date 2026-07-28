@@ -1,9 +1,11 @@
 import json
 import io
+import math
 import mmap
 import struct
 import subprocess
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -15,12 +17,15 @@ sys.path.insert(0, str(ROOT / "src"))
 from raw_hid_probe import (
     PROBE_EXECUTABLE,
     RawHidProbeClient,
+    RawHidAnalysisClient,
     RawHidStreamClient,
     STREAM_HEADER,
     STREAM_MAGIC,
     STREAM_SLOT,
     STREAM_VERSION,
+    _StickUpdateTracker,
     _enumerate_raw_hid_gamepads_isolated,
+    _fixed_stream_probe_supported,
     enumerate_raw_hid_gamepads,
     _is_virtual_hid_path,
     normalize_probe_snapshot,
@@ -295,6 +300,152 @@ class RawHidProbeTests(unittest.TestCase):
         client._mapping = None
         mapping.close()
 
+    def test_stream_reader_can_return_per_report_axis_mask(self):
+        capacity = 1024
+        mapping = mmap.mmap(
+            -1, STREAM_HEADER.size + capacity * STREAM_SLOT.size
+        )
+        STREAM_HEADER.pack_into(
+            mapping, 0,
+            STREAM_MAGIC, STREAM_VERSION,
+            STREAM_HEADER.size, STREAM_SLOT.size,
+            capacity, 1, 0, 0x0F,
+            1, 1, 10_000_000, 1,
+        )
+        STREAM_SLOT.pack_into(
+            mapping, STREAM_HEADER.size,
+            1, 10_000_000, 0.25, -0.5, 0.75, -1.0,
+            0.0, 0.0, 0, 0x03,
+        )
+        client = RawHidStreamClient(capacity=capacity)
+        client._mapping = mapping
+
+        samples, newest, dropped = client.read_samples(
+            0, include_axes=True
+        )
+
+        self.assertEqual((newest, dropped), (1, 0))
+        self.assertEqual(samples[0][4], 0x03)
+        client._mapping = None
+        mapping.close()
+
+    def test_stream_reader_can_return_trigger_controls(self):
+        capacity = 1024
+        mapping = mmap.mmap(
+            -1, STREAM_HEADER.size + capacity * STREAM_SLOT.size
+        )
+        STREAM_HEADER.pack_into(
+            mapping, 0,
+            STREAM_MAGIC, STREAM_VERSION,
+            STREAM_HEADER.size, STREAM_SLOT.size,
+            capacity, 1, 0, 0x3F,
+            1, 1, 10_000_000, 1,
+        )
+        STREAM_SLOT.pack_into(
+            mapping, STREAM_HEADER.size,
+            1, 10_000_000, 0.0, 0.0, 0.0, 0.0,
+            0.25, 0.75, 0, 0x30,
+        )
+        client = RawHidStreamClient(capacity=capacity)
+        client._mapping = mapping
+
+        samples, newest, dropped = client.read_samples(
+            0, include_axes=True, include_controls=True
+        )
+
+        self.assertEqual((newest, dropped), (1, 0))
+        self.assertEqual(samples[0][4], 0x30)
+        self.assertEqual(samples[0][5], (0.25, 0.75))
+        client._mapping = None
+        mapping.close()
+
+    def test_fixed_stream_helper_is_limited_to_verified_layouts(self):
+        self.assertFalse(_fixed_stream_probe_supported(
+            r"\\?\HID#VID_9999&PID_0001&IG_03#generic"
+        ))
+        self.assertTrue(_fixed_stream_probe_supported(
+            r"\\?\HID#VID_CAFE&PID_4020#standalone"
+        ))
+        self.assertTrue(_fixed_stream_probe_supported(
+            r"\\?\HID#VID_045E&PID_028E&IG_00#vigem"
+        ))
+
+    def test_analysis_keeps_raw_rate_separate_from_effective_rate(self):
+        tracker = _StickUpdateTracker()
+        for state in range(250):
+            point = (state / 250.0, -state / 250.0)
+            for _repeat in range(4):
+                tracker.add(point)
+        client = RawHidAnalysisClient()
+        started = time.perf_counter() - 1.0
+        histogram = [0] * 100001
+        histogram[1000] = 999
+
+        client._publish_analysis_snapshot(
+            state="complete",
+            started_wall=started,
+            duration_seconds=1.0,
+            first_timestamp=0.0,
+            last_timestamp=1.0,
+            histogram=histogram,
+            interval_count=999,
+            interval_sum_us=999_000.0,
+            interval_min_us=1000.0,
+            interval_max_us=1000.0,
+            trackers={"left": tracker, "right": _StickUpdateTracker()},
+            stream_status={"raw_reports": 1000, "ignored_reports": 0},
+            dropped_samples=0,
+            finished=True,
+        )
+        snapshot = client.read_snapshot()
+
+        self.assertAlmostEqual(snapshot["rate_hz"], 999.0)
+        self.assertAlmostEqual(snapshot["effective_rate_hz"], 249.0)
+        self.assertAlmostEqual(
+            snapshot["effective_ratio"], 249.0 / 999.0
+        )
+
+    def test_analysis_detects_regular_four_report_repeats(self):
+        tracker = _StickUpdateTracker()
+        states = 256
+        repeats = 4
+        for state in range(states):
+            angle = state / (states / 4.0) * 2.0 * math.pi
+            point = (math.cos(angle), math.sin(angle))
+            for _repeat in range(repeats):
+                tracker.add(point)
+        client = RawHidAnalysisClient()
+        duration = 4.0
+        raw_reports = states * repeats
+        histogram = [0] * 100001
+        histogram[3906] = raw_reports - 1
+
+        client._publish_analysis_snapshot(
+            state="complete",
+            started_wall=time.perf_counter() - duration,
+            duration_seconds=duration,
+            first_timestamp=0.0,
+            last_timestamp=duration,
+            histogram=histogram,
+            interval_count=raw_reports - 1,
+            interval_sum_us=duration * 1_000_000.0,
+            interval_min_us=3906.0,
+            interval_max_us=3906.0,
+            trackers={"left": tracker, "right": _StickUpdateTracker()},
+            stream_status={
+                "raw_reports": raw_reports,
+                "ignored_reports": 0,
+            },
+            dropped_samples=0,
+            finished=True,
+        )
+        snapshot = client.read_snapshot()
+
+        self.assertTrue(snapshot["activity_sufficient"])
+        self.assertEqual(snapshot["dominant_run_length"], 4)
+        self.assertTrue(snapshot["regular_repeat"])
+        self.assertAlmostEqual(snapshot["effective_ratio"], 0.25, places=2)
+
     def test_stream_latest_reads_only_newest_slot(self):
         capacity = 1024
         mapping = mmap.mmap(
@@ -369,12 +520,9 @@ class RawHidProbeTests(unittest.TestCase):
             "parser, parser.right_y, report, bytes_read, hid_data",
             source,
         )
-        self.assertIn("if (sample_axes == 0) continue", source)
-        self.assertIn("seen_axes |= sample_axes", source)
-        self.assertIn(
-            "(seen_axes & parser.axes_mask) != parser.axes_mask",
-            source,
-        )
+        self.assertNotIn("if (sample_axes == 0) continue", source)
+        self.assertIn("if (sample_axes != 0) ++parsed_samples", source)
+        self.assertIn("Publish every raw report", source)
         self.assertIn(
             "even when no standard stick usage is found",
             source,

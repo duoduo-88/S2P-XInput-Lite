@@ -1,6 +1,107 @@
 """Traditional Chinese / English text used by the settings GUI."""
 
 EN_TEXT = {
+    "關於": "About",
+    "版本": "Version",
+    "贊助開發（Ko-fi）": "Support Development (Ko-fi)",
+    "許可協議": "License",
+    "第三方程式": "Third-Party Software",
+    "找不到授權文件。": "The license document could not be found.",
+    "\u5efa\u8b70\uff1a\u6aa2\u67e5\u624b\u628a\u96fb\u91cf\u8207\u540c\u983b\u5e72\u64fe\uff1b\u50c5\u5728 RSSI \u4f4e\u65bc -75 dBm \u6642\u624d\u9700\u9760\u8fd1\u6a4b\u63a5\u5668":
+        "Recommendation: check controller battery and same-band interference; only move closer when RSSI is below -75 dBm",
+    "\u684c\u9762\u7aef\u8f38\u5165\u9593\u9694\uff1aP50 {p50:.2f} ms\uff1bP95 {p95:.2f} ms\uff1bP99 {p99:.2f} ms":
+        "Desktop input intervals: P50 {p50:.2f} ms; P95 {p95:.2f} ms; P99 {p99:.2f} ms",
+    "BLE \u539f\u59cb\u56de\u5831\u7387\uff1a\u5e73\u5747 {average:.1f} Hz\uff1bP50 {p50:.1f} Hz\uff1bP95 {p95:.1f} Hz\uff1bP99 {p99:.1f} Hz":
+        "BLE raw report rate: average {average:.1f} Hz; P50 {p50:.1f} Hz; P95 {p95:.1f} Hz; P99 {p99:.1f} Hz",
+    "\u8a3a\u65b7\u5224\u8b80\u6458\u8981": "Diagnostic assessment",
+    "\u8a3a\u65b7\u8a73\u7d30\u72c0\u614b": "Diagnostic details",
+    "\u6975\u4f73": "Excellent",
+    "\u826f\u597d": "Good",
+    "\u666e\u901a": "Fair",
+    "\u504f\u5f31": "Weak",
+    "\u5f88\u5f31": "Very weak",
+    "\u6574\u9ad4\u5224\u8b80": "Overall assessment",
+    "\u5075\u6e2c\u5230\u7684\u72c0\u6cc1": "Detected findings",
+    "\u5efa\u8b70\u52d5\u4f5c": "Recommended action",
+    "\u6b63\u5728\u6536\u96c6\u8cc7\u6599": "Collecting data",
+    "\u5c1a\u7121\u8db3\u5920\u6a23\u672c\u53ef\u4f9b\u5224\u8b80": "Not enough samples to assess yet",
+    "\u8acb\u7e7c\u7e8c\u64cd\u4f5c\u624b\u628a\u81f3\u8a3a\u65b7\u5b8c\u6210": "Keep using the controller until Diagnostics completes",
+    "\u9700\u8981\u6ce8\u610f": "Attention needed",
+    "\u5efa\u8b70\uff1a\u6e1b\u5c11 USB \u8ca0\u8f09\u4e26\u6aa2\u67e5\u7dda\u6750\u8207\u96fb\u6e90": "Recommendation: reduce USB load and check the cable and power",
+    "\u5efa\u8b70\uff1a\u8acb\u9760\u8fd1\u6a4b\u63a5\u5668\u4e26\u6e1b\u5c11 2.4 GHz \u5e72\u64fe": "Recommendation: move closer to the bridge and reduce 2.4 GHz interference",
+    "\u5efa\u8b70\uff1a\u532f\u51fa Log \u4ee5\u4fbf\u9032\u4e00\u6b65\u5206\u6790": "Recommendation: export the log for further analysis",
+    "\u76ee\u524d\u672a\u767c\u73fe\u660e\u986f\u7570\u5e38": "No obvious issue detected so far",
+    "\u8f38\u5165\u3001\u5ef6\u9072\u8207\u9707\u52d5\u672a\u51fa\u73fe\u8b66\u793a": "Input, latency, and rumble have no warnings",
+    "\u53ef\u532f\u51fa Log \u4f5c\u70ba\u672c\u6b21\u8a3a\u65b7\u8a18\u9304": "You can export the log as this diagnostic record",
+    "\u9023\u7dda\uff1a{connection}\uff1b\u6a21\u5f0f\uff1a{mode}": "Connection: {connection}; mode: {mode}",
+    "\u6821\u6b63\uff1a{calibration}\uff1b\u611f\u6e2c\u5668\uff1a{sensor}\uff1b\u9640\u87ba\u5100\uff1a{gyro}": "Calibration: {calibration}; sensors: {sensor}; gyro: {gyro}",
+    "\u9707\u52d5\uff1a{input}\uff1b{output}\uff1b{transport}": "Rumble: {input}; {output}; {transport}",
+    "\u6a4b\u63a5\u5668 MAC\uff1a{mac}": "Bridge MAC: {mac}",
+    "\u97cc\u9ad4\u672a\u63d0\u4f9b": "not provided by firmware",
+    "\u624b\u628a CH{channel} MAC\uff1a{mac}\uff1b\u8a0a\u865f\uff1a{signal}\uff1b\u9023\u7dda\u9593\u9694\uff1a{interval:.2f} ms":
+        "Controller CH{channel} MAC: {mac}; signal: {signal}; connection interval: {interval:.2f} ms",
+    "\u8f38\u5165\u6642\u5e8f\uff1a\u56de\u5831\u7387\u5e73\u5747 {rate:.1f} Hz\uff1bP50 {p50:.2f} ms\uff1bP95 {p95:.2f} ms\uff1bP99 {p99:.2f} ms":
+        "Input timing: average rate {rate:.1f} Hz; P50 {p50:.2f} ms; P95 {p95:.2f} ms; P99 {p99:.2f} ms",
+    "\u8a3a\u65b7\u6a21\u5f0f\u6703\u5728\u9078\u64c7\u7684\u6642\u9593\u5167\u8a18\u9304\u624b\u628a\u8f38\u5165\u983b\u7387\u3001\u5ef6\u9072\u3001\u6821\u6b63\u72c0\u614b\u8207\u9707\u52d5\u8cc7\u6599\u3002\n\n\u6e2c\u8a66\u671f\u9593\u4ecd\u53ef\u7e7c\u7e8c\u64cd\u4f5c\u624b\u628a\uff0c\u4e5f\u53ef\u4ee5\u7e2e\u5c0f\u6b64\u8996\u7a97\u3002\n\n\u5b8c\u6210\u5f8c\u53ef\u532f\u51fa TXT Log\uff0c\u4f9b AI \u6216\u652f\u63f4\u4eba\u54e1\u5206\u6790\u3002":
+        "Diagnostics records controller input rate, latency, calibration state, and rumble data for the selected duration.\n\n"
+        "You can keep using the controller and minimize this window while it runs.\n\n"
+        "When complete, export a TXT log for AI or support analysis.",
+    "\u8cc7\u6599\u4f86\u6e90\uff1a\u4e3b\u7a0b\u5f0f\u6a4b\u63a5\u901a\u9053\uff08ESP32 \u5e8f\u5217\u57e0\u7531\u4e3b\u7a0b\u5f0f\u4f7f\u7528\uff09":
+        "Source: desktop bridge channel (the application owns the ESP32 serial port)",
+    "\u8cc7\u6599\u4f86\u6e90\uff1aESP32 \u7368\u7acb\u8a3a\u65b7\u901a\u9053":
+        "Source: standalone ESP32 diagnostic channel",
+    "ESP32 \u8a3a\u65b7\u901a\u9053\uff1a\u672a\u5075\u6e2c\u5230\u53ef\u7528\u88dd\u7f6e":
+        "ESP32 diagnostic channel: no usable device detected",
+    "\u63d0\u793a\uff1a\u82e5\u4f7f\u7528\u6a4b\u63a5\u6a21\u5f0f\uff0c\u8acb\u5148\u7531\u4e3b\u7a0b\u5f0f\u9023\u7dda\uff1b\u82e5\u662f\u820a\u97cc\u9ad4\uff0c\u8acb\u5237\u5165 S2P-FW 1.0.0\u3002":
+        "Tip: connect through the desktop application for bridge mode; flash S2P-FW 1.0.0 for older firmware.",
+    "ESP32 \u8a3a\u65b7\u901a\u9053\u7121\u6cd5\u4f7f\u7528\uff1a{error}":
+        "ESP32 diagnostic channel unavailable: {error}",
+    "\u7b49\u5f85\u56de\u8986\u903e\u6642": "response timed out",
+    "ESP32 \u8a3a\u65b7\u901a\u9053\uff1a\u6b63\u5728\u9023\u7dda":
+        "ESP32 diagnostic channel: connecting",
+    "\u97cc\u9ad4\uff1a{product} {version}\uff1b\u5354\u8b70\uff1a{protocol} {protocol_version}":
+        "Firmware: {product} {version}; protocol: {protocol} {protocol_version}",
+    "\u97cc\u9ad4\u8f38\u5165\uff1a{reports} \u5831\u544a\uff1b\u6f0f\u5931 {gaps}\uff1b\u4f47\u5217\u4e1f\u68c4 {drops}\uff1bUSB \u7b49\u5f85\u5e73\u5747 {wait:.2f} ms":
+        "Firmware input: {reports} reports; gaps {gaps}; queue drops {drops}; average USB wait {wait:.2f} ms",
+    "\u97cc\u9ad4\u81ea\u6e2c\uff1a{passed} \u9805\u5df2\u56de\u8986\uff1b{failed} \u9805\u672a\u5b8c\u6210":
+        "Firmware self-tests: {passed} replies; {failed} incomplete",
+    "\u63d0\u793a\uff1a\u6c92\u6709\u97cc\u9ad4\u8cc7\u6599\u6642\uff0c\u4ecd\u53ef\u8a18\u9304\u624b\u628a\u8f38\u5165\u8207\u4e3b\u7a0b\u5f0f\u9707\u52d5\u8f38\u51fa\u3002":
+        "Tip: controller input and desktop rumble output can still be recorded without firmware data.",
+    "\u91cd\u8981\u4e8b\u4ef6\uff1a{event}": "Important event: {event}",
+    "需要更新 ESP32-S3 韌體": "ESP32-S3 Firmware Update Required",
+    "需要更新韌體才能使用診斷模式": "Firmware update required for Diagnostics",
+    "目前 ESP32 韌體不支援診斷模式。\n\n請回到設定頁按「刷入韌體」，刷入 S2P-FW 1.0.0 後，按 RESET / EN 或重新插拔 ESP32，再重新開啟手把測試。":
+        "The current ESP32 firmware does not support Diagnostics.\n\n"
+        "Return to Settings and choose Flash Firmware. After flashing "
+        "S2P-FW 1.0.0, press RESET / EN or reconnect the ESP32, then open "
+        "Gamepad Test again.",
+    "診斷模式": "Diagnostics",
+    "尚未開始診斷": "Diagnostics not started",
+    "開始診斷": "Start Diagnostics",
+    "停止診斷": "Stop Diagnostics",
+    "匯出診斷 Log": "Export Diagnostic Log",
+    "診斷時間": "Duration",
+    "秒": "s",
+    "即時診斷摘要": "Live Diagnostic Summary",
+    "感測器": "Sensors",
+    "最近狀態": "Recent Status",
+    "診斷執行中": "Diagnostics running",
+    "診斷完成": "Diagnostics complete",
+    "診斷已停止": "Diagnostics stopped",
+    "目前沒有可匯出的診斷資料。": "There is no diagnostic data to export.",
+    "文字檔": "Text file",
+    "無法寫入診斷 Log：{error}": "Could not write the diagnostic log: {error}",
+    "診斷 Log 已匯出。": "Diagnostic log exported.",
+    "剩餘 {seconds:.0f} 秒": "{seconds:.0f} s remaining",
+    "已完成": "Complete",
+    "橋接模式": "Bridge mode",
+    "獨立 XInput 模式": "Standalone XInput mode",
+    "獨立 HID 模式": "Standalone HID mode",
+    "USB 有線模式": "Wired USB mode",
+    "Windows BLE 模式": "Windows BLE mode",
+    "建議保持手把靜止完成初始化": "Keep the controller still to finish initialization",
+    "暫時不需要校正": "No calibration currently needed",
+    "建議重新校正": "Recalibration recommended",
     "等待第一筆座標": "Waiting for the first coordinates",
     "Raw HID 實際回報": "Actual Raw HID reports",
     "S2P-XInput-Lite 啟動中…": "Starting S2P-XInput-Lite…",
@@ -24,7 +125,7 @@ EN_TEXT = {
     "重新整理": "Refresh",
     "輸入監看": "Input Monitor",
     "Raw HID 實際採樣": "Raw HID Actual Sampling",
-    "實際採樣": "Actual Sampling",
+    "實際採樣": "Sampling",
     "使用 Windows 收到的每筆 Raw HID 回報":
         "Use every Raw HID report delivered by Windows",
     "正在開啟 Raw HID 實際採樣...": "Opening Raw HID actual sampling...",
@@ -52,6 +153,67 @@ EN_TEXT = {
     "目前到達率": "Current Delivery Rate",
     "累計 reports": "Reports Collected",
     "目前回報率": "Current Report Rate",
+    "HID 回報率": "HID Report Rate",
+    "有效回報率": "Effective Report Rate",
+    "判讀：尚未量測。": "Reading: not measured yet.",
+    "判讀：量測中，完成後顯示分析結果。":
+        "Reading: measuring; analysis will appear when complete.",
+    "判讀：量測時請持續以中等速度，大幅繞圈轉動一支搖桿。\n完成後會同時判讀回報穩定度與有效狀態更新率。":
+        "Reading: continuously rotate one stick in wide circles at a moderate "
+        "speed during measurement.\nThe result will evaluate both delivery "
+        "stability and effective state update rate.",
+    "判讀：量測中，請持續以中等速度，大幅繞圈轉動一支搖桿。\n請避免長時間停在中心或壓住外圈不動。":
+        "Reading: keep rotating one stick in wide circles at a moderate "
+        "speed.\nAvoid holding it at the centre or against the outer edge.",
+    "判讀：量測失敗，無法分析回報穩定度與有效狀態更新率。":
+        "Reading: measurement failed; delivery stability and effective state "
+        "update rate could not be analysed.",
+    "回報間隔資料不足，無法判讀穩定度。":
+        "There is not enough report-interval data to evaluate stability.",
+    "主要回報間隔接近預期值，P95／P99 尾端也集中，回報穩定。":
+        "The main report interval is near the expected value, and the P95/P99 "
+        "tail is concentrated; delivery is stable.",
+    "主要回報間隔接近預期值，尾端有少量跨週期回報，未見持續堆積。":
+        "The main interval is near the expected value. A small tail crosses "
+        "one period, with no sign of continuing backlog.",
+    "主要回報間隔穩定；最大間隔約為典型間隔的 2 倍，代表少數回報跨到下一個傳輸週期。這可能是低延遲傳輸策略的預期特性，不代表平均輸入延遲加倍。":
+        "The main report interval is stable. The maximum is about twice the "
+        "typical interval, indicating that a small number of reports crossed "
+        "into the next transport cycle. This can be an expected property of "
+        "a low-latency transport strategy and does not mean that average "
+        "input latency doubled.",
+    "P99 與最大間隔皆接近典型間隔的 2 倍，跨週期情形並非單一極端值；可能存在較頻繁的排程等待或傳輸波動。":
+        "Both P99 and the maximum interval are close to twice the typical "
+        "interval, so cross-cycle delivery is not limited to one extreme "
+        "sample; scheduling waits or transport variation may be occurring "
+        "more frequently.",
+    "回報間隔分散或偏離預期值，存在較明顯的排程波動。":
+        "Report intervals are dispersed or differ from the expected value, "
+        "indicating more noticeable scheduling variation.",
+    "無法解析標準搖桿軸，因此本次不提供有效回報率。":
+        "Standard stick axes could not be parsed, so no effective report rate "
+        "is available for this measurement.",
+    "搖桿活動不足，請持續大幅繞圈後重新量測，避免把靜止資料判成重複回報。":
+        "Stick movement was insufficient. Repeat the test with continuous wide "
+        "circles so stationary data is not mistaken for repeated reports.",
+    "搖桿活動量或資料量不足，本次有效回報率不具判讀條件。":
+        "Stick activity or sample volume was insufficient, so the effective "
+        "report rate is not valid for interpretation.",
+    "偵測到規律重複狀態：每個搖桿狀態通常維持 {count} 筆；有效更新率明顯低於 HID 回報率。":
+        "Regular repeated states were detected: each stick state usually lasts "
+        "{count} reports; the effective update rate is well below the HID "
+        "report rate.",
+    "有效狀態更新率接近 HID 回報率，未發現明顯規律重複。":
+        "The effective state update rate is close to the HID report rate; no "
+        "clear regular repetition was detected.",
+    "有效狀態更新率略低於 HID 回報率，未發現固定重複規律。":
+        "The effective state update rate is slightly below the HID report rate; "
+        "no fixed repetition pattern was detected.",
+    "有效狀態更新率明顯較低，但未發現固定重複規律；可能受軸解析度、濾波或轉動速度影響。":
+        "The effective state update rate is substantially lower, but no fixed "
+        "repetition pattern was found; axis resolution, filtering, or rotation "
+        "speed may be contributing.",
+    "判讀：{cadence}\n{effective}": "Reading: {cadence}\n{effective}",
     "收到回報數": "Reports Received",
     "剩餘時間": "Time Remaining",
     "Report 到達間隔（ms）": "Report Arrival Intervals (ms)",
@@ -195,9 +357,9 @@ EN_TEXT = {
         "at Windows, not input-to-game response latency.",
     "清除軌跡與統計": "Clear",
     "顯示輸出形狀": "Shape",
-    "輸出形狀": "Output Shape",
+    "輸出形狀": "Shape",
     "顯示陀螺圖例": "Gyro Legend",
-    "陀螺儀圖例": "Gyro Legend",
+    "陀螺儀圖例": "Gyro",
     "採樣點": "Samples",
     "採樣點100%\n顯示目前軌跡長度內，所選Windows輸入介面實際收到的全部座標點。\n\nXInput限制\nXInput只保留最新座標，無法把兩次讀取之間已被覆蓋的中間座標還原成路徑點。\n\nRaw HID 實際採樣\n啟用後會直接使用 Windows 收到的每筆 Raw HID 回報；此時100%代表顯示緩衝區內全部實際回報點。\n\n顯示百分比\n降低百分比只會減少畫面上的路徑點，不會改變實際輸入。":
         "Sample points 100%\n"

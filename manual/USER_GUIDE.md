@@ -4,7 +4,8 @@
 
 This guide covers installation, connections, profiles, stick tuning, mapping,
 gyro controls, rumble, HidHide, ESP32-S3 bridge and standalone operation, and
-the new Gamepad Test tool in S2P-XInput-Lite v0.7.0.
+the Gamepad Test, report-rate, diagnostics, and About pages in
+S2P-XInput-Lite v0.7.0.
 
 The screenshots use the English interface. Select **中 / En** in the lower-left corner of the main window to switch languages without changing the layout.
 
@@ -401,8 +402,8 @@ on the ESP32. Features that require Windows are not executed.
 
 1. Select the profile to write.
 2. Finish editing and select **Save/Apply**.
-3. Confirm that the ESP32 is connected and running standalone-capable
-   `0.14.0` firmware.
+3. Confirm that the ESP32 is connected and running the bundled
+   `S2P-FW 1.0.1` firmware.
 4. Select **ESP32 ▼** at the bottom of the window.
 5. Select **Write and enable PC XInput standalone** or
    **Write and enable Mobile USB HID**.
@@ -517,6 +518,35 @@ The **Vibration Test** tab sends test patterns to Windows devices that expose
 XInput rumble. Stopping or closing the tester sends zero vibration. Mobile USB
 HID currently provides input only and does not relay web or game rumble to the
 controller.
+
+### 9.6 Report Rate
+
+Open **Report Rate** to measure a Raw HID collection without display-frame
+sampling. Select the collection and test duration, start the measurement, then
+move one stick continuously through wide circles. The result shows total HID
+reports, reports containing usable stick data, effective rate, P50/P95/P99
+intervals, distribution statistics, and a timeline. Select the collection that
+actually changes when the controller moves; interfaces from the same physical
+device may expose different reports.
+
+### 9.7 Diagnostics
+
+The **Diagnostics** tab runs a 30, 60, or 120 second ESP32 health check. Keep
+the controller awake and exercise the sticks, sensors, and rumble during the
+run. The summary covers firmware mode, connection and input continuity,
+latency, calibration, motion sensors, gyro processing, rumble, and an overall
+pass/warn/fail verdict. **Export Report** saves the displayed report as UTF-8
+text.
+
+Bridge mode temporarily uses the application's active serial connection.
+Standalone modes open the ESP32 diagnostic channel directly. The complete
+diagnostic command set requires the bundled `S2P-FW 1.0.1`.
+
+### 9.8 About
+
+The **About** tab keeps the logo, version, GitHub, and Ko-fi links visible on
+the left. The right side contains scrollable **License Agreement** and
+**Third-Party Software** tabs loaded from the files included with the release.
 
 ---
 

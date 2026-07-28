@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from esp32_detection import (
+    _is_bridge_status,
     _port_priority,
     find_esp32_port,
 )
@@ -14,6 +15,33 @@ class _UnavailableSerial:
 
 
 class ESP32DetectionTests(unittest.TestCase):
+    def test_current_s2p_firmware_identity_is_accepted(self):
+        self.assertTrue(_is_bridge_status({
+            "cmd": "status",
+            "product": "S2P-FW",
+            "version": "1.0.0",
+            "protocol": "s2p_bridge",
+            "protocol_version": "1.0.0",
+            "profile": "s2p_usb_bridge",
+            "build": "standalone_diagnostics",
+        }))
+
+    def test_last_pre_1_0_s2p_bundle_is_upgrade_only_legacy(self):
+        self.assertTrue(_is_bridge_status({
+            "cmd": "status",
+            "version": "0.14.3",
+            "profile": "tinyusb_direct",
+            "build": "cdc_bridge_2_lowlatency",
+        }))
+
+    def test_upstream_firmware_is_not_claimed_as_compatible(self):
+        self.assertFalse(_is_bridge_status({
+            "cmd": "status",
+            "version": "0.12.4",
+            "profile": "tinyusb_direct",
+            "build": "cdc_bridge_2_lowlatency",
+        }))
+
     def test_standalone_usb_personality_has_native_priority(self):
         port = SimpleNamespace(device="COM8", vid=0xCAFE, pid=0x4020)
         self.assertEqual(_port_priority(port)[0], 0)

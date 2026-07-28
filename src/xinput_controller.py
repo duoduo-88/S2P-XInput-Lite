@@ -592,6 +592,10 @@ class XInputController:
         self.final_tail_decay_ms = audio_settings["final_tail_decay_ms"]
         self._game_rumble = (0, 0)
         self._audio_rumble = (0, 0)
+        self._rumble_input = (0, 0)
+        self._rumble_input_count = 0
+        self._rumble_peak_input = (0, 0)
+        self._rumble_peak_output = (0, 0)
 
         self._rumble_sender = None
         self._rumble_sender_supports_priority = False
@@ -652,6 +656,10 @@ class XInputController:
                 "_rumble_sequence": self._rumble_sequence,
                 "_rumble_running": self._rumble_running,
                 "_rumble_thread": self._rumble_thread,
+                "_rumble_input": self._rumble_input,
+                "_rumble_input_count": self._rumble_input_count,
+                "_rumble_peak_input": self._rumble_peak_input,
+                "_rumble_peak_output": self._rumble_peak_output,
             }
             replacement_state = dict(snapshot.__dict__)
             replacement_state.update(preserved)
@@ -1045,6 +1053,24 @@ class XInputController:
             self._rumble_sender_supports_priority = bool(supports_priority)
             self._rumble_condition.notify_all()
 
+    def get_rumble_diagnostics(self):
+        """Return the latest host input and converted HD Rumble parameters."""
+        with self._rumble_condition:
+            state = self._rumble_state or (
+                self.lf_frequency, 0, self.hf_frequency, 0
+            )
+            return {
+                "received": self._rumble_input_count,
+                "input": list(self._rumble_input),
+                "peak_input": list(self._rumble_peak_input),
+                "frequency": [int(state[0]), int(state[2])],
+                "output": [int(state[1]), int(state[3])],
+                "peak_output": list(self._rumble_peak_output),
+                "audio_output": list(self._audio_rumble),
+                "mode": self.audio_haptics_mode,
+                "max_amplitude": int(self.max_amplitude),
+            }
+
     def set_audio_rumble(self, lf_level, hf_level):
         """Receive normalized audio levels and publish the selected mix."""
         with self._rumble_condition:
@@ -1124,6 +1150,10 @@ class XInputController:
                 int(lf_amp),
                 self.hf_frequency,
                 int(hf_amp),
+            )
+            self._rumble_peak_output = (
+                max(self._rumble_peak_output[0], int(lf_amp)),
+                max(self._rumble_peak_output[1], int(hf_amp)),
             )
             self._rumble_force_zero = bool(force_zero)
             self._rumble_priority = bool(priority or force_zero)
@@ -1255,6 +1285,14 @@ class XInputController:
 
         if self._rumble_sender is None:
             return
+
+        with self._rumble_condition:
+            self._rumble_input = (int(large_motor), int(small_motor))
+            self._rumble_input_count += 1
+            self._rumble_peak_input = (
+                max(self._rumble_peak_input[0], int(large_motor)),
+                max(self._rumble_peak_input[1], int(small_motor)),
+            )
 
         # LF 與 HF 強度都為 0 時視為完整關閉震動。
         # 必須在補償計算前處理，否則非零的交叉補償仍會產生輸出。

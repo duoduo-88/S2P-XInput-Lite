@@ -9,25 +9,37 @@ import math
 import struct
 import time
 import tkinter as tk
+import webbrowser
 import zlib
 from collections import deque
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from tkinter import ttk, font as tkfont, messagebox
+from tkinter import ttk, filedialog, font as tkfont, messagebox
 
+from diagnostic_session import (
+    DEFAULT_DIAGNOSTIC_SECONDS,
+    DiagnosticSession,
+    ESP32DiagnosticReader,
+    diagnostic_firmware_needs_update,
+    read_controller_status,
+)
+from command_queue import enqueue_controller_command
 from gamepad_devices import (
     GamepadDevice,
     NativeGamepadSampler,
+    S2P_MOBILE_HID_PROFILE,
     WindowsGamepadBackend,
 )
 from gyro_processing import _apply_gyro_response_curve
 from raw_hid_probe import (
-    RawHidProbeClient,
+    RawHidAnalysisClient,
     RawHidStreamClient,
     enumerate_raw_hid_gamepads,
 )
+from switch2_input import SWITCH_BUTTONS
 from test_telemetry import SharedTestTelemetry
 from tooltip_layout import wrap_tooltip_text
+from version import APP_NAME, VERSION
 
 
 PLOT_SIZE = 320
@@ -37,6 +49,7 @@ SHAPE_BIN_COUNT = 72
 TRAIL_TILE_SIZE = 40
 MAX_CANVAS_TRAIL_ITEMS = 2000
 TRIGGER_EVENT_THRESHOLD = 30.0 / 255.0
+SWITCH_RAW_HID_BUTTONS = tuple(SWITCH_BUTTONS.items())
 SHAPE_TRACE_REFRESH_HZ = 60.0
 SHAPE_CAPTURE_SETTLE_SECONDS = 1.0
 TRAIL_COLOR = "#1976D2"
@@ -55,6 +68,13 @@ GYRO_ANTI_DEADZONE_COLOR = "#00897B"
 TEST_ICON_PATH = (
     Path(__file__).resolve().parent.parent / "image" / "testicon.png"
 )
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+ABOUT_ICON_PATH = PROJECT_ROOT / "image" / "icon.png"
+LICENSE_PATH = PROJECT_ROOT / "LICENSE"
+THIRD_PARTY_NOTICES_PATH = PROJECT_ROOT / "THIRD_PARTY_NOTICES.md"
+GITHUB_URL = "https://github.com/duoduo-88/S2P-XInput-Lite/tree/main"
+SPONSOR_URL = "https://ko-fi.com/duoduo88"
+CONTROLLER_STATUS_PATH = Path(__file__).with_name("controller_status.json")
 
 
 def _gyro_mapping_enabled(gyro):
@@ -258,9 +278,10 @@ def primary_display_refresh_rate():
 def read_connection_status_summary(translator=None):
     """Read bridge status when the tester is running in its own process."""
     tr = translator or (lambda value: value)
-    status_path = Path(__file__).with_name("controller_status.json")
     try:
-        status = json.loads(status_path.read_text(encoding="utf-8"))
+        status = json.loads(
+            CONTROLLER_STATUS_PATH.read_text(encoding="utf-8")
+        )
         if time.time() - float(status.get("updated_at", 0.0)) > 3.0:
             return tr("● 未連線"), "#777777"
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
@@ -608,6 +629,10 @@ class StickPlot:
         self._dynamic_deadzone_item = None
         self._dynamic_deadzone_coords = None
         self._dynamic_deadzone_visible = False
+        self._presentation_times = deque(maxlen=512)
+        self._fps_item = None
+        self._fps_text = None
+        self._last_fps_draw_at = 0.0
         tr = getattr(
             getattr(self.owner, "gui", None),
             "tr",
@@ -1972,6 +1997,54 @@ class StickPlot:
             )
         return frame_changed
 
+    def record_presentation_fps(self, now, frame_changed):
+        """Display this plot's own Canvas presentation rate in its corner."""
+        # A resize/theme rebuild redraws the radar with canvas.delete("all").
+        # Tk keeps the old numeric id in Python, so recreate the FPS overlay
+        # when that canvas item no longer exists.
+        if self._fps_item is not None and not self.canvas.type(self._fps_item):
+            self._fps_item = None
+            self._fps_text = None
+        if frame_changed:
+            self._presentation_times.append(now)
+        while (
+            self._presentation_times
+            and now - self._presentation_times[0] > 1.0
+        ):
+            self._presentation_times.popleft()
+        if (
+            self._fps_item is not None
+            and now - self._last_fps_draw_at < 0.25
+        ):
+            return
+        if len(self._presentation_times) < 2:
+            text = "0 FPS"
+        else:
+            elapsed = (
+                self._presentation_times[-1]
+                - self._presentation_times[0]
+            )
+            fps = (
+                (len(self._presentation_times) - 1) / elapsed
+                if elapsed > 0.0 else 0.0
+            )
+            text = f"{fps:.0f} FPS"
+        if self._fps_item is None:
+            self._fps_item = self.canvas.create_text(
+                PLOT_SIZE - 6,
+                6,
+                text=text,
+                anchor="ne",
+                fill="#777777",
+                font=("Segoe UI", 8),
+                tags="fps",
+            )
+        elif text != self._fps_text:
+            self.canvas.itemconfigure(self._fps_item, text=text)
+        self._fps_text = text
+        self._last_fps_draw_at = now
+        self.canvas.tag_raise(self._fps_item)
+
 
 class GamepadTestWindow:
     def __init__(self, gui):
@@ -1982,6 +2055,8 @@ class GamepadTestWindow:
         self.input_tab = None
         self.rumble_tab = None
         self.high_rate_tab = None
+        self.diagnostic_tab = None
+        self.about_tab = None
         # hidapi has been observed corrupting its heap when a device is
         # removed while a handle is open. Keep this long-running Tk process on
         # XInput/WinMM only; Raw HID work is owned by crash-isolated helpers.
@@ -1991,6 +2066,7 @@ class GamepadTestWindow:
         self.native_sampler = None
         self.telemetry = None
         self.latest_telemetry = {}
+        self.latest_diagnostic_input = {}
         self.devices = {}
         self._native_test_devices = ()
         self._device_enumeration_initialized = False
@@ -1999,8 +2075,7 @@ class GamepadTestWindow:
         self.status_var = tk.StringVar(
             value=self.gui.tr("正在搜尋手把...")
         )
-        self.draw_fps_var = tk.StringVar(value="— FPS")
-        self.raw_hid_probe = RawHidProbeClient()
+        self.raw_hid_probe = RawHidAnalysisClient()
         self.raw_hid_stream = RawHidStreamClient()
         self.raw_hid_stream_enabled_var = tk.BooleanVar(value=True)
         self.raw_hid_stream_toggle = None
@@ -2010,12 +2085,18 @@ class GamepadTestWindow:
         self._raw_hid_stream_dropped = 0
         self._raw_hid_stream_latest_axes = None
         self._raw_hid_stream_latest_sample = None
+        self._nintendo_winmm_pair_key = None
+        self._nintendo_winmm_pair_score = 0
         self.raw_hid_devices = {}
         self.raw_hid_duration_var = tk.StringVar(value="10")
         self.raw_hid_state_var = tk.StringVar(value=self.gui.tr("尚未量測"))
         self.raw_hid_rate_var = tk.StringVar(value="— Hz")
+        self.raw_hid_effective_rate_var = tk.StringVar(value="— Hz")
         self.raw_hid_count_var = tk.StringVar(value="0")
         self.raw_hid_remaining_var = tk.StringVar(value="—")
+        self.raw_hid_analysis_var = tk.StringVar(
+            value=self.gui.tr("判讀：尚未量測。")
+        )
         self.raw_hid_stats_vars = {
             key: tk.StringVar(value="—")
             for key in ("p50", "p95", "p99", "min", "mean", "max")
@@ -2043,8 +2124,8 @@ class GamepadTestWindow:
         self.shape_enabled_var = tk.BooleanVar(value=False)
         self._shape_capture_signature = None
         self.show_gyro_legend_var = tk.BooleanVar(value=True)
-        self.sample_display_percent_var = tk.DoubleVar(value=30.0)
-        self.sample_display_percent_text = tk.StringVar(value="30%")
+        self.sample_display_percent_var = tk.DoubleVar(value=100.0)
+        self.sample_display_percent_text = tk.StringVar(value="100%")
         self.trail_length_var = tk.DoubleVar(value=2.5)
         self.trail_length_text = tk.StringVar(
             value=self.gui.tr("{seconds:.1f} 秒").format(seconds=2.5)
@@ -2082,7 +2163,6 @@ class GamepadTestWindow:
         self._last_consumed_token = None
         self._last_trail_sequence = 0
         self._trail_overwrite_count = 0
-        self._draw_times = deque(maxlen=512)
         self._raw_hid_resume_after_measurement = False
         self._button_events = {}
         self._recent_events = deque(maxlen=8)
@@ -2097,7 +2177,36 @@ class GamepadTestWindow:
         self._last_window_geometry = None
         self._high_resolution_timer_active = False
         self._window_icon = None
+        self._about_logo = None
+        self._about_fonts = ()
         self._parameter_editor_window = None
+        self.diagnostic_session = DiagnosticSession(
+            DEFAULT_DIAGNOSTIC_SECONDS
+        )
+        self.diagnostic_reader = ESP32DiagnosticReader()
+        self.diagnostic_duration_var = tk.StringVar(
+            value=str(DEFAULT_DIAGNOSTIC_SECONDS)
+        )
+        self.diagnostic_state_var = tk.StringVar(
+            value=self.gui.tr("尚未開始診斷")
+        )
+        self.diagnostic_remaining_var = tk.StringVar(value="—")
+        self.diagnostic_progress_var = tk.DoubleVar(value=0.0)
+        self.diagnostic_summary_vars = {
+            key: tk.StringVar(value="—")
+            for key in (
+                "mode", "connection", "input", "latency",
+                "calibration", "sensor", "gyro",
+                "rumble_input", "rumble_output", "rumble_transport",
+                "verdict", "findings", "advice",
+            )
+        }
+        self.diagnostic_start_button = None
+        self.diagnostic_stop_button = None
+        self.diagnostic_export_button = None
+        self.diagnostic_event_text = None
+        self._diagnostic_last_event_signature = None
+        self._diagnostic_firmware_update_notice_shown = False
 
     def _apply_window_icon(self, window):
         """Apply the dedicated tester icon without changing the main app icon."""
@@ -2137,7 +2246,10 @@ class GamepadTestWindow:
             self.telemetry = SharedTestTelemetry()
         self._last_trail_sequence = self.telemetry.latest_trail_sequence()
         if self.native_sampler is None:
-            self.native_sampler = NativeGamepadSampler(self.backend)
+            self.native_sampler = NativeGamepadSampler(
+                self.backend,
+                isolate_enumeration=True,
+            )
         if not self.native_sampler.start():
             self.root.after(
                 25,
@@ -2195,27 +2307,30 @@ class GamepadTestWindow:
         )
         self.device_refresh_button.grid(row=0, column=2, padx=(5, 0))
         self.status_label = None
-        self.draw_fps_label = ttk.Label(
-            selector,
-            textvariable=self.draw_fps_var,
-            foreground="#777777",
-            width=7,
-            anchor="e",
-        )
-        self.draw_fps_label.grid(row=0, column=3, sticky="e", padx=(8, 0))
+        # Per-radar presentation FPS is rendered in each plot's upper-right
+        # corner, leaving this header's spare width for device selection.
+        self.draw_fps_label = None
 
         notebook = ttk.Notebook(content)
         notebook.grid(row=1, column=0, sticky="nsew")
         input_tab = ttk.Frame(notebook, padding=(8, 6))
         rumble_tab = ttk.Frame(notebook, padding=(10, 8))
         high_rate_tab = ttk.Frame(notebook, padding=(10, 8))
+        diagnostic_tab = ttk.Frame(notebook, padding=(10, 8))
+        about_tab = ttk.Frame(notebook, padding=(10, 8))
         self.test_notebook = notebook
         self.input_tab = input_tab
         self.rumble_tab = rumble_tab
         self.high_rate_tab = high_rate_tab
+        self.diagnostic_tab = diagnostic_tab
+        self.about_tab = about_tab
         notebook.add(input_tab, text=f" {self.gui.tr('輸入監看')} ")
         notebook.add(rumble_tab, text=f" {self.gui.tr('震動測試')} ")
         notebook.add(high_rate_tab, text=f" {self.gui.tr('回報率量測')} ")
+        notebook.add(
+            diagnostic_tab, text=f" {self.gui.tr('診斷模式')} "
+        )
+        notebook.add(about_tab, text=f" {self.gui.tr('關於')} ")
         notebook.bind(
             "<<NotebookTabChanged>>", self._on_test_tab_changed, add="+"
         )
@@ -2454,6 +2569,8 @@ class GamepadTestWindow:
 
         self._build_rumble_tab(rumble_tab)
         self._build_high_rate_tab(high_rate_tab)
+        self._build_diagnostic_tab(diagnostic_tab)
+        self._build_about_tab(about_tab)
         self._refresh_devices(force=True)
         self._update_raw_hid_availability()
         # The first telemetry frame is published only after read_latest() has
@@ -2562,10 +2679,11 @@ class GamepadTestWindow:
         self.raw_hid_stop_button.grid(row=0, column=4, sticky="ew")
         summary = ttk.Frame(parent)
         summary.grid(row=1, column=0, sticky="ew", pady=(10, 8))
-        for column in range(3):
+        for column in range(4):
             summary.columnconfigure(column, weight=1, uniform="raw_summary")
         summary_items = (
-            ("目前回報率", self.raw_hid_rate_var),
+            ("HID 回報率", self.raw_hid_rate_var),
+            ("有效回報率", self.raw_hid_effective_rate_var),
             ("收到回報數", self.raw_hid_count_var),
             ("剩餘時間", self.raw_hid_remaining_var),
         )
@@ -2575,7 +2693,7 @@ class GamepadTestWindow:
             )
             box.grid(
                 row=0, column=column, sticky="ew",
-                padx=(0 if column == 0 else 4, 0 if column == 2 else 4),
+                padx=(0 if column == 0 else 4, 0 if column == 3 else 4),
             )
             ttk.Label(
                 box,
@@ -2657,21 +2775,26 @@ class GamepadTestWindow:
             ).grid(
                 row=row, column=2, sticky="w", padx=(10, 0),
             )
-        ttk.Label(
+        legend.grid_remove()
+        analysis_label = ttk.Label(
             parent,
-            text=self.gui.tr("判讀：三個數值越小、彼此越接近，代表回報越穩定。\n預期時間差（ms）＝1000 ÷ 回報率（Hz）；P50 接近預期值、P99 接近 P50，表示表現穩定。"),
+            textvariable=self.raw_hid_analysis_var,
             foreground="#666666",
             anchor="w",
             justify="left",
-            wraplength=670,
-        ).grid(row=5, column=0, sticky="ew", pady=(3, 0))
-        ttk.Label(
-            parent,
-            text=self.gui.tr("山形顯示回報時間差分佈；僅反映資料到達 Windows 的穩定度，不代表按鍵到遊戲反應的延遲。"),
-            foreground="#666666",
-            anchor="w",
-            justify="left",
-        ).grid(row=6, column=0, sticky="ew", pady=(2, 0))
+            # The usable width changes with DPI scaling and localisation.
+            # Keep the paragraph's wrap width aligned to the actual widget
+            # width instead of a fixed 670 px, which can split "2 倍".
+            wraplength=1,
+        )
+        analysis_label.grid(row=4, column=0, sticky="ew", pady=(5, 0))
+
+        def fit_analysis_wrap(event):
+            wraplength = max(1, int(event.width))
+            if int(event.widget.cget("wraplength")) != wraplength:
+                event.widget.configure(wraplength=wraplength)
+
+        analysis_label.bind("<Configure>", fit_analysis_wrap)
         self._draw_raw_hid_chart((), 0, 0.0, 0.0, 0.0)
 
     def _update_raw_hid_availability(self):
@@ -2711,18 +2834,55 @@ class GamepadTestWindow:
         return stopped
 
     def _sync_raw_hid_stream(self):
-        """Own exactly one stream for the explicitly selected Raw HID device."""
+        """Own one Raw HID stream for a selected HID collection or mobile WinMM."""
         if self.window is None:
             return
         probe_state = self.raw_hid_probe.read_snapshot().get("state")
         selected = self._selected_device()
-        enabled = (
-            self.raw_hid_stream_enabled_var.get()
-            and probe_state not in {"opening", "running"}
-            and selected is not None
-            and selected.kind == "raw_hid"
+        is_selected_raw_hid = selected is not None and selected.kind == "raw_hid"
+        is_mobile_winmm = bool(
+            selected is not None
+            and selected.kind == "winmm"
+            and selected.input_profile == S2P_MOBILE_HID_PROFILE
         )
-        device = self._selected_raw_hid_device() if enabled else None
+        has_nintendo_raw_hid = any(
+            (raw.vendor_id, raw.product_id) == (0x057E, 0x2069)
+            for raw in getattr(self, "raw_hid_devices", {}).values()
+        )
+        is_winmm_pair_candidate = bool(
+            selected is not None
+            and selected.kind == "winmm"
+            and has_nintendo_raw_hid
+        )
+        enabled = (
+            probe_state not in {"opening", "running"}
+            and (
+                (is_selected_raw_hid and self.raw_hid_stream_enabled_var.get())
+                # WinMM has no reliable standard for trigger axes.  For this
+                # known mobile descriptor, keep its native buttons but use the
+                # crash-isolated Raw HID stream to fill LT/RT.
+                or is_mobile_winmm
+                # A physical Nintendo controller can expose more than one
+                # generic WinMM mirror.  Start a passive Raw HID comparison;
+                # it is not used until movement proves the selected mirror is
+                # the same physical device.
+                or is_winmm_pair_candidate
+            )
+        )
+        if is_selected_raw_hid:
+            device = self._selected_raw_hid_device()
+        elif is_mobile_winmm:
+            device = next((
+                raw for raw in self.raw_hid_devices.values()
+                if (raw.vendor_id, raw.product_id) == (0xCAFE, 0x4021)
+            ), None)
+        elif is_winmm_pair_candidate:
+            device = next(
+                raw for raw in self.raw_hid_devices.values()
+                if (raw.vendor_id, raw.product_id) == (0x057E, 0x2069)
+            )
+        else:
+            device = None
         path = device.path if device is not None else None
         if path == self._raw_hid_stream_path and self.raw_hid_stream.active:
             status = self.raw_hid_stream.status()
@@ -2758,35 +2918,85 @@ class GamepadTestWindow:
             self.gui.tr("正在開啟 Raw HID 實際採樣...")
         )
 
+    @staticmethod
+    def _merge_cached_raw_hid_sample(sample, cached):
+        """Keep native buttons while holding Raw HID axes/controls between reports."""
+        if cached is None:
+            return sample
+        if sample is None:
+            return dict(cached)
+        merged = dict(sample)
+        for key in ("left", "right", "triggers", "token"):
+            if key in cached:
+                merged[key] = cached[key]
+        return merged
+
     def _consume_raw_hid_stream(self, sample, record_trail=True):
         if record_trail:
             samples, newest, dropped = self.raw_hid_stream.read_samples(
-                self._raw_hid_stream_sequence
+                self._raw_hid_stream_sequence,
+                include_axes=True,
+                include_controls=True,
+                include_buttons=True,
             )
         else:
             latest, newest, dropped = self.raw_hid_stream.read_latest(
                 self._raw_hid_stream_sequence
             )
-            samples = () if latest is None else (latest,)
+            samples = (
+                () if latest is None else (latest + (0x0F,),)
+            )
         self._raw_hid_stream_sequence = newest
         self._raw_hid_stream_dropped += dropped
         if not samples:
             cached = getattr(
                 self, "_raw_hid_stream_latest_sample", None
             )
-            if sample is None and cached is not None:
-                return dict(cached), False
-            return sample, False
+            return self._merge_cached_raw_hid_sample(sample, cached), False
         if record_trail:
             record_shape = self.shape_enabled_var.get()
-            for sample_time, left, right, _sequence in samples:
-                self.histories["left"].add(
-                    left[0], left[1], sample_time, record_shape
-                )
-                self.histories["right"].add(
-                    right[0], right[1], sample_time, record_shape
-                )
-        latest_time, left, right, sequence = samples[-1]
+            for item in samples:
+                sample_time, left, right, _sequence, axes_mask = item[:5]
+                if axes_mask & 0x03 == 0x03:
+                    self.histories["left"].add(
+                        left[0], left[1], sample_time, record_shape
+                    )
+                if axes_mask & 0x0C == 0x0C:
+                    self.histories["right"].add(
+                        right[0], right[1], sample_time, record_shape
+                    )
+        left_sample = next((
+            item for item in reversed(samples)
+            if item[4] & 0x03 == 0x03
+        ), None)
+        right_sample = next((
+            item for item in reversed(samples)
+            if item[4] & 0x0C == 0x0C
+        ), None)
+        if left_sample is None and right_sample is None:
+            cached = getattr(
+                self, "_raw_hid_stream_latest_sample", None
+            )
+            return self._merge_cached_raw_hid_sample(sample, cached), False
+        previous_axes = getattr(
+            self, "_raw_hid_stream_latest_axes", None
+        )
+        left = (
+            left_sample[1]
+            if left_sample is not None
+            else previous_axes[0] if previous_axes is not None
+            else (0.0, 0.0)
+        )
+        right = (
+            right_sample[2]
+            if right_sample is not None
+            else previous_axes[1] if previous_axes is not None
+            else (0.0, 0.0)
+        )
+        sequence = max(
+            item[3] for item in (left_sample, right_sample)
+            if item is not None
+        )
         self._raw_hid_stream_latest_axes = (left, right)
         if sample is None:
             sample = {
@@ -2801,9 +3011,36 @@ class GamepadTestWindow:
             }
         else:
             sample = dict(sample)
+        trigger_values = list(sample.get("triggers") or (0.0, 0.0))
+        trigger_values = (trigger_values + [0.0, 0.0])[:2]
+        for index, trigger_mask in enumerate((0x10, 0x20)):
+            trigger_sample = next((
+                item for item in reversed(samples)
+                if len(item) > 5 and int(item[4]) & trigger_mask
+            ), None)
+            if trigger_sample is not None:
+                trigger_values[index] = trigger_sample[5][index]
+        button_sample = next((
+            item for item in reversed(samples)
+            if len(item) > 6
+        ), None)
+        is_nintendo_raw_hid = "VID_057E&PID_2069" in str(
+            getattr(self, "_raw_hid_stream_path", "")
+        ).upper()
+        if (
+            button_sample is not None
+            and (is_nintendo_raw_hid or sample.get("buttons") in (None, ()))
+        ):
+            buttons_mask = int(button_sample[6])
+            sample["buttons_mask"] = buttons_mask
+            sample["buttons"] = tuple(
+                name for name, mask in SWITCH_RAW_HID_BUTTONS
+                if buttons_mask & mask
+            )
         sample.update({
             "left": left,
             "right": right,
+            "triggers": tuple(trigger_values),
             "token": ("raw_hid", sequence),
         })
         self._raw_hid_stream_latest_sample = dict(sample)
@@ -2951,7 +3188,11 @@ class GamepadTestWindow:
         self.raw_hid_duration_var.set(f"{duration:g}")
         self._raw_hid_countdown_cancelled = False
         self.raw_hid_rate_var.set("— Hz")
+        self.raw_hid_effective_rate_var.set("— Hz")
         self.raw_hid_count_var.set("0")
+        self.raw_hid_analysis_var.set(self.gui.tr(
+            "判讀：量測中，完成後顯示分析結果。"
+        ))
         for variable in self.raw_hid_stats_vars.values():
             variable.set("—")
         self._update_raw_hid_stat_colors({})
@@ -3135,6 +3376,13 @@ class GamepadTestWindow:
             return
         rate = float(snapshot.get("rate_hz", 0.0) or 0.0)
         self.raw_hid_rate_var.set(f"{rate:,.0f} Hz" if rate > 0 else "— Hz")
+        effective_rate = float(
+            snapshot.get("effective_rate_hz", 0.0) or 0.0
+        )
+        show_effective = self._raw_hid_effective_rate_visible(snapshot)
+        self.raw_hid_effective_rate_var.set(
+            f"{effective_rate:,.0f} Hz" if show_effective else "— Hz"
+        )
         self.raw_hid_count_var.set(f"{int(snapshot.get('reports', 0)):,}")
         self._update_raw_hid_percentile_info(
             snapshot.get("intervals", 0)
@@ -3186,6 +3434,9 @@ class GamepadTestWindow:
                 code=int(snapshot.get("error_code", 0) or 0)
             )
         )
+        self.raw_hid_analysis_var.set(
+            self._raw_hid_analysis_text(snapshot)
+        )
         self._set_raw_hid_controls_active(
             state in {"opening", "running"}
         )
@@ -3194,6 +3445,108 @@ class GamepadTestWindow:
             and getattr(self, "_raw_hid_resume_after_measurement", False)
         ):
             self._resume_actual_sampling_after_measurement()
+
+    @staticmethod
+    def _raw_hid_effective_rate_visible(snapshot):
+        return bool(
+            snapshot.get("axes_available")
+            and snapshot.get("activity_sufficient")
+            and float(snapshot.get("effective_rate_hz", 0.0) or 0.0) > 0
+        )
+
+    def _raw_hid_analysis_text(self, snapshot):
+        """Build a compact two-line interpretation from the measurement."""
+        state = str(snapshot.get("state") or "idle")
+        if state in {"opening", "running"}:
+            return self.gui.tr("判讀：量測中，完成後顯示分析結果。")
+        if state == "error":
+            return self.gui.tr(
+                "判讀：量測失敗，無法分析回報穩定度與有效狀態更新率。"
+            )
+        if state == "idle":
+            return self.gui.tr("判讀：尚未量測。")
+
+        rate = float(snapshot.get("rate_hz", 0.0) or 0.0)
+        p50 = float(snapshot.get("p50_us", 0.0) or 0.0) / 1000.0
+        p95 = float(snapshot.get("p95_us", 0.0) or 0.0) / 1000.0
+        p99 = float(snapshot.get("p99_us", 0.0) or 0.0) / 1000.0
+        maximum = float(snapshot.get("max_us", 0.0) or 0.0) / 1000.0
+        if rate <= 0 or p50 <= 0:
+            cadence = self.gui.tr("回報間隔資料不足，無法判讀穩定度。")
+        else:
+            expected = 1000.0 / rate
+            typical_ratio = p50 / expected
+            p95_ratio = p95 / p50 if p50 > 0 else 0.0
+            tail_ratio = p99 / p50 if p50 > 0 else 0.0
+            maximum_ratio = maximum / p50 if p50 > 0 else 0.0
+            if (
+                0.85 <= typical_ratio <= 1.15
+                and p95_ratio <= 1.30
+                and tail_ratio <= 1.35
+                and 1.70 <= maximum_ratio <= 2.30
+            ):
+                cadence = self.gui.tr(
+                    "主要回報間隔穩定；最大間隔約為典型間隔的 2 倍，代表少數回報跨到下一個傳輸週期。這可能是低延遲傳輸策略的預期特性，不代表平均輸入延遲加倍。"
+                )
+            elif (
+                0.75 <= typical_ratio <= 1.25
+                and 1.70 <= tail_ratio <= 2.30
+                and maximum_ratio >= 1.70
+            ):
+                cadence = self.gui.tr(
+                    "P99 與最大間隔皆接近典型間隔的 2 倍，跨週期情形並非單一極端值；可能存在較頻繁的排程等待或傳輸波動。"
+                )
+            elif (
+                0.85 <= typical_ratio <= 1.15
+                and p95_ratio <= 1.20
+                and tail_ratio <= 1.35
+            ):
+                cadence = self.gui.tr(
+                    "主要回報間隔接近預期值，P95／P99 尾端也集中，回報穩定。"
+                )
+            elif (
+                0.75 <= typical_ratio <= 1.25
+                and p95_ratio <= 1.30
+                and tail_ratio <= 2.25
+            ):
+                cadence = self.gui.tr(
+                    "主要回報間隔接近預期值，尾端有少量跨週期回報，未見持續堆積。"
+                )
+            else:
+                cadence = self.gui.tr(
+                    "回報間隔分散或偏離預期值，存在較明顯的排程波動。"
+                )
+
+        if not snapshot.get("axes_available"):
+            effective = self.gui.tr(
+                "無法解析標準搖桿軸，因此本次不提供有效回報率。"
+            )
+        elif not snapshot.get("activity_sufficient"):
+            effective = self.gui.tr(
+                "搖桿活動量或資料量不足，本次有效回報率不具判讀條件。"
+            )
+        else:
+            ratio = float(snapshot.get("effective_ratio", 0.0) or 0.0)
+            dominant = int(snapshot.get("dominant_run_length", 0) or 0)
+            if snapshot.get("regular_repeat") and dominant >= 2:
+                effective = self.gui.tr(
+                    "偵測到規律重複狀態：每個搖桿狀態通常維持 {count} 筆；有效更新率明顯低於 HID 回報率。"
+                ).format(count=dominant)
+            elif ratio >= 0.90:
+                effective = self.gui.tr(
+                    "有效狀態更新率接近 HID 回報率，未發現明顯規律重複。"
+                )
+            elif ratio >= 0.75:
+                effective = self.gui.tr(
+                    "有效狀態更新率略低於 HID 回報率，未發現固定重複規律。"
+                )
+            else:
+                effective = self.gui.tr(
+                    "有效狀態更新率明顯較低，但未發現固定重複規律；可能受軸解析度、濾波或轉動速度影響。"
+                )
+        return self.gui.tr("判讀：{cadence}\n{effective}").format(
+            cadence=cadence, effective=effective
+        )
 
     def _draw_raw_hid_chart(
         self, counts, histogram_max_us, p50_us, p95_us, p99_us
@@ -3228,9 +3581,18 @@ class GamepadTestWindow:
         )
         values = (float(p50_us), float(p95_us), float(p99_us))
         x_max_us = max(1.0, float(histogram_max_us or 0))
+        visible_start, visible_end = self._raw_hid_chart_visible_range(
+            counts, x_max_us, values
+        )
+        bucket_count = max(1, len(counts) - 1)
+        visible_min_us = x_max_us * visible_start / bucket_count
+        visible_max_us = x_max_us * visible_end / bucket_count
+        visible_span_us = max(1.0, visible_max_us - visible_min_us)
         for index in range(5):
             x = left + (right - left) * index / 4
-            value_ms = x_max_us * index / 4 / 1000.0
+            value_ms = (
+                visible_min_us + visible_span_us * index / 4
+            ) / 1000.0
             canvas.create_line(x, top, x, bottom, fill="#E8E8E8")
             label_x = min(max(x, 22), width - 22)
             canvas.create_text(
@@ -3242,8 +3604,11 @@ class GamepadTestWindow:
             canvas.create_line(left, y, right, y, fill="#E8E8E8")
         peak = max(counts)
         points = [(left, bottom)]
-        for index, count in enumerate(counts):
-            x = left + (right - left) * index / max(1, len(counts) - 1)
+        for index in range(visible_start, visible_end + 1):
+            count = counts[index]
+            x = left + (right - left) * (
+                index - visible_start
+            ) / max(1, visible_end - visible_start)
             # Preserve visible headroom for percentile labels and make a
             # narrow high-frequency peak easier to read.
             y = bottom - count / peak * (bottom - top) * 0.82
@@ -3252,14 +3617,19 @@ class GamepadTestWindow:
         canvas.create_polygon(
             *[coordinate for point in points for coordinate in point],
             fill="#BBDEFB", outline="#1976D2", width=2,
+            smooth=True, splinesteps=12,
         )
         label_y_offsets = (8, 30, 52)
+        marker_labels = []
         for label_index, (color, label, value) in enumerate(zip(
             ("#42A5F5", "#FB8C00", "#E53935"),
             ("P50", "P95", "P99"),
             values,
         )):
-            x = left + min(value, x_max_us) / x_max_us * (right - left)
+            x = left + (
+                min(max(value, visible_min_us), visible_max_us)
+                - visible_min_us
+            ) / visible_span_us * (right - left)
             canvas.create_line(x, top, x, bottom, fill=color, width=2)
             text_id = canvas.create_text(
                 x, top + label_y_offsets[label_index],
@@ -3273,6 +3643,36 @@ class GamepadTestWindow:
                     fill="#FFFFFF", outline=color,
                 )
                 canvas.tag_lower(box_id, text_id)
+                marker_labels.append((box_id, text_id))
+        # Marker lines are painted in percentile order. Raise the completed
+        # white label cards afterwards so a nearby P95/P99 line cannot cross
+        # an earlier P50/P95 label.
+        for box_id, text_id in marker_labels:
+            canvas.tag_raise(box_id)
+            canvas.tag_raise(text_id)
+
+    @staticmethod
+    def _raw_hid_chart_visible_range(counts, x_max_us, percentiles):
+        """Return a padded bucket range that fills the chart with data."""
+        bucket_count = len(counts)
+        if bucket_count <= 1 or x_max_us <= 0:
+            return 0, max(0, bucket_count - 1)
+
+        active_buckets = [
+            index for index, count in enumerate(counts) if count > 0
+        ]
+        if not active_buckets:
+            return 0, bucket_count - 1
+
+        last_bucket = bucket_count - 1
+        marker_buckets = [
+            min(last_bucket, max(0, round(value / x_max_us * last_bucket)))
+            for value in percentiles if value > 0
+        ]
+        start = min(active_buckets + marker_buckets)
+        end = max(active_buckets + marker_buckets)
+        padding = max(2, int(math.ceil((end - start + 1) * 0.15)))
+        return max(0, start - padding), min(last_bucket, end + padding)
 
     def _redraw_raw_hid_chart(self):
         self._draw_raw_hid_chart(*self._raw_hid_chart_data)
@@ -3529,6 +3929,1182 @@ class GamepadTestWindow:
         entry.focus_set()
         entry.selection_range(0, "end")
         dialog.grab_set()
+
+    @staticmethod
+    def _read_about_document(path):
+        """Read a bundled notice without making the About page fragile."""
+        try:
+            return Path(path).read_text(encoding="utf-8")
+        except OSError:
+            return ""
+
+    @staticmethod
+    def _open_about_link(url):
+        """Open an official project link in the user's default browser."""
+        try:
+            return bool(webbrowser.open(url, new=2))
+        except (OSError, webbrowser.Error):
+            return False
+
+    def _build_about_document(self, notebook, title, path):
+        page = ttk.Frame(notebook, padding=(6, 6))
+        page.columnconfigure(0, weight=1)
+        page.rowconfigure(0, weight=1)
+
+        text = tk.Text(
+            page,
+            wrap="word",
+            relief="flat",
+            borderwidth=0,
+            padx=9,
+            pady=8,
+            font=("Segoe UI", 9),
+        )
+        scrollbar = ttk.Scrollbar(
+            page,
+            orient="vertical",
+            command=text.yview,
+        )
+        text.configure(yscrollcommand=scrollbar.set)
+        text.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+
+        content = self._read_about_document(path)
+        if not content:
+            content = self.gui.tr("找不到授權文件。")
+        text.insert("1.0", content)
+        text.configure(state="disabled")
+        notebook.add(page, text=f" {self.gui.tr(title)} ")
+
+    def _build_about_tab(self, parent):
+        """Build a fixed About panel with independently scrollable notices."""
+        parent.columnconfigure(0, weight=1, uniform="about_half")
+        parent.columnconfigure(2, weight=1, uniform="about_half")
+        parent.rowconfigure(0, weight=1)
+
+        left = ttk.Frame(parent, padding=(16, 12))
+        left.grid(row=0, column=0, sticky="nsew")
+        left.columnconfigure(0, weight=1)
+        left.rowconfigure(0, weight=1)
+        left.rowconfigure(7, weight=1)
+
+        ttk.Separator(parent, orient="vertical").grid(
+            row=0, column=1, sticky="ns", padx=5
+        )
+
+        row = 1
+        self._about_logo = None
+        if ABOUT_ICON_PATH.is_file():
+            try:
+                logo = tk.PhotoImage(
+                    master=self.window,
+                    file=str(ABOUT_ICON_PATH),
+                )
+                divisor = max(1, round(logo.width() / 128))
+                if divisor > 1:
+                    logo = logo.subsample(divisor, divisor)
+                self._about_logo = logo
+                ttk.Label(left, image=logo).grid(
+                    row=row, column=0, pady=(0, 12)
+                )
+                row += 1
+            except tk.TclError:
+                self._about_logo = None
+
+        title_font = tkfont.Font(
+            family="Segoe UI",
+            size=14,
+            weight="bold",
+        )
+        ttk.Label(
+            left,
+            text=APP_NAME,
+            font=title_font,
+            anchor="center",
+        ).grid(row=row, column=0, sticky="ew")
+        row += 1
+        ttk.Label(
+            left,
+            text=f"{self.gui.tr('版本')} {VERSION}",
+            foreground="#666666",
+            anchor="center",
+        ).grid(row=row, column=0, sticky="ew", pady=(3, 18))
+        row += 1
+
+        link_font = tkfont.Font(
+            family="Segoe UI",
+            size=10,
+            underline=True,
+        )
+        # Named Tk fonts are deleted when their Python wrappers are collected.
+        self._about_fonts = (title_font, link_font)
+        background = (
+            ttk.Style(parent).lookup("TFrame", "background") or "#F0F0F0"
+        )
+        for label, url in (
+            ("GitHub", GITHUB_URL),
+            ("贊助開發（Ko-fi）", SPONSOR_URL),
+        ):
+            link = tk.Label(
+                left,
+                text=self.gui.tr(label),
+                foreground="#1565C0",
+                background=background,
+                cursor="hand2",
+                font=link_font,
+                padx=4,
+                pady=4,
+            )
+            link.grid(row=row, column=0)
+            link.bind(
+                "<Button-1>",
+                lambda _event, target=url: self._open_about_link(target),
+            )
+            row += 1
+
+        right = ttk.Frame(parent, padding=(10, 4, 4, 4))
+        right.grid(row=0, column=2, sticky="nsew")
+        right.columnconfigure(0, weight=1)
+        right.rowconfigure(0, weight=1)
+        document_notebook = ttk.Notebook(right)
+        document_notebook.grid(row=0, column=0, sticky="nsew")
+        self._build_about_document(
+            document_notebook,
+            "許可協議",
+            LICENSE_PATH,
+        )
+        self._build_about_document(
+            document_notebook,
+            "第三方程式",
+            THIRD_PARTY_NOTICES_PATH,
+        )
+
+    def _build_diagnostic_tab(self, parent):
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(3, weight=1)
+
+        controls = ttk.Frame(parent)
+        controls.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        controls.columnconfigure(7, weight=1)
+        self.diagnostic_start_button = ttk.Button(
+            controls,
+            text=self.gui.tr("開始診斷"),
+            command=self.start_diagnostic,
+        )
+        self.diagnostic_start_button.grid(row=0, column=0, padx=(0, 5))
+        self.diagnostic_stop_button = ttk.Button(
+            controls,
+            text=self.gui.tr("停止診斷"),
+            command=self.stop_diagnostic,
+            state="disabled",
+        )
+        self.diagnostic_stop_button.grid(row=0, column=1, padx=(0, 5))
+        self.diagnostic_export_button = ttk.Button(
+            controls,
+            text=self.gui.tr("匯出診斷 Log"),
+            command=self.export_diagnostic_log,
+            state="disabled",
+        )
+        self.diagnostic_export_button.grid(row=0, column=2, padx=(0, 12))
+        ttk.Label(controls, text=self.gui.tr("診斷時間")).grid(
+            row=0, column=3, padx=(0, 5)
+        )
+        ttk.Combobox(
+            controls,
+            textvariable=self.diagnostic_duration_var,
+            values=("30", "60", "120"),
+            state="readonly",
+            width=5,
+        ).grid(row=0, column=4)
+        diagnostic_help = tk.Label(
+            controls,
+            text="?",
+            width=2,
+            relief="solid",
+            borderwidth=1,
+            cursor="question_arrow",
+        )
+        diagnostic_help.grid(row=0, column=6, padx=(5, 0))
+        HoverTip(
+            diagnostic_help,
+            self.gui.tr(
+                "\u8a3a\u65b7\u6a21\u5f0f\u6703\u5728\u9078\u64c7\u7684\u6642\u9593\u5167\u8a18\u9304\u624b\u628a\u8f38\u5165\u983b\u7387\u3001\u5ef6\u9072\u3001\u6821\u6b63\u72c0\u614b\u8207\u9707\u52d5\u8cc7\u6599\u3002\n\n\u6e2c\u8a66\u671f\u9593\u4ecd\u53ef\u7e7c\u7e8c\u64cd\u4f5c\u624b\u628a\uff0c\u4e5f\u53ef\u4ee5\u7e2e\u5c0f\u6b64\u8996\u7a97\u3002\n\n\u5b8c\u6210\u5f8c\u53ef\u532f\u51fa TXT Log\uff0c\u4f9b AI \u6216\u652f\u63f4\u4eba\u54e1\u5206\u6790\u3002"
+            ),
+            wraplength=380,
+        )
+        ttk.Label(controls, text=self.gui.tr("秒")).grid(
+            row=0, column=5, padx=(4, 0)
+        )
+        ttk.Label(
+            controls,
+            textvariable=self.diagnostic_remaining_var,
+            anchor="e",
+        ).grid(row=0, column=7, sticky="e")
+
+        status = ttk.Frame(parent)
+        status.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        status.columnconfigure(0, weight=1)
+        ttk.Label(
+            status,
+            textvariable=self.diagnostic_state_var,
+            anchor="w",
+        ).grid(row=0, column=0, sticky="ew")
+        ttk.Progressbar(
+            status,
+            variable=self.diagnostic_progress_var,
+            maximum=100.0,
+        ).grid(row=1, column=0, sticky="ew", pady=(4, 0))
+
+        summary = ttk.LabelFrame(
+            parent,
+            text=self.gui.tr("即時診斷摘要"),
+            padding=(9, 7),
+        )
+        summary.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        summary.configure(text=self.gui.tr("\u8a3a\u65b7\u5224\u8b80\u6458\u8981"))
+        for column in range(2):
+            summary.columnconfigure(column, weight=1, uniform="diagnostic")
+        items = (
+            ("模式", "mode"),
+            ("連線", "connection"),
+            ("輸入回報", "input"),
+            ("延遲／佇列", "latency"),
+            ("校正建議", "calibration"),
+            ("感測器", "sensor"),
+            ("陀螺儀", "gyro"),
+            ("震動輸入", "rumble_input"),
+            ("震動輸出", "rumble_output"),
+            ("震動傳輸", "rumble_transport"),
+        )
+        # Keep technical telemetry in Recent Status.  This compact area is
+        # reserved for the conclusion the user should act on.
+        items = (
+            ("\u6574\u9ad4\u5224\u8b80", "verdict"),
+            ("\u5075\u6e2c\u5230\u7684\u72c0\u6cc1", "findings"),
+            ("\u5efa\u8b70\u52d5\u4f5c", "advice"),
+        )
+        for index, (label, key) in enumerate(items):
+            row, column = index, 0
+            box = ttk.Frame(summary)
+            box.grid(
+                row=row, column=column, sticky="ew",
+                padx=0,
+                pady=2,
+            )
+            box.columnconfigure(1, weight=1)
+            ttk.Label(
+                box,
+                text=self.gui.tr(label),
+                width=11,
+                anchor="nw",
+            ).grid(row=0, column=0, sticky="nw")
+            value_label = ttk.Label(
+                box,
+                textvariable=self.diagnostic_summary_vars[key],
+                anchor="nw",
+                justify="left",
+                wraplength=560,
+            )
+            value_label.grid(row=0, column=1, sticky="new")
+            box.bind(
+                "<Configure>",
+                lambda event, label=value_label: label.configure(
+                    wraplength=max(120, event.width - 100)
+                ),
+                add="+",
+            )
+
+        event_group = ttk.LabelFrame(
+            parent,
+            text=self.gui.tr("最近狀態"),
+            padding=(8, 6),
+        )
+        event_group.grid(row=3, column=0, sticky="nsew")
+        event_group.configure(text=self.gui.tr("\u8a3a\u65b7\u8a73\u7d30\u72c0\u614b"))
+        event_group.columnconfigure(0, weight=1)
+        event_group.rowconfigure(0, weight=1)
+        self.diagnostic_event_text = tk.Text(
+            event_group,
+            height=6,
+            wrap="word",
+            state="disabled",
+            relief="flat",
+            borderwidth=0,
+            background=(
+                ttk.Style(parent).lookup("TFrame", "background")
+                or "#F0F0F0"
+            ),
+            font=("Consolas", 9),
+        )
+        self.diagnostic_event_text.grid(row=0, column=0, sticky="nsew")
+
+    @staticmethod
+    def _diagnostic_pair(value, default=(0, 0)):
+        value = value if isinstance(value, (list, tuple)) else default
+        return tuple(value[:2]) if len(value) >= 2 else tuple(default)
+
+    @staticmethod
+    def _diagnostic_rssi_quality(rssi_dbm):
+        if rssi_dbm >= -55:
+            return "\u6975\u4f73"
+        if rssi_dbm >= -67:
+            return "\u826f\u597d"
+        if rssi_dbm >= -75:
+            return "\u666e\u901a"
+        if rssi_dbm >= -85:
+            return "\u504f\u5f31"
+        return "\u5f88\u5f31"
+
+    def start_diagnostic(self):
+        try:
+            duration = float(self.diagnostic_duration_var.get())
+        except (TypeError, ValueError, tk.TclError):
+            duration = DEFAULT_DIAGNOSTIC_SECONDS
+        self.diagnostic_session = DiagnosticSession(duration)
+        self.diagnostic_session.start()
+        self._diagnostic_last_event_signature = None
+        self._diagnostic_firmware_update_notice_shown = False
+        self.diagnostic_state_var.set(self.gui.tr("診斷執行中"))
+        self.diagnostic_progress_var.set(0.0)
+        self.diagnostic_start_button.configure(state="disabled")
+        self.diagnostic_stop_button.configure(state="normal")
+        self.diagnostic_export_button.configure(state="disabled")
+
+        connector = read_controller_status(CONTROLLER_STATUS_PATH)
+        bridge_owns_port = (
+            connector.get("state") == "connected"
+            and connector.get("mode") == "esp32"
+        )
+        if bridge_owns_port:
+            enqueue_controller_command("diagnostic_start")
+            self.diagnostic_session.add_event(
+                "firmware_channel",
+                state="owned_by_bridge_connector",
+            )
+        else:
+            self.diagnostic_reader.start()
+
+    def _show_diagnostic_firmware_update_notice(self):
+        if self._diagnostic_firmware_update_notice_shown:
+            return
+        self._diagnostic_firmware_update_notice_shown = True
+        self.diagnostic_session.add_event(
+            "firmware_update_required",
+            required_product="S2P-FW",
+            required_version="1.0.0",
+            required_protocol="s2p_bridge 1.0.0",
+        )
+        self.stop_diagnostic("firmware_update_required")
+        self.diagnostic_state_var.set(
+            self.gui.tr("需要更新韌體才能使用診斷模式")
+        )
+        messagebox.showwarning(
+            self.gui.tr("需要更新 ESP32-S3 韌體"),
+            self.gui.tr(
+                "目前 ESP32 韌體不支援診斷模式。\n\n"
+                "請回到設定頁按「刷入韌體」，刷入 S2P-FW 1.0.0 後，"
+                "按 RESET / EN 或重新插拔 ESP32，再重新開啟手把測試。"
+            ),
+            parent=self.window,
+        )
+
+    def stop_diagnostic(self, reason="stopped_by_user"):
+        session = self.diagnostic_session
+        connector = read_controller_status(CONTROLLER_STATUS_PATH)
+        if connector.get("mode") == "esp32":
+            enqueue_controller_command("diagnostic_stop")
+        if session.running:
+            session.stop(reason)
+        self.diagnostic_reader.stop(timeout=0.25)
+        if session.started_monotonic is None:
+            return
+        self.diagnostic_state_var.set(
+            self.gui.tr("診斷完成")
+            if session.completed else self.gui.tr("診斷已停止")
+        )
+        self.diagnostic_start_button.configure(state="normal")
+        self.diagnostic_stop_button.configure(state="disabled")
+        self.diagnostic_export_button.configure(
+            state="normal" if session.samples else "disabled"
+        )
+        self._update_diagnostic_display()
+        if session.completed:
+            self.diagnostic_progress_var.set(100.0)
+
+    def export_diagnostic_log(self):
+        session = self.diagnostic_session
+        if session.started_monotonic is None or not session.samples:
+            messagebox.showinfo(
+                self.gui.tr("匯出診斷 Log"),
+                self.gui.tr("目前沒有可匯出的診斷資料。"),
+                parent=self.window,
+            )
+            return
+        default_name = (
+            "S2P-Diagnostic-"
+            + time.strftime("%Y%m%d-%H%M%S")
+            + ".txt"
+        )
+        filename = filedialog.asksaveasfilename(
+            parent=self.window,
+            title=self.gui.tr("匯出診斷 Log"),
+            defaultextension=".txt",
+            initialfile=default_name,
+            filetypes=((self.gui.tr("文字檔"), "*.txt"),),
+        )
+        if not filename:
+            return
+        try:
+            Path(filename).write_text(
+                session.format_log(), encoding="utf-8"
+            )
+        except OSError as exc:
+            messagebox.showerror(
+                self.gui.tr("匯出診斷 Log"),
+                self.gui.tr("無法寫入診斷 Log：{error}").format(error=exc),
+                parent=self.window,
+            )
+            return
+        messagebox.showinfo(
+            self.gui.tr("匯出診斷 Log"),
+            self.gui.tr("診斷 Log 已匯出。"),
+            parent=self.window,
+        )
+
+    def _poll_diagnostic(self, now):
+        session = self.diagnostic_session
+        if not session.running:
+            return
+        connector = read_controller_status(CONTROLLER_STATUS_PATH)
+        firmware = self.diagnostic_reader.snapshot()
+        bridge_firmware = connector.get("firmware_diagnostics")
+        if isinstance(bridge_firmware, dict) and bridge_firmware:
+            firmware.update(bridge_firmware)
+        if session.due(now):
+            telemetry = (
+                self.latest_telemetry
+                if self._telemetry_is_fresh(self.latest_telemetry)
+                else self.latest_diagnostic_input
+            )
+            session.add_sample(
+                telemetry,
+                connector,
+                firmware,
+                now=now,
+            )
+        if diagnostic_firmware_needs_update(
+            firmware, connector, session.elapsed(now)
+        ):
+            self._show_diagnostic_firmware_update_notice()
+            return
+        self._update_diagnostic_display(now)
+        if not session.running:
+            self.stop_diagnostic("completed")
+
+    def _update_diagnostic_display_legacy(self, now=None):
+        session = self.diagnostic_session
+        if session.started_monotonic is None:
+            return
+        remaining = session.remaining(now)
+        elapsed = session.elapsed(now)
+        self.diagnostic_remaining_var.set(
+            self.gui.tr("剩餘 {seconds:.0f} 秒").format(seconds=remaining)
+            if session.running else self.gui.tr("已完成")
+        )
+        self.diagnostic_progress_var.set(min(
+            100.0, elapsed / session.duration_seconds * 100.0
+        ))
+        latest = session.samples[-1] if session.samples else {}
+        telemetry = latest.get("telemetry") or {}
+        status = latest.get("status") or {}
+        firmware = latest.get("firmware") or {}
+        capabilities = firmware.get("capabilities") or {}
+        runtime = firmware.get("runtime_status") or {}
+        latency = firmware.get("latency_status") or {}
+        rumble = dict(status.get("rumble") or {})
+        rumble.update(firmware.get("rumble_status") or {})
+
+        mode = capabilities.get("mode") or status.get("mode") or "unknown"
+        mode_names = {
+            "esp32": self.gui.tr("橋接模式"),
+            "standalone": self.gui.tr("獨立 XInput 模式"),
+            "standalone_hid": self.gui.tr("獨立 HID 模式"),
+            "wired": self.gui.tr("USB 有線模式"),
+            "bluetooth": self.gui.tr("Windows BLE 模式"),
+        }
+        self.diagnostic_summary_vars["mode"].set(
+            mode_names.get(str(mode), str(mode))
+        )
+        connection = status.get("state") or firmware.get("state") or "unknown"
+        self.diagnostic_summary_vars["connection"].set(str(connection))
+
+        rate = telemetry.get("source_rate_hz") or status.get(
+            "input_report_rate"
+        )
+        self.diagnostic_summary_vars["input"].set(
+            f"{float(rate):.1f} Hz"
+            if isinstance(rate, (int, float)) else "—"
+        )
+        p95 = session.summary().get("input_interval_ms_p95")
+        queue_drops = int(
+            latency.get("notify_queue_drops", 0) or 0
+        )
+        source_gaps = int(latency.get("source_gap_events", 0) or 0)
+        usb_wait_us = int(latency.get("usb_wait_avg_us", 0) or 0)
+        timing = (
+            f"P95 {p95:.2f} ms"
+            if p95 is not None
+            else f"USB {usb_wait_us / 1000.0:.2f} ms"
+            if usb_wait_us > 0 else "—"
+        )
+        self.diagnostic_summary_vars["latency"].set(
+            f"{timing} · gaps {source_gaps} · drops {queue_drops}"
+        )
+
+        bias_samples = int(
+            status.get("gyro_bias_samples", 0)
+            or runtime.get("gyro_bias_samples", 0)
+            or 0
+        )
+        calibration_state = str(
+            status.get("gyro_calibration_state") or "idle"
+        )
+        calibration_text = (
+            self.gui.tr("建議保持手把靜止完成初始化")
+            if connection == "connected" and bias_samples < 16
+            else self.gui.tr("暫時不需要校正")
+        )
+        if calibration_state in {"failed", "error"}:
+            calibration_text = self.gui.tr("建議重新校正")
+        self.diagnostic_summary_vars["calibration"].set(calibration_text)
+
+        sensor_mode = status.get("sensor_mode")
+        fusion = runtime.get("gyro_active")
+        self.diagnostic_summary_vars["sensor"].set(
+            str(sensor_mode or (
+                "fusion active" if fusion else "—"
+            ))
+        )
+        gyro = status.get("gyro_raw") or runtime.get("gyro_rate")
+        if isinstance(gyro, (list, tuple)) and len(gyro) >= 3:
+            self.diagnostic_summary_vars["gyro"].set(
+                "X {0:.1f} · Y {1:.1f} · Z {2:.1f}".format(
+                    *[float(value) for value in gyro[:3]]
+                )
+            )
+        else:
+            self.diagnostic_summary_vars["gyro"].set("—")
+
+        raw = self._diagnostic_pair(
+            rumble.get("input") or rumble.get("latest_input")
+        )
+        output = self._diagnostic_pair(
+            rumble.get("output") or rumble.get("latest_output")
+        )
+        frequency = self._diagnostic_pair(rumble.get("frequency"))
+        self.diagnostic_summary_vars["rumble_input"].set(
+            f"Large {raw[0]} · Small {raw[1]} · "
+            f"Max {max(session.rumble_peak_input)}"
+        )
+        self.diagnostic_summary_vars["rumble_output"].set(
+            f"LF {frequency[0]}/{output[0]} · "
+            f"HF {frequency[1]}/{output[1]} · "
+            f"Max {max(session.rumble_peak_output)}"
+        )
+        attempts = rumble.get(
+            "transport_send_attempts", rumble.get("sent", 0)
+        )
+        failures = rumble.get("transport_send_failures", 0)
+        overwritten = rumble.get("transport_overwritten", 0)
+        self.diagnostic_summary_vars["rumble_transport"].set(
+            f"sent {attempts} · failed {failures} · latest {overwritten}"
+        )
+
+        summary_stats = session.summary()
+        warnings = summary_stats.get("warnings", ())
+        if not session.samples:
+            verdict = self.gui.tr("\u6b63\u5728\u6536\u96c6\u8cc7\u6599")
+            findings = self.gui.tr("\u5c1a\u7121\u8db3\u5920\u6a23\u672c\u53ef\u4f9b\u5224\u8b80")
+            advice = self.gui.tr("\u8acb\u7e7c\u7e8c\u64cd\u4f5c\u624b\u628a\u81f3\u8a3a\u65b7\u5b8c\u6210")
+        elif warnings:
+            verdict = self.gui.tr("\u9700\u8981\u6ce8\u610f")
+            findings = "\u3001".join(str(item) for item in warnings)
+            if "FIRMWARE_NOTIFY_QUEUE_DROPS" in warnings:
+                advice = self.gui.tr("\u5efa\u8b70\uff1a\u6e1b\u5c11 USB \u8ca0\u8f09\u4e26\u6aa2\u67e5\u7dda\u6750\u8207\u96fb\u6e90")
+            elif "INPUT_SOURCE_GAPS" in warnings:
+                advice = self.gui.tr("\u5efa\u8b70\uff1a\u6aa2\u67e5\u624b\u628a\u96fb\u91cf\u8207\u540c\u983b\u5e72\u64fe\uff1b\u50c5\u5728 RSSI \u4f4e\u65bc -75 dBm \u6642\u624d\u9700\u9760\u8fd1\u6a4b\u63a5\u5668")
+            else:
+                advice = self.gui.tr("\u5efa\u8b70\uff1a\u532f\u51fa Log \u4ee5\u4fbf\u9032\u4e00\u6b65\u5206\u6790")
+        else:
+            verdict = self.gui.tr("\u76ee\u524d\u672a\u767c\u73fe\u660e\u986f\u7570\u5e38")
+            findings = self.gui.tr("\u8f38\u5165\u3001\u5ef6\u9072\u8207\u9707\u52d5\u672a\u51fa\u73fe\u8b66\u793a")
+            advice = self.gui.tr("\u53ef\u532f\u51fa Log \u4f5c\u70ba\u672c\u6b21\u8a3a\u65b7\u8a18\u9304")
+        self.diagnostic_summary_vars["verdict"].set(verdict)
+        self.diagnostic_summary_vars["findings"].set(findings)
+        self.diagnostic_summary_vars["advice"].set(advice)
+
+        event_lines = []
+        reader_state = firmware.get("state")
+        bridge_owned = (
+            status.get("state") == "connected"
+            and status.get("mode") == "esp32"
+        )
+        if bridge_owned:
+            event_lines.append(self.gui.tr(
+                "\u8cc7\u6599\u4f86\u6e90\uff1a\u4e3b\u7a0b\u5f0f\u6a4b\u63a5\u901a\u9053\uff08ESP32 \u5e8f\u5217\u57e0\u7531\u4e3b\u7a0b\u5f0f\u4f7f\u7528\uff09"
+            ))
+        elif reader_state == "running":
+            event_lines.append(
+                self.gui.tr("\u8cc7\u6599\u4f86\u6e90\uff1aESP32 \u7368\u7acb\u8a3a\u65b7\u901a\u9053")
+                + (f" ({firmware.get('port')})" if firmware.get("port") else "")
+            )
+        elif reader_state == "unavailable":
+            error = str(firmware.get("error") or "")
+            if "diagnostic port not found" in error:
+                event_lines.extend((
+                    self.gui.tr("ESP32 \u8a3a\u65b7\u901a\u9053\uff1a\u672a\u5075\u6e2c\u5230\u53ef\u7528\u88dd\u7f6e"),
+                    self.gui.tr(
+                        "\u63d0\u793a\uff1a\u82e5\u4f7f\u7528\u6a4b\u63a5\u6a21\u5f0f\uff0c\u8acb\u5148\u7531\u4e3b\u7a0b\u5f0f\u9023\u7dda\uff1b\u82e5\u662f\u820a\u97cc\u9ad4\uff0c\u8acb\u5237\u5165 S2P-FW 1.0.0\u3002"
+                    ),
+                ))
+            else:
+                event_lines.append(
+                    self.gui.tr("ESP32 \u8a3a\u65b7\u901a\u9053\u7121\u6cd5\u4f7f\u7528\uff1a{error}").format(
+                        error=error or self.gui.tr("\u7b49\u5f85\u56de\u8986\u903e\u6642")
+                    )
+                )
+        elif reader_state == "opening":
+            event_lines.append(self.gui.tr("ESP32 \u8a3a\u65b7\u901a\u9053\uff1a\u6b63\u5728\u9023\u7dda"))
+
+        event_lines.extend((
+            self.gui.tr("\u9023\u7dda\uff1a{connection}\uff1b\u6a21\u5f0f\uff1a{mode}").format(
+                connection=connection,
+                mode=mode_names.get(str(mode), str(mode)),
+            ),
+            self.gui.tr("\u6821\u6b63\uff1a{calibration}\uff1b\u611f\u6e2c\u5668\uff1a{sensor}\uff1b\u9640\u87ba\u5100\uff1a{gyro}").format(
+                calibration=calibration_text,
+                sensor=self.diagnostic_summary_vars["sensor"].get(),
+                gyro=self.diagnostic_summary_vars["gyro"].get(),
+            ),
+            self.gui.tr("\u9707\u52d5\uff1a{input}\uff1b{output}\uff1b{transport}").format(
+                input=self.diagnostic_summary_vars["rumble_input"].get(),
+                output=self.diagnostic_summary_vars["rumble_output"].get(),
+                transport=self.diagnostic_summary_vars["rumble_transport"].get(),
+            ),
+        ))
+
+        if capabilities:
+            event_lines.append(
+                self.gui.tr("\u97cc\u9ad4\uff1a{product} {version}\uff1b\u5354\u8b70\uff1a{protocol} {protocol_version}").format(
+                    product=capabilities.get("product") or "S2P-FW",
+                    version=capabilities.get("version") or "?",
+                    protocol=capabilities.get("protocol") or "?",
+                    protocol_version=capabilities.get("protocol_version") or "?",
+                )
+            )
+        link_status = firmware.get("link_status") or {}
+        if isinstance(link_status, dict) and link_status:
+            bridge_mac = link_status.get("bridge_mac")
+            if bridge_mac:
+                event_lines.append(
+                    self.gui.tr("\u6a4b\u63a5\u5668 MAC\uff1a{mac}").format(
+                        mac=bridge_mac
+                    )
+                )
+            for link in (link_status.get("links") or [])[:3]:
+                if not isinstance(link, (list, tuple)) or len(link) < 6:
+                    continue
+                channel, controller_mac, ready, interval, rssi, age = link[:6]
+                try:
+                    rssi = int(rssi)
+                except (TypeError, ValueError):
+                    rssi = 127
+                if -127 <= rssi <= 20:
+                    signal = f"{rssi} dBm ({self.gui.tr(self._diagnostic_rssi_quality(rssi))})"
+                else:
+                    signal = self.gui.tr("\u97cc\u9ad4\u672a\u63d0\u4f9b")
+                event_lines.append(
+                    self.gui.tr(
+                        "\u624b\u628a CH{channel} MAC\uff1a{mac}\uff1b\u8a0a\u865f\uff1a{signal}\uff1b\u9023\u7dda\u9593\u9694\uff1a{interval:.2f} ms"
+                    ).format(
+                        channel=channel,
+                        mac=controller_mac,
+                        signal=signal,
+                        interval=float(interval or 0.0),
+                    )
+                )
+        summary_stats = session.summary()
+        p50 = summary_stats.get("input_interval_ms_p50")
+        p95 = summary_stats.get("input_interval_ms_p95")
+        p99 = summary_stats.get("input_interval_ms_p99")
+        rate_average = summary_stats.get("source_rate_hz_avg")
+        if any(value is not None for value in (p50, p95, p99)):
+            event_lines.append(
+                self.gui.tr(
+                    "\u684c\u9762\u7aef\u8f38\u5165\u9593\u9694\uff1aP50 {p50:.2f} ms\uff1bP95 {p95:.2f} ms\uff1bP99 {p99:.2f} ms"
+                ).format(
+                    p50=float(p50),
+                    p95=float(p95),
+                    p99=float(p99),
+                )
+            )
+        raw_rate_average = summary_stats.get("ble_raw_report_rate_hz_avg")
+        if raw_rate_average is not None:
+            event_lines.append(
+                self.gui.tr(
+                    "BLE \u539f\u59cb\u56de\u5831\u7387\uff1a\u5e73\u5747 {average:.1f} Hz\uff1bP50 {p50:.1f} Hz\uff1bP95 {p95:.1f} Hz\uff1bP99 {p99:.1f} Hz"
+                ).format(
+                    average=float(raw_rate_average),
+                    p50=float(summary_stats.get("ble_raw_report_rate_hz_p50") or 0.0),
+                    p95=float(summary_stats.get("ble_raw_report_rate_hz_p95") or 0.0),
+                    p99=float(summary_stats.get("ble_raw_report_rate_hz_p99") or 0.0),
+                )
+            )
+        if latency:
+            event_lines.append(
+                self.gui.tr(
+                    "\u97cc\u9ad4\u8f38\u5165\uff1a{reports} \u5831\u544a\uff1b\u6f0f\u5931 {gaps}\uff1b\u4f47\u5217\u4e1f\u68c4 {drops}\uff1bUSB \u7b49\u5f85\u5e73\u5747 {wait:.2f} ms"
+                ).format(
+                    reports=int(latency.get("ble_input_reports", 0) or 0),
+                    gaps=int(latency.get("source_gap_events", 0) or 0),
+                    drops=int(latency.get("notify_queue_drops", 0) or 0),
+                    wait=float(latency.get("usb_wait_avg_us", 0) or 0) / 1000.0,
+                )
+            )
+        self_tests = firmware.get("self_tests") or []
+        setup_errors = firmware.get("setup_errors") or []
+        if self_tests or setup_errors:
+            event_lines.append(
+                self.gui.tr("\u97cc\u9ad4\u81ea\u6e2c\uff1a{passed} \u9805\u5df2\u56de\u8986\uff1b{failed} \u9805\u672a\u5b8c\u6210").format(
+                    passed=len(self_tests), failed=len(setup_errors)
+                )
+            )
+        if reader_state in {"opening", "unavailable"}:
+            event_lines.append(self.gui.tr(
+                "\u63d0\u793a\uff1a\u6c92\u6709\u97cc\u9ad4\u8cc7\u6599\u6642\uff0c\u4ecd\u53ef\u8a18\u9304\u624b\u628a\u8f38\u5165\u8207\u4e3b\u7a0b\u5f0f\u9707\u52d5\u8f38\u51fa\u3002"
+            ))
+        for warning in session.summary().get("warnings", ()):
+            event_lines.append(f"WARN: {warning}")
+        event_lines.extend(
+            self.gui.tr("\u91cd\u8981\u4e8b\u4ef6\uff1a{event}").format(
+                event=event.get("type", "unknown")
+            )
+            for event in session.events[-4:]
+            if event.get("type") not in {
+                "session_started", "session_stopped", "firmware_channel",
+            }
+        )
+        signature = tuple(event_lines)
+        if (
+            self.diagnostic_event_text is not None
+            and signature != self._diagnostic_last_event_signature
+        ):
+            self._diagnostic_last_event_signature = signature
+            self.diagnostic_event_text.configure(state="normal")
+            self.diagnostic_event_text.delete("1.0", "end")
+            self.diagnostic_event_text.insert(
+                "1.0", "\n".join(event_lines)
+            )
+            self.diagnostic_event_text.configure(state="disabled")
+
+    def _update_diagnostic_display(self, now=None):
+        """Render one stable assessment plus grouped technical details."""
+        session = self.diagnostic_session
+        if session.started_monotonic is None:
+            return
+
+        def text(zh, en):
+            return (
+                en
+                if getattr(self.gui, "language", "zh") == "en"
+                else zh
+            )
+
+        def number(value, digits=1, suffix=""):
+            if not isinstance(value, (int, float)):
+                return "—"
+            return f"{float(value):.{digits}f}{suffix}"
+
+        remaining = session.remaining(now)
+        elapsed = session.elapsed(now)
+        self.diagnostic_remaining_var.set(
+            text(f"\u5269\u9918 {remaining:.0f} \u79d2", f"{remaining:.0f} s remaining")
+            if session.running else text("\u5df2\u5b8c\u6210", "Complete")
+        )
+        self.diagnostic_progress_var.set(
+            100.0 if session.completed else min(
+                100.0,
+                elapsed / session.duration_seconds * 100.0,
+            )
+        )
+
+        latest = session.samples[-1] if session.samples else {}
+        status = latest.get("status") or {}
+        firmware = latest.get("firmware") or {}
+        capabilities = firmware.get("capabilities") or {}
+        runtime = firmware.get("runtime_status") or {}
+        latency = firmware.get("latency_status") or {}
+        rumble = dict(status.get("rumble") or {})
+        rumble.update(firmware.get("rumble_status") or {})
+        stats = session.summary()
+        warnings = tuple(stats.get("warnings") or ())
+        notices = tuple(stats.get("notices") or ())
+
+        warning_text = {
+            "FIRMWARE_NOTIFY_QUEUE_DROPS": text(
+                "\u97cc\u9ad4\u8f38\u5165\u4f47\u5217\u6709\u8cc7\u6599\u4e1f\u68c4",
+                "Firmware input queue dropped data",
+            ),
+            "INPUT_SOURCE_GAPS": text(
+                "\u539f\u59cb BLE \u8f38\u5165\u9593\u9694\u6bd4\u4f8b\u504f\u9ad8",
+                "Raw BLE input gaps exceed the threshold",
+            ),
+            "RUMBLE_SEND_FAILURES": text(
+                "\u9707\u52d5\u8a0a\u865f\u50b3\u9001\u5931\u6557",
+                "Rumble transport failures detected",
+            ),
+            "SENSOR_MODE_UNAVAILABLE": text(
+                "\u5df2\u9023\u7dda\u4f46\u672a\u53d6\u5f97\u611f\u6e2c\u5668\u6a21\u5f0f",
+                "Connected, but sensor mode is unavailable",
+            ),
+            "BLE_SIGNAL_VERY_WEAK": text(
+                "BLE \u8a0a\u865f\u5f88\u5f31",
+                "BLE signal is very weak",
+            ),
+            "BLE_RAW_REPORT_RATE_LOW": text(
+                "BLE \u539f\u59cb\u56de\u5831\u7387\u4f4e\u65bc\u9023\u7dda\u9593\u9694\u7684\u9810\u671f",
+                "BLE raw report rate is below the expected link rate",
+            ),
+            "FIRMWARE_SELF_TEST_INCOMPLETE": text(
+                "\u97cc\u9ad4\u81ea\u6e2c\u672a\u5168\u90e8\u5b8c\u6210",
+                "Firmware self-tests did not all complete",
+            ),
+        }
+        findings = [warning_text.get(code, code) for code in warnings]
+        gap_ratio = stats.get("source_gap_ratio")
+        if "OCCASIONAL_INPUT_SOURCE_GAPS" in notices:
+            findings.append(text(
+                "\u5075\u6e2c\u5230\u5c11\u91cf\u539f\u59cb\u8f38\u5165\u9593\u9694"
+                f"\uff08{float(gap_ratio or 0.0) * 100.0:.2f}%\uff0c"
+                "\u672a\u8d85\u904e 1% \u8b66\u793a\u9580\u6abb\uff09",
+                "A small number of raw input gaps were observed "
+                f"({float(gap_ratio or 0.0) * 100.0:.2f}%, below the 1% warning threshold)",
+            ))
+        if "BLE_SIGNAL_WEAK" in notices:
+            findings.append(text(
+                "BLE \u8a0a\u865f\u504f\u5f31\uff0c\u4f46\u5c1a\u672a\u9054\u56b4\u91cd\u7b49\u7d1a",
+                "BLE signal is weak, but not critical",
+            ))
+
+        if not session.samples:
+            verdict = text("\u6b63\u5728\u6536\u96c6\u8cc7\u6599", "Collecting data")
+            finding_text = text(
+                "\u5c1a\u7121\u8db3\u5920\u6a23\u672c\u53ef\u4f9b\u5224\u8b80",
+                "Not enough samples to assess yet",
+            )
+            advice = text(
+                "\u8acb\u7e7c\u7e8c\u64cd\u4f5c\u624b\u628a\uff0c\u76f4\u5230\u8a3a\u65b7\u5b8c\u6210",
+                "Keep using the controller until Diagnostics completes",
+            )
+        elif warnings:
+            verdict = text("\u9700\u8981\u6ce8\u610f", "Attention needed")
+            finding_text = "\uff1b".join(findings)
+            rssi = stats.get("link_rssi_dbm")
+            if "FIRMWARE_NOTIFY_QUEUE_DROPS" in warnings:
+                advice = text(
+                    "\u6aa2\u67e5 USB \u7dda\u6750\u3001\u4f9b\u96fb\u8207\u96fb\u8166 USB \u8ca0\u8f09\uff0c\u518d\u91cd\u65b0\u8a3a\u65b7",
+                    "Check the USB cable, power, and host USB load, then run Diagnostics again",
+                )
+            elif (
+                "BLE_SIGNAL_VERY_WEAK" in warnings
+                or (
+                    "INPUT_SOURCE_GAPS" in warnings
+                    and isinstance(rssi, (int, float))
+                    and rssi < -75
+                )
+            ):
+                advice = text(
+                    "\u8acb\u9760\u8fd1 ESP32\uff0c\u4e26\u6e1b\u5c11 2.4 GHz \u5e72\u64fe",
+                    "Move closer to the ESP32 and reduce 2.4 GHz interference",
+                )
+            elif "INPUT_SOURCE_GAPS" in warnings:
+                advice = text(
+                    "\u8a0a\u865f\u4e26\u4e0d\u5f31\uff1b\u8acb\u512a\u5148\u6aa2\u67e5\u624b\u628a\u96fb\u91cf\u3001"
+                    "2.4 GHz \u5e72\u64fe\u8207\u5176\u4ed6\u85cd\u7259\u88dd\u7f6e\uff0c\u4e0d\u9700\u518d\u9760\u8fd1 ESP32",
+                    "Signal is not weak; check controller battery, 2.4 GHz interference, "
+                    "and other Bluetooth devices. Moving closer is unnecessary",
+                )
+            elif "RUMBLE_SEND_FAILURES" in warnings:
+                advice = text(
+                    "\u91cd\u65b0\u57f7\u884c\u9707\u52d5\u6e2c\u8a66\uff1b\u82e5\u4ecd\u5931\u6557\uff0c\u8acb\u532f\u51fa Log",
+                    "Repeat the rumble test; export the log if failures continue",
+                )
+            elif "FIRMWARE_SELF_TEST_INCOMPLETE" in warnings:
+                advice = text(
+                    "\u91cd\u65b0\u63d2\u62d4 ESP32 \u5f8c\u518d\u6e2c\uff1b\u82e5\u4ecd\u5931\u6557\uff0c\u91cd\u5237\u6700\u65b0\u97cc\u9ad4",
+                    "Reconnect the ESP32 and retry; reflash current firmware if it still fails",
+                )
+            else:
+                advice = text(
+                    "\u532f\u51fa TXT Log \u9032\u4e00\u6b65\u5206\u6790",
+                    "Export the TXT log for further analysis",
+                )
+        else:
+            verdict = (
+                text("\u8a3a\u65b7\u5b8c\u6210\uff0c\u672a\u767c\u73fe\u660e\u986f\u7570\u5e38",
+                     "Diagnostics complete; no obvious issue detected")
+                if session.completed else
+                text("\u76ee\u524d\u72c0\u614b\u6b63\u5e38", "Current status is normal")
+            )
+            finding_text = (
+                "\uff1b".join(findings)
+                if findings
+                else text(
+                    "\u8f38\u5165\u3001\u50b3\u8f38\u8207\u9707\u52d5\u672a\u51fa\u73fe\u8b66\u793a",
+                    "Input, transport, and rumble have no warnings",
+                )
+            )
+            advice = text(
+                "\u7121\u9700\u8abf\u6574\uff1b\u53ef\u532f\u51fa Log \u7559\u5b58\u672c\u6b21\u7d50\u679c",
+                "No adjustment is needed; you may export the log for reference",
+            )
+
+        self.diagnostic_summary_vars["verdict"].set(verdict)
+        self.diagnostic_summary_vars["findings"].set(finding_text)
+        self.diagnostic_summary_vars["advice"].set(advice)
+
+        mode = capabilities.get("mode") or status.get("mode") or "unknown"
+        mode_text = {
+            "esp32": text("\u6a4b\u63a5\u6a21\u5f0f", "Bridge mode"),
+            "standalone": text("\u7368\u7acb XInput \u6a21\u5f0f", "Standalone XInput mode"),
+            "standalone_hid": text("\u7368\u7acb HID \u6a21\u5f0f", "Standalone HID mode"),
+            "wired": text("USB \u6709\u7dda\u6a21\u5f0f", "Wired USB mode"),
+            "bluetooth": text("Windows BLE \u6a21\u5f0f", "Windows BLE mode"),
+        }.get(str(mode), str(mode))
+        reader_state = firmware.get("state")
+        port = firmware.get("port")
+        bridge_owned = (
+            status.get("state") == "connected"
+            and status.get("mode") == "esp32"
+        )
+        if bridge_owned:
+            source_text = text(
+                "\u4e3b\u7a0b\u5f0f\u6a4b\u63a5\u901a\u9053\uff08\u5e8f\u5217\u57e0\u7531\u4e3b\u7a0b\u5f0f\u4f7f\u7528\uff09",
+                "Desktop bridge channel (the application owns the serial port)",
+            )
+        elif reader_state == "running":
+            source_text = text(
+                "ESP32 \u7368\u7acb\u8a3a\u65b7\u901a\u9053",
+                "Standalone ESP32 diagnostic channel",
+            )
+            if port:
+                source_text += f" ({port})"
+        elif reader_state == "opening":
+            source_text = text("\u6b63\u5728\u9023\u7dda ESP32", "Connecting to ESP32")
+        else:
+            source_text = text(
+                "\u672a\u53d6\u5f97 ESP32 \u8a3a\u65b7\u901a\u9053",
+                "ESP32 diagnostic channel unavailable",
+            )
+
+        ready_link = bool(stats.get("controller_mac"))
+        controller_connected = (
+            status.get("state") == "connected"
+            or ready_link
+            or int(stats.get("ble_input_reports", 0) or 0) > 0
+        )
+        connection_text = (
+            text("\u624b\u628a\u5df2\u9023\u7dda", "Controller connected")
+            if controller_connected
+            else text(
+                "\u8a3a\u65b7\u901a\u9053\u5df2\u9023\u7dda\uff0c\u672a\u78ba\u8a8d\u624b\u628a\u9023\u7dda",
+                "Diagnostic channel connected; controller link not confirmed",
+            )
+            if reader_state == "running"
+            else text("\u624b\u628a\u672a\u9023\u7dda", "Controller not connected")
+        )
+
+        details = [
+            text("\u8cc7\u6599\u4f86\u6e90\uff1a", "Source: ") + source_text,
+            text("\u72c0\u614b\uff1a", "Status: ")
+            + connection_text
+            + text("\uff1b\u6a21\u5f0f\uff1a", "; mode: ")
+            + mode_text,
+        ]
+        if capabilities:
+            details.append(
+                text("\u97cc\u9ad4\uff1a", "Firmware: ")
+                + f"{capabilities.get('product') or 'S2P-FW'} "
+                + f"{capabilities.get('version') or '?'}"
+                + text("\uff1b\u5354\u8b70\uff1a", "; protocol: ")
+                + f"{capabilities.get('protocol') or '?'} "
+                + f"{capabilities.get('protocol_version') or '?'}"
+            )
+
+        if stats.get("controller_mac") or stats.get("bridge_mac"):
+            device_parts = []
+            if stats.get("bridge_mac"):
+                device_parts.append(
+                    text("\u6a4b\u63a5\u5668 MAC ", "bridge MAC ")
+                    + str(stats["bridge_mac"])
+                )
+            if stats.get("controller_mac"):
+                device_parts.append(
+                    text("\u624b\u628a MAC ", "controller MAC ")
+                    + str(stats["controller_mac"])
+                )
+            details.append(
+                text("BLE \u88dd\u7f6e\uff1a", "BLE devices: ")
+                + "\uff1b".join(device_parts)
+            )
+
+            link_parts = []
+            rssi = stats.get("link_rssi_dbm")
+            if isinstance(rssi, (int, float)):
+                link_parts.append(
+                    f"RSSI {int(rssi)} dBm ("
+                    + text(
+                        self._diagnostic_rssi_quality(int(rssi)),
+                        {
+                            "\u6975\u4f73": "excellent",
+                            "\u826f\u597d": "good",
+                            "\u666e\u901a": "fair",
+                            "\u504f\u5f31": "weak",
+                            "\u5f88\u5f31": "very weak",
+                        }[self._diagnostic_rssi_quality(int(rssi))],
+                    )
+                    + ")"
+                )
+            if stats.get("link_interval_ms") is not None:
+                link_parts.append(
+                    text("\u9023\u7dda\u9593\u9694 ", "interval ")
+                    + number(stats["link_interval_ms"], 2, " ms")
+                )
+            if link_parts:
+                details.append(
+                    text("BLE \u8a0a\u865f\uff1a", "BLE signal: ")
+                    + "\uff1b".join(link_parts)
+                )
+        elif mode in {"standalone", "standalone_hid", "esp32"}:
+            details.append(text(
+                "BLE \u9023\u7dda\uff1a\u97cc\u9ad4\u672a\u63d0\u4f9b MAC / RSSI \u8cc7\u6599",
+                "BLE link: firmware did not provide MAC / RSSI data",
+            ))
+
+        raw_average = stats.get("ble_raw_report_rate_hz_avg")
+        if raw_average is not None:
+            details.append(
+                text("BLE \u539f\u59cb\u56de\u5831\u7387\uff1a", "BLE raw report rate: ")
+                + text("\u5e73\u5747 ", "average ")
+                + number(raw_average, 1, " Hz")
+                + f"\uff1bP50 {number(stats.get('ble_raw_report_rate_hz_p50'), 1, ' Hz')}"
+                + f"\uff1bP95 {number(stats.get('ble_raw_report_rate_hz_p95'), 1, ' Hz')}"
+                + f"\uff1bP99 {number(stats.get('ble_raw_report_rate_hz_p99'), 1, ' Hz')}"
+            )
+        else:
+            details.append(text(
+                "BLE \u539f\u59cb\u56de\u5831\u7387\uff1a\u6536\u96c6\u4e2d\u6216\u97cc\u9ad4\u672a\u63d0\u4f9b",
+                "BLE raw report rate: collecting or unavailable from firmware",
+            ))
+
+        interval_p50 = stats.get("input_interval_ms_p50")
+        if interval_p50 is not None:
+            details.append(
+                text("\u684c\u9762\u7aef\u8f38\u5165\u9593\u9694\uff1a", "Desktop input intervals: ")
+                + f"P50 {number(interval_p50, 2, ' ms')}"
+                + f"\uff1bP95 {number(stats.get('input_interval_ms_p95'), 2, ' ms')}"
+                + f"\uff1bP99 {number(stats.get('input_interval_ms_p99'), 2, ' ms')}"
+            )
+
+        gap_ratio_percent = (
+            float(gap_ratio) * 100.0 if gap_ratio is not None else None
+        )
+        gap_state = (
+            text("\u8d85\u904e\u8b66\u793a\u9580\u6abb", "above warning threshold")
+            if "INPUT_SOURCE_GAPS" in warnings
+            else text("\u672a\u8d85\u904e\u8b66\u793a\u9580\u6abb", "below warning threshold")
+        )
+        details.append(
+            text("\u539f\u59cb\u9593\u9694\uff1a", "Raw input gaps: ")
+            + f"{stats.get('source_gap_events', 0)}"
+            + (
+                f" ({gap_ratio_percent:.2f}%)"
+                if gap_ratio_percent is not None else ""
+            )
+            + text("\uff1b\u6700\u5927 ", "; maximum ")
+            + f"{stats.get('source_gap_max_ms', 0)} ms"
+            + "\uff1b"
+            + gap_state
+        )
+        details.append(
+            text("\u50b3\u8f38\uff1a\u4f47\u5217\u4e1f\u68c4 ", "Transport: queue drops ")
+            + str(stats.get("notify_queue_drops", 0))
+            + text("\uff1bUSB \u7b49\u5f85\u5e73\u5747 ", "; average USB wait ")
+            + number(stats.get("usb_wait_avg_us", 0) / 1000.0, 2, " ms")
+            + text("\uff1b\u6700\u5927 ", "; maximum ")
+            + number(stats.get("usb_wait_max_us", 0) / 1000.0, 2, " ms")
+        )
+
+        sensor_mode = status.get("sensor_mode")
+        gyro = status.get("gyro_raw") or runtime.get("gyro_rate")
+        if isinstance(gyro, (list, tuple)) and len(gyro) >= 3:
+            gyro_text = "X {:.1f} / Y {:.1f} / Z {:.1f}".format(
+                *[float(value) for value in gyro[:3]]
+            )
+        else:
+            gyro_text = "—"
+        calibration_state = str(
+            status.get("gyro_calibration_state") or "idle"
+        )
+        details.append(
+            text("\u611f\u6e2c\u5668\uff1a", "Sensors: ")
+            + str(sensor_mode or "—")
+            + text("\uff1b\u6821\u6b63\u72c0\u614b ", "; calibration ")
+            + calibration_state
+            + text("\uff1b\u9640\u87ba\u5100 ", "; gyro ")
+            + gyro_text
+        )
+
+        raw_rumble = self._diagnostic_pair(
+            rumble.get("input") or rumble.get("latest_input")
+        )
+        output_rumble = self._diagnostic_pair(
+            rumble.get("output") or rumble.get("latest_output")
+        )
+        details.append(
+            text("\u9707\u52d5\uff1a\u8f38\u5165 ", "Rumble: input ")
+            + f"{raw_rumble[0]}/{raw_rumble[1]}"
+            + text("\uff1b\u8f38\u51fa ", "; output ")
+            + f"{output_rumble[0]}/{output_rumble[1]}"
+            + text("\uff1b\u5cf0\u503c ", "; peak ")
+            + f"{max(session.rumble_peak_output)}"
+            + text("\uff1b\u5931\u6557 ", "; failures ")
+            + str(
+                rumble.get(
+                    "transport_send_failures",
+                    rumble.get("send_failures", 0),
+                )
+                or 0
+            )
+        )
+        details.append(
+            text("\u97cc\u9ad4\u81ea\u6e2c\uff1a", "Firmware self-tests: ")
+            + f"{stats.get('self_test_replies', 0)} "
+            + text("\u9805\u5df2\u56de\u8986", "replies")
+            + f"\uff1b{stats.get('self_test_failures', 0)} "
+            + text("\u9805\u672a\u5b8c\u6210", "incomplete")
+        )
+
+        signature = tuple(details)
+        if (
+            self.diagnostic_event_text is not None
+            and signature != self._diagnostic_last_event_signature
+        ):
+            self._diagnostic_last_event_signature = signature
+            self.diagnostic_event_text.configure(state="normal")
+            self.diagnostic_event_text.delete("1.0", "end")
+            self.diagnostic_event_text.insert("1.0", "\n".join(details))
+            self.diagnostic_event_text.configure(state="disabled")
 
     def _build_rumble_tab(self, parent):
         parent.columnconfigure(0, weight=1)
@@ -3819,7 +5395,7 @@ class GamepadTestWindow:
         current = time.perf_counter()
         frame_interval = self._frame_interval
         if self._active_test_tab() == "high_rate":
-            frame_interval = max(frame_interval, 1.0 / 30.0)
+            frame_interval = max(frame_interval, 1.0 / 60.0)
         if current < self._window_motion_until:
             # A Canvas redraw competes with Windows' move/resize loop. Keep
             # the tester responsive while the user is dragging its window.
@@ -3850,11 +5426,17 @@ class GamepadTestWindow:
             return "high_rate"
         if self.rumble_tab is not None and selected == str(self.rumble_tab):
             return "rumble"
+        if (
+            self.diagnostic_tab is not None
+            and selected == str(self.diagnostic_tab)
+        ):
+            return "diagnostic"
+        if self.about_tab is not None and selected == str(self.about_tab):
+            return "about"
         return "input"
 
     def _on_test_tab_changed(self, _event=None):
         self._next_frame_at = time.perf_counter()
-        self._draw_times.clear()
         # Drain at the event boundary. A fast away-and-back switch can happen
         # before the next background poll and must not replay hidden movement.
         self._discard_pending_monitor_samples()
@@ -3894,6 +5476,9 @@ class GamepadTestWindow:
         if self.window is None or not self.window.winfo_exists():
             return
         now = time.perf_counter()
+        # DiagnosticSession measures duration with monotonic time. Keep this
+        # clock domain separate from high-refresh presentation scheduling.
+        self._poll_diagnostic(time.monotonic())
         monitor_visible = self._active_test_tab() == "input"
         telemetry = self.telemetry.read_latest() if self.telemetry else {}
         telemetry = telemetry or {}
@@ -3934,10 +5519,64 @@ class GamepadTestWindow:
             and device is not None
             and self.raw_hid_stream.active
         ):
-            sample, raw_consumed = self._consume_raw_hid_stream(
-                sample, record_trail=monitor_visible
+            pair_candidate = (
+                device.kind == "winmm"
+                and any(
+                    (raw.vendor_id, raw.product_id) == (0x057E, 0x2069)
+                    for raw in self.raw_hid_devices.values()
+                )
             )
+            if (
+                pair_candidate
+                and getattr(self, "_nintendo_winmm_pair_key", None)
+                not in {None, device.key}
+            ):
+                self._nintendo_winmm_pair_key = None
+                self._nintendo_winmm_pair_score = 0
+            pair_confirmed = (
+                getattr(self, "_nintendo_winmm_pair_key", None)
+                == device.key
+            )
+            native_sample = sample
+            sample, raw_consumed = self._consume_raw_hid_stream(
+                sample,
+                record_trail=(
+                    monitor_visible and (not pair_candidate or pair_confirmed)
+                ),
+            )
+            if pair_candidate and not pair_confirmed:
+                native_left = tuple((native_sample or {}).get("left") or ())
+                raw_left = tuple((sample or {}).get("left") or ())
+                if len(native_left) == len(raw_left) == 2:
+                    dot = (
+                        float(native_left[0]) * float(raw_left[0])
+                        + float(native_left[1]) * float(raw_left[1])
+                    )
+                    if dot >= 0.35:
+                        self._nintendo_winmm_pair_score = getattr(
+                            self, "_nintendo_winmm_pair_score", 0
+                        ) + 1
+                    else:
+                        self._nintendo_winmm_pair_score = 0
+                    if self._nintendo_winmm_pair_score >= 6:
+                        self._nintendo_winmm_pair_key = device.key
+                        pair_confirmed = True
+                if not pair_confirmed:
+                    sample = native_sample
+                    raw_consumed = False
             consumed_trail = consumed_trail or raw_consumed
+        if sample is not None and device is not None:
+            self.latest_diagnostic_input = {
+                "device_key": device.key,
+                "device_kind": device.kind,
+                "device_name": device.name,
+                "source_rate_hz": sample.get("source_rate_hz"),
+                "buttons": list(sample.get("buttons") or ()),
+                "buttons_mask": int(sample.get("buttons_mask", 0) or 0),
+                "triggers": list(sample.get("triggers") or (0.0, 0.0)),
+                "left": list(sample.get("left") or (0.0, 0.0)),
+                "right": list(sample.get("right") or (0.0, 0.0)),
+            }
         if sample is not None:
             sample_token = sample.get("token")
             if is_s2p and self.telemetry is not None:
@@ -3979,31 +5618,37 @@ class GamepadTestWindow:
         active_tab = self._active_test_tab()
         window_in_motion = now < self._window_motion_until
         if self._monitor_presentation_allowed(active_tab, now):
-            frame_changed = self._draw_plots(
+            # LT/RT are a compact direct input readout.  Keep them in the
+            # presentation loop so they do not inherit the deliberately
+            # slower 30 Hz text/event refresh below.
+            self._update_triggers(sample, is_s2p)
+            if active_tab == "input":
+                event_signature = tuple(sorted(
+                    self._event_inputs(sample, is_s2p).items()
+                ))
+                if event_signature != getattr(
+                    self, "_last_event_input_signature", None
+                ):
+                    self._last_event_input_signature = event_signature
+                    self._update_events(sample, is_s2p, now)
+            self._draw_plots(
                 is_s2p, update_details=refresh_details
             )
-            # Count only monitor frames that changed a bitmap, overlay or live
-            # dot; background polls and no-op draws are not presentation FPS.
-            if frame_changed:
-                self._draw_times.append(now)
-        while self._draw_times and now - self._draw_times[0] > 1.0:
-            self._draw_times.popleft()
         if refresh_details and not window_in_motion:
             self._last_detail_refresh = now
-            if active_tab == "input":
-                self._update_triggers(sample, is_s2p)
             if now - self._last_connection_refresh >= 0.25:
                 self._last_connection_refresh = now
                 self._sync_connection_status(sample)
             if active_tab == "input":
                 self._update_events(sample, is_s2p, now)
-            self._update_draw_fps()
             if active_tab == "rumble":
                 self._update_rumble_availability(device)
-            self._update_raw_hid_measurement(
-                redraw_chart=active_tab == "high_rate"
-            )
             self._update_raw_hid_stream_status()
+        # Update the distribution independently from the slower text details
+        # refresh so its adaptive range follows incoming reports live.
+        self._update_raw_hid_measurement(
+            redraw_chart=active_tab == "high_rate"
+        )
         self._schedule_poll()
 
     @staticmethod
@@ -4118,20 +5763,23 @@ class GamepadTestWindow:
     def _draw_plots(self, is_s2p, update_details=True):
         telemetry = self.latest_telemetry if is_s2p else {}
         frame_changed = False
+        presentation_now = time.perf_counter()
         for side, plot in self.plots.items():
             history = self.histories[side]
             if history.trail:
                 _, x, y, _sequence = history.trail[-1]
             else:
                 x = y = 0.0
-            frame_changed = plot.draw(
+            side_changed = plot.draw(
                 history,
                 x,
                 y,
                 telemetry,
                 is_s2p,
                 update_details=update_details,
-            ) or frame_changed
+            )
+            plot.record_presentation_fps(presentation_now, side_changed)
+            frame_changed = side_changed or frame_changed
         return frame_changed
 
     def _on_source_changed(self, side):
@@ -4445,15 +6093,97 @@ class GamepadTestWindow:
         for side, plot in self.plots.items():
             plot.set_source_capability(is_s2p, target == side)
 
+    def _native_device_for_raw_hid(self):
+        """Return an unambiguous Windows snapshot source for Raw HID buttons.
+
+        Raw HID remains the source for stick positions and report timing. XInput
+        or WinMM is used only to fill button/trigger fields that stream version 1
+        does not publish. Never guess when several plausible devices remain.
+        """
+        raw_device = self._selected_raw_hid_device()
+        if raw_device is None:
+            return None
+        candidates = tuple(
+            device for device in self._native_test_devices
+            if device.kind in {"xinput", "winmm"}
+        )
+
+        # The running bridge exposes its exact ViGEm XInput slot through shared
+        # telemetry, which is the strongest possible association.
+        raw_slot = self.latest_telemetry.get("xinput_slot")
+        if (
+            raw_device.is_virtual
+            and self._telemetry_is_fresh(self.latest_telemetry)
+            and isinstance(raw_slot, int)
+        ):
+            match = next((
+                device for device in candidates
+                if device.kind == "xinput" and device.index == raw_slot
+            ), None)
+            if match is not None:
+                return match
+
+        xinput = tuple(device for device in candidates if device.kind == "xinput")
+        winmm = tuple(device for device in candidates if device.kind == "winmm")
+        vid_pid = (int(raw_device.vendor_id), int(raw_device.product_id))
+
+        # Standalone PC mode has a known XInput output contract. Prefer its
+        # single XInput slot over the parallel WinMM view so LT/RT remain
+        # available as analog axes and button names stay semantic.
+        if vid_pid == (0xCAFE, 0x4020) and len(xinput) == 1:
+            return xinput[0]
+
+        # WinMM retains USB vendor/product identifiers in JOYCAPS, so physical
+        # third-party HID collections can be paired without guessing by name.
+        caps_by_index = getattr(self.backend, "_winmm_caps", {})
+        exact_winmm = tuple(
+            device for device in winmm
+            if (
+                int(getattr(
+                    caps_by_index.get(device.index), "wMid", -1
+                ))
+                == vid_pid[0]
+                and int(getattr(
+                    caps_by_index.get(device.index), "wPid", -1
+                ))
+                == vid_pid[1]
+            )
+        )
+        if len(exact_winmm) == 1:
+            return exact_winmm[0]
+
+        # XInput does not expose VID/PID, but an explicitly selected &IG_
+        # collection and exactly one visible XInput device form an unambiguous
+        # association for ordinary physical or software-created gamepads.
+        if "&ig_" in raw_device.path.casefold() and len(xinput) == 1:
+            return xinput[0]
+
+        # Mobile HID is represented through WinMM and retains a meaningful name.
+        if vid_pid == (0xCAFE, 0x4021):
+            named = tuple(
+                device for device in winmm
+                if "s2p mobile gamepad" in device.name.casefold()
+            )
+            if len(named) == 1:
+                return named[0]
+            if len(winmm) == 1:
+                return winmm[0]
+
+        if raw_device.is_virtual and len(xinput) == 1:
+            return xinput[0]
+        return None
+
     def _configure_native_sampler(self):
         if self.native_sampler is None:
             return
         device = self._selected_device()
-        self.native_sampler.set_device(
-            device
-            if device is not None and device.kind in {"xinput", "winmm"}
-            else None
-        )
+        if device is not None and device.kind in {"xinput", "winmm"}:
+            native_device = device
+        elif device is not None and device.kind == "raw_hid":
+            native_device = self._native_device_for_raw_hid()
+        else:
+            native_device = None
+        self.native_sampler.set_device(native_device)
 
     def _sync_connection_status(self, sample):
         """Mirror the settings UI's connection summary in the tester header."""
@@ -4498,18 +6228,6 @@ class GamepadTestWindow:
             "#138A36" if connected else "#777777",
         )
 
-    def _update_draw_fps(self):
-        if len(self._draw_times) < 2:
-            self.draw_fps_var.set("— FPS")
-            self.draw_fps_label.configure(foreground="#777777")
-            return
-        elapsed = self._draw_times[-1] - self._draw_times[0]
-        if elapsed <= 0.0:
-            return
-        fps = (len(self._draw_times) - 1) / elapsed
-        self.draw_fps_var.set(f"{fps:.0f} FPS")
-        self.draw_fps_label.configure(foreground="#777777")
-
     def _event_inputs(self, sample, is_s2p):
         if sample is None:
             return {}
@@ -4531,6 +6249,13 @@ class GamepadTestWindow:
         # standard XInput trigger threshold, while preserving their analog
         # readout in the linear-trigger panel.
         trigger_values = tuple(sample.get("triggers") or ())
+        # The mobile HID descriptor also publishes digital Button usages 9/10
+        # (L2/R2) as compatibility mirrors for older games.  When their
+        # analog LT/RT values are available, present a single coherent trigger
+        # instead of duplicate L2/R2 and LT/RT events.
+        for index, digital_name in enumerate(("L2", "R2")):
+            if index < len(trigger_values) and trigger_values[index] is not None:
+                active.pop(digital_name, None)
         for index, trigger_name in enumerate(("LT", "RT")):
             if index >= len(trigger_values):
                 continue
@@ -4567,6 +6292,22 @@ class GamepadTestWindow:
             "LEFT": "←",
             "RIGHT": "→",
         }
+        # The monitor calls this at presentation rate.  Avoid sending three
+        # unchanged Tk updates per trigger every frame while preserving an
+        # immediate update for every actual input/source change.
+        signature = (
+            tuple(trigger_values),
+            bool(sample),
+            bool(is_s2p),
+            tuple(sorted(
+                (name, str(item.get("source") or ""),
+                 str(item.get("direction") or ""))
+                for name, item in linear_mappings.items()
+            )),
+        )
+        if signature == getattr(self, "_last_trigger_display_signature", None):
+            return
+        self._last_trigger_display_signature = signature
         for index, trigger_name in enumerate(("LT", "RT")):
             raw_value = trigger_values[index]
             if raw_value is None:
@@ -5010,6 +6751,9 @@ class GamepadTestWindow:
             self._play_rumble_pattern(name, layer_id)
 
     def close(self):
+        if self.diagnostic_session.running:
+            self.diagnostic_session.stop("window_closed")
+        self.diagnostic_reader.stop(timeout=0.5)
         self._cancel_raw_hid_countdown()
         self.raw_hid_probe.stop()
         self._stop_raw_hid_stream()
@@ -5034,6 +6778,8 @@ class GamepadTestWindow:
                 pass
         self.window = None
         self._window_icon = None
+        self._about_logo = None
+        self._about_fonts = ()
         self._poll_job = None
         self._device_refresh_job = None
         self._disable_high_resolution_timer()

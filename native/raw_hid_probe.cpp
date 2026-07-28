@@ -62,11 +62,14 @@ enum StreamAxis : uint32_t {
     StreamLeftY = 1 << 1,
     StreamRightX = 1 << 2,
     StreamRightY = 1 << 3,
+    StreamLeftTrigger = 1 << 4,
+    StreamRightTrigger = 1 << 5,
 };
 
 struct AxisDescriptor {
     bool valid = false;
     USAGE usage = 0;
+    USHORT usage_page = 0x01;
     UCHAR report_id = 0;
     USHORT link_collection = 0;
     USHORT data_index = 0;
@@ -80,6 +83,8 @@ struct StreamParser {
     AxisDescriptor left_y;
     AxisDescriptor right_x;
     AxisDescriptor right_y;
+    AxisDescriptor left_trigger;
+    AxisDescriptor right_trigger;
     USHORT input_data_indices = 0;
     uint32_t axes_mask = 0;
 };
@@ -616,10 +621,11 @@ int run_self_test(uint32_t rate_hz, uint64_t duration_ms) {
 AxisDescriptor find_axis(
     const std::vector<HIDP_VALUE_CAPS> &caps,
     USAGE usage,
-    int report_id = -1
+    int report_id = -1,
+    USHORT usage_page = 0x01
 ) {
     for (const auto &cap : caps) {
-        if (cap.UsagePage != 0x01) continue;
+        if (cap.UsagePage != usage_page) continue;
         if (report_id >= 0 && cap.ReportID != report_id) continue;
         const USAGE first = cap.IsRange ? cap.Range.UsageMin
                                         : cap.NotRange.Usage;
@@ -628,6 +634,7 @@ AxisDescriptor find_axis(
         return {
             true,
             usage,
+            usage_page,
             cap.ReportID,
             cap.LinkCollection,
             static_cast<USHORT>(
@@ -728,6 +735,8 @@ bool initialize_stream_parser(
     if (parser.left_y.valid) parser.axes_mask |= StreamLeftY;
     if (parser.right_x.valid) parser.axes_mask |= StreamRightX;
     if (parser.right_y.valid) parser.axes_mask |= StreamRightY;
+    parser.left_trigger = find_axis(value_caps, 0xC5, -1, 0x02);
+    parser.right_trigger = find_axis(value_caps, 0xC4, -1, 0x02);
     // Timing measurement only needs raw reports, and the monitor can still
     // present a useful partial-axis view. A valid input report descriptor is
     // therefore enough to start even when no standard stick usage is found.
@@ -763,7 +772,7 @@ bool read_axis(
     ULONG raw = 0;
     NTSTATUS status = HidP_GetUsageValue(
         HidP_Input,
-        0x01,
+        axis.usage_page,
         axis.link_collection,
         axis.usage,
         &raw,
@@ -779,7 +788,7 @@ bool read_axis(
     ) {
         status = HidP_GetUsageValue(
             HidP_Input,
-            0x01,
+            axis.usage_page,
             0,
             axis.usage,
             &raw,
@@ -863,6 +872,44 @@ float normalize_xinput_hid_axis(ULONG raw, bool invert) {
     return invert ? -normalized : normalized;
 }
 
+uint32_t pro2_buttons_to_u32(uint8_t b0, uint8_t b1, uint8_t b2) {
+    uint32_t value = 0;
+    const std::pair<uint8_t, uint32_t> first[] = {
+        {0x01, 0x00000004}, {0x02, 0x00000008},
+        {0x04, 0x00000001}, {0x08, 0x00000002},
+        {0x10, 0x00000040}, {0x20, 0x00000080},
+        {0x40, 0x00000200}, {0x80, 0x00000400},
+    };
+    const std::pair<uint8_t, uint32_t> second[] = {
+        {0x01, 0x00010000}, {0x02, 0x00040000},
+        {0x04, 0x00080000}, {0x08, 0x00020000},
+        {0x10, 0x00400000}, {0x20, 0x00800000},
+        {0x40, 0x00000100}, {0x80, 0x00000800},
+    };
+    const std::pair<uint8_t, uint32_t> third[] = {
+        {0x01, 0x00001000}, {0x02, 0x00002000},
+        {0x04, 0x01000000}, {0x08, 0x02000000}, {0x10, 0x00004000},
+    };
+    for (const auto &[mask, target] : first) if (b0 & mask) value |= target;
+    for (const auto &[mask, target] : second) if (b1 & mask) value |= target;
+    for (const auto &[mask, target] : third) if (b2 & mask) value |= target;
+    return value;
+}
+
+float normalize_pro2_axis(uint16_t raw, bool invert) {
+    float value = std::clamp((static_cast<float>(raw) - 2048.0f) / 2047.0f,
+                             -1.0f, 1.0f);
+    return invert ? -value : value;
+}
+
+uint16_t read_pro2_stick_x(const uint8_t *data) {
+    return static_cast<uint16_t>(data[0] | ((data[1] & 0x0F) << 8));
+}
+
+uint16_t read_pro2_stick_y(const uint8_t *data) {
+    return static_cast<uint16_t>(((data[1] >> 4) & 0x0F) | (data[2] << 4));
+}
+
 int run_stream(
     const std::wstring &path,
     const std::wstring &mapping_name,
@@ -940,11 +987,11 @@ int run_stream(
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
     InterlockedExchange(&header->state, 1);
     uint64_t sequence = 0;
+    uint64_t parsed_samples = 0;
     float left_x = 0.0f;
     float left_y = 0.0f;
     float right_x = 0.0f;
     float right_y = 0.0f;
-    uint32_t seen_axes = 0;
     std::wstring folded_path = path;
     std::transform(
         folded_path.begin(), folded_path.end(), folded_path.begin(),
@@ -955,6 +1002,12 @@ int run_stream(
     const bool verified_fixed_xinput_layout = (
         folded_path.find(L"&IG_") != std::wstring::npos
         && folded_path.find(L"VID_413D&PID_2104") != std::wstring::npos
+    );
+    const bool nintendo_pro2_layout = (
+        // Raw Input symbolic links do not consistently retain MI_00 even
+        // though the UI enumerates this as interface 0.  VID/PID uniquely
+        // identify this physical Nintendo input in the tester.
+        folded_path.find(L"VID_057E&PID_2069") != std::wstring::npos
     );
     bool stopped = false;
     uint32_t stop_poll_counter = 0;
@@ -1019,7 +1072,27 @@ int run_stream(
             reinterpret_cast<volatile LONG64 *>(&header->reserved)
         );
         uint32_t sample_axes = 0;
-        if (
+        uint32_t buttons = 0;
+        float left_trigger = 0.0f;
+        float right_trigger = 0.0f;
+        if (nintendo_pro2_layout && bytes_read >= 12 && report[0] == 0x09) {
+            buttons = pro2_buttons_to_u32(report[3], report[4], report[5]);
+            left_x = normalize_pro2_axis(read_pro2_stick_x(report.data() + 6), false);
+            left_y = normalize_pro2_axis(read_pro2_stick_y(report.data() + 6), false);
+            right_x = normalize_pro2_axis(read_pro2_stick_x(report.data() + 9), false);
+            right_y = normalize_pro2_axis(read_pro2_stick_y(report.data() + 9), false);
+            sample_axes = StreamLeftX | StreamLeftY | StreamRightX | StreamRightY;
+        } else if (nintendo_pro2_layout && bytes_read >= 17 && report[0] == 0x05) {
+            buttons = static_cast<uint32_t>(report[5])
+                | (static_cast<uint32_t>(report[6]) << 8)
+                | (static_cast<uint32_t>(report[7]) << 16)
+                | (static_cast<uint32_t>(report[8]) << 24);
+            left_x = normalize_pro2_axis(read_pro2_stick_x(report.data() + 11), false);
+            left_y = normalize_pro2_axis(read_pro2_stick_y(report.data() + 11), false);
+            right_x = normalize_pro2_axis(read_pro2_stick_x(report.data() + 14), false);
+            right_y = normalize_pro2_axis(read_pro2_stick_y(report.data() + 14), false);
+            sample_axes = StreamLeftX | StreamLeftY | StreamRightX | StreamRightY;
+        } else if (
             verified_fixed_xinput_layout
             && bytes_read >= 9
         ) {
@@ -1063,17 +1136,40 @@ int run_stream(
             )) {
                 sample_axes |= StreamRightY;
             }
+            float normalized_trigger = 0.0f;
+            if (read_axis(
+                parser, parser.left_trigger, report, bytes_read, hid_data,
+                false, normalized_trigger
+            )) {
+                left_trigger = std::clamp(
+                    (normalized_trigger + 1.0f) * 0.5f, 0.0f, 1.0f
+                );
+                sample_axes |= StreamLeftTrigger;
+            }
+            if (read_axis(
+                parser, parser.right_trigger, report, bytes_read, hid_data,
+                false, normalized_trigger
+            )) {
+                right_trigger = std::clamp(
+                    (normalized_trigger + 1.0f) * 0.5f, 0.0f, 1.0f
+                );
+                sample_axes |= StreamRightTrigger;
+            }
         }
-        // Composite devices may split axes across report IDs. Preserve the
-        // last value for axes absent from this report and publish once every
-        // axis advertised by this collection has been observed. Collections
-        // with no recognizable axes still keep raw_reports moving so their
-        // availability and report rate remain visible.
-        if (sample_axes == 0) continue;
-        seen_axes |= sample_axes;
-        if (
-            (seen_axes & parser.axes_mask) != parser.axes_mask
-        ) continue;
+        if (nintendo_pro2_layout) {
+            if (buttons & 0x00800000) {
+                left_trigger = 1.0f;
+                sample_axes |= StreamLeftTrigger;
+            }
+            if (buttons & 0x00000080) {
+                right_trigger = 1.0f;
+                sample_axes |= StreamRightTrigger;
+            }
+        }
+        if (sample_axes != 0) ++parsed_samples;
+        // Publish every raw report. Timing must remain independent from
+        // whether this report contains axes; slot.reserved tells consumers
+        // which coordinates were actually decoded from the current report.
         ++sequence;
         StreamSlot &slot = slots[(sequence - 1) % capacity];
         InterlockedExchange64(&slot.sequence, 0);
@@ -1082,16 +1178,16 @@ int run_stream(
         slot.left_y = left_y;
         slot.right_x = right_x;
         slot.right_y = right_y;
-        slot.left_trigger = 0.0f;
-        slot.right_trigger = 0.0f;
-        slot.buttons = 0;
+        slot.left_trigger = left_trigger;
+        slot.right_trigger = right_trigger;
+        slot.buttons = buttons;
         slot.reserved = sample_axes;
         MemoryBarrier();
         InterlockedExchange64(
             &slot.sequence, static_cast<LONG64>(sequence)
         );
         InterlockedExchange64(
-            &header->reports, static_cast<LONG64>(sequence)
+            &header->reports, static_cast<LONG64>(parsed_samples)
         );
         InterlockedExchange64(
             &header->latest_sequence, static_cast<LONG64>(sequence)
