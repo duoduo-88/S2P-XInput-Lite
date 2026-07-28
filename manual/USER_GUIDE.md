@@ -465,7 +465,19 @@ not guaranteed.
 
 ## 9. Gamepad Test
 
-![Gamepad Test interface](../image/test.gif)
+![Gamepad Test input monitor](assets/annotated/08-gamepad-input.png)
+
+1. **Device and refresh**: Select the controller to inspect or rescan devices.
+2. **Function tabs**: Open Input Monitor, Rumble Test, Report Rate Test,
+   Diagnostics, or About.
+3. **Stick source and zoom**: Select each stick's source and adjust its view.
+4. **Left and right stick plots**: Show live position, trails, output shape,
+   and guides.
+5. **Sampling and trail controls**: Adjust sampling, trail duration, and
+   overlays.
+6. **Trigger input**: Shows current LT and RT values and their input type.
+7. **Button events**: Lists button state, held time, effective mapping, and
+   active layer.
 
 Select **Gamepad Test** at the bottom of the main window to open the standalone
 tester. It runs separately from the settings window so high-rate drawing does
@@ -514,12 +526,30 @@ trigger, and POV map instead of a guessed generic WinMM order.
 
 ### 9.5 Vibration Test
 
+![Gamepad Test vibration page](assets/annotated/09-gamepad-rumble.png)
+
+1. **Manual output**: Adjust LF and HF motor strength directly.
+2. **Motor levels**: Show the current output percentage for both bands.
+3. **Test patterns**: Select pulse, alternate, impact, engine, wave, and other
+   preset effects.
+4. **Playback controls**: Set repeat, LF/HF routing, rate, and strength.
+5. **Stop controls**: Reset the settings or immediately stop all vibration.
+
 The **Vibration Test** tab sends test patterns to Windows devices that expose
 XInput rumble. Stopping or closing the tester sends zero vibration. Mobile USB
 HID currently provides input only and does not relay web or game rumble to the
 controller.
 
 ### 9.6 Report Rate
+
+![Gamepad Test report-rate page](assets/annotated/10-gamepad-report-rate.png)
+
+1. **Measurement settings**: Select the duration, start, or stop early.
+2. **Live summary**: Shows HID rate, effective rate, report count, and time
+   remaining.
+3. **Interval statistics**: Lists P50, P95, P99, minimum, mean, and maximum.
+4. **Interval distribution**: Plots report-interval distribution and timeline.
+5. **Reading status**: Shows whether measurement is active and its result state.
 
 Open **Report Rate** to measure a Raw HID collection without display-frame
 sampling. Select the collection and test duration, start the measurement, then
@@ -530,6 +560,14 @@ actually changes when the controller moves; interfaces from the same physical
 device may expose different reports.
 
 ### 9.7 Diagnostics
+
+![Gamepad Test ESP32 diagnostics page](assets/annotated/11-gamepad-diagnostics.png)
+
+1. **Diagnostic controls**: Start or stop diagnostics and select the duration.
+2. **Diagnostic status**: Shows the current phase and progress.
+3. **Diagnostic assessment**: Summarizes the verdict, findings, and advice.
+4. **Diagnostic details**: Lists connection, input, sensor, and rumble checks.
+5. **Export Support Log**: Saves diagnostic data for a support report.
 
 The **Diagnostics** tab runs a 30, 60, or 120 second ESP32 health check. Keep
 the controller awake and exercise the sticks, sensors, and rumble during the
@@ -543,6 +581,15 @@ Standalone modes open the ESP32 diagnostic channel directly. The complete
 diagnostic command set requires the bundled `S2P-FW 1.0.1`.
 
 ### 9.8 About
+
+![About page showing the license agreement](assets/annotated/12-gamepad-about-license.png)
+
+![About page showing third-party software notices](assets/annotated/13-gamepad-about-third-party.png)
+
+1. **Product identity**: Shows the icon, product name, and version.
+2. **Project links**: Opens GitHub, sponsorship, and development-support links.
+3. **Document tabs**: Switches between the license and third-party notices.
+4. **Document content**: Scrolls through the complete bundled notices.
 
 The **About** tab keeps the logo, version, GitHub, and Ko-fi links visible on
 the left. The right side contains scrollable **License Agreement** and
