@@ -4,9 +4,14 @@
 
 ![S2P-XInput-Lite 橫幅](image/S2P-XInput-Lite-banner.jpg)
 
+<p align="center">
+  <img src="image/GUI.gif" alt="S2P-XInput-Lite 設定介面" height="360">
+  <img src="image/test.gif" alt="S2P-XInput-Lite 手把測試" height="360">
+</p>
+
 S2P-XInput-Lite 可在 Windows 為 Switch 2 Pro Controller 提供 XInput 相容控制器輸出，支援 USB 有線、ESP32-S3 USB 橋接器及 Windows 原生 BLE。
 
-開發版本：**v0.6.1**
+目前版本：**v0.7.0**
 
 [最新正式版本](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 
@@ -35,6 +40,11 @@ S2P-XInput-Lite 可在 Windows 為 Switch 2 Pro Controller 提供 XInput 相容�
 - 可將相容設定檔寫入 ESP32，讓它不開啟 Windows 程式也能提供 PC XInput
   相容輸出或標準手機 USB HID
 - 將陀螺儀映射至 XInput 搖桿或滑鼠
+- 獨立手把測試工具：XInput、WinMM、S2P 橋接輸出與每個 Raw HID
+  collection 都可直接選擇；可即時顯示搖桿軌跡、按鍵映射、輸出形狀與震動
+  測試，回報率頁面則顯示回報筆數、P50／P95／P99、間隔統計與時間軸
+- 內建 ESP32 診斷頁：支援定時測試、通過／警告／失敗判定及匯出文字報告
+- 關於頁：提供專案與贊助連結、軟體許可協議及第三方程式聲明
 - 完整遊戲設定檔，可一起切換搖桿、陀螺儀、震動、音訊觸覺與映射設定
 - 繁體中文與英文介面
 - 即時顯示連線、電量、ESP32、ViGEmBus、WASAPI 及 HidHide 狀態
@@ -64,7 +74,7 @@ S2P-XInput-Lite 可在 Windows 為 Switch 2 Pro Controller 提供 XInput 相容�
 
 第一次使用原生 BLE 配對時，啟動連線後按住控制器的 **SYNC** 鍵。已配對的控制器通常按任意鍵即可喚醒。
 
-若未安裝 HidHide，程式會詢問是否開啟官方下載頁；選擇略過後不會在每次啟動時重複提醒，也不會阻止連線。需要時可點擊視窗下方的 **HidHide：缺少** 狀態開啟下載頁。USB 控制器已連接且 HidHide 尚未設定時，程式會先詢問，再將可攜式 `runtime\python.exe` 與選定的 Nintendo HID 加入 HidHide；若選擇暫不設定，之後也不會重複提醒，可點擊 **HidHide：關閉／設定** 重新叫出設定確認。其他應用程式既有的 HidHide 項目會保留。**恢復預設值** 只會移除本程式與選定控制器的項目，並保留無關項目。
+若未安裝 HidHide，程式會詢問是否開啟官方下載頁；選擇略過後不會在每次啟動時重複提醒，也不會阻止連線。需要時可點擊視窗下方的 **HidHide：缺少** 狀態開啟下載頁。USB 控制器已連接且 HidHide 尚未設定時，程式會先詢問，再將可攜式 `runtime\python.exe`、`src\raw_hid_probe.exe` 與選定的 Nintendo HID 加入 HidHide；若選擇暫不設定，之後也不會重複提醒，可點擊 **HidHide：關閉／設定** 重新叫出設定確認。其他應用程式既有的 HidHide 項目會保留。**恢復預設值** 只會移除本程式管理的兩個應用程式與選定控制器項目，並保留無關項目。
 
 ## 設定檔與 Mapping Layers
 
@@ -88,8 +98,9 @@ Mapping Layer 檔案是全域資源，可在按住按鍵組合時暫時覆寫目
 - ESP32 獨立模式不支援 Windows 鍵盤／滑鼠輸出、音訊震動、依程序自動
   切換設定檔、手機震動或 BLE HID 輸出。
 - XInput 無法輸出原始動作感測資料，因此陀螺儀只能映射至搖桿或滑鼠。
-- ESP32 連線需要相容韌體。寫入獨立模式設定檔及直接 USB 控制器輸出需要
-  隨附的 `0.14.0` 韌體；較舊的純橋接韌體不支援這些功能。
+- ESP32 連線需要相容韌體。寫入獨立模式設定檔、直接 USB 控制器輸出及
+  診斷頁需要隨附的 `S2P-FW 1.0.1`；舊版 S2P 韌體與上游韌體無法提供完整
+  的 `s2p_bridge 1.0.0` 功能。
 - GitHub 原始碼庫包含完整 ESP32 原始碼；發佈包則只在 `esp32s3` 內提供
   燒錄工具及必要韌體映像。
 - HidHide 不隨附，也不是 ESP32 或 BLE 的必要元件。未安裝時 USB 輸入仍可使用，但遊戲可能同時偵測實體 HID 與虛擬 XInput 控制器。

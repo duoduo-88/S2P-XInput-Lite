@@ -73,6 +73,7 @@ class InputDispatcher:
         self._inline_disabled_until = 0.0
 
         self.processing_rate_hz = None
+        self.input_rate_hz = None
         self.dropped_reports = 0
         self.inline_reports = 0
         self.queued_reports = 0
@@ -82,6 +83,8 @@ class InputDispatcher:
         self._rate_deltas = deque(maxlen=64)
         self._rate_last_processed = None
         self._rate_generation = None
+        self._input_rate_window_started = None
+        self._input_rate_count = 0
 
         self._thread = threading.Thread(
             target=self._run,
@@ -139,6 +142,19 @@ class InputDispatcher:
 
         self._queue.append((self._generation, snapshot, is_edge))
 
+    def _record_input_rate_locked(self, report_count, now):
+        """Measure every received report, including identical/batched states."""
+        if self._input_rate_window_started is None:
+            self._input_rate_window_started = now
+            self._input_rate_count = 0
+            return
+        self._input_rate_count += max(0, int(report_count))
+        elapsed = now - self._input_rate_window_started
+        if elapsed >= 0.5:
+            self.input_rate_hz = self._input_rate_count / elapsed
+            self._input_rate_window_started = now
+            self._input_rate_count = 0
+
     def submit(self, payload):
         """Submit one snapshot, using the inline path only when truly idle."""
         if self._stop.is_set():
@@ -151,6 +167,7 @@ class InputDispatcher:
             if self._stop.is_set():
                 return
 
+            self._record_input_rate_locked(1, time.perf_counter())
             is_edge = self._classify_locked(snapshot)
             cooldown_active = False
             if self._inline_disabled_until:
@@ -197,6 +214,9 @@ class InputDispatcher:
         with self._lock:
             if self._stop.is_set():
                 return
+            self._record_input_rate_locked(
+                len(snapshots), time.perf_counter()
+            )
             self.backlog_batches += 1
             # Keep the direct path disabled briefly after a real backlog.  This
             # lets the reader drain new reports while the worker catches up.
@@ -231,6 +251,7 @@ class InputDispatcher:
                 self._last_buttons = None
                 self._inline_disabled_until = 0.0
                 self.processing_rate_hz = None
+                self.input_rate_hz = None
                 self.dropped_reports = 0
                 self.inline_reports = 0
                 self.queued_reports = 0
@@ -239,6 +260,8 @@ class InputDispatcher:
                 self._rate_deltas.clear()
                 self._rate_last_processed = None
                 self._rate_generation = None
+                self._input_rate_window_started = None
+                self._input_rate_count = 0
                 # submit() is excluded by the same lock while this is cleared.
                 self._wake.clear()
             return True

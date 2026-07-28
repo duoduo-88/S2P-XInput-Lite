@@ -61,10 +61,16 @@
 
 static const char *TAG = "S3_BLUEDROID";
 
-#define APP_FIRMWARE_VERSION      "0.14.0"
-#define EXPECTED_FIRMWARE_PROFILE "tinyusb_direct"
-#define EXPECTED_FIRMWARE_BUILD   "cdc_bridge_2_lowlatency"
+#define APP_FIRMWARE_PRODUCT      "S2P-FW"
+#define APP_FIRMWARE_VERSION      "1.0.1"
+#define APP_PROTOCOL_NAME         "s2p_bridge"
+#define APP_PROTOCOL_VERSION      "1.0.0"
+#define EXPECTED_FIRMWARE_PROFILE "s2p_usb_bridge"
+#define EXPECTED_FIRMWARE_BUILD   "standalone_diagnostics"
 #define CDC_LINE_STATE_DTR        0x01
+#define CDC_TX_BUFFER_SIZE        512
+#define CDC_TX_PHASE_BUDGET_US    5000
+#define CDC_QUEUE_BUDGET_PER_LOOP 4
 #define NINTENDO_COMPANY_ID       0x0553
 #define MAX_CH                    8     // one GATTC app per channel
 #define REPORT_SIZE               64
@@ -129,6 +135,10 @@ typedef struct {
     uint16_t cmd_handle;
     uint16_t rumble_handle;
     uint16_t itvl;           // connection interval in 1.25 ms units (6=7.5ms, 12=15ms)
+    int8_t   rssi_dbm;       // most recently sampled link RSSI
+    bool     rssi_valid;
+    uint32_t rssi_requested_ms;
+    uint32_t rssi_updated_ms;
     uint8_t  input_src;      // which UUID set input_handle: 1=FD2, 2=legacy (diagnostic)
     bool     prefer_legacy;  // NSO GameCube: input is on the LEGACY char, not FD2
     // GCN only: every NOTIFY char handle in the SW2 service (collected during discovery).
@@ -289,13 +299,22 @@ static void ch_count(int *used, int *ready) {
 }
 
 // --- USB-CDC transport ---
-static QueueHandle_t s_cmd_queue;   // inbound command lines
+static QueueHandle_t s_control_queue; // inbound commands that never write CDC
+static QueueHandle_t s_query_queue; // inbound commands that produce CDC output
 static QueueHandle_t s_ack_queue;   // ack/cmd notifications (P0)
 static QueueHandle_t s_notify_queue; // handle-routed notifications for GCN/WinRT parity
-static QueueHandle_t s_out_queue;   // outbound JSON lines from BLE callbacks
+static QueueHandle_t s_event_queue; // connection lifecycle JSON (P1)
+static QueueHandle_t s_out_queue;   // scan/debug JSON (low priority)
 static TaskHandle_t s_cdc_task_h;
-static volatile bool s_request_status = false;
+static volatile uint32_t s_event_queue_drops = 0;
 typedef struct { char text[256]; } line_t;
+typedef struct {
+    uint8_t data[CDC_TX_BUFFER_SIZE];
+    size_t length;
+    size_t offset;
+    bool valid;
+} cdc_tx_state_t;
+static cdc_tx_state_t s_cdc_tx;
 typedef struct {
     uint8_t ch;
     uint8_t len;
@@ -308,6 +327,151 @@ static int  s_rx_len = 0;
 static in_report_t s_in_shadow[MAX_CH];
 static volatile bool s_in_dirty[MAX_CH];
 static portMUX_TYPE s_in_mux = portMUX_INITIALIZER_UNLOCKED;
+typedef struct {
+    uint32_t ble_input_reports;
+    uint32_t source_gap_events;
+    uint32_t source_gap_max_ms;
+    uint32_t shadow_overwrites;
+    uint32_t notify_queue_drops;
+} input_latency_metrics_t;
+static input_latency_metrics_t s_input_latency_metrics;
+static uint32_t s_last_input_report_time[MAX_CH];
+static bool s_last_input_report_time_valid[MAX_CH];
+
+static void note_ble_input_report(
+    int channel, const uint8_t *data, uint8_t length
+) {
+    if (
+        channel < 0 || channel >= MAX_CH || !data || length < 4
+    ) return;
+    uint32_t report_time =
+        (uint32_t)data[0] |
+        ((uint32_t)data[1] << 8) |
+        ((uint32_t)data[2] << 16) |
+        ((uint32_t)data[3] << 24);
+    uint32_t expected_interval_ms =
+        ((uint32_t)(s_ch[channel].itvl ? s_ch[channel].itvl : 6u)
+            * 5u + 3u) / 4u;
+    uint32_t gap_threshold_ms =
+        expected_interval_ms + expected_interval_ms / 2u;
+    portENTER_CRITICAL(&s_in_mux);
+    s_input_latency_metrics.ble_input_reports++;
+    bool gap_suppressed =
+        (s_widened_mask & (1u << channel)) != 0;
+    if (!gap_suppressed && s_last_input_report_time_valid[channel]) {
+        uint32_t delta =
+            report_time - s_last_input_report_time[channel];
+        /*
+         * Allow one negotiated BLE interval plus 50% timestamp tolerance.
+         * This yields 12 ms for a 7.5 ms link and 22 ms for a 15 ms link,
+         * avoiding false gaps while three controllers intentionally run at
+         * the wider interval. Longer gaps below one second still indicate a
+         * skipped source interval; larger values are reconnects or resets.
+         */
+        if (delta >= gap_threshold_ms && delta < 1000u) {
+            s_input_latency_metrics.source_gap_events++;
+            if (delta > s_input_latency_metrics.source_gap_max_ms)
+                s_input_latency_metrics.source_gap_max_ms = delta;
+        }
+    }
+    s_last_input_report_time[channel] = report_time;
+    /*
+     * A temporary third-link widen changes the real interval before the
+     * negotiated interval callback updates s_ch[].itvl. Do not compare across
+     * that transition; the first report after the mask clears is a new base.
+     */
+    s_last_input_report_time_valid[channel] = !gap_suppressed;
+    portEXIT_CRITICAL(&s_in_mux);
+}
+
+static void reset_input_latency_metrics(void) {
+    portENTER_CRITICAL(&s_in_mux);
+    memset(
+        &s_input_latency_metrics, 0, sizeof(s_input_latency_metrics)
+    );
+    memset(
+        s_last_input_report_time_valid, 0,
+        sizeof(s_last_input_report_time_valid)
+    );
+    portEXIT_CRITICAL(&s_in_mux);
+    standalone_xinput_reset_latency_metrics();
+}
+
+static void format_input_latency_metrics(char *output, size_t size) {
+    input_latency_metrics_t input;
+    standalone_usb_latency_metrics_t usb;
+    portENTER_CRITICAL(&s_in_mux);
+    input = s_input_latency_metrics;
+    portEXIT_CRITICAL(&s_in_mux);
+    standalone_xinput_get_latency_metrics(&usb);
+    uint64_t wait_average_us = usb.wait_samples
+        ? usb.wait_total_us / usb.wait_samples : 0;
+    snprintf(
+        output, size,
+        "{\"cmd\":\"latency_status\",\"ok\":1,"
+        "\"ble_input_reports\":%lu,\"source_gap_events\":%lu,"
+        "\"source_gap_max_ms\":%lu,\"shadow_overwrites\":%lu,"
+        "\"notify_queue_drops\":%lu,\"usb_busy_events\":%lu,"
+        "\"usb_pending_overwrites\":%lu,\"usb_wait_samples\":%lu,"
+        "\"usb_wait_avg_us\":%llu,\"usb_wait_max_us\":%lu}\n",
+        (unsigned long)input.ble_input_reports,
+        (unsigned long)input.source_gap_events,
+        (unsigned long)input.source_gap_max_ms,
+        (unsigned long)input.shadow_overwrites,
+        (unsigned long)input.notify_queue_drops,
+        (unsigned long)usb.busy_events,
+        (unsigned long)usb.pending_overwrites,
+        (unsigned long)usb.wait_samples,
+        (unsigned long long)wait_average_us,
+        (unsigned long)usb.wait_max_us
+    );
+}
+
+static void request_link_rssi(void) {
+    uint32_t now = now_ms();
+    for (int ch = 0; ch < MAX_CH; ch++) {
+        if (!s_ch[ch].used || !s_ch[ch].link_open) continue;
+        if (now - s_ch[ch].rssi_requested_ms < 750u) continue;
+        s_ch[ch].rssi_requested_ms = now;
+        if (esp_ble_gap_read_rssi(s_ch[ch].bda) != ESP_OK)
+            s_ch[ch].rssi_valid = false;
+    }
+}
+
+static void format_link_status(char *output, size_t size) {
+    size_t used = 0;
+    int written = snprintf(
+        output, size,
+        "{\"cmd\":\"link_status\",\"ok\":1,\"bridge_mac\":\"%s\",\"links\":[",
+        s_own_mac
+    );
+    if (written < 0 || (size_t)written >= size) return;
+    used = (size_t)written;
+    uint32_t now = now_ms();
+    bool first = true;
+    uint8_t link_count = 0;
+    for (int ch = 0; ch < MAX_CH && link_count < 4; ch++) {
+        if (!s_ch[ch].used) continue;
+        uint32_t age = s_ch[ch].rssi_valid
+            ? now - s_ch[ch].rssi_updated_ms : 0u;
+        written = snprintf(
+            output + used, size - used,
+            "%s[%d,\"%02X:%02X:%02X:%02X:%02X:%02X\",%d,%.2f,%d,%lu]",
+            first ? "" : ",", ch,
+            s_ch[ch].bda[0], s_ch[ch].bda[1], s_ch[ch].bda[2],
+            s_ch[ch].bda[3], s_ch[ch].bda[4], s_ch[ch].bda[5],
+            s_ch[ch].ready ? 1 : 0,
+            (double)s_ch[ch].itvl * 1.25,
+            s_ch[ch].rssi_valid ? (int)s_ch[ch].rssi_dbm : 127,
+            (unsigned long)age
+        );
+        if (written < 0 || (size_t)written >= size - used) break;
+        used += (size_t)written;
+        first = false;
+        link_count++;
+    }
+    if (used + 4u < size) snprintf(output + used, size - used, "]}\n");
+}
 
 // --- Jitter Buffer (FIFO) for Audio Haptics ---
 #define RUMBLE_QUEUE_SIZE 5
@@ -343,33 +507,77 @@ static void rumble_playout_task(void *arg) {
 static bool cdc_host_ready(void) {
     return tud_cdc_connected() && (tud_cdc_get_line_state() & CDC_LINE_STATE_DTR);
 }
-static void safe_cdc_write(const uint8_t *data, uint32_t len) {
-    /*
-     * CDC is an optional configuration/bridge channel.  In standalone mode
-     * it is normally closed; waiting 100 ms for DTR here would stall the same
-     * task that services the XInput endpoint and reduce input to about 10 Hz.
-     * A closed host cannot consume this data, so discard it immediately.
-     */
-    if (!cdc_host_ready()) return;
-    uint32_t w = 0, t = 0;
-    while (w < len && t < 100) {
-        if (!cdc_host_ready()) return;
-        uint32_t avail = tud_cdc_write_available();
-        if (avail > 0) {
-            uint32_t n = (len - w) > avail ? avail : (len - w);
-            tud_cdc_write(data + w, n); tud_cdc_write_flush(); w += n; t = 0;
-        } else { vTaskDelay(pdMS_TO_TICKS(1)); t++; }
-    }
+static void cdc_tx_reset(void) {
+    s_cdc_tx.length = 0;
+    s_cdc_tx.offset = 0;
+    s_cdc_tx.valid = false;
 }
-static void send_json(const char *s) { safe_cdc_write((const uint8_t *)s, strlen(s)); }  // cdc_task only
-// out_json/out_debug: enqueue for cdc_task to send.  MUST be used from BLE callback
-// (BTC task) context — calling safe_cdc_write there can block up to 100 ms and, under a
-// flood of scan_results (a controller in pairing mode), stalls the BLE host -> crash.
-static void out_json(const char *s) {
-    if (!s_out_queue) return;
+static bool cdc_tx_submit(const uint8_t *data, size_t len) {
+    if (!data || len == 0) return true;
+    if (!cdc_host_ready()) {
+        cdc_tx_reset();
+        return true;  // Preserve the historical closed-CDC drop policy.
+    }
+    if (s_cdc_tx.valid || len > sizeof(s_cdc_tx.data)) return false;
+    memcpy(s_cdc_tx.data, data, len);
+    s_cdc_tx.length = len;
+    s_cdc_tx.offset = 0;
+    s_cdc_tx.valid = true;
+    return true;
+}
+static bool cdc_tx_pump_until(int64_t deadline_us) {
+    if (!s_cdc_tx.valid) return true;
+    if (!cdc_host_ready()) {
+        cdc_tx_reset();
+        return true;
+    }
+    while (
+        s_cdc_tx.valid &&
+        esp_timer_get_time() < deadline_us
+    ) {
+        uint32_t avail = tud_cdc_write_available();
+        if (avail == 0) return false;
+        size_t remaining = s_cdc_tx.length - s_cdc_tx.offset;
+        uint32_t request =
+            remaining > avail ? avail : (uint32_t)remaining;
+        uint32_t written = tud_cdc_write(
+            s_cdc_tx.data + s_cdc_tx.offset, request
+        );
+        if (written == 0) return false;
+        s_cdc_tx.offset += written;
+        tud_cdc_write_flush();
+        if (s_cdc_tx.offset >= s_cdc_tx.length) {
+            cdc_tx_reset();
+            return true;
+        }
+    }
+    return !s_cdc_tx.valid;
+}
+static bool cdc_tx_can_submit(int64_t deadline_us) {
+    if (!cdc_tx_pump_until(deadline_us)) return false;
+    return esp_timer_get_time() < deadline_us;
+}
+static void send_json(const char *s) {
+    if (!cdc_tx_submit((const uint8_t *)s, strlen(s)))
+        ESP_LOGW(TAG, "CDC TX busy while submitting JSON");
+}
+// Queue JSON for cdc_task. BLE callbacks never touch TinyUSB or wait for a slow
+// host. Important lifecycle events have a dedicated queue, so scan/debug floods
+// cannot consume their capacity.
+static bool queue_json(QueueHandle_t queue, const char *s) {
+    if (!queue) return false;
     line_t L; strncpy(L.text, s, sizeof(L.text) - 1); L.text[sizeof(L.text) - 1] = '\0';
-    if (xQueueSend(s_out_queue, &L, 0) == pdTRUE && s_cdc_task_h)
-        xTaskNotifyGive(s_cdc_task_h);
+    if (xQueueSend(queue, &L, 0) != pdTRUE) return false;
+    if (s_cdc_task_h) xTaskNotifyGive(s_cdc_task_h);
+    return true;
+}
+static void out_json(const char *s) {
+    (void)queue_json(s_out_queue, s);
+}
+static void out_event(const char *s) {
+    if (queue_json(s_event_queue, s)) return;
+    __atomic_add_fetch(&s_event_queue_drops, 1u, __ATOMIC_RELAXED);
+    ESP_LOGW(TAG, "critical event queue full");
 }
 static void out_debug(const char *msg) {
     char b[200];
@@ -394,6 +602,8 @@ static void clear_channel_state(int ch) {
     portENTER_CRITICAL(&s_in_mux);
     s_in_dirty[ch] = false;
     memset(&s_in_shadow[ch], 0, sizeof(s_in_shadow[ch]));
+    s_last_input_report_time[ch] = 0;
+    s_last_input_report_time_valid[ch] = false;
     portEXIT_CRITICAL(&s_in_mux);
     memset(&s_ch[ch], 0, sizeof(s_ch[ch]));
     s_ch[ch].gattc_if = keep;
@@ -454,29 +664,42 @@ static size_t parse_hex(const char *s, uint8_t *out, size_t max);
 static void send_status_response(void) {
     char b[512];
     snprintf(b, sizeof(b),
-        "{\"cmd\":\"status\",\"version\":\"%s\",\"profile\":\"%s\",\"build\":\"%s\","
+        "{\"cmd\":\"status\",\"product\":\"%s\",\"version\":\"%s\","
+        "\"protocol\":\"%s\",\"protocol_version\":\"%s\","
+        "\"profile\":\"%s\",\"build\":\"%s\","
         "\"ble_channels\":%u,\"mac\":\"%s\","
+        "\"event_queue_drops\":%lu,"
         "\"features\":{\"wrpair\":1,\"shadow\":1,"
+        "\"diagnostics\":1,\"rumble_diagnostics\":1,"
         "\"standalone_profile_write\":1,\"standalone_profile_runtime\":1,"
         "\"standalone_usb_xinput\":1,"
         "\"standalone_usb_hid\":1,"
         "\"standalone_ble_hid\":0},\"profile_schemas\":[1]}\n",
-        APP_FIRMWARE_VERSION, EXPECTED_FIRMWARE_PROFILE, EXPECTED_FIRMWARE_BUILD,
-        (unsigned)ch_active_mask(), s_own_mac);
+        APP_FIRMWARE_PRODUCT, APP_FIRMWARE_VERSION,
+        APP_PROTOCOL_NAME, APP_PROTOCOL_VERSION,
+        EXPECTED_FIRMWARE_PROFILE, EXPECTED_FIRMWARE_BUILD,
+        (unsigned)ch_active_mask(), s_own_mac,
+        (unsigned long)__atomic_load_n(
+            &s_event_queue_drops, __ATOMIC_RELAXED
+        ));
     send_json(b);
 }
 
 static void send_capabilities_response(void) {
-    char b[384];
+    char b[512];
     snprintf(b, sizeof(b),
-        "{\"cmd\":\"capabilities\",\"ok\":1,\"version\":\"%s\","
+        "{\"cmd\":\"capabilities\",\"ok\":1,\"product\":\"%s\","
+        "\"version\":\"%s\",\"protocol\":\"%s\","
+        "\"protocol_version\":\"%s\","
         "\"mode\":\"%s\",\"features\":{\"bridge\":1,"
+        "\"diagnostics\":1,\"rumble_diagnostics\":1,"
         "\"standalone_profile_write\":1,\"standalone_profile_runtime\":1,"
         "\"standalone_usb_xinput\":1,"
         "\"standalone_usb_hid\":1,"
         "\"standalone_ble_hid\":0},\"profile_schemas\":[%u],"
         "\"profile_max_bytes\":%u}\n",
-        APP_FIRMWARE_VERSION,
+        APP_FIRMWARE_PRODUCT, APP_FIRMWARE_VERSION,
+        APP_PROTOCOL_NAME, APP_PROTOCOL_VERSION,
         !s_standalone_mode ? "bridge" :
             (s_standalone_usb_hid ? "standalone_hid" : "standalone"),
         (unsigned)STANDALONE_PROFILE_SCHEMA,
@@ -526,7 +749,15 @@ static void do_mode_command(const char *mode) {
 
 static void do_restart_command(void) {
     send_json("{\"cmd\":\"restart\",\"ok\":1}\n");
-    vTaskDelay(pdMS_TO_TICKS(120));
+    int64_t deadline_us = esp_timer_get_time() + 100000;
+    while (
+        s_cdc_tx.valid &&
+        esp_timer_get_time() < deadline_us
+    ) {
+        if (!cdc_tx_pump_until(deadline_us))
+            vTaskDelay(pdMS_TO_TICKS(1));
+    }
+    vTaskDelay(pdMS_TO_TICKS(20));
     esp_restart();
 }
 
@@ -538,7 +769,8 @@ static void send_report_frame(uint8_t channel, const uint8_t *payload, uint8_t p
         (uint8_t)((channel + 1) | (is_cmd ? 0x80 : 0x00))
     };
     memcpy(frame + 4, payload, plen);
-    safe_cdc_write(frame, 4 + plen);
+    if (!cdc_tx_submit(frame, 4 + plen))
+        ESP_LOGW(TAG, "CDC TX busy while submitting report frame");
 }
 // CDC v2 notify frame: 0xaa 0x55 <len=payload+3> <0x40|chan> <handle_le16> <payload...>
 static void send_notify_handle_frame(uint8_t channel, uint16_t handle, const uint8_t *payload, uint8_t plen) {
@@ -548,7 +780,8 @@ static void send_notify_handle_frame(uint8_t channel, uint16_t handle, const uin
         (uint8_t)(handle & 0xff), (uint8_t)(handle >> 8)
     };
     memcpy(frame + 6, payload, plen);
-    safe_cdc_write(frame, 6 + plen);
+    if (!cdc_tx_submit(frame, 6 + plen))
+        ESP_LOGW(TAG, "CDC TX busy while submitting notify frame");
 }
 static int hexval(char c) {
     if (c >= '0' && c <= '9') return c - '0';
@@ -695,6 +928,18 @@ static void do_conn(char *args, bool standalone_pair_required) {
                 s_widened_mask |= (1u << i);
             }
         }
+        /*
+         * Reset the source-gap baseline immediately. Do not depend on a
+         * report arriving during the widen window before the mask is cleared.
+         */
+        portENTER_CRITICAL(&s_in_mux);
+        for (int i = 0; i < MAX_CH; i++) {
+            if (s_widened_mask & (1u << i)) {
+                s_last_input_report_time[i] = 0;
+                s_last_input_report_time_valid[i] = false;
+            }
+        }
+        portEXIT_CRITICAL(&s_in_mux);
         s_conn_open_after = now_ms() + 250;   // let the widen settle before opening
         gap_busy(700);
         char dbg[80];
@@ -825,7 +1070,7 @@ static void open_pending_conn(void) {
             "{\"cmd\":\"connect_fail\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\"}\n",
             s_ch[ch].bda[0],s_ch[ch].bda[1],s_ch[ch].bda[2],
             s_ch[ch].bda[3],s_ch[ch].bda[4],s_ch[ch].bda[5]);
-        out_json(fail);
+        out_event(fail);
         clear_channel_state(ch);
         restore_widened_links();
         if (s_scan_mode) s_resume_scan = true;
@@ -947,12 +1192,57 @@ static uint8_t s_standalone_large_motor;
 static uint8_t s_standalone_small_motor;
 static uint32_t s_standalone_rumble_next_ms;
 static uint8_t s_standalone_zero_flush;
+static uint32_t s_standalone_rumble_received;
+static uint32_t s_standalone_rumble_sent;
+static uint8_t s_standalone_rumble_peak_large;
+static uint8_t s_standalone_rumble_peak_small;
+static uint16_t s_standalone_rumble_lf_frequency;
+static uint16_t s_standalone_rumble_lf_amplitude;
+static uint16_t s_standalone_rumble_hf_frequency;
+static uint16_t s_standalone_rumble_hf_amplitude;
+static uint16_t s_standalone_rumble_peak_lf_amplitude;
+static uint16_t s_standalone_rumble_peak_hf_amplitude;
 
 #define STANDALONE_RUMBLE_REFRESH_MS 16u
 #define STANDALONE_RUMBLE_ZERO_FLUSH_COUNT 3u
 #define STANDALONE_FEEDBACK_LF_FREQUENCY 225u
 #define STANDALONE_FEEDBACK_HF_FREQUENCY 481u
 #define STANDALONE_FEEDBACK_AMPLITUDE 800u
+
+static void reset_standalone_rumble_metrics(void) {
+    s_standalone_rumble_received = 0;
+    s_standalone_rumble_sent = 0;
+    s_standalone_rumble_peak_large = s_standalone_large_motor;
+    s_standalone_rumble_peak_small = s_standalone_small_motor;
+    s_standalone_rumble_peak_lf_amplitude =
+        s_standalone_rumble_lf_amplitude;
+    s_standalone_rumble_peak_hf_amplitude =
+        s_standalone_rumble_hf_amplitude;
+}
+
+static void format_standalone_rumble_metrics(char *output, size_t size) {
+    snprintf(
+        output, size,
+        "{\"cmd\":\"rumble_status\",\"ok\":1,"
+        "\"received\":%lu,\"sent\":%lu,"
+        "\"input\":[%u,%u],\"peak_input\":[%u,%u],"
+        "\"frequency\":[%u,%u],\"output\":[%u,%u],"
+        "\"peak_output\":[%u,%u],\"zero_flush\":%u}\n",
+        (unsigned long)s_standalone_rumble_received,
+        (unsigned long)s_standalone_rumble_sent,
+        (unsigned)s_standalone_large_motor,
+        (unsigned)s_standalone_small_motor,
+        (unsigned)s_standalone_rumble_peak_large,
+        (unsigned)s_standalone_rumble_peak_small,
+        (unsigned)s_standalone_rumble_lf_frequency,
+        (unsigned)s_standalone_rumble_hf_frequency,
+        (unsigned)s_standalone_rumble_lf_amplitude,
+        (unsigned)s_standalone_rumble_hf_amplitude,
+        (unsigned)s_standalone_rumble_peak_lf_amplitude,
+        (unsigned)s_standalone_rumble_peak_hf_amplitude,
+        (unsigned)s_standalone_zero_flush
+    );
+}
 
 typedef struct {
     uint8_t command_id;
@@ -1304,6 +1594,11 @@ static void pump_standalone_xinput_rumble(void) {
         standalone_xinput_take_rumble(&large_motor, &small_motor);
     uint32_t now = now_ms();
     if (changed) {
+        s_standalone_rumble_received++;
+        if (large_motor > s_standalone_rumble_peak_large)
+            s_standalone_rumble_peak_large = large_motor;
+        if (small_motor > s_standalone_rumble_peak_small)
+            s_standalone_rumble_peak_small = small_motor;
         bool was_active =
             s_standalone_large_motor != 0 ||
             s_standalone_small_motor != 0;
@@ -1377,6 +1672,14 @@ static void pump_standalone_xinput_rumble(void) {
     uint16_t hf_amplitude = (uint16_t)(
         hf_value > max_amplitude ? max_amplitude : hf_value
     );
+    s_standalone_rumble_lf_frequency = lf_frequency;
+    s_standalone_rumble_hf_frequency = hf_frequency;
+    s_standalone_rumble_lf_amplitude = lf_amplitude;
+    s_standalone_rumble_hf_amplitude = hf_amplitude;
+    if (lf_amplitude > s_standalone_rumble_peak_lf_amplitude)
+        s_standalone_rumble_peak_lf_amplitude = lf_amplitude;
+    if (hf_amplitude > s_standalone_rumble_peak_hf_amplitude)
+        s_standalone_rumble_peak_hf_amplitude = hf_amplitude;
     standalone_xinput_set_rumble_ratio(
         fmaxf((float)lf_amplitude, (float)hf_amplitude) /
         fmaxf(1.0f, (float)max_amplitude)
@@ -1385,14 +1688,29 @@ static void pump_standalone_xinput_rumble(void) {
         channel, lf_frequency, lf_amplitude,
         hf_frequency, hf_amplitude
     );
+    s_standalone_rumble_sent++;
     s_standalone_rumble_next_ms =
         now + STANDALONE_RUMBLE_REFRESH_MS;
     if (!active && s_standalone_zero_flush > 0)
         s_standalone_zero_flush--;
 }
 
-static void handle_command(char *cmd) {
-    if (strncmp(cmd, "status", 6) == 0)         { s_request_status = true; }
+static bool command_is_control(const char *cmd) {
+    return
+        strncmp(cmd, "scan on", 7) == 0 ||
+        strncmp(cmd, "scan off", 8) == 0 ||
+        strncmp(cmd, "ble disconnect", 14) == 0 ||
+        strncmp(cmd, "auto", 4) == 0 ||
+        strncmp(cmd, "conn ", 5) == 0 ||
+        strncmp(cmd, "inputsrc ", 9) == 0 ||
+        strncmp(cmd, "disc ", 5) == 0 ||
+        strncmp(cmd, "wrpair ", 7) == 0 ||
+        strncmp(cmd, "wr ", 3) == 0 ||
+        strncmp(cmd, "rs ", 3) == 0;
+}
+
+static void handle_query_command(char *cmd) {
+    if (strncmp(cmd, "status", 6) == 0)         { send_status_response(); }
     else if (strcmp(cmd, "capabilities") == 0)  { send_capabilities_response(); }
     else if (strcmp(cmd, "profile status") == 0) {
         char response[256];
@@ -1409,9 +1727,33 @@ static void handle_command(char *cmd) {
         ble_callback_metrics_format(timing, sizeof(timing));
         send_json(timing);
     }
+    else if (strcmp(cmd, "link status") == 0) {
+        char status[512];
+        request_link_rssi();
+        format_link_status(status, sizeof(status));
+        send_json(status);
+    }
     else if (strcmp(cmd, "ble timing reset") == 0) {
         ble_callback_metrics_reset();
         send_json("{\"cmd\":\"ble_timing_reset\",\"ok\":1}\n");
+    }
+    else if (strcmp(cmd, "latency status") == 0) {
+        char status[512];
+        format_input_latency_metrics(status, sizeof(status));
+        send_json(status);
+    }
+    else if (strcmp(cmd, "latency reset") == 0) {
+        reset_input_latency_metrics();
+        send_json("{\"cmd\":\"latency_reset\",\"ok\":1}\n");
+    }
+    else if (strcmp(cmd, "rumble status") == 0) {
+        char status[384];
+        format_standalone_rumble_metrics(status, sizeof(status));
+        send_json(status);
+    }
+    else if (strcmp(cmd, "rumble reset") == 0) {
+        reset_standalone_rumble_metrics();
+        send_json("{\"cmd\":\"rumble_reset\",\"ok\":1}\n");
     }
     else if (strncmp(cmd, "algorithm test ", 15) == 0) {
         char result[256];
@@ -1461,7 +1803,10 @@ static void handle_command(char *cmd) {
     }
     else if (strncmp(cmd, "mode ", 5) == 0) { do_mode_command(cmd + 5); }
     else if (strcmp(cmd, "restart") == 0) { do_restart_command(); }
-    else if (strncmp(cmd, "scan on", 7) == 0)   {
+}
+
+static void handle_control_command(char *cmd) {
+    if (strncmp(cmd, "scan on", 7) == 0) {
         // The host sends "scan on" right after "disc <ch>" to re-arm detection.  Never
         // start the scan synchronously here: a gap_disconnect issued by do_disc is still
         // in flight on the HCI path and starting a scan on top of it collides and
@@ -1480,12 +1825,14 @@ static void handle_command(char *cmd) {
             s_resume_scan = true;
         }
     }
-    else if (strncmp(cmd, "scan off", 8) == 0)  {
+    else if (strncmp(cmd, "scan off", 8) == 0) {
         s_scan_mode = false;
         s_resume_scan = false;
         request_scan_stop();
     }
-    else if (strncmp(cmd, "ble disconnect", 14) == 0) { do_disc_all(); }
+    else if (strncmp(cmd, "ble disconnect", 14) == 0) {
+        do_disc_all();
+    }
     else if (strncmp(cmd, "auto", 4) == 0)      { /* host-driven conn only */ }
     else if (strncmp(cmd, "conn ", 5) == 0)     { do_conn(cmd + 5, false); }
     else if (strncmp(cmd, "inputsrc ", 9) == 0) { do_inputsrc(cmd + 9); }
@@ -1504,7 +1851,7 @@ static void emit_connect_fail(int ch, const char *reason) {
         s_ch[ch].bda[0],s_ch[ch].bda[1],s_ch[ch].bda[2],
         s_ch[ch].bda[3],s_ch[ch].bda[4],s_ch[ch].bda[5]
     );
-    out_json(message);
+    out_event(message);
     char debug[96];
     snprintf(debug, sizeof(debug), "connect watchdog ch=%d: %s", ch, reason);
     out_debug(debug);
@@ -1551,9 +1898,16 @@ void tinyusb_cdc_rx_callback(int itf, cdcacm_event_t *event) {
         if (c == '\r') continue;
         if (c == '\n') {
             s_rx_buf[s_rx_len] = '\0';
-            if (s_rx_len > 0 && s_cmd_queue) {
+            if (s_rx_len > 0) {
+                QueueHandle_t destination =
+                    command_is_control(s_rx_buf)
+                        ? s_control_queue : s_query_queue;
                 line_t L; strncpy(L.text, s_rx_buf, sizeof(L.text) - 1); L.text[sizeof(L.text)-1] = '\0';
-                if (xQueueSend(s_cmd_queue, &L, 0) == pdTRUE && s_cdc_task_h)
+                if (
+                    destination &&
+                    xQueueSend(destination, &L, 0) == pdTRUE &&
+                    s_cdc_task_h
+                )
                     xTaskNotifyGive(s_cdc_task_h);
             }
             s_rx_len = 0;
@@ -1580,7 +1934,6 @@ static void cdc_task(void *arg) {
             s_standalone_auto_conn_pair_required = false;
             do_conn(s_standalone_auto_conn, pair_required);
         }
-        if (s_request_status) { s_request_status = false; send_status_response(); }
         // Deferred 3rd-link open: the existing links were widened to 15ms in do_conn;
         // open the 3rd once that has settled (scan is already stopped by then).
         if (
@@ -1620,10 +1973,22 @@ static void cdc_task(void *arg) {
             time_reached(now_ms(), s_gap_busy_until)
         )
             kick_disc_queue();
+        /*
+         * Every CDC producer shares one short phase deadline. A partial item
+         * remains in s_cdc_tx and is completed before any queue is dequeued,
+         * so a slow host cannot splice two frames or monopolize cdc_task.
+         */
+        int64_t cdc_deadline_us =
+            esp_timer_get_time() + CDC_TX_PHASE_BUDGET_US;
+        cdc_tx_pump_until(cdc_deadline_us);
         // Input shadows are P0: forward the newest controller state before
         // diagnostics or command traffic.  BLE callbacks wake this task
         // immediately, removing the old command-queue polling delay (<=2 ms).
         for (int i = 0; i < MAX_CH; i++) {
+            if (
+                !s_standalone_mode &&
+                !cdc_tx_can_submit(cdc_deadline_us)
+            ) break;
             in_report_t r; bool dirty = false;
             portENTER_CRITICAL(&s_in_mux);
             if (s_in_dirty[i]) { r = s_in_shadow[i]; s_in_dirty[i] = false; dirty = true; }
@@ -1639,11 +2004,21 @@ static void cdc_task(void *arg) {
                 } else {
                     if (r.handle) send_notify_handle_frame(r.ch, r.handle, r.data, r.len);
                     else send_report_frame(r.ch, r.data, r.len, false);
+                    cdc_tx_pump_until(cdc_deadline_us);
                 }
             }
         }
         in_report_t ack;
-        while (xQueueReceive(s_ack_queue, &ack, 0) == pdTRUE) {
+        int ack_processed = 0;
+        while (
+            ack_processed < CDC_QUEUE_BUDGET_PER_LOOP &&
+            (
+                s_standalone_mode ||
+                cdc_tx_can_submit(cdc_deadline_us)
+            ) &&
+            xQueueReceive(s_ack_queue, &ack, 0) == pdTRUE
+        ) {
+            ack_processed++;
             if (
                 ack.ch >= MAX_CH || !s_ch[ack.ch].used ||
                 ack.generation != s_ch[ack.ch].generation
@@ -1658,10 +2033,20 @@ static void cdc_task(void *arg) {
                 }
             } else {
                 send_report_frame(ack.ch, ack.data, ack.len, true);
+                cdc_tx_pump_until(cdc_deadline_us);
             }
         }
         in_report_t ntf;
-        while (xQueueReceive(s_notify_queue, &ntf, 0) == pdTRUE) {
+        int notify_processed = 0;
+        while (
+            notify_processed < CDC_QUEUE_BUDGET_PER_LOOP &&
+            (
+                s_standalone_mode ||
+                cdc_tx_can_submit(cdc_deadline_us)
+            ) &&
+            xQueueReceive(s_notify_queue, &ntf, 0) == pdTRUE
+        ) {
+            notify_processed++;
             if (
                 ntf.ch >= MAX_CH || !s_ch[ntf.ch].used ||
                 ntf.generation != s_ch[ntf.ch].generation
@@ -1675,19 +2060,75 @@ static void cdc_task(void *arg) {
                 );
             } else if (!s_standalone_mode) {
                 send_notify_handle_frame(ntf.ch, ntf.handle, ntf.data, ntf.len);
+                cdc_tx_pump_until(cdc_deadline_us);
             }
         }
+        /*
+         * Input accepted above marks the standalone USB report dirty.  Pump it
+         * in the same wakeup instead of reaching the 2 ms maintenance wait and
+         * deferring the new state to the next loop.  Keep the pump at the top
+         * of the loop as well so a report whose endpoint was busy is retried.
+        */
+        standalone_xinput_pump();
+        /*
+         * Control commands never write CDC, so execute them even while a
+         * previous frame is pending. This lets scan off, conn, disconnect and
+         * rumble make progress independently of a slow host reader.
+         */
+        line_t control;
+        for (
+            int handled = 0;
+            handled < CDC_QUEUE_BUDGET_PER_LOOP &&
+                xQueueReceive(
+                    s_control_queue, &control, 0
+                ) == pdTRUE;
+            handled++
+        ) {
+            handle_control_command(control.text);
+        }
+        // Lifecycle events outrank queries and low-priority scan/debug output.
+        line_t event;
+        for (
+            int sent = 0;
+            sent < CDC_QUEUE_BUDGET_PER_LOOP &&
+                cdc_tx_can_submit(cdc_deadline_us) &&
+                xQueueReceive(s_event_queue, &event, 0) == pdTRUE;
+            sent++
+        ) {
+            send_json(event.text);
+            cdc_tx_pump_until(cdc_deadline_us);
+        }
+        line_t query;
+        for (
+            int handled = 0;
+            handled < CDC_QUEUE_BUDGET_PER_LOOP &&
+                cdc_tx_can_submit(cdc_deadline_us) &&
+                xQueueReceive(s_query_queue, &query, 0) == pdTRUE;
+            handled++
+        ) {
+            handle_query_command(query.text);
+            cdc_tx_pump_until(cdc_deadline_us);
+        }
         line_t out;
-        while (xQueueReceive(s_out_queue, &out, 0) == pdTRUE)
-            safe_cdc_write((const uint8_t *)out.text, strlen(out.text));
-        line_t L;
-        while (xQueueReceive(s_cmd_queue, &L, 0) == pdTRUE)
-            handle_command(L.text);
+        for (
+            int sent = 0;
+            sent < CDC_QUEUE_BUDGET_PER_LOOP &&
+                cdc_tx_can_submit(cdc_deadline_us) &&
+                xQueueReceive(s_out_queue, &out, 0) == pdTRUE;
+            sent++
+        ) {
+            send_json(out.text);
+            cdc_tx_pump_until(cdc_deadline_us);
+        }
 
         // Notifications make input wakeups immediate.  The timeout only keeps
         // deferred GAP maintenance deadlines progressing when fully idle.
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2));
     }
+}
+
+static void wake_standalone_output(void) {
+    if (s_cdc_task_h) xTaskNotifyGive(s_cdc_task_h);
 }
 
 // --- GATT discovery helpers ---
@@ -1837,7 +2278,7 @@ static void mark_channel_ready(int ch) {
         ch, s_ch[ch].bda[0],s_ch[ch].bda[1],s_ch[ch].bda[2],
         s_ch[ch].bda[3],s_ch[ch].bda[4],s_ch[ch].bda[5]
     );
-    out_json(message);
+    out_event(message);
     restore_widened_links();
     if (s_standalone_mode) {
         s_resume_scan = false;
@@ -1895,10 +2336,10 @@ static void gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
                     "{\"cmd\":\"connect_fail\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\"}\n",
                     s_ch[dch].bda[0],s_ch[dch].bda[1],s_ch[dch].bda[2],
                     s_ch[dch].bda[3],s_ch[dch].bda[4],s_ch[dch].bda[5]);
-                out_json(b);
+                out_event(b);
             } else {
                 char b[80]; snprintf(b, sizeof(b), "{\"cmd\":\"disconnected\",\"channel\":%d}\n", dch);
-                out_json(b);
+                out_event(b);
             }
             clear_channel_state(dch);
         }
@@ -1945,7 +2386,7 @@ static void gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
                 "{\"cmd\":\"connect_fail\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\"}\n",
                 s_ch[ch].bda[0],s_ch[ch].bda[1],s_ch[ch].bda[2],
                 s_ch[ch].bda[3],s_ch[ch].bda[4],s_ch[ch].bda[5]);
-            out_json(b);
+            out_event(b);
             int uo, ro; ch_count(&uo, &ro);
             char dbg[110];
             snprintf(dbg, sizeof(dbg),
@@ -1993,7 +2434,7 @@ static void gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
                  s_ch[ch].ack_handle, s_ch[ch].cmd_handle, s_ch[ch].rumble_handle);
         out_debug(b);
         snprintf(b, sizeof(b), "{\"cmd\":\"gatt_done\",\"channel\":%d}\n", ch);
-        out_json(b);
+        out_event(b);
         enable_notifications(ch);
         break;
     }
@@ -2044,14 +2485,28 @@ static void gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
         int64_t callback_started_us = ble_callback_metrics_start();
         uint8_t len = param->notify.value_len > REPORT_SIZE ? REPORT_SIZE : param->notify.value_len;
         if (ch_uses_notify_all(ch)) {
+            bool is_input =
+                param->notify.handle == s_ch[ch].input_handle;
+            if (is_input)
+                note_ble_input_report(ch, param->notify.value, len);
             in_report_t n;
             n.ch = ch; n.len = len; n.handle = param->notify.handle;
             n.generation = s_ch[ch].generation;
             memcpy(n.data, param->notify.value, len);
-            if (s_notify_queue && xQueueSend(s_notify_queue, &n, 0) == pdTRUE && s_cdc_task_h)
-                xTaskNotifyGive(s_cdc_task_h);
+            if (s_notify_queue) {
+                if (xQueueSend(s_notify_queue, &n, 0) == pdTRUE) {
+                    if (s_cdc_task_h) xTaskNotifyGive(s_cdc_task_h);
+                } else if (is_input) {
+                    portENTER_CRITICAL(&s_in_mux);
+                    s_input_latency_metrics.notify_queue_drops++;
+                    portEXIT_CRITICAL(&s_in_mux);
+                }
+            }
         } else if (param->notify.handle == s_ch[ch].input_handle) {
+            note_ble_input_report(ch, param->notify.value, len);
             portENTER_CRITICAL(&s_in_mux);
+            if (s_in_dirty[ch])
+                s_input_latency_metrics.shadow_overwrites++;
             s_in_shadow[ch].ch = ch; s_in_shadow[ch].len = len;
             s_in_shadow[ch].handle = 0;
             s_in_shadow[ch].generation = s_ch[ch].generation;
@@ -2197,6 +2652,20 @@ static void gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) 
         }
         break;
     }
+    case ESP_GAP_BLE_READ_RSSI_COMPLETE_EVT: {
+        int ch = ch_by_bda(param->read_rssi_cmpl.remote_addr);
+        if (ch >= 0 && s_ch[ch].used) {
+            s_ch[ch].rssi_valid = (
+                param->read_rssi_cmpl.status == ESP_BT_STATUS_SUCCESS &&
+                param->read_rssi_cmpl.rssi != 127
+            );
+            if (s_ch[ch].rssi_valid) {
+                s_ch[ch].rssi_dbm = param->read_rssi_cmpl.rssi;
+                s_ch[ch].rssi_updated_ms = now_ms();
+            }
+        }
+        break;
+    }
     case ESP_GAP_BLE_SCAN_STOP_COMPLETE_EVT:
         s_scan_stop_pending = false;
         if (param->scan_stop_cmpl.status == ESP_BT_STATUS_SUCCESS) {
@@ -2272,7 +2741,11 @@ static void gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) 
 }
 
 void app_main(void) {
-    ESP_LOGI(TAG, "Bluedroid bridge %s", APP_FIRMWARE_VERSION);
+    ESP_LOGI(
+        TAG, "%s %s (%s %s)",
+        APP_FIRMWARE_PRODUCT, APP_FIRMWARE_VERSION,
+        APP_PROTOCOL_NAME, APP_PROTOCOL_VERSION
+    );
     for (int i = 0; i < MAX_CH; i++) s_ch[i].gattc_if = ESP_GATT_IF_NONE;
 
     esp_err_t ret = nvs_flash_init();
@@ -2286,12 +2759,16 @@ void app_main(void) {
     s_standalone_usb_hid = output_mode == STANDALONE_OUTPUT_HID;
     bool standalone_profile_loaded = standalone_profile_load_runtime();
 
-    s_cmd_queue = xQueueCreate(16, sizeof(line_t));
+    s_control_queue = xQueueCreate(16, sizeof(line_t));
+    s_query_queue = xQueueCreate(16, sizeof(line_t));
     s_ack_queue = xQueueCreate(16, sizeof(in_report_t));
     s_notify_queue = xQueueCreate(32, sizeof(in_report_t));
+    s_event_queue = xQueueCreate(16, sizeof(line_t));
     s_out_queue = xQueueCreate(24, sizeof(line_t));
     ESP_ERROR_CHECK(
-        s_cmd_queue && s_ack_queue && s_notify_queue && s_out_queue
+        s_control_queue && s_query_queue &&
+        s_ack_queue && s_notify_queue &&
+        s_event_queue && s_out_queue
             ? ESP_OK : ESP_ERR_NO_MEM
     );
 
@@ -2318,6 +2795,7 @@ void app_main(void) {
             cdc_task, "cdc_task", 8192, NULL, 10, &s_cdc_task_h, 1
         ) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM
     );
+    standalone_xinput_set_wakeup_cb(wake_standalone_output);
 
     ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();

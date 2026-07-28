@@ -15,6 +15,7 @@ import time
 import tkinter as tk
 import uuid
 import webbrowser
+from collections import deque
 from tkinter import ttk, messagebox, simpledialog, filedialog, font as tkfont
 from ctypes import wintypes
 from pathlib import Path
@@ -64,6 +65,7 @@ from idle_disconnect import (
     load_idle_disconnect_minutes,
 )
 from localization import translate_text
+from tooltip_layout import wrap_tooltip_text
 from console_i18n import localized_print as print
 from mapping_layers import (
     LAYER_DIR,
@@ -381,6 +383,15 @@ if PYTHON_EXE.name.lower() == "pythonw.exe":
     )
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+HIDHIDE_APPLICATION_PATHS = (
+    PYTHON_EXE,
+    PROJECT_ROOT / "src" / "raw_hid_probe.exe",
+)
+STARTUP_IMAGE_PATH = (
+    PROJECT_ROOT
+    / "image"
+    / "S2P-XInput-Lite-600x340.png"
+)
 
 ESPTOOL_PATH = (
     PROJECT_ROOT
@@ -633,11 +644,22 @@ def _get_widget_work_area(widget):
 class ToolTip:
     """滑鼠移到元件上時顯示說明。"""
 
-    def __init__(self, widget, text, translator=None, illustration=None):
+    def __init__(
+        self,
+        widget,
+        text,
+        translator=None,
+        illustration=None,
+        wraplength=None,
+    ):
         self.widget = widget
         self.text = text
         self.translator = translator or (lambda value: value)
         self.illustration = illustration
+        self.wraplength = (
+            None if wraplength is None
+            else max(160, int(wraplength))
+        )
         self.window = None
 
         self.widget.bind("<Enter>", self.show)
@@ -667,22 +689,50 @@ class ToolTip:
             )
             content_parent.pack()
 
+        # Keep the project-wide 320 px tooltip width, but lay out Chinese text
+        # ourselves so Tk cannot strand punctuation, numeric units or orphans.
+        work_left, work_top, work_right, work_bottom = (
+            _get_widget_work_area(self.widget)
+        )
+        work_width = max(1, work_right - work_left)
+        requested_wrap = (
+            320 if self.wraplength is None else self.wraplength
+        )
+        effective_wrap = min(
+            requested_wrap,
+            max(160, work_width - 32),
+        )
         label = tk.Label(
             content_parent,
-            text=self.translator(self.text),
+            text="",
             justify="left",
             relief="solid" if self.illustration is None else "flat",
             borderwidth=1 if self.illustration is None else 0,
             padx=8,
             pady=6,
-            wraplength=320,
+            wraplength=0,
         )
+        label_font = tkfont.Font(font=label.cget("font"))
+        label.configure(text=wrap_tooltip_text(
+            self.translator(self.text),
+            effective_wrap,
+            label_font.measure,
+        ))
 
-        label.pack()
+        label.pack(fill="x")
         if self.illustration is not None:
+            # The preview drawing scales from the canvas centre, so it does not
+            # need to force every illustrated tooltip to a fixed 300 px width.
+            # Match the canvas to the text block while retaining enough room
+            # for the graph and its one-line status caption.
+            content_parent.update_idletasks()
+            illustration_width = max(
+                220,
+                min(300, label.winfo_reqwidth() - 16),
+            )
             canvas = tk.Canvas(
                 content_parent,
-                width=300,
+                width=illustration_width,
                 height=116,
                 bg=label.cget("background"),
                 highlightthickness=0,
@@ -714,9 +764,6 @@ class ToolTip:
 
         # 使用 Windows 工作區，而不是整個螢幕範圍。
         # 工作區會排除底部、上方或側邊工作列，也支援多螢幕。
-        work_left, work_top, work_right, work_bottom = (
-            _get_widget_work_area(self.widget)
-        )
         edge_margin = 5
         widget_x = self.widget.winfo_rootx()
         widget_y = self.widget.winfo_rooty()
@@ -1688,6 +1735,137 @@ class StickCurveEditor(ttk.Frame):
         self.dragging_index = None
 
 
+class StartupOverlay:
+    """Borderless startup artwork shared by launch and taskbar restore."""
+
+    DOT_INTERVAL_MS = 320
+
+    def __init__(
+        self,
+        root,
+        language="zh",
+        center_rect=None,
+        bounds=None,
+        paint_now=False,
+    ):
+        self.root = root
+        self.language = language if language in ("zh", "en") else "zh"
+        self._dot_count = 3
+        self._animation_job = None
+        self.window = tk.Toplevel(root)
+        self.window.withdraw()
+        self.window.overrideredirect(True)
+        self.window.attributes("-topmost", True)
+
+        self.image = tk.PhotoImage(
+            master=self.window,
+            file=str(STARTUP_IMAGE_PATH),
+        )
+        width = int(self.image.width())
+        height = int(self.image.height())
+        self.canvas = tk.Canvas(
+            self.window,
+            width=width,
+            height=height,
+            borderwidth=0,
+            highlightthickness=0,
+        )
+        self.canvas.pack()
+        self.canvas.create_image(
+            0,
+            0,
+            anchor="nw",
+            image=self.image,
+        )
+        self._text_item = self.canvas.create_text(
+            width - 12,
+            height - 8,
+            anchor="se",
+            text=self._loading_text(),
+            font=("Segoe UI", 9),
+            fill="#4a4a4a",
+        )
+
+        if bounds is None:
+            bounds = (
+                0,
+                0,
+                max(width, int(root.winfo_screenwidth())),
+                max(height, int(root.winfo_screenheight())),
+            )
+        if center_rect is None:
+            center_rect = bounds
+        bounds_x, bounds_y, bounds_width, bounds_height = bounds
+        center_x, center_y, center_width, center_height = center_rect
+        x = center_x + (center_width - width) // 2
+        y = center_y + (center_height - height) // 2
+        max_x = bounds_x + max(0, bounds_width - width)
+        max_y = bounds_y + max(0, bounds_height - height)
+        x = min(max(bounds_x, x), max_x)
+        y = min(max(bounds_y, y), max_y)
+        self.window.geometry(f"{width}x{height}+{x}+{y}")
+        self.window.update_idletasks()
+        self.window.deiconify()
+        self.window.lift()
+        self._schedule_animation()
+        if paint_now:
+            # The first frame must reach the desktop before ConfigGUI starts
+            # its synchronous widget construction.
+            root.update()
+
+    def _loading_text(self):
+        label = translate_text("啟動中", self.language)
+        return f"{label}{'.' * self._dot_count}"
+
+    def _schedule_animation(self):
+        try:
+            self._animation_job = self.window.after(
+                self.DOT_INTERVAL_MS,
+                self._animate,
+            )
+        except (tk.TclError, AttributeError):
+            self._animation_job = None
+
+    def _animate(self):
+        self._animation_job = None
+        self.pulse()
+        self._schedule_animation()
+
+    def pulse(self):
+        """Advance dots and flush this overlay's pending drawing work."""
+        try:
+            if not self.window.winfo_exists():
+                return
+            self._dot_count = (self._dot_count % 3) + 1
+            self.canvas.itemconfigure(
+                self._text_item,
+                text=self._loading_text(),
+            )
+            self.window.update_idletasks()
+        except (tk.TclError, AttributeError):
+            pass
+
+    def destroy(self):
+        job = self._animation_job
+        self._animation_job = None
+        if job is not None:
+            try:
+                self.window.after_cancel(job)
+            except (tk.TclError, AttributeError):
+                pass
+        try:
+            self.window.destroy()
+        except (tk.TclError, AttributeError):
+            pass
+
+
+def pulse_startup_overlay(root):
+    """Let long startup phases visibly advance the loading ellipsis."""
+    overlay = getattr(root, "_s2p_startup_overlay", None)
+    if overlay is not None:
+        overlay.pulse()
+
+
 class ConfigGUI:
     def __init__(self, root):
         global _GUI_ROOT
@@ -1711,6 +1889,8 @@ class ConfigGUI:
         # 標準 transient 模態視窗堆疊。所有視窗樣式都在第一次顯示前
         # 設定完成，避免 Windows 在映射後重建標題列而壓住頂部控制項。
         self._modal_windows = []
+        self._close_in_progress = False
+        self._close_warning_window = None
         self._adaptive_layout_job = None
         self._root_restore_pending = False
         self._root_restore_repaint_job = None
@@ -1719,6 +1899,8 @@ class ConfigGUI:
         self._root_restore_generation = 0
         self._root_restore_alpha_hidden = False
         self._root_restore_original_alpha = 1.0
+        self._restore_splash = None
+        self._restore_splash_generation = None
         self._main_window_positioned = False
         self.root.bind("<Unmap>", self._on_root_unmap, add="+")
         self.root.bind("<Map>", self._on_root_map, add="+")
@@ -1798,6 +1980,18 @@ class ConfigGUI:
         self.stick_zoom_window = None
         self.stick_zoom_notebook = None
         self.stick_zoom_editors = {}
+        # The tester owns a high-frequency Canvas redraw loop. Keep it in a
+        # separate GUI process so it cannot delay this settings window.
+        self.gamepad_test_process = None
+        self._gamepad_test_startup_job = None
+        self._gamepad_test_exit_job = None
+        self._gamepad_test_language_restart_job = None
+        self._gamepad_test_closing_event = None
+        self._gamepad_test_ready_event = None
+        self._gamepad_test_stderr_lines = deque(maxlen=100)
+        self._gamepad_test_stderr_thread = None
+        self._gamepad_test_reopen_requested = False
+        self._gamepad_test_loading_window = None
         self._stick_zoom_trace_bindings = []
         self._stick_curve_redraw_jobs = {"LEFT": None, "RIGHT": None}
 
@@ -1815,12 +2009,16 @@ class ConfigGUI:
         _GUI_LANGUAGE = self.language
 
         self.initialize_profiles()
+        pulse_startup_overlay(self.root)
 
         self.create_variables()
+        pulse_startup_overlay(self.root)
         self.build_parameter_default_registry()
         self.create_widgets()
+        pulse_startup_overlay(self.root)
         self.bind_parameter_reset_context_menus()
         self.apply_language()
+        pulse_startup_overlay(self.root)
         if self._mapping_layer_load_error:
             error_text = self._mapping_layer_load_error
             self.root.after_idle(
@@ -3039,7 +3237,8 @@ class ConfigGUI:
 
 
     def update_adaptive_window(
-        self
+        self,
+        allow_unmapped=False,
     ):
         """依螢幕高度限制視窗，低解析度時自動啟用垂直捲動。"""
 
@@ -3054,7 +3253,11 @@ class ConfigGUI:
         # minimized or being restored.  Never persist that geometry back into
         # the application window.
         try:
-            if self.root.state() != "normal" or not self.root.winfo_ismapped():
+            state = self.root.state()
+            if allow_unmapped:
+                if state not in ("normal", "withdrawn"):
+                    return
+            elif state != "normal" or not self.root.winfo_ismapped():
                 return
         except tk.TclError:
             return
@@ -3073,7 +3276,9 @@ class ConfigGUI:
         # 底部固定按鈕列需要的高度
         action_height = 0
 
-        if self.action_frame.winfo_ismapped():
+        if self.action_frame.winfo_ismapped() or (
+            allow_unmapped and self.action_frame.winfo_manager()
+        ):
             action_height = (
                 self.action_frame.winfo_reqheight()
             )
@@ -3220,6 +3425,12 @@ class ConfigGUI:
         )
         self._main_window_positioned = True
 
+    def show_initial_window(self):
+        """Position the completed UI before its first visible desktop frame."""
+        self.root.update_idletasks()
+        self.update_adaptive_window(allow_unmapped=True)
+        self.root.deiconify()
+
     def request_adaptive_window_update(self, delay=0):
         """Coalesce profile/language layout changes into one safe resize."""
         job = getattr(self, "_adaptive_layout_job", None)
@@ -3325,6 +3536,30 @@ class ConfigGUI:
         trace_id = variable.trace_add("write", update)
         self._stick_zoom_trace_bindings.append((variable, trace_id))
         update()
+
+    def _create_stick_zoom_deadzone_label(
+        self,
+        parent,
+        text,
+        variable,
+    ):
+        """Create an expanded-view deadzone label with numeric scrubbing."""
+        label = ttk.Label(
+            parent,
+            text=text,
+            width=7,
+            anchor="w",
+        )
+        label.pack(side="left")
+        self.bind_numeric_scrubber(
+            label,
+            variable,
+            0.0,
+            0.99,
+            step=0.01,
+            number_format=".2f",
+        )
+        return label
 
     def _build_stick_zoom_tab(self, notebook, side, canvas_width, canvas_height):
         """Build one expanded stick page using the same variables as the main UI."""
@@ -3440,13 +3675,13 @@ class ConfigGUI:
         )
         shape_help = self.create_help(
             output_group,
-            "輸出形狀會在圓形與方形之間分成 10 段。\n\n"
+            "輸出形狀會在圓形與方形之間分成 10 段。"
             "灰色圓：圓形基準；虛線方框：方形極限；"
             "藍線：目前設定的最大輸出範圍。\n\n"
             "對角方向每軸約為：\n"
             "0 = 0.707　2 = 0.766　5 = 0.854\n"
             "8 = 0.941　10 = 1.000\n\n"
-            "數值越高，對角方向可輸出的範圍越大。\n\n"
+            "數值越高，對角方向可輸出的範圍越大。"
             "拉桿後方百分比是預估圓周誤差；"
             "實際結果會受校正與取樣影響。",
             illustration=lambda canvas, var=output_shape_var: (
@@ -3535,12 +3770,11 @@ class ConfigGUI:
             width=5,
             variable=deadzone_compress_var,
         ).pack(side="left", padx=(0, 4))
-        ttk.Label(
+        self._create_stick_zoom_deadzone_label(
             center_label_frame,
-            text="中心死區",
-            width=7,
-            anchor="w",
-        ).pack(side="left")
+            "中心死區",
+            deadzone_var,
+        )
         ttk.Entry(
             deadzone_group,
             textvariable=deadzone_var,
@@ -3568,12 +3802,11 @@ class ConfigGUI:
             width=5,
             variable=outer_deadzone_compress_var,
         ).pack(side="left", padx=(0, 4))
-        ttk.Label(
+        self._create_stick_zoom_deadzone_label(
             outer_label_frame,
-            text="外圍死區",
-            width=7,
-            anchor="w",
-        ).pack(side="left")
+            "外圍死區",
+            outer_deadzone_var,
+        )
         ttk.Entry(
             deadzone_group,
             textvariable=outer_deadzone_var,
@@ -3852,7 +4085,7 @@ class ConfigGUI:
     def update_hidhide_status(self, status=None):
         """Refresh the compact HidHide indicator without periodic CLI polling."""
         if status is None:
-            status = inspect_hidhide(PYTHON_EXE)
+            status = inspect_hidhide(HIDHIDE_APPLICATION_PATHS)
         self.hidhide_status = status
         state = status.get("state", "error")
         display = {
@@ -3924,6 +4157,36 @@ class ConfigGUI:
                 atomic_write_config(latest, CONFIG_PATH)
         except (OSError, configparser.Error) as exc:
             LOGGER.warning("Could not save HidHide setup preference: %s", exc)
+
+    def _close_mode_warning_is_suppressed(self):
+        """Return whether the bridge/standalone close reminder is disabled."""
+        try:
+            return self.config.getboolean(
+                "gui",
+                "close_mode_warning_suppressed",
+                fallback=False,
+            )
+        except ValueError:
+            return False
+
+    def _set_close_mode_warning_suppressed(self, suppressed):
+        """Persist the close reminder preference without losing newer data."""
+        value = "true" if suppressed else "false"
+        if not self.config.has_section("gui"):
+            self.config.add_section("gui")
+        self.config.set("gui", "close_mode_warning_suppressed", value)
+        try:
+            with config_file_lock():
+                latest = load_config(CONFIG_PATH)
+                if not latest.has_section("gui"):
+                    latest.add_section("gui")
+                latest.set("gui", "close_mode_warning_suppressed", value)
+                atomic_write_config(latest, CONFIG_PATH)
+        except (OSError, configparser.Error) as exc:
+            LOGGER.warning(
+                "Could not save close reminder preference: %s",
+                exc,
+            )
 
     def open_hidhide_download_page(self):
         """Open the official download page when the missing status is clicked."""
@@ -4014,7 +4277,8 @@ class ConfigGUI:
 
         message = self.tr(
             "偵測到 USB 有線手把。為避免遊戲同時收到實體 HID 與虛擬 Xbox 手把，"
-            "程式可以將實體手把加入 HidHide 隱藏清單，並允許攜帶版 Python 繼續讀取。"
+            "程式可以將實體手把加入 HidHide 隱藏清單，並允許攜帶版 Python "
+            "與 Raw HID 量測器繼續讀取。"
         )
         if not status.get("cloak_active"):
             message += "\n\n" + self.tr(
@@ -4032,7 +4296,9 @@ class ConfigGUI:
             self._set_hidhide_setup_prompt_dismissed(True)
             return True
 
-        configured = configure_hidhide(PYTHON_EXE, enable_cloak=True)
+        configured = configure_hidhide(
+            HIDHIDE_APPLICATION_PATHS, enable_cloak=True
+        )
         self.update_hidhide_status(configured)
         if configured.get("state") == "ready":
             self._set_hidhide_setup_prompt_dismissed(False)
@@ -4077,7 +4343,7 @@ class ConfigGUI:
             "esp32": "ESP32",
             "wired": "USB",
         }
-        text = "● 手把：未啟動"
+        text = "● 未啟動"
         color = "#777777"
 
         try:
@@ -4125,9 +4391,11 @@ class ConfigGUI:
             raw_mode = data.get("mode")
             mode = mode_text.get(raw_mode, "")
             detail = state_text.get(state, "狀態未知")
-            text = f"● 手把：{detail}"
-            if mode:
-                text += f" · {mode}"
+            text = (
+                f"● {mode} · {detail}"
+                if mode
+                else f"● {detail}"
+            )
 
             if state == "connected":
                 battery = data.get("battery_percent")
@@ -4135,12 +4403,6 @@ class ConfigGUI:
                     text += " · 供電"
                     if data.get("wired_full_report") is False:
                         text += " · 基本"
-                    polling_rate = data.get("wired_polling_rate")
-                    if polling_rate is not None and float(polling_rate) > 0:
-                        text += f" · USB {float(polling_rate):.0f}Hz"
-                    processing_rate = data.get("wired_processing_rate")
-                    if processing_rate is not None and float(processing_rate) > 0:
-                        text += f" · XI {float(processing_rate):.0f}Hz"
                 elif battery is not None:
                     battery = int(battery)
                     if battery >= 75:
@@ -4152,9 +4414,16 @@ class ConfigGUI:
                     text += f" · 電量{battery_level}"
                     voltage = data.get("battery_voltage")
                     if voltage is not None:
-                        text += f" ({float(voltage):.3f}V)"
+                        text += f" ({float(voltage):.2f}V)"
                     if data.get("charging"):
                         text += "（充電中）"
+                source_rate = (
+                    data.get("wired_polling_rate")
+                    if raw_mode == "wired"
+                    else data.get("input_report_rate")
+                )
+                if source_rate is not None and float(source_rate) > 0:
+                    text += f" · {float(source_rate):.0f}Hz"
                 if not (
                     raw_mode == "wired"
                     and data.get("wired_full_report") is False
@@ -4846,13 +5115,7 @@ class ConfigGUI:
         draw_curve()
         window.protocol("WM_DELETE_WINDOW", window.destroy)
         window.update_idletasks()
-        x = self.root.winfo_rootx() + max(
-            0, (self.root.winfo_width() - window.winfo_width()) // 2
-        )
-        y = self.root.winfo_rooty() + max(
-            0, (self.root.winfo_height() - window.winfo_height()) // 2
-        )
-        window.geometry(f"+{x}+{y}")
+        self._center_child_window(window)
         self._bring_child_to_front(window)
     def open_gyro_button_selector(self, selector_type):
         """Open a compact checklist for gyro activation or freeze buttons."""
@@ -4965,13 +5228,7 @@ class ConfigGUI:
 
         window.protocol("WM_DELETE_WINDOW", window.destroy)
         window.update_idletasks()
-        x = self.root.winfo_rootx() + max(
-            0, (self.root.winfo_width() - window.winfo_width()) // 2
-        )
-        y = self.root.winfo_rooty() + max(
-            0, (self.root.winfo_height() - window.winfo_height()) // 2
-        )
-        window.geometry(f"+{x}+{y}")
+        self._center_child_window(window)
         self._bring_child_to_front(window)
     def initialize_profiles(self):
         """Create the first full profile and restore the active profile name."""
@@ -5628,6 +5885,7 @@ class ConfigGUI:
         finally:
             self._loading_profile_values = False
 
+        self._refresh_stick_direction_mode_ui()
         audio_state_updater = getattr(
             self, "_update_audio_response_state", None
         )
@@ -5640,6 +5898,13 @@ class ConfigGUI:
         self._layer_folder_snapshot = self._capture_layer_folder_snapshot()
         self._external_layers_pending_apply = False
         self.build_parameter_default_registry()
+
+    def _refresh_stick_direction_mode_ui(self):
+        """Refresh each selector and settings pane from its canonical mode."""
+        for updater in getattr(
+            self, "stick_direction_mode_updaters", {}
+        ).values():
+            updater()
 
     def _confirm_profile_transition(self):
         if not self.has_unsaved_changes():
@@ -6315,6 +6580,11 @@ class ConfigGUI:
 
     def toggle_language(self):
         """切換中英文並立即保存 GUI 語言偏好。"""
+        gamepad_test_process = self.gamepad_test_process
+        restart_gamepad_test = bool(
+            gamepad_test_process is not None
+            and gamepad_test_process.poll() is None
+        )
         self.language = "en" if self.language == "zh" else "zh"
         global _GUI_LANGUAGE
         _GUI_LANGUAGE = self.language
@@ -6334,7 +6604,45 @@ class ConfigGUI:
             )
 
         self.apply_language()
+        if restart_gamepad_test:
+            if self._gamepad_test_language_restart_job is not None:
+                try:
+                    self.root.after_cancel(
+                        self._gamepad_test_language_restart_job
+                    )
+                except tk.TclError:
+                    pass
+            self._gamepad_test_language_restart_job = self.root.after(
+                50,
+                lambda target=gamepad_test_process:
+                    self._restart_gamepad_test_after_language_change(target),
+            )
         self.request_adaptive_window_update()
+
+    def _restart_gamepad_test_after_language_change(self, process):
+        """Restart only if the tester is still genuinely open."""
+        self._gamepad_test_language_restart_job = None
+        if process is not self.gamepad_test_process:
+            return
+        closing_event = getattr(
+            self, "_gamepad_test_closing_event", None
+        )
+        if (
+            process.poll() is not None
+            or (
+                closing_event is not None
+                and closing_event.is_set()
+            )
+        ):
+            return
+        if self._gamepad_test_startup_job is not None:
+            try:
+                self.root.after_cancel(self._gamepad_test_startup_job)
+            except tk.TclError:
+                pass
+            self._gamepad_test_startup_job = None
+        self._close_gamepad_test_process()
+        self.open_gamepad_test_window()
 
     def show_idle_disconnect_menu(self):
         """Show the global wireless idle timeout choices."""
@@ -6412,6 +6720,11 @@ class ConfigGUI:
         # The language button advertises the language it switches to.
         self.language_button.configure(
             text="En" if self.language == "zh" else "中"
+        )
+        # This button may have been created while the UI was English. Always
+        # translate from its stable Chinese key instead of the lazy text cache.
+        self.gamepad_test_button.configure(
+            text=self.tr("手把測試")
         )
         self.write_esp32_button.configure(
             text=f"{self.tr('寫入 ESP32')} ▼"
@@ -6950,32 +7263,7 @@ class ConfigGUI:
         capture_window.bind("<ButtonPress-3>", on_mouse_button)
         capture_window.bind("<MouseWheel>", on_mouse_wheel)
 
-        # 等待 Tkinter 計算完成視窗大小
-        capture_window.update_idletasks()
-
-        # 將錄製視窗置中於主 GUI
-        parent_x = self.root.winfo_rootx()
-        parent_y = self.root.winfo_rooty()
-        parent_width = self.root.winfo_width()
-        parent_height = self.root.winfo_height()
-
-        window_width = capture_window.winfo_reqwidth()
-        window_height = capture_window.winfo_reqheight()
-
-        x = (
-            parent_x
-            + (parent_width - window_width) // 2
-        )
-
-        y = (
-            parent_y
-            + (parent_height - window_height) // 2
-        )
-
-        capture_window.geometry(
-            f"+{x}+{y}"
-        )
-
+        self._center_child_window(capture_window)
         self._bring_child_to_front(capture_window)
 
     def create_help(self, parent, text, illustration=None):
@@ -7240,6 +7528,317 @@ class ConfigGUI:
         entry.selection_range(0, "end")
         window.grab_set()
 
+    def open_gamepad_test_window(self):
+        """Open the non-modal final-output tester in its own GUI process."""
+        if self.gamepad_test_process is not None:
+            process = self.gamepad_test_process
+            if process.poll() is None:
+                closing_event = getattr(
+                    self, "_gamepad_test_closing_event", None
+                )
+                if closing_event is not None and closing_event.is_set():
+                    self._gamepad_test_reopen_requested = True
+                    self._show_gamepad_test_loading_window()
+                    self._schedule_gamepad_test_exit_check(process)
+                else:
+                    self._allow_gamepad_test_foreground(process)
+                    try:
+                        process.stdin.write(b"show\n")
+                        process.stdin.flush()
+                    except (
+                        AttributeError,
+                        BrokenPipeError,
+                        OSError,
+                        ValueError,
+                    ):
+                        pass
+                return
+            self._close_gamepad_test_process(timeout=0.0)
+        try:
+            test_app = Path(__file__).with_name("gamepad_test_app.py")
+            closing_event = threading.Event()
+            ready_event = threading.Event()
+            self.gamepad_test_process = subprocess.Popen(
+                [
+                    str(PYTHON_EXE),
+                    str(test_app),
+                    "--parent-pipe",
+                    "--language",
+                    self.language,
+                ],
+                cwd=str(test_app.parent),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            process = self.gamepad_test_process
+            self._gamepad_test_closing_event = closing_event
+            self._gamepad_test_ready_event = ready_event
+            stderr_lines = getattr(
+                self, "_gamepad_test_stderr_lines", None
+            )
+            if stderr_lines is None:
+                stderr_lines = deque(maxlen=100)
+                self._gamepad_test_stderr_lines = stderr_lines
+            else:
+                stderr_lines.clear()
+            self._gamepad_test_reopen_requested = False
+            self._gamepad_test_stderr_thread = threading.Thread(
+                target=self._drain_gamepad_test_stderr,
+                args=(process, stderr_lines),
+                daemon=True,
+                name="GamepadTestStderr",
+            )
+            self._gamepad_test_stderr_thread.start()
+            threading.Thread(
+                target=self._watch_gamepad_test_lifecycle,
+                args=(process, closing_event, ready_event),
+                daemon=True,
+                name="GamepadTestLifecycle",
+            ).start()
+            self._show_gamepad_test_loading_window()
+            self._gamepad_test_startup_job = self.root.after(
+                25,
+                lambda target=process, event=ready_event:
+                self._check_gamepad_test_startup(target, event),
+            )
+        except (OSError, RuntimeError, tk.TclError) as exc:
+            self._close_gamepad_test_loading_window()
+            messagebox.showerror(
+                self.tr("手把測試無法開啟"),
+                self.tr("無法讀取 Windows 手把介面。")
+                + f"\n\n{exc}",
+                parent=self.root,
+            )
+
+    @staticmethod
+    def _allow_gamepad_test_foreground(process):
+        """Transfer this user-initiated foreground request to the tester."""
+        try:
+            allow_foreground = ctypes.windll.user32.AllowSetForegroundWindow
+            allow_foreground.argtypes = (ctypes.c_uint32,)
+            allow_foreground.restype = ctypes.c_int
+            return bool(allow_foreground(int(process.pid)))
+        except (
+            AttributeError,
+            OSError,
+            TypeError,
+            ValueError,
+        ):
+            return False
+
+    @staticmethod
+    def _watch_gamepad_test_lifecycle(
+        process, closing_event, ready_event=None
+    ):
+        """Receive lifecycle notifications without blocking Tk's event loop."""
+        try:
+            while True:
+                message = process.stdout.readline()
+                if not message:
+                    return
+                message = message.strip().lower()
+                if message == b"ready" and ready_event is not None:
+                    ready_event.set()
+                elif message == b"closing":
+                    closing_event.set()
+        except (AttributeError, OSError, ValueError):
+            return
+
+    @staticmethod
+    def _drain_gamepad_test_stderr(process, lines):
+        """Continuously drain tester diagnostics without mixing its stdout IPC."""
+        try:
+            while True:
+                line = process.stderr.readline()
+                if not line:
+                    return
+                if isinstance(line, bytes):
+                    line = line.decode("utf-8", errors="replace")
+                elif not isinstance(line, str):
+                    return
+                lines.append(line.rstrip())
+        except (AttributeError, OSError, ValueError):
+            return
+
+    def _show_gamepad_test_loading_window(self):
+        current = getattr(self, "_gamepad_test_loading_window", None)
+        if current is not None:
+            try:
+                if current.winfo_exists():
+                    current.lift()
+                    return
+            except (AttributeError, tk.TclError):
+                pass
+        self._close_gamepad_test_loading_window()
+        window = tk.Toplevel(self.root)
+        window.withdraw()
+        window.title(self.tr("手把測試程式初始化中"))
+        window.resizable(False, False)
+        window.transient(self.root)
+        window.protocol("WM_DELETE_WINDOW", lambda: None)
+        content = ttk.Frame(window, padding=(18, 16))
+        content.pack(fill="both", expand=True)
+        ttk.Label(
+            content,
+            text=self.tr("正在初始化手把測試程式，請稍候…"),
+            anchor="center",
+        ).pack(fill="x")
+        progress = ttk.Progressbar(
+            content,
+            mode="indeterminate",
+            length=260,
+        )
+        progress.pack(fill="x", pady=(12, 0))
+        progress.start(12)
+        self._gamepad_test_loading_window = window
+        window.update_idletasks()
+        self._center_child_window(window, width=330)
+        window.deiconify()
+
+    def _close_gamepad_test_loading_window(self):
+        window = getattr(self, "_gamepad_test_loading_window", None)
+        self._gamepad_test_loading_window = None
+        if window is None:
+            return
+        try:
+            if window.winfo_exists():
+                window.destroy()
+        except (AttributeError, tk.TclError):
+            pass
+
+    def _schedule_gamepad_test_exit_check(self, process):
+        if getattr(self, "_gamepad_test_exit_job", None) is not None:
+            return
+        try:
+            self._gamepad_test_exit_job = self.root.after(
+                25,
+                lambda target=process:
+                self._check_gamepad_test_exit(target),
+            )
+        except tk.TclError:
+            self._gamepad_test_exit_job = None
+
+    def _check_gamepad_test_exit(self, process):
+        """Reopen after a close-time click once the old process has exited."""
+        self._gamepad_test_exit_job = None
+        if process is not self.gamepad_test_process:
+            return
+        if process.poll() is None:
+            self._schedule_gamepad_test_exit_check(process)
+            return
+        reopen = bool(self._gamepad_test_reopen_requested)
+        self._gamepad_test_reopen_requested = False
+        self._close_gamepad_test_process(
+            timeout=0.0,
+            keep_loading=reopen,
+        )
+        if reopen:
+            self.open_gamepad_test_window()
+
+    def _check_gamepad_test_startup(self, process, ready_event=None):
+        """Surface an early child-process traceback instead of failing silently."""
+        self._gamepad_test_startup_job = None
+        if process is not self.gamepad_test_process:
+            return
+        if ready_event is None:
+            ready_event = getattr(self, "_gamepad_test_ready_event", None)
+        if ready_event is not None and ready_event.is_set():
+            self._close_gamepad_test_loading_window()
+            return
+        return_code = process.poll()
+        if return_code is None:
+            self._gamepad_test_startup_job = self.root.after(
+                25,
+                lambda target=process, event=ready_event:
+                self._check_gamepad_test_startup(target, event),
+            )
+            return
+        self._close_gamepad_test_loading_window()
+        stderr_thread = getattr(
+            self, "_gamepad_test_stderr_thread", None
+        )
+        if stderr_thread is not None:
+            stderr_thread.join(timeout=0.2)
+        detail = "\n".join(
+            getattr(self, "_gamepad_test_stderr_lines", ())
+        ).strip()
+        self._close_gamepad_test_process(timeout=0.0)
+        if return_code == 0:
+            return
+        if len(detail) > 1800:
+            detail = detail[-1800:]
+        message = self.tr("無法讀取 Windows 手把介面。")
+        if detail:
+            message += f"\n\n{detail}"
+        messagebox.showerror(
+            self.tr("手把測試無法開啟"),
+            message,
+            parent=self.root,
+        )
+
+    def _close_gamepad_test_process(
+        self,
+        timeout=1.5,
+        *,
+        keep_loading=False,
+    ):
+        """Ask the tester to stop rumble and exit before forced termination."""
+        process = self.gamepad_test_process
+        stderr_thread = getattr(
+            self, "_gamepad_test_stderr_thread", None
+        )
+        if not keep_loading:
+            self._close_gamepad_test_loading_window()
+        if process is None:
+            return True
+        if process.poll() is None:
+            try:
+                process.stdin.write(b"close\n")
+                process.stdin.flush()
+            except (AttributeError, BrokenPipeError, OSError, ValueError):
+                pass
+            try:
+                process.wait(timeout=max(0.0, float(timeout)))
+            except subprocess.TimeoutExpired:
+                try:
+                    process.terminate()
+                    process.wait(timeout=0.5)
+                except (OSError, subprocess.TimeoutExpired):
+                    try:
+                        process.kill()
+                        process.wait(timeout=0.5)
+                    except (OSError, subprocess.TimeoutExpired):
+                        closing_event = getattr(
+                            self, "_gamepad_test_closing_event", None
+                        )
+                        if closing_event is None:
+                            closing_event = threading.Event()
+                            self._gamepad_test_closing_event = closing_event
+                        closing_event.set()
+                        # Keep the process and pipe references until a later
+                        # poll confirms exit; otherwise a rare native hang
+                        # becomes an untracked orphan.
+                        self._schedule_gamepad_test_exit_check(process)
+                        return False
+        if self.gamepad_test_process is process:
+            self.gamepad_test_process = None
+        self._gamepad_test_closing_event = None
+        self._gamepad_test_ready_event = None
+        self._gamepad_test_stderr_thread = None
+        for stream in (process.stdin, process.stdout, process.stderr):
+            try:
+                stream.close()
+            except (AttributeError, OSError, ValueError):
+                pass
+        if (
+            stderr_thread is not None
+            and stderr_thread is not threading.current_thread()
+        ):
+            stderr_thread.join(timeout=0.2)
+        return True
+
     def _center_child_window(self, window, width=None, height=None):
         """Place a modal over the current settings window, clamped on-screen."""
         self.root.update_idletasks()
@@ -7250,13 +7849,26 @@ class ConfigGUI:
         # Keep large editors usable at 1280x720 without covering the taskbar.
         width = min(width, max(200, work_width - 20))
         height = min(height, max(180, work_height - 35))
-        parent_width = max(self.root.winfo_width(), self.root.winfo_reqwidth())
-        parent_height = max(self.root.winfo_height(), self.root.winfo_reqheight())
+        # Centre against the visible client area. winfo_req* can be wider than
+        # the adaptive window and previously shifted every dialog to one side.
+        parent_width = max(1, int(self.root.winfo_width()))
+        parent_height = max(1, int(self.root.winfo_height()))
+        if parent_width <= 1:
+            parent_width = max(1, int(self.root.winfo_reqwidth()))
+        if parent_height <= 1:
+            parent_height = max(1, int(self.root.winfo_reqheight()))
         x = self.root.winfo_rootx() + (parent_width - width) // 2
         y = self.root.winfo_rooty() + (parent_height - height) // 2
         x = max(work_x, min(x, work_x + work_width - width))
         y = max(work_y, min(y, work_y + work_height - height))
         window.geometry(f"{width}x{height}+{x}+{y}")
+
+    def _mapping_layer_editor_width(self):
+        """Match the editor to the visible settings window, not its request."""
+        width = max(1, int(self.root.winfo_width()))
+        if width <= 1:
+            width = max(1, int(self.root.winfo_reqwidth()))
+        return width
 
     def _register_modal_window(self, window):
         """Track a transient dialog without changing Windows window styles."""
@@ -7301,6 +7913,7 @@ class ConfigGUI:
         try:
             if self.root.state() == "iconic":
                 self._root_restore_pending = True
+                self._hide_restore_splash()
                 # Invalidate a reveal from the previous restore immediately;
                 # the delayed check below handles WMs that report iconic late.
                 self._begin_root_restore_cycle()
@@ -7312,6 +7925,7 @@ class ConfigGUI:
                 if self.root.state() != "iconic":
                     return
                 self._root_restore_pending = True
+                self._hide_restore_splash()
                 self._begin_root_restore_cycle()
                 self._hide_root_until_restore_painted()
                 current = self.root.grab_current()
@@ -7329,12 +7943,18 @@ class ConfigGUI:
 
         restoring = bool(self._root_restore_pending)
         if restoring:
-            # Keep the mapped window nearly transparent until its complete Tk
+            # Keep the mapped window fully transparent until its complete Tk
             # child tree has painted.  DWM can otherwise present the black
             # backing surface for one or more frames before the large embedded
             # Canvas/Frame hierarchy finishes its first restore paint.
             self._hide_root_until_restore_painted()
-            self._schedule_root_restore_repaint()
+            # Register the artwork before scheduling any idle paint. Creating
+            # the Toplevel flushes idle layout work, so reversing these two
+            # steps can let a fast reveal callback run before the artwork has
+            # been stored and leave it orphaned on screen.
+            generation = self._begin_root_restore_cycle()
+            self._show_restore_splash(generation)
+            self._schedule_root_restore_repaint(generation)
             self.root.after(120, self._clear_root_topmost)
         else:
             self.root.after_idle(self._clear_root_topmost)
@@ -7352,9 +7972,9 @@ class ConfigGUI:
         try:
             current_alpha = float(self.root.attributes("-alpha"))
             self._root_restore_original_alpha = current_alpha
-            # Keep a tiny non-zero alpha so Windows continues mapping and
-            # painting the window while the unfinished surface is invisible.
-            self.root.attributes("-alpha", 0.01)
+            # RedrawWindow below explicitly repaints the mapped child tree, so
+            # the unfinished root can remain completely invisible meanwhile.
+            self.root.attributes("-alpha", 0.0)
             self._root_restore_alpha_hidden = True
         except (tk.TclError, TypeError, ValueError):
             self._root_restore_alpha_hidden = False
@@ -7368,17 +7988,58 @@ class ConfigGUI:
             return
         self._root_restore_show_job = None
         self._repaint_root_after_restore()
-        self._flush_dwm_composition()
-        if not self._root_restore_alpha_hidden:
-            return
+        if self._root_restore_alpha_hidden:
+            try:
+                self.root.attributes(
+                    "-alpha", self._root_restore_original_alpha
+                )
+            except tk.TclError:
+                pass
+            finally:
+                self._root_restore_alpha_hidden = False
         try:
-            self.root.attributes(
-                "-alpha", self._root_restore_original_alpha
-            )
-        except tk.TclError:
+            self.root.update_idletasks()
+        except (tk.TclError, AttributeError):
             pass
-        finally:
-            self._root_restore_alpha_hidden = False
+        self._flush_dwm_composition()
+        # The completed root is now composed behind the topmost artwork.
+        # Only the matching restore generation may remove that artwork.
+        self._hide_restore_splash(generation)
+
+    def _show_restore_splash(self, generation):
+        """Cover a taskbar restore until the complete root has repainted."""
+        self._hide_restore_splash()
+        try:
+            work_area = self.get_work_area()
+            center_rect = (
+                int(self.root.winfo_rootx()),
+                int(self.root.winfo_rooty()),
+                max(1, int(self.root.winfo_width())),
+                max(1, int(self.root.winfo_height())),
+            )
+            self._restore_splash = StartupOverlay(
+                self.root,
+                language=self.language,
+                center_rect=center_rect,
+                bounds=work_area,
+            )
+            self._restore_splash_generation = generation
+        except (tk.TclError, OSError, ValueError):
+            self._restore_splash = None
+            self._restore_splash_generation = None
+
+    def _hide_restore_splash(self, generation=None):
+        """Destroy only the artwork owned by the requested restore cycle."""
+        current_generation = getattr(
+            self, "_restore_splash_generation", None
+        )
+        if generation is not None and generation != current_generation:
+            return
+        splash = getattr(self, "_restore_splash", None)
+        self._restore_splash = None
+        self._restore_splash_generation = None
+        if splash is not None:
+            splash.destroy()
 
     def _begin_root_restore_cycle(self):
         """Invalidate old restore callbacks and return a fresh cycle token."""
@@ -7398,9 +8059,10 @@ class ConfigGUI:
             setattr(self, attribute, None)
         return self._root_restore_generation
 
-    def _schedule_root_restore_repaint(self):
+    def _schedule_root_restore_repaint(self, generation=None):
         """Paint twice at idle, flush DWM, and retain a timed safety reveal."""
-        generation = self._begin_root_restore_cycle()
+        if generation is None:
+            generation = self._begin_root_restore_cycle()
 
         def is_current():
             return generation == self._root_restore_generation
@@ -7451,6 +8113,7 @@ class ConfigGUI:
         except (tk.TclError, AttributeError):
             self._root_restore_repaint_job = None
             reveal_completed_frame()
+        return generation
 
     def _repaint_root_after_restore(self):
         """Synchronously repaint the root background and complete child tree."""
@@ -8794,9 +9457,7 @@ class ConfigGUI:
             controls, text=self.tr("還原"), command=restore_defaults
         ).pack(side="right", padx=(0, 6))
         dialog.update_idletasks()
-        editor_width = max(
-            self.root.winfo_width(), self.root.winfo_reqwidth()
-        )
+        editor_width = self._mapping_layer_editor_width()
         natural_height = (
             body.winfo_reqheight()
             + controls.winfo_reqheight()
@@ -9168,10 +9829,11 @@ class ConfigGUI:
 
         # Reset only this application's HidHide entries. Other applications and
         # devices remain untouched; global cloaking is disabled only when empty.
-        hidhide_result = remove_hidhide_configuration(PYTHON_EXE)
+        hidhide_result = remove_hidhide_configuration(
+            HIDHIDE_APPLICATION_PATHS
+        )
         self.hidhide_prompt_shown = False
-        self._set_hidhide_missing_prompt_dismissed(False)
-        self._set_hidhide_setup_prompt_dismissed(False)
+        self._reset_prompt_preferences_to_defaults()
         self.update_hidhide_status(hidhide_result)
         if hidhide_result.get("state") == "error":
             messagebox.showwarning(
@@ -9189,6 +9851,12 @@ class ConfigGUI:
             "請按「儲存/套用」，才會寫入方案並套用至連線。\n"
             "HidHide 可重新設定。"
         )
+
+    def _reset_prompt_preferences_to_defaults(self):
+        """Restore every persistent 'do not show again' choice."""
+        self._set_hidhide_missing_prompt_dismissed(False)
+        self._set_hidhide_setup_prompt_dismissed(False)
+        self._set_close_mode_warning_suppressed(False)
 
 
     def run_calibration(self):
@@ -9819,7 +10487,95 @@ class ConfigGUI:
             main_path
         )
 
+    def _prompt_close_mode_warning(self):
+        """Explain which connection modes survive closing the settings UI."""
+        current = getattr(self, "_close_warning_window", None)
+        if current is not None:
+            try:
+                if current.winfo_exists():
+                    current.lift()
+                    current.focus_set()
+                    return False, False
+            except (AttributeError, tk.TclError):
+                pass
+
+        window = tk.Toplevel(self.root)
+        self._close_warning_window = window
+        window.withdraw()
+        window.title(self.tr("關閉程式"))
+        window.resizable(False, False)
+        window.transient(self.root)
+        result = {"confirmed": False, "suppress": False}
+        suppress_var = tk.BooleanVar(master=window, value=False)
+
+        content = ttk.Frame(window, padding=(10, 10))
+        content.pack(fill="both", expand=True)
+        ttk.Label(
+            content,
+            text=self.tr(
+                "關閉設定視窗後：\n\n"
+                "• 桌面橋接模式會中斷連線。\n"
+                "• ESP32 獨立模式會繼續運作。"
+            ),
+            justify="left",
+            wraplength=170,
+        ).pack(fill="x", pady=(0, 10))
+        ttk.Checkbutton(
+            content,
+            text=self.tr("以後不再提示"),
+            variable=suppress_var,
+        ).pack(anchor="w")
+        actions = ttk.Frame(content)
+        actions.pack(fill="x", pady=(12, 0))
+
+        def cancel(_event=None):
+            window.destroy()
+
+        def confirm(_event=None):
+            result["confirmed"] = True
+            result["suppress"] = bool(suppress_var.get())
+            window.destroy()
+
+        close_button = ttk.Button(
+            actions,
+            text=self.tr("仍要關閉"),
+            command=confirm,
+            width=11,
+        )
+        close_button.pack(side="right")
+        cancel_button = ttk.Button(
+            actions,
+            text=self.tr("取消"),
+            command=cancel,
+            width=9,
+        )
+        cancel_button.pack(side="right", padx=(0, 8))
+        window.bind("<Escape>", cancel)
+        window.protocol("WM_DELETE_WINDOW", cancel)
+        window.update_idletasks()
+        self._center_child_window(window, width=200)
+        self._bring_child_to_front(window, cancel_button)
+        try:
+            self.root.wait_window(window)
+        except tk.TclError:
+            pass
+        finally:
+            if self._close_warning_window is window:
+                self._close_warning_window = None
+        return result["confirmed"], result["suppress"]
+
     def on_close(self):
+        """Serialize close attempts across modal Tk message loops."""
+        if getattr(self, "_close_in_progress", False):
+            return
+        self._close_in_progress = True
+        try:
+            self._perform_on_close()
+        except Exception:
+            self._close_in_progress = False
+            raise
+
+    def _perform_on_close(self):
         """關閉 GUI 前檢查未儲存設定，並清理所有子程序。"""
 
         # 先檢查是否有尚未儲存的設定
@@ -9831,10 +10587,46 @@ class ConfigGUI:
             )
 
             if not confirmed:
+                self._close_in_progress = False
                 return
 
         # 關閉獨立的搖桿曲線放大視窗。
+        suppress_warning = False
+        if not self._close_mode_warning_is_suppressed():
+            confirmed, suppress_warning = self._prompt_close_mode_warning()
+            if not confirmed:
+                self._close_in_progress = False
+                return
+        if suppress_warning:
+            # Persist only after every close confirmation succeeded. The setter
+            # reloads the latest config under the shared lock, preserving any
+            # calibration write that completed during the modal dialog.
+            self._set_close_mode_warning_suppressed(True)
+
         self.close_stick_zoom_window()
+        if self._gamepad_test_startup_job is not None:
+            try:
+                self.root.after_cancel(self._gamepad_test_startup_job)
+            except tk.TclError:
+                pass
+            self._gamepad_test_startup_job = None
+        if self._gamepad_test_exit_job is not None:
+            try:
+                self.root.after_cancel(self._gamepad_test_exit_job)
+            except tk.TclError:
+                pass
+            self._gamepad_test_exit_job = None
+        language_restart_job = getattr(
+            self, "_gamepad_test_language_restart_job", None
+        )
+        if language_restart_job is not None:
+            try:
+                self.root.after_cancel(language_restart_job)
+            except tk.TclError:
+                pass
+            self._gamepad_test_language_restart_job = None
+        self._gamepad_test_reopen_requested = False
+        self._close_gamepad_test_process()
 
         # 先正常關閉主連接程式
         # 讓 main.py 執行 finally，
@@ -10014,9 +10806,43 @@ class ConfigGUI:
             )
             return False
 
+def show_startup_window(root):
+    """Paint the product artwork before the heavier GUI build."""
+    language = "zh"
+    try:
+        language = load_config(CONFIG_PATH).get(
+            "gui", "language", fallback="zh"
+        ).strip().lower()
+    except (OSError, configparser.Error, ValueError):
+        pass
+    if language not in ("zh", "en"):
+        language = "zh"
+
+    return StartupOverlay(
+        root,
+        language=language,
+        paint_now=True,
+    )
+
+
 def main():
     root = tk.Tk()
-    ConfigGUI(root)
+    # Tk starts a new root at its small default geometry. Keep it hidden until
+    # every widget has been created and the final centred geometry is ready.
+    root.withdraw()
+    startup_window = show_startup_window(root)
+    root._s2p_startup_overlay = startup_window
+    try:
+        gui = ConfigGUI(root)
+    except Exception:
+        root._s2p_startup_overlay = None
+        startup_window.destroy()
+        raise
+    root._s2p_startup_overlay = None
+    gui.show_initial_window()
+    root.update_idletasks()
+    gui._flush_dwm_composition()
+    startup_window.destroy()
     root.mainloop()
 
 if __name__ == "__main__":

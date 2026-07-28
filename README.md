@@ -4,9 +4,14 @@
 
 ![S2P-XInput-Lite banner](image/S2P-XInput-Lite-banner.jpg)
 
+<p align="center">
+  <img src="image/GUI.gif" alt="S2P-XInput-Lite settings interface" height="360">
+  <img src="image/test.gif" alt="S2P-XInput-Lite gamepad tester" height="360">
+</p>
+
 S2P-XInput-Lite provides XInput-compatible controller output for a Switch 2 Pro Controller on Windows. It supports wired USB, an ESP32-S3 USB bridge, and native Windows BLE.
 
-Current release: **v0.6.1**
+Current release: **v0.7.0**
 
 [Latest published release](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 
@@ -27,6 +32,13 @@ Current release: **v0.6.1**
 - ESP32 standalone profile writing for PC XInput-compatible output or
   standards-based mobile USB HID without keeping the Windows application open
 - Gyroscope mapping to an XInput stick or mouse
+- Standalone gamepad tester with live input/output plots, button mapping
+  details, shape capture, vibration tests, and directly selectable Raw HID
+  collections for stick monitoring. Its report-rate page shows report count,
+  P50/P95/P99 intervals, distribution statistics, and a timeline.
+- Built-in ESP32 diagnostics with timed tests, a clear pass/warn/fail verdict,
+  and exportable text reports
+- About page with project links, the software license, and third-party notices
 - Full game profiles for switching stick, gyro, rumble, audio-haptics, and mapping settings together, with automatic UI refresh
 - Traditional Chinese and English interface
 - Live connection, battery, ESP32, ViGEmBus, WASAPI, and HidHide status
@@ -54,7 +66,7 @@ The packaged release includes a portable Python runtime and all required package
 
 The application checks wired USB first, then ESP32, and finally native BLE. Keep the connection program running while playing.
 
-If HidHide is missing, the application offers to open its official download page. Declining suppresses the reminder on later launches and does not block the connection; click **HidHide: Missing** at the bottom of the window to open the download page later. When a wired controller is detected and HidHide is installed but not configured, the application asks before adding the portable `runtime\python.exe` and the selected physical Nintendo HID to HidHide. Declining also suppresses later reminders; click **HidHide: Off/Setup** to reopen the setup confirmation. Accepting may enable global cloaking; existing HidHide entries belonging to other applications are preserved. **Restore Defaults** removes this application and the selected controller from HidHide while preserving unrelated entries; reconnect the USB controller first if it is currently hidden.
+If HidHide is missing, the application offers to open its official download page. Declining suppresses the reminder on later launches and does not block the connection; click **HidHide: Missing** at the bottom of the window to open the download page later. When a wired controller is detected and HidHide is installed but not configured, the application asks before adding the portable `runtime\python.exe`, `src\raw_hid_probe.exe`, and the selected physical Nintendo HID to HidHide. Declining also suppresses later reminders; click **HidHide: Off/Setup** to reopen the setup confirmation. Accepting may enable global cloaking; existing HidHide entries belonging to other applications are preserved. **Restore Defaults** removes these two application entries and the selected controller from HidHide while preserving unrelated entries; reconnect the USB controller first if it is currently hidden.
 
 For first-time native BLE pairing, start the connection program and hold the controller's **SYNC** button. A previously paired controller can normally be woken with any button.
 
@@ -102,9 +114,10 @@ Reusable hardware probes and automated tests are maintained in the development r
 - ESP32 standalone mode does not support Windows keyboard/mouse output, audio
   haptics, process-based profile switching, phone rumble, or BLE HID output
 - Motion is mapped to a stick or mouse; XInput does not expose raw motion sensors
-- The ESP32 connection requires compatible firmware. Standalone profile writing
-  and direct USB controller output require the bundled `0.14.0` firmware;
-  older bridge-only firmware cannot provide those features.
+- The ESP32 connection requires compatible firmware. Standalone profile
+  writing, direct USB controller output, and the diagnostic page require the
+  bundled `S2P-FW 1.0.1`; older S2P builds and upstream firmware cannot provide
+  the complete `s2p_bridge 1.0.0` feature set.
 - The GitHub repository includes the complete ESP32 source. Packaged releases
   contain only the flashing tool and required firmware images under `esp32s3`.
 - HidHide is not bundled and is not required for ESP32 or BLE. Without it, wired input still works, but games may detect both the physical HID and virtual XInput controller.

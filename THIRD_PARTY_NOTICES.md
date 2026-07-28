@@ -54,17 +54,19 @@ upstream licenses and copyright notices.
 
 ## ESP32-S3 Firmware Files
 
-The bundled ESP32-S3 Bluedroid bridge and standalone firmware is a modified
-build based on Switch2Connect commit
+The bundled ESP32-S3 Bluedroid bridge and standalone firmware began as a
+modified build based on Switch2Connect commit
 `d63b044e66cfb93f8377a3596e3f00c82715b029`. Its complete corresponding source
 is distributed under `esp32s3/source/esp32s3_usb_bridge_bluedroid`. The current
-development firmware reports version `0.14.0-dev` and retains compatibility
-with the `0.12.4` bridge command protocol.
+release reports `S2P-FW 1.0.1` and uses the independent `s2p_bridge 1.0.0`
+protocol. It does not claim runtime or command compatibility with upstream
+Switch2Connect firmware.
 
 S2P-XInput-Lite modifications include low-latency BLE-to-USB CDC scheduling,
 immediate CDC task wake-up, newest-input priority, combined CDC report writes,
-and an updated build identifier. These modifications remain distributed under
-the GNU General Public License terms stated in the firmware source.
+standalone PC and mobile USB output, A/B profile storage, and diagnostic
+commands. These modifications remain distributed under the GNU General Public
+License terms stated in the firmware source.
 
 **Upstream source:**  
 https://github.com/TommyWabg/Switch2Connect

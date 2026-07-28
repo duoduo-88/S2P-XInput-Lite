@@ -2,6 +2,7 @@
 
 import math
 import threading
+from functools import lru_cache
 
 import numpy as np
 from console_i18n import current_language
@@ -52,6 +53,21 @@ def _spectral_band_rms(samples, sample_rate):
     sample_count = int(mono.size)
     if sample_count < 8 or sample_rate <= 0:
         return (0.0,) * len(AUDIO_BANDS_HZ)
+    window, denominator, band_bins = _spectral_plan(
+        sample_count, float(sample_rate)
+    )
+    spectrum = np.fft.rfft(mono * window)
+    power = np.abs(spectrum) ** 2
+    levels = []
+    for start, stop in band_bins:
+        band_power = float(np.sum(power[start:stop]))
+        levels.append(math.sqrt(max(0.0, 2.0 * band_power / denominator)))
+    return tuple(levels)
+
+
+@lru_cache(maxsize=8)
+def _spectral_plan(sample_count, sample_rate):
+    """Cache the immutable FFT window and band bins used on every audio hop."""
     # A symmetric Hann window suppresses the newest samples at its right
     # edge, adding perceptible onset lag in a causal real-time stream. This
     # rising half-sine keeps leakage controlled while giving the newest audio
@@ -60,16 +76,16 @@ def _spectral_band_rms(samples, sample_rate):
         np.linspace(0.0, math.pi / 2.0, sample_count, dtype=np.float32)
     )
     window_power = float(np.mean(window * window))
-    spectrum = np.fft.rfft(mono * window)
-    power = np.abs(spectrum) ** 2
     frequencies = np.fft.rfftfreq(sample_count, 1.0 / float(sample_rate))
     denominator = max(1e-12, sample_count * sample_count * window_power)
-    levels = []
+    band_bins = []
     for low_hz, high_hz in AUDIO_BANDS_HZ:
-        mask = (frequencies >= low_hz) & (frequencies < high_hz)
-        band_power = float(np.sum(power[mask])) if np.any(mask) else 0.0
-        levels.append(math.sqrt(max(0.0, 2.0 * band_power / denominator)))
-    return tuple(levels)
+        band_bins.append((
+            int(np.searchsorted(frequencies, low_hz, side="left")),
+            int(np.searchsorted(frequencies, high_hz, side="left")),
+        ))
+    window.setflags(write=False)
+    return window, denominator, tuple(band_bins)
 
 
 class AudioHaptics:
@@ -81,6 +97,10 @@ class AudioHaptics:
         self._thread = None
         self._stream = None
         self._audio = None
+        self._stop_event = threading.Event()
+        self._lifecycle_lock = threading.Lock()
+        self._generation = 0
+        self._restart_after_exit = False
         self._apply_config(config)
 
     def _apply_config(self, config):
@@ -120,65 +140,77 @@ class AudioHaptics:
 
     def reconfigure(self, config):
         """Apply a profile while preserving any live PyAudio/WASAPI stream."""
-        was_running = self._running
         self._apply_config(config)
-        if self.mode in ("AUDIO", "MIX") and not was_running:
+        if self.mode in ("AUDIO", "MIX"):
             self.start()
-        elif self.mode == "GAME":
+        else:
             # Keep an already-open native stream alive across profile changes;
             # repeated PortAudio close/terminate/reopen cycles can crash in
             # ntdll.  GAME ignores this value in XInputController.
             self._level_callback(0.0, 0.0)
 
     def start(self):
-        if self.mode == "GAME" or self._running:
-            return
-        self._running = True
-        self._thread = threading.Thread(
-            target=self._capture_loop,
-            daemon=True,
-            name="AudioHapticsCapture",
-        )
-        self._thread.start()
+        if self.mode == "GAME":
+            return False
+        with self._lifecycle_lock:
+            thread = self._thread
+            if thread is not None and thread.is_alive():
+                if self._stop_event.is_set() or not self._running:
+                    self._restart_after_exit = True
+                    return False
+                return True
+            self._thread = None
+            self._restart_after_exit = False
+            self._generation += 1
+            generation = self._generation
+            stop_event = threading.Event()
+            self._stop_event = stop_event
+            self._running = True
+            thread = threading.Thread(
+                target=self._capture_loop,
+                args=(generation, stop_event),
+                daemon=True,
+                name="AudioHapticsCapture",
+            )
+            self._thread = thread
+            thread.start()
+            return True
 
     def close(self):
-        self._running = False
-        stream = self._stream
-        if stream is not None:
-            try:
-                stream.stop_stream()
-            except Exception:
-                pass
-            try:
-                stream.close()
-            except Exception:
-                pass
+        with self._lifecycle_lock:
+            self._restart_after_exit = False
+            self._running = False
+            self._stop_event.set()
+            thread = self._thread
         if (
-            self._thread is not None
-            and self._thread.is_alive()
-            and threading.current_thread() is not self._thread
+            thread is not None
+            and thread.is_alive()
+            and threading.current_thread() is not thread
         ):
-            self._thread.join(timeout=1.0)
+            thread.join(timeout=1.0)
+        stopped = thread is None or not thread.is_alive()
+        if stopped:
+            with self._lifecycle_lock:
+                if self._thread is thread:
+                    self._thread = None
         self._level_callback(0.0, 0.0)
+        return stopped
 
-    def _capture_loop(self):
+    def _capture_loop(self, generation, stop_event):
+        audio = None
+        stream = None
         try:
             import pyaudiowpatch as pyaudio
-        except ImportError:
-            print("音訊震動無法啟動：缺少 PyAudioWPatch；遊戲震動仍可正常使用。")
-            self._running = False
-            return
 
-        try:
-            self._audio = pyaudio.PyAudio()
-            device = self._default_loopback_device(pyaudio)
+            audio = pyaudio.PyAudio()
+            device = self._default_loopback_device(pyaudio, audio)
             sample_rate = int(device["defaultSampleRate"])
             channels = max(1, int(device["maxInputChannels"]))
             # Read a small hop for low latency, while retaining a 20 ms
             # rolling window so the lowest EQ bands keep useful resolution.
             hop_frames = max(128, min(512, sample_rate // 200))
             analysis_frames = max(512, min(2048, sample_rate // 50))
-            self._stream = self._audio.open(
+            stream = audio.open(
                 format=pyaudio.paFloat32,
                 channels=channels,
                 rate=sample_rate,
@@ -186,37 +218,76 @@ class AudioHaptics:
                 input_device_index=int(device["index"]),
                 frames_per_buffer=hop_frames,
             )
+            with self._lifecycle_lock:
+                if generation == self._generation:
+                    self._audio = audio
+                    self._stream = stream
             print(f"音訊震動已啟動：{device['name']}")
             self._process_stream(
-                sample_rate, channels, hop_frames, analysis_frames
+                sample_rate,
+                channels,
+                hop_frames,
+                analysis_frames,
+                stream=stream,
+                stop_event=stop_event,
             )
+        except ImportError:
+            print("音訊震動無法啟動：缺少 PyAudioWPatch；遊戲震動仍可正常使用。")
         except Exception as exc:
-            if self._running:
+            if not stop_event.is_set():
                 print(f"音訊震動擷取失敗：{exc}")
         finally:
-            self._running = False
+            current_thread = threading.current_thread()
+            with self._lifecycle_lock:
+                if (
+                    generation == self._generation
+                    and self._thread is current_thread
+                ):
+                    self._running = False
+                    stop_event.set()
             self._level_callback(0.0, 0.0)
-            if self._stream is not None:
+            if stream is not None:
                 try:
-                    self._stream.close()
+                    stream.stop_stream()
                 except Exception:
                     pass
-                self._stream = None
-            if self._audio is not None:
                 try:
-                    self._audio.terminate()
+                    stream.close()
                 except Exception:
                     pass
-                self._audio = None
+            if audio is not None:
+                try:
+                    audio.terminate()
+                except Exception:
+                    pass
+            restart = False
+            with self._lifecycle_lock:
+                if (
+                    generation == self._generation
+                    and self._thread is current_thread
+                ):
+                    if self._stream is stream:
+                        self._stream = None
+                    if self._audio is audio:
+                        self._audio = None
+                    self._thread = None
+                    restart = (
+                        self._restart_after_exit
+                        and self.mode in ("AUDIO", "MIX")
+                    )
+                    self._restart_after_exit = False
+            if restart:
+                self.start()
 
-    def _default_loopback_device(self, pyaudio):
-        wasapi = self._audio.get_host_api_info_by_type(pyaudio.paWASAPI)
-        output = self._audio.get_device_info_by_index(
+    def _default_loopback_device(self, pyaudio, audio=None):
+        audio = self._audio if audio is None else audio
+        wasapi = audio.get_host_api_info_by_type(pyaudio.paWASAPI)
+        output = audio.get_device_info_by_index(
             wasapi["defaultOutputDevice"]
         )
         if output.get("isLoopbackDevice"):
             return output
-        loopback = self._audio.get_wasapi_loopback_analogue_by_dict(output)
+        loopback = audio.get_wasapi_loopback_analogue_by_dict(output)
         if loopback is None:
             raise RuntimeError(_tr(
                 "找不到預設 Windows 輸出裝置的 loopback 端點",
@@ -226,8 +297,17 @@ class AudioHaptics:
         return loopback
 
     def _process_stream(
-        self, sample_rate, channels, hop_frames, analysis_frames=None
+        self,
+        sample_rate,
+        channels,
+        hop_frames,
+        analysis_frames=None,
+        *,
+        stream=None,
+        stop_event=None,
     ):
+        stream = self._stream if stream is None else stream
+        stop_event = self._stop_event if stop_event is None else stop_event
         lf_envelope = 0.0
         hf_envelope = 0.0
         if analysis_frames is None:
@@ -237,8 +317,19 @@ class AudioHaptics:
         # update instead of waiting for an entire 20 ms window to fill.
         rolling_audio = np.zeros(analysis_frames, dtype=np.float32)
 
-        while self._running:
-            data = self._stream.read(
+        while self._running and not stop_event.is_set():
+            get_read_available = getattr(
+                stream, "get_read_available", None
+            )
+            if get_read_available is not None:
+                available = max(0, int(get_read_available()))
+                if available < hop_frames:
+                    missing_seconds = (hop_frames - available) / sample_rate
+                    stop_event.wait(
+                        timeout=max(0.0005, min(0.002, missing_seconds))
+                    )
+                    continue
+            data = stream.read(
                 hop_frames, exception_on_overflow=False
             )
             samples = np.frombuffer(data, dtype=np.float32)
@@ -248,10 +339,20 @@ class AudioHaptics:
             samples = samples[:frame_count * channels].reshape(
                 frame_count, channels
             )
+            if self.mode == "GAME":
+                # Keep draining the live stream so switching back to AUDIO/MIX
+                # cannot replay stale buffered sound, but skip all DSP and
+                # callback traffic while game rumble owns the output.
+                rolling_audio.fill(0.0)
+                lf_envelope = 0.0
+                hf_envelope = 0.0
+                continue
             mono = np.mean(samples, axis=1)
-            rolling_audio = np.concatenate((rolling_audio, mono))[
-                -analysis_frames:
-            ]
+            if frame_count >= analysis_frames:
+                rolling_audio[:] = mono[-analysis_frames:]
+            else:
+                rolling_audio[:-frame_count] = rolling_audio[frame_count:]
+                rolling_audio[-frame_count:] = mono
             band_rms = _spectral_band_rms(rolling_audio, sample_rate)
             band_levels = tuple(
                 self._level_from_rms(rms, gain)

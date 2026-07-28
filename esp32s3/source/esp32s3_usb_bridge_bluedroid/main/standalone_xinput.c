@@ -15,6 +15,7 @@
 
 #include "cJSON.h"
 #include "device/usbd_pvt.h"
+#include "esp_timer.h"
 #include "FusionAhrs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -289,6 +290,11 @@ static bool s_report_dirty;
 static bool s_hid_report_dirty;
 static bool s_usb_hid_mode;
 static bool s_usb_xinput_mode;
+static standalone_xinput_wakeup_cb_t s_wakeup_cb;
+static standalone_usb_latency_metrics_t s_usb_latency_metrics;
+static bool s_usb_wait_active;
+static int64_t s_usb_wait_started_us;
+static void cancel_usb_wait(void);
 static int s_active_channel = -1;
 static uint8_t s_endpoint_in;
 static uint8_t s_endpoint_out;
@@ -1730,6 +1736,28 @@ static uint32_t apply_stick_direction(
         ? config->targets[config->active_direction] : 0;
 }
 
+static bool stick_direction_consumes_native_output(
+    const stick_direction_runtime_t *config
+) {
+    if (!config) return false;
+    if (
+        config->mode == STICK_DIRECTION_LT ||
+        config->mode == STICK_DIRECTION_RT
+    ) return true;
+    if (
+        config->mode != STICK_DIRECTION_4WAY &&
+        config->mode != STICK_DIRECTION_8WAY
+    ) return false;
+    int count = config->mode == STICK_DIRECTION_4WAY ? 4 : 8;
+    static const int indices_4way[4] = {0, 2, 4, 6};
+    for (int i = 0; i < count; i++) {
+        int index = config->mode == STICK_DIRECTION_4WAY
+            ? indices_4way[i] : i;
+        if (config->targets[index] != 0) return true;
+    }
+    return false;
+}
+
 bool standalone_xinput_format_algorithm_test(
     const char *arguments, char *output, size_t size
 ) {
@@ -3026,6 +3054,7 @@ void standalone_xinput_configure(
     tinyusb_config_t *config, bool enabled, bool usb_hid_mode
 ) {
     if (!config) return;
+    cancel_usb_wait();
     s_usb_hid_mode = enabled && usb_hid_mode;
     s_usb_xinput_mode = enabled && !usb_hid_mode;
     if (s_usb_hid_mode) {
@@ -3052,6 +3081,29 @@ void standalone_xinput_configure(
             sizeof(s_bridge_string_descriptors) /
             sizeof(s_bridge_string_descriptors[0]);
     }
+}
+
+void standalone_xinput_set_wakeup_cb(
+    standalone_xinput_wakeup_cb_t callback
+) {
+    s_wakeup_cb = callback;
+}
+
+void standalone_xinput_get_latency_metrics(
+    standalone_usb_latency_metrics_t *metrics
+) {
+    if (!metrics) return;
+    portENTER_CRITICAL(&s_state_mux);
+    *metrics = s_usb_latency_metrics;
+    portEXIT_CRITICAL(&s_state_mux);
+}
+
+void standalone_xinput_reset_latency_metrics(void) {
+    portENTER_CRITICAL(&s_state_mux);
+    memset(&s_usb_latency_metrics, 0, sizeof(s_usb_latency_metrics));
+    s_usb_wait_active = false;
+    s_usb_wait_started_us = 0;
+    portEXIT_CRITICAL(&s_state_mux);
 }
 
 void standalone_xinput_accept_switch_report(
@@ -3159,12 +3211,28 @@ void standalone_xinput_accept_switch_report(
         report.buttons2 |= (uint8_t)((direction_targets >> 8) & 0xffu);
         if (direction_targets & TARGET_LT) report.left_trigger = 0xff;
         if (direction_targets & TARGET_RT) report.right_trigger = 0xff;
+        /*
+         * Match desktop conversion semantics: supported direction mappings
+         * consume the physical stick instead of emitting the native axis and
+         * mapped target together. Gyro runs afterwards and can still own it.
+         */
+        if (stick_direction_consumes_native_output(&directions[0])) {
+            report.left_x = 0;
+            report.left_y = 0;
+        }
+        if (stick_direction_consumes_native_output(&directions[1])) {
+            report.right_x = 0;
+            report.right_y = 0;
+        }
         apply_gyro_to_report_runtime(
             payload, length, source, &report,
             &s_runtime.gyro, s_runtime.sticks
         );
         portENTER_CRITICAL(&s_state_mux);
         if (channel == s_active_channel) {
+            bool pending = s_usb_hid_mode
+                ? s_hid_report_dirty : s_report_dirty;
+            if (pending) s_usb_latency_metrics.pending_overwrites++;
             s_idle_buttons = source;
             memcpy(s_idle_sticks, raw_sticks, sizeof(raw_sticks));
             memcpy(s_idle_gyro, raw_gyro, sizeof(raw_gyro));
@@ -3226,9 +3294,70 @@ static void arm_out_endpoint(void) {
     usbd_edpt_release(0, s_endpoint_out);
 }
 
+static void wake_output_if_pending(bool hid_mode) {
+    bool pending;
+    portENTER_CRITICAL(&s_state_mux);
+    pending = hid_mode ? s_hid_report_dirty : s_report_dirty;
+    portEXIT_CRITICAL(&s_state_mux);
+    if (pending && s_wakeup_cb) s_wakeup_cb();
+}
+
+static bool usb_report_pending(bool hid_mode) {
+    bool pending;
+    portENTER_CRITICAL(&s_state_mux);
+    pending = hid_mode ? s_hid_report_dirty : s_report_dirty;
+    portEXIT_CRITICAL(&s_state_mux);
+    return pending;
+}
+
+static void note_usb_wait_if_pending(bool hid_mode) {
+    int64_t now_us = esp_timer_get_time();
+    portENTER_CRITICAL(&s_state_mux);
+    bool pending = hid_mode ? s_hid_report_dirty : s_report_dirty;
+    if (pending && !s_usb_wait_active) {
+        s_usb_wait_active = true;
+        s_usb_wait_started_us = now_us;
+        s_usb_latency_metrics.busy_events++;
+    }
+    portEXIT_CRITICAL(&s_state_mux);
+}
+
+static void cancel_usb_wait(void) {
+    portENTER_CRITICAL(&s_state_mux);
+    s_usb_wait_active = false;
+    s_usb_wait_started_us = 0;
+    portEXIT_CRITICAL(&s_state_mux);
+}
+
+static void finish_usb_wait(void) {
+    int64_t now_us = esp_timer_get_time();
+    portENTER_CRITICAL(&s_state_mux);
+    if (s_usb_wait_active) {
+        int64_t elapsed_us = now_us - s_usb_wait_started_us;
+        uint32_t wait_us = elapsed_us <= 0
+            ? 0
+            : elapsed_us > UINT32_MAX
+                ? UINT32_MAX : (uint32_t)elapsed_us;
+        s_usb_latency_metrics.wait_samples++;
+        s_usb_latency_metrics.wait_total_us += wait_us;
+        if (wait_us > s_usb_latency_metrics.wait_max_us)
+            s_usb_latency_metrics.wait_max_us = wait_us;
+        s_usb_wait_active = false;
+        s_usb_wait_started_us = 0;
+    }
+    portEXIT_CRITICAL(&s_state_mux);
+}
+
 void standalone_xinput_pump(void) {
     if (s_usb_hid_mode) {
-        if (!tud_ready() || !tud_hid_ready()) return;
+        if (!tud_ready()) {
+            cancel_usb_wait();
+            return;
+        }
+        if (!tud_hid_ready()) {
+            note_usb_wait_if_pending(true);
+            return;
+        }
         xinput_report_t snapshot;
         bool dirty;
         portENTER_CRITICAL(&s_state_mux);
@@ -3243,12 +3372,22 @@ void standalone_xinput_pump(void) {
             portENTER_CRITICAL(&s_state_mux);
             s_hid_report_dirty = true;
             portEXIT_CRITICAL(&s_state_mux);
+            note_usb_wait_if_pending(true);
+        } else {
+            finish_usb_wait();
         }
         return;
     }
-    if (!tud_ready() || !s_endpoint_in) return;
+    if (!tud_ready() || !s_endpoint_in) {
+        cancel_usb_wait();
+        return;
+    }
     arm_out_endpoint();
-    if (usbd_edpt_busy(0, s_endpoint_in)) return;
+    if (usbd_edpt_busy(0, s_endpoint_in)) {
+        note_usb_wait_if_pending(false);
+        return;
+    }
+    if (!usb_report_pending(false)) return;
     bool dirty;
     portENTER_CRITICAL(&s_state_mux);
     dirty = s_report_dirty;
@@ -3265,6 +3404,9 @@ void standalone_xinput_pump(void) {
         portENTER_CRITICAL(&s_state_mux);
         s_report_dirty = true;
         portEXIT_CRITICAL(&s_state_mux);
+        note_usb_wait_if_pending(false);
+    } else {
+        finish_usb_wait();
     }
 }
 
@@ -3358,6 +3500,7 @@ static void xinput_reset(uint8_t rhport) {
     (void)rhport;
     s_endpoint_in = 0;
     s_endpoint_out = 0;
+    cancel_usb_wait();
 }
 
 static uint16_t xinput_open(
@@ -3402,6 +3545,14 @@ static bool xinput_transfer(
     uint32_t transferred
 ) {
     (void)rhport;
+    if (endpoint == s_endpoint_in) {
+        /*
+         * A newer BLE state may have arrived while the IN endpoint was busy.
+         * Wake the output task as soon as the host completes this transfer
+         * instead of relying on its 2 ms maintenance timeout.
+         */
+        wake_output_if_pending(false);
+    }
     if (endpoint == s_endpoint_out && result == XFER_RESULT_SUCCESS) {
         if (transferred >= 5 &&
             s_out_buffer[0] == 0x00 && s_out_buffer[1] == 0x08) {
@@ -3493,4 +3644,13 @@ void tud_hid_set_report_cb(
     (void)report_type;
     (void)buffer;
     (void)size;
+}
+
+void tud_hid_report_complete_cb(
+    uint8_t instance, uint8_t const *report, uint16_t len
+) {
+    (void)instance;
+    (void)report;
+    (void)len;
+    wake_output_if_pending(true);
 }

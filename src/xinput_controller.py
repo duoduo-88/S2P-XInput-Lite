@@ -1,6 +1,7 @@
 import threading
 import time
 import math
+import ctypes
 import imufusion
 import numpy as np
 import vgamepad as vg
@@ -91,6 +92,9 @@ XB_BUTTONS = {
     "X": vg.XUSB_BUTTON.XUSB_GAMEPAD_X,
     "Y": vg.XUSB_BUTTON.XUSB_GAMEPAD_Y,
 }
+XB_BUTTON_NAMES = {
+    int(mask): name for name, mask in XB_BUTTONS.items()
+}
 
 def _soft_mix(first, second, maximum):
     """Combine amplitudes without the harsh clipping of plain addition."""
@@ -152,6 +156,10 @@ class XInputController:
             if pad is not None
             else (vg.VX360Gamepad() if activate_runtime else None)
         )
+        self._test_telemetry = None
+        self._test_xinput_slot = None
+        self._test_gyro_active = False
+        self._test_input_rate_hz = None
         self.config = config
         self.cal = calibration
         # GUI、方案與執行端共用同一份設定型別與範圍規則。
@@ -489,6 +497,7 @@ class XInputController:
         self._impact_accel_recover_until = 0.0
         self._gyro_smoothed = (0.0, 0.0)
         self._gyro_was_active = False
+        self._test_gyro_active = False
         self._gyro_motion_envelope = 0.0
         self._aim_gravity_sign = None
         self._aim_pose_ready_since = None
@@ -583,6 +592,10 @@ class XInputController:
         self.final_tail_decay_ms = audio_settings["final_tail_decay_ms"]
         self._game_rumble = (0, 0)
         self._audio_rumble = (0, 0)
+        self._rumble_input = (0, 0)
+        self._rumble_input_count = 0
+        self._rumble_peak_input = (0, 0)
+        self._rumble_peak_output = (0, 0)
 
         self._rumble_sender = None
         self._rumble_sender_supports_priority = False
@@ -629,6 +642,9 @@ class XInputController:
         with condition:
             preserved = {
                 "pad": self.pad,
+                "_test_telemetry": self._test_telemetry,
+                "_test_xinput_slot": self._test_xinput_slot,
+                "_test_input_rate_hz": self._test_input_rate_hz,
                 "_rumble_sender": self._rumble_sender,
                 "_rumble_sender_supports_priority": (
                     self._rumble_sender_supports_priority
@@ -640,6 +656,10 @@ class XInputController:
                 "_rumble_sequence": self._rumble_sequence,
                 "_rumble_running": self._rumble_running,
                 "_rumble_thread": self._rumble_thread,
+                "_rumble_input": self._rumble_input,
+                "_rumble_input_count": self._rumble_input_count,
+                "_rumble_peak_input": self._rumble_peak_input,
+                "_rumble_peak_output": self._rumble_peak_output,
             }
             replacement_state = dict(snapshot.__dict__)
             replacement_state.update(preserved)
@@ -647,6 +667,302 @@ class XInputController:
             # the inactive snapshot's pad/condition between two assignments.
             self.__dict__.update(replacement_state)
             condition.notify_all()
+
+    def set_test_telemetry(self, telemetry):
+        """Attach the optional shared-memory diagnostics publisher."""
+        self._test_telemetry = telemetry
+
+    def set_test_input_rate(self, rate_hz):
+        """Update the transport's measured report rate for diagnostics."""
+        try:
+            rate = float(rate_hz)
+        except (TypeError, ValueError):
+            rate = 0.0
+        self._test_input_rate_hz = rate if rate > 0.0 else None
+
+    def get_xinput_user_index(self):
+        """Return the real zero-based XInput slot assigned by ViGEm."""
+        try:
+            from vgamepad.win import vigem_client as vcli
+            from vgamepad.win import vigem_commons as vcom
+
+            user_index = ctypes.c_ulong()
+            result = vcli.vigem_target_x360_get_user_index(
+                self.pad._busp,
+                self.pad._devicep,
+                ctypes.byref(user_index),
+            )
+            if result != vcom.VIGEM_ERRORS.VIGEM_ERROR_NONE:
+                return None
+            value = int(user_index.value)
+            return value if 0 <= value <= 3 else None
+        except (AttributeError, ImportError, OSError, TypeError, ValueError):
+            return None
+
+    def _test_curve_input(self, raw_xy, side):
+        """Return the response-curve input magnitude used for diagnostics."""
+        cal = self.cal[side]
+        (cx, cy), (max_x, max_y), (min_x, min_y) = (
+            _calibration_with_center_override(cal, None)
+        )
+        x = apply_calibration_to_axis(raw_xy[0], cx, max_x, min_x)
+        y = apply_calibration_to_axis(raw_xy[1], cy, max_y, min_y)
+        magnitude = min(1.0, math.hypot(x, y))
+        if side == "left":
+            deadzone = self.left_deadzone
+            outer_deadzone = self.left_outer_deadzone
+            compress_inner = self.left_deadzone_compress
+            compress_outer = self.left_outer_deadzone_compress
+        else:
+            deadzone = self.right_deadzone
+            outer_deadzone = self.right_outer_deadzone
+            compress_inner = self.right_deadzone_compress
+            compress_outer = self.right_outer_deadzone_compress
+        start = deadzone if compress_inner else 0.0
+        end = 1.0 - outer_deadzone if compress_outer else 1.0
+        if end <= start:
+            start, end = 0.0, 1.0
+        curve_input = max(0.0, min(1.0, (magnitude - start) / (end - start)))
+        points = self.stick_curves[side]
+        segment = max(0, len(points) - 2)
+        for index in range(len(points) - 1):
+            if curve_input <= points[index + 1][0]:
+                segment = index
+                break
+        return curve_input, segment
+
+    @staticmethod
+    def _test_mapping_target(kind, value):
+        if kind == MAP_MOUSE:
+            names = {
+                "LEFT": "滑鼠左鍵",
+                "RIGHT": "滑鼠右鍵",
+                "MIDDLE": "滑鼠中鍵",
+            }
+            return names.get(str(value), f"滑鼠 {value}")
+        if kind == MAP_KEYBOARD:
+            return f"鍵盤 {value}"
+        if kind == MAP_BUTTON:
+            return f"XInput {XB_BUTTON_NAMES.get(int(value), value)}"
+        if kind == MAP_LT:
+            return "XInput LT"
+        if kind == MAP_RT:
+            return "XInput RT"
+        axis_names = {
+            MAP_LX: "XInput 左搖桿 X",
+            MAP_LY: "XInput 左搖桿 Y",
+            MAP_RX: "XInput 右搖桿 X",
+            MAP_RY: "XInput 右搖桿 Y",
+        }
+        return axis_names.get(kind, "無")
+
+    @staticmethod
+    def _test_direction_target(target):
+        target = str(target or "NONE").strip().upper()
+        if target in ("", "NONE"):
+            return "無"
+        if target.startswith("KEYBOARD:"):
+            return f"鍵盤 {target[len('KEYBOARD:'):]}"
+        if target.startswith("MOUSE:"):
+            mouse_value = target[len("MOUSE:"):]
+            names = {
+                "LEFT": "滑鼠左鍵",
+                "RIGHT": "滑鼠右鍵",
+                "MIDDLE": "滑鼠中鍵",
+                "WHEEL_UP": "滑鼠滾輪 ↑",
+                "WHEEL_DOWN": "滑鼠滾輪 ↓",
+            }
+            return names.get(mouse_value, f"滑鼠 {mouse_value}")
+        if target in ("LT", "RT"):
+            return f"XInput {target}"
+        if target in XB_BUTTONS:
+            return f"XInput {target}"
+        return target
+
+    def _publish_test_telemetry(
+        self, state, physical_left, physical_right, gyro_xy,
+        final_left, final_right, report,
+    ):
+        channel = self._test_telemetry
+        now_ns = time.monotonic_ns()
+        if channel is None or not channel.reader_is_active(now_ns):
+            return
+        channel.write_trail_sample(
+            now_ns,
+            physical_left,
+            physical_right,
+            gyro_xy,
+            final_left,
+            final_right,
+        )
+        if not channel.publish_due(now_ns):
+            return
+        if self._test_xinput_slot is None:
+            self._test_xinput_slot = self.get_xinput_user_index()
+
+        pressed = []
+        for switch_name, mask, kind, value, _source in self._compiled_mapping:
+            if mask is None or not (state.buttons & mask):
+                continue
+            pressed.append({
+                "source": switch_name,
+                "target": self._test_mapping_target(kind, value),
+            })
+        direction_labels = {
+            "UP": "↑",
+            "DOWN": "↓",
+            "LEFT": "←",
+            "RIGHT": "→",
+            "UP_LEFT": "↖",
+            "UP_RIGHT": "↗",
+            "DOWN_LEFT": "↙",
+            "DOWN_RIGHT": "↘",
+        }
+        for side_name, side_label in (
+            ("LEFT", "左搖桿"), ("RIGHT", "右搖桿")
+        ):
+            direction = self._active_stick_directions.get(side_name)
+            if direction is None:
+                continue
+            target = self.stick_direction_config[side_name]["mappings"].get(
+                direction, "NONE"
+            )
+            pressed.append({
+                "source": (
+                    f"{side_label} "
+                    f"{direction_labels.get(direction, direction)}"
+                ),
+                "target": self._test_direction_target(target),
+            })
+
+        analog_mapping_names = {
+            "映射為滑鼠": "滑鼠移動",
+            "MOUSE_WHEEL_LINEAR": "滑鼠滾輪（線性）",
+            "XINPUT_LT_LINEAR": "XInput LT（線性）",
+            "XINPUT_RT_LINEAR": "XInput RT（線性）",
+            "映射為左搖桿": "XInput 左搖桿",
+            "映射為右搖桿": "XInput 右搖桿",
+        }
+        for side_name, side_label, values in (
+            ("LEFT", "左搖桿", physical_left),
+            ("RIGHT", "右搖桿", physical_right),
+        ):
+            mode = self.stick_direction_config[side_name].get("mode")
+            target = analog_mapping_names.get(mode)
+            if target and math.hypot(*values) > 0.001:
+                pressed.append({"source": side_label, "target": target})
+        physical_buttons = [
+            name for name, mask in SWITCH_BUTTONS.items()
+            if state.buttons & mask
+        ]
+        layer_id = self._mapping_runtime.active_id
+        layer_name = "主方案"
+        if layer_id is not None:
+            for layer in self.mapping_layers:
+                if layer.get("id") == layer_id:
+                    layer_name = str(layer.get("name") or "映射層")
+                    break
+
+        left_curve_input, left_segment = self._test_curve_input(
+            state.left_stick, "left"
+        )
+        right_curve_input, right_segment = self._test_curve_input(
+            state.right_stick, "right"
+        )
+        if self.gyro_motion_mode == "CENTER":
+            active_gyro_deadzone = _adaptive_gyro_deadzone(
+                self.gyro_deadzone,
+                self._gyro_motion_envelope,
+                self.gyro_adaptive_deadzone,
+            )
+        else:
+            active_gyro_deadzone = self.gyro_tilt_deadzone
+
+        target_side = (
+            "left" if self.gyro_target == "LEFT_STICK"
+            else "right" if self.gyro_target == "RIGHT_STICK"
+            else None
+        )
+        linear_trigger_mappings = []
+        for side_name, side_label in (
+            ("LEFT", "左搖桿"), ("RIGHT", "右搖桿")
+        ):
+            settings = self.stick_direction_config[side_name]
+            mode = settings.get("mode")
+            if mode not in ("XINPUT_LT_LINEAR", "XINPUT_RT_LINEAR"):
+                continue
+            linear_trigger_mappings.append({
+                "trigger": "LT" if mode == "XINPUT_LT_LINEAR" else "RT",
+                "source": side_label,
+                "direction": str(settings.get("analog_direction") or "UP"),
+            })
+        payload = {
+            "timestamp_ns": now_ns,
+            "source_rate_hz": self._test_input_rate_hz,
+            "xinput_slot": self._test_xinput_slot,
+            "buttons_mask": int(report.wButtons),
+            "buttons": physical_buttons,
+            "pressed_mappings": pressed,
+            "linear_trigger_mappings": linear_trigger_mappings,
+            "mapping_layer": layer_name,
+            "triggers": [
+                int(report.bLeftTrigger) / 255.0,
+                int(report.bRightTrigger) / 255.0,
+            ],
+            "left": {
+                "physical": list(physical_left),
+                "gyro": list(gyro_xy) if target_side == "left" else [0.0, 0.0],
+                "final": list(final_left),
+                "curve_input": left_curve_input,
+                "curve_segment": left_segment,
+                "curve_points": [list(point) for point in self.stick_curves["left"]],
+                "deadzone": self.left_deadzone,
+                "outer_deadzone": self.left_outer_deadzone,
+                "output_shape": self.stick_output_shape["left"],
+            },
+            "right": {
+                "physical": list(physical_right),
+                "gyro": list(gyro_xy) if target_side == "right" else [0.0, 0.0],
+                "final": list(final_right),
+                "curve_input": right_curve_input,
+                "curve_segment": right_segment,
+                "curve_points": [list(point) for point in self.stick_curves["right"]],
+                "deadzone": self.right_deadzone,
+                "outer_deadzone": self.right_outer_deadzone,
+                "output_shape": self.stick_output_shape["right"],
+            },
+            "gyro": {
+                "available": target_side is not None,
+                "target": target_side,
+                "active": bool(self._test_gyro_active),
+                "activation_mode": self.gyro_activation_mode,
+                "activation_buttons": list(self.gyro_activation_buttons),
+                "activation_match": self.gyro_activation_match,
+                "motion_mode": self.gyro_motion_mode,
+                "base_deadzone": self.gyro_deadzone,
+                "active_deadzone": active_gyro_deadzone,
+                "tilt_deadzone": self.gyro_tilt_deadzone,
+                "adaptive_deadzone": self.gyro_adaptive_deadzone,
+                "stick_anti_deadzone": self.gyro_stick_anti_deadzone,
+                "stick_sensitivity": self.gyro_stick_sensitivity,
+                "mouse_sensitivity": self.gyro_mouse_sensitivity,
+                "tilt_max_angle": self.gyro_tilt_max_angle,
+                "x_ratio": self.gyro_x_ratio,
+                "y_ratio": self.gyro_y_ratio,
+                "response_curve": self.gyro_response_curve,
+                "curve_strength": self.gyro_curve_strength,
+                "smoothing_ms": self.gyro_smoothing_ms,
+                "tilt_smoothing_ms": self.gyro_tilt_smoothing_ms,
+                "accel_suppression": self.gyro_accel_suppression,
+                "button_freeze_ms": self.gyro_button_freeze_ms,
+                "stabilization_buttons": list(
+                    self.gyro_stabilization_buttons
+                ),
+            },
+            "gyro_stick_sensitivity": self.gyro_stick_sensitivity,
+            "audio_haptics_mode": self.audio_haptics_mode,
+        }
+        channel.publish_if_requested(payload, now_ns)
 
     def _acquire_keyboard_combo(self, combo_text, source):
         self._desktop_output.acquire_keyboard_combo(combo_text, source)
@@ -684,6 +1000,7 @@ class XInputController:
         self._gyro_trigger_button_state = 0
         self._gyro_smoothed = (0.0, 0.0)
         self._gyro_was_active = False
+        self._test_gyro_active = False
         self._gyro_motion_envelope = 0.0
         self._aim_gravity_sign = None
         self._aim_pose_ready_since = None
@@ -736,8 +1053,30 @@ class XInputController:
             self._rumble_sender_supports_priority = bool(supports_priority)
             self._rumble_condition.notify_all()
 
+    def get_rumble_diagnostics(self):
+        """Return the latest host input and converted HD Rumble parameters."""
+        with self._rumble_condition:
+            state = self._rumble_state or (
+                self.lf_frequency, 0, self.hf_frequency, 0
+            )
+            return {
+                "received": self._rumble_input_count,
+                "input": list(self._rumble_input),
+                "peak_input": list(self._rumble_peak_input),
+                "frequency": [int(state[0]), int(state[2])],
+                "output": [int(state[1]), int(state[3])],
+                "peak_output": list(self._rumble_peak_output),
+                "audio_output": list(self._audio_rumble),
+                "mode": self.audio_haptics_mode,
+                "max_amplitude": int(self.max_amplitude),
+            }
+
     def set_audio_rumble(self, lf_level, hf_level):
         """Receive normalized audio levels and publish the selected mix."""
+        with self._rumble_condition:
+            if self.audio_haptics_mode == "GAME":
+                self._audio_rumble = (0, 0)
+                return
         lf_input = max(0.0, min(1.0, lf_level))
         hf_input = max(0.0, min(1.0, hf_level))
         raw_lf_amp = int(self.max_amplitude * (lf_input ** self.lf_curve))
@@ -749,6 +1088,8 @@ class XInputController:
         lf_amp = max(0, min(self.max_amplitude, lf_amp))
         hf_amp = max(0, min(self.max_amplitude, hf_amp))
         with self._rumble_condition:
+            if self._audio_rumble == (lf_amp, hf_amp):
+                return
             self._audio_rumble = (lf_amp, hf_amp)
         self._publish_rumble_mix(priority=False)
 
@@ -809,6 +1150,10 @@ class XInputController:
                 int(lf_amp),
                 self.hf_frequency,
                 int(hf_amp),
+            )
+            self._rumble_peak_output = (
+                max(self._rumble_peak_output[0], int(lf_amp)),
+                max(self._rumble_peak_output[1], int(hf_amp)),
             )
             self._rumble_force_zero = bool(force_zero)
             self._rumble_priority = bool(priority or force_zero)
@@ -940,6 +1285,14 @@ class XInputController:
 
         if self._rumble_sender is None:
             return
+
+        with self._rumble_condition:
+            self._rumble_input = (int(large_motor), int(small_motor))
+            self._rumble_input_count += 1
+            self._rumble_peak_input = (
+                max(self._rumble_peak_input[0], int(large_motor)),
+                max(self._rumble_peak_input[1], int(small_motor)),
+            )
 
         # LF 與 HF 強度都為 0 時視為完整關閉震動。
         # 必須在補償計算前處理，否則非零的交叉補償仍會產生輸出。
@@ -3019,6 +3372,7 @@ class XInputController:
             active = trigger_pressed
         else:
             active = self._gyro_toggle_enabled
+        self._test_gyro_active = bool(active)
         recenter_mask = SWITCH_BUTTONS.get(self.gyro_tilt_recenter_button)
         recenter_pressed = bool(
             recenter_mask is not None and state.buttons & recenter_mask
@@ -3966,4 +4320,13 @@ class XInputController:
         report.sThumbRX = round(final_rx * 32767)
         report.sThumbRY = round(final_ry * 32767)
 
+        self._publish_test_telemetry(
+            state,
+            (lx, ly),
+            (rx, ry),
+            (gyro_x, gyro_y),
+            (final_lx, final_ly),
+            (final_rx, final_ry),
+            report,
+        )
         self.pad.update()

@@ -413,13 +413,13 @@ def build_stick_section(
     update_left_shape_value()
     left_shape_help = gui.create_help(
         left_output_group,
-        "輸出形狀會在圓形與方形之間分成 10 段。\n\n"
+        "輸出形狀會在圓形與方形之間分成 10 段。"
         "灰色圓：圓形基準；虛線方框：方形極限；"
         "藍線：目前設定的最大輸出範圍。\n\n"
         "對角方向每軸約為：\n"
         "0 = 0.707　2 = 0.766　5 = 0.854\n"
         "8 = 0.941　10 = 1.000\n\n"
-        "數值越高，對角方向可輸出的範圍越大。\n\n"
+        "數值越高，對角方向可輸出的範圍越大。"
         "拉桿後方百分比是預估圓周誤差；"
         "實際結果會受校正與取樣影響。",
         illustration=lambda canvas: draw_output_shape_preview(
@@ -848,13 +848,13 @@ def build_stick_section(
     update_right_shape_value()
     right_shape_help = gui.create_help(
         right_output_group,
-        "輸出形狀會在圓形與方形之間分成 10 段。\n\n"
+        "輸出形狀會在圓形與方形之間分成 10 段。"
         "灰色圓：圓形基準；虛線方框：方形極限；"
         "藍線：目前設定的最大輸出範圍。\n\n"
         "對角方向每軸約為：\n"
         "0 = 0.707　2 = 0.766　5 = 0.854\n"
         "8 = 0.941　10 = 1.000\n\n"
-        "數值越高，對角方向可輸出的範圍越大。\n\n"
+        "數值越高，對角方向可輸出的範圍越大。"
         "拉桿後方百分比是預估圓周誤差；"
         "實際結果會受校正與取樣影響。",
         illustration=lambda canvas: draw_output_shape_preview(

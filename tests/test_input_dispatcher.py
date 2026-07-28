@@ -18,6 +18,35 @@ def report(buttons=0, marker=0):
 
 
 class InputDispatcherTests(unittest.TestCase):
+    def test_input_rate_counts_identical_and_batched_reports(self):
+        dispatcher = InputDispatcher(lambda _payload: None)
+        try:
+            with dispatcher._lock:
+                dispatcher._record_input_rate_locked(1, 10.0)
+                for index in range(1, 67):
+                    dispatcher._record_input_rate_locked(
+                        2, 10.0 + index / 132.0
+                    )
+
+            self.assertAlmostEqual(dispatcher.input_rate_hz, 264.0, places=6)
+        finally:
+            dispatcher.stop()
+
+    def test_reset_clears_input_rate_window(self):
+        dispatcher = InputDispatcher(lambda _payload: None)
+        try:
+            with dispatcher._lock:
+                dispatcher._record_input_rate_locked(1, 10.0)
+                dispatcher._record_input_rate_locked(66, 10.5)
+            self.assertEqual(dispatcher.input_rate_hz, 132.0)
+
+            self.assertTrue(dispatcher.reset())
+            self.assertIsNone(dispatcher.input_rate_hz)
+            self.assertIsNone(dispatcher._input_rate_window_started)
+            self.assertEqual(dispatcher._input_rate_count, 0)
+        finally:
+            dispatcher.stop()
+
     def test_button_edges_are_preserved_and_callback_is_serial(self):
         received = []
         active = 0

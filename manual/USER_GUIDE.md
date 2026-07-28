@@ -1,11 +1,11 @@
-# S2P-XInput-Lite v0.6.0 User Guide
+# S2P-XInput-Lite v0.7.0 User Guide
 
 [繁體中文](USER_GUIDE_zh-TW.md)
 
 This guide covers installation, connections, profiles, stick tuning, mapping,
-gyro controls, rumble, HidHide, and ESP32-S3 bridge and standalone operation in
-S2P-XInput-Lite v0.6.0. Existing illustrations remain valid for shared UI that
-has not changed; follow section 8 for the new v0.6.0 ESP32 controls.
+gyro controls, rumble, HidHide, ESP32-S3 bridge and standalone operation, and
+the Gamepad Test, report-rate, diagnostics, and About pages in
+S2P-XInput-Lite v0.7.0.
 
 The screenshots use the English interface. Select **中 / En** in the lower-left corner of the main window to switch languages without changing the layout.
 
@@ -25,8 +25,9 @@ The screenshots use the English interface. Select **中 / En** in the lower-left
 - [6. Gyro mapping](#6-gyro-mapping)
 - [7. Rumble settings](#7-rumble-settings)
 - [8. HidHide and ESP32-S3](#8-hidhide-and-esp32-s3)
-- [9. Quick controls](#9-quick-controls)
-- [10. Troubleshooting](#10-troubleshooting)
+- [9. Gamepad Test](#9-gamepad-test)
+- [10. Quick controls](#10-quick-controls)
+- [11. Troubleshooting](#11-troubleshooting)
 - [Appendix: recommended tuning order](#appendix-recommended-tuning-order)
 
 ---
@@ -63,7 +64,7 @@ Connect the controller directly to the PC with USB-C. This normally provides low
 
 The controller connects to the ESP32-S3 over BLE. The bridge then sends controller data to the PC over USB.
 
-v0.6.0 also provides two standalone outputs that do not require the Windows
+v0.7.0 provides two standalone outputs that do not require the Windows
 application to remain open:
 
 - **PC XInput Standalone Mode** — The ESP32 provides XInput-compatible output directly to Windows.
@@ -401,8 +402,8 @@ on the ESP32. Features that require Windows are not executed.
 
 1. Select the profile to write.
 2. Finish editing and select **Save/Apply**.
-3. Confirm that the ESP32 is connected and running standalone-capable
-   `0.14.0` firmware.
+3. Confirm that the ESP32 is connected and running the bundled
+   `S2P-FW 1.0.1` firmware.
 4. Select **ESP32 ▼** at the bottom of the window.
 5. Select **Write and enable PC XInput standalone** or
    **Write and enable Mobile USB HID**.
@@ -462,27 +463,114 @@ not guaranteed.
 
 ---
 
-## 9. Quick controls
+## 9. Gamepad Test
 
-### 9.1 Sliders and values
+![Gamepad Test interface](../image/test.gif)
+
+Select **Gamepad Test** at the bottom of the main window to open the standalone
+tester. It runs separately from the settings window so high-rate drawing does
+not delay settings input. Selecting the button again raises the existing tester
+instead of opening a duplicate.
+
+### 9.1 Selecting a source
+
+- **S2P-XInput-Lite** tests the current virtual XInput output and exposes
+  physical, processed, and combined sources.
+- Other entries are XInput or generic game controllers detected by Windows.
+- Duplicate names include the interface type and device number.
+- **Refresh** rescans devices. Changing the device or plotted source clears the
+  old measurement so unrelated samples are not combined.
+
+### 9.2 Stick plots
+
+Each stick has its own source selector. The centre crosshair is zero, the dark
+outer circle is the 100% reference, and the live dot is the current value.
+
+- **Trail samples** controls the percentage of real reports drawn.
+- **Trail length** controls how many seconds remain visible.
+- `-`, `+`, and **Reset** control plot zoom.
+- S2P output sources can also show the applied deadzone, outer limit, response
+  curve, and gyro guides.
+
+### 9.3 Output-shape capture
+
+Enable **Show Output Shape**, then rotate the stick slowly around its outer
+edge. The purple line records the maximum output reached in every direction and
+reports coverage, roundness error, and maximum radius.
+
+- Coverage reaches 100% after every 5-degree sector has a real sample.
+- After the displayed line catches the latest maxima and no sector expands for
+  one second, the capture locks and stops redrawing to avoid idle rendering
+  overhead.
+- Toggle **Show Output Shape**, change the source/settings, or select
+  **Clear Trail & Statistics** to begin a new capture.
+
+### 9.4 Buttons and triggers
+
+The event table shows the source button, pressed/released state, held duration,
+effective mapping, and active mapping layer. LT and RT show both raw trigger
+input and final output. S2P Mobile USB HID uses a dedicated button, axis,
+trigger, and POV map instead of a guessed generic WinMM order.
+
+### 9.5 Vibration Test
+
+The **Vibration Test** tab sends test patterns to Windows devices that expose
+XInput rumble. Stopping or closing the tester sends zero vibration. Mobile USB
+HID currently provides input only and does not relay web or game rumble to the
+controller.
+
+### 9.6 Report Rate
+
+Open **Report Rate** to measure a Raw HID collection without display-frame
+sampling. Select the collection and test duration, start the measurement, then
+move one stick continuously through wide circles. The result shows total HID
+reports, reports containing usable stick data, effective rate, P50/P95/P99
+intervals, distribution statistics, and a timeline. Select the collection that
+actually changes when the controller moves; interfaces from the same physical
+device may expose different reports.
+
+### 9.7 Diagnostics
+
+The **Diagnostics** tab runs a 30, 60, or 120 second ESP32 health check. Keep
+the controller awake and exercise the sticks, sensors, and rumble during the
+run. The summary covers firmware mode, connection and input continuity,
+latency, calibration, motion sensors, gyro processing, rumble, and an overall
+pass/warn/fail verdict. **Export Report** saves the displayed report as UTF-8
+text.
+
+Bridge mode temporarily uses the application's active serial connection.
+Standalone modes open the ESP32 diagnostic channel directly. The complete
+diagnostic command set requires the bundled `S2P-FW 1.0.1`.
+
+### 9.8 About
+
+The **About** tab keeps the logo, version, GitHub, and Ko-fi links visible on
+the left. The right side contains scrollable **License Agreement** and
+**Third-Party Software** tabs loaded from the files included with the release.
+
+---
+
+## 10. Quick controls
+
+### 10.1 Sliders and values
 
 - Select the displayed slider value to open the parameter-entry window.
 - The window shows the valid range, step size, and help text.
 - Hold a parameter label and drag right to increase or left to decrease.
 - Each parameter follows its own discrete step sequence.
 
-### 9.2 Right-click restore menu
+### 10.2 Right-click restore menu
 
 - **Restore Last Saved Value** — Discards the unsaved change.
 - **Restore System Default** — Uses the value from System Default.
 
-### 9.3 Curve points
+### 10.3 Curve points
 
 - Double-click to restore a point.
 - Right-click to enter exact X and Y coordinates.
 - Drag to adjust visually.
 
-### 9.4 Six-band help
+### 10.4 Six-band help
 
 Hover over the six-band description to display a question-mark cursor and the complete guide for:
 
@@ -491,7 +579,7 @@ Hover over the six-band description to display a question-mark cursor and the co
 - LF/HF Balance.
 - Drag and double-click controls.
 
-### 9.5 Restart and Pin
+### 10.5 Restart and Pin
 
 - **Restart Connection** — Restarts the desktop connector and reloads saved settings; it does not write to the ESP32.
 - **ESP32 ▼** — Writes the current profile and selects standalone output, or returns to bridge mode.
@@ -502,7 +590,7 @@ Hover over the six-band description to display a question-mark cursor and the co
 
 ---
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 | Symptom | What to check |
 |---|---|
@@ -557,4 +645,4 @@ Gate → Lvl → six bands → LF/HF Balance → Tail/Decay.
 Keep one verified stable profile and use **Save New** for experimental settings.
 
 > [!NOTE]
-> This guide applies to S2P-XInput-Lite v0.6.0. For later releases, follow the in-app question-mark help and the latest release notes.
+> This guide applies to S2P-XInput-Lite v0.7.0. For later releases, follow the in-app question-mark help and the latest release notes.

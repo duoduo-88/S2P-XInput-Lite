@@ -1,6 +1,483 @@
 """Traditional Chinese / English text used by the settings GUI."""
 
 EN_TEXT = {
+    "關於": "About",
+    "版本": "Version",
+    "贊助開發（Ko-fi）": "Support Development (Ko-fi)",
+    "許可協議": "License",
+    "第三方程式": "Third-Party Software",
+    "找不到授權文件。": "The license document could not be found.",
+    "\u5efa\u8b70\uff1a\u6aa2\u67e5\u624b\u628a\u96fb\u91cf\u8207\u540c\u983b\u5e72\u64fe\uff1b\u50c5\u5728 RSSI \u4f4e\u65bc -75 dBm \u6642\u624d\u9700\u9760\u8fd1\u6a4b\u63a5\u5668":
+        "Recommendation: check controller battery and same-band interference; only move closer when RSSI is below -75 dBm",
+    "\u684c\u9762\u7aef\u8f38\u5165\u9593\u9694\uff1aP50 {p50:.2f} ms\uff1bP95 {p95:.2f} ms\uff1bP99 {p99:.2f} ms":
+        "Desktop input intervals: P50 {p50:.2f} ms; P95 {p95:.2f} ms; P99 {p99:.2f} ms",
+    "BLE \u539f\u59cb\u56de\u5831\u7387\uff1a\u5e73\u5747 {average:.1f} Hz\uff1bP50 {p50:.1f} Hz\uff1bP95 {p95:.1f} Hz\uff1bP99 {p99:.1f} Hz":
+        "BLE raw report rate: average {average:.1f} Hz; P50 {p50:.1f} Hz; P95 {p95:.1f} Hz; P99 {p99:.1f} Hz",
+    "\u8a3a\u65b7\u5224\u8b80\u6458\u8981": "Diagnostic assessment",
+    "\u8a3a\u65b7\u8a73\u7d30\u72c0\u614b": "Diagnostic details",
+    "\u6975\u4f73": "Excellent",
+    "\u826f\u597d": "Good",
+    "\u666e\u901a": "Fair",
+    "\u504f\u5f31": "Weak",
+    "\u5f88\u5f31": "Very weak",
+    "\u6574\u9ad4\u5224\u8b80": "Overall assessment",
+    "\u5075\u6e2c\u5230\u7684\u72c0\u6cc1": "Detected findings",
+    "\u5efa\u8b70\u52d5\u4f5c": "Recommended action",
+    "\u6b63\u5728\u6536\u96c6\u8cc7\u6599": "Collecting data",
+    "\u5c1a\u7121\u8db3\u5920\u6a23\u672c\u53ef\u4f9b\u5224\u8b80": "Not enough samples to assess yet",
+    "\u8acb\u7e7c\u7e8c\u64cd\u4f5c\u624b\u628a\u81f3\u8a3a\u65b7\u5b8c\u6210": "Keep using the controller until Diagnostics completes",
+    "\u9700\u8981\u6ce8\u610f": "Attention needed",
+    "\u5efa\u8b70\uff1a\u6e1b\u5c11 USB \u8ca0\u8f09\u4e26\u6aa2\u67e5\u7dda\u6750\u8207\u96fb\u6e90": "Recommendation: reduce USB load and check the cable and power",
+    "\u5efa\u8b70\uff1a\u8acb\u9760\u8fd1\u6a4b\u63a5\u5668\u4e26\u6e1b\u5c11 2.4 GHz \u5e72\u64fe": "Recommendation: move closer to the bridge and reduce 2.4 GHz interference",
+    "\u5efa\u8b70\uff1a\u532f\u51fa Log \u4ee5\u4fbf\u9032\u4e00\u6b65\u5206\u6790": "Recommendation: export the log for further analysis",
+    "\u76ee\u524d\u672a\u767c\u73fe\u660e\u986f\u7570\u5e38": "No obvious issue detected so far",
+    "\u8f38\u5165\u3001\u5ef6\u9072\u8207\u9707\u52d5\u672a\u51fa\u73fe\u8b66\u793a": "Input, latency, and rumble have no warnings",
+    "\u53ef\u532f\u51fa Log \u4f5c\u70ba\u672c\u6b21\u8a3a\u65b7\u8a18\u9304": "You can export the log as this diagnostic record",
+    "\u9023\u7dda\uff1a{connection}\uff1b\u6a21\u5f0f\uff1a{mode}": "Connection: {connection}; mode: {mode}",
+    "\u6821\u6b63\uff1a{calibration}\uff1b\u611f\u6e2c\u5668\uff1a{sensor}\uff1b\u9640\u87ba\u5100\uff1a{gyro}": "Calibration: {calibration}; sensors: {sensor}; gyro: {gyro}",
+    "\u9707\u52d5\uff1a{input}\uff1b{output}\uff1b{transport}": "Rumble: {input}; {output}; {transport}",
+    "\u6a4b\u63a5\u5668 MAC\uff1a{mac}": "Bridge MAC: {mac}",
+    "\u97cc\u9ad4\u672a\u63d0\u4f9b": "not provided by firmware",
+    "\u624b\u628a CH{channel} MAC\uff1a{mac}\uff1b\u8a0a\u865f\uff1a{signal}\uff1b\u9023\u7dda\u9593\u9694\uff1a{interval:.2f} ms":
+        "Controller CH{channel} MAC: {mac}; signal: {signal}; connection interval: {interval:.2f} ms",
+    "\u8f38\u5165\u6642\u5e8f\uff1a\u56de\u5831\u7387\u5e73\u5747 {rate:.1f} Hz\uff1bP50 {p50:.2f} ms\uff1bP95 {p95:.2f} ms\uff1bP99 {p99:.2f} ms":
+        "Input timing: average rate {rate:.1f} Hz; P50 {p50:.2f} ms; P95 {p95:.2f} ms; P99 {p99:.2f} ms",
+    "\u8a3a\u65b7\u6a21\u5f0f\u6703\u5728\u9078\u64c7\u7684\u6642\u9593\u5167\u8a18\u9304\u624b\u628a\u8f38\u5165\u983b\u7387\u3001\u5ef6\u9072\u3001\u6821\u6b63\u72c0\u614b\u8207\u9707\u52d5\u8cc7\u6599\u3002\n\n\u6e2c\u8a66\u671f\u9593\u4ecd\u53ef\u7e7c\u7e8c\u64cd\u4f5c\u624b\u628a\uff0c\u4e5f\u53ef\u4ee5\u7e2e\u5c0f\u6b64\u8996\u7a97\u3002\n\n\u5b8c\u6210\u5f8c\u53ef\u532f\u51fa TXT Log\uff0c\u4f9b AI \u6216\u652f\u63f4\u4eba\u54e1\u5206\u6790\u3002":
+        "Diagnostics records controller input rate, latency, calibration state, and rumble data for the selected duration.\n\n"
+        "You can keep using the controller and minimize this window while it runs.\n\n"
+        "When complete, export a TXT log for AI or support analysis.",
+    "\u8cc7\u6599\u4f86\u6e90\uff1a\u4e3b\u7a0b\u5f0f\u6a4b\u63a5\u901a\u9053\uff08ESP32 \u5e8f\u5217\u57e0\u7531\u4e3b\u7a0b\u5f0f\u4f7f\u7528\uff09":
+        "Source: desktop bridge channel (the application owns the ESP32 serial port)",
+    "\u8cc7\u6599\u4f86\u6e90\uff1aESP32 \u7368\u7acb\u8a3a\u65b7\u901a\u9053":
+        "Source: standalone ESP32 diagnostic channel",
+    "ESP32 \u8a3a\u65b7\u901a\u9053\uff1a\u672a\u5075\u6e2c\u5230\u53ef\u7528\u88dd\u7f6e":
+        "ESP32 diagnostic channel: no usable device detected",
+    "\u63d0\u793a\uff1a\u82e5\u4f7f\u7528\u6a4b\u63a5\u6a21\u5f0f\uff0c\u8acb\u5148\u7531\u4e3b\u7a0b\u5f0f\u9023\u7dda\uff1b\u82e5\u662f\u820a\u97cc\u9ad4\uff0c\u8acb\u5237\u5165 S2P-FW 1.0.0\u3002":
+        "Tip: connect through the desktop application for bridge mode; flash S2P-FW 1.0.0 for older firmware.",
+    "ESP32 \u8a3a\u65b7\u901a\u9053\u7121\u6cd5\u4f7f\u7528\uff1a{error}":
+        "ESP32 diagnostic channel unavailable: {error}",
+    "\u7b49\u5f85\u56de\u8986\u903e\u6642": "response timed out",
+    "ESP32 \u8a3a\u65b7\u901a\u9053\uff1a\u6b63\u5728\u9023\u7dda":
+        "ESP32 diagnostic channel: connecting",
+    "\u97cc\u9ad4\uff1a{product} {version}\uff1b\u5354\u8b70\uff1a{protocol} {protocol_version}":
+        "Firmware: {product} {version}; protocol: {protocol} {protocol_version}",
+    "\u97cc\u9ad4\u8f38\u5165\uff1a{reports} \u5831\u544a\uff1b\u6f0f\u5931 {gaps}\uff1b\u4f47\u5217\u4e1f\u68c4 {drops}\uff1bUSB \u7b49\u5f85\u5e73\u5747 {wait:.2f} ms":
+        "Firmware input: {reports} reports; gaps {gaps}; queue drops {drops}; average USB wait {wait:.2f} ms",
+    "\u97cc\u9ad4\u81ea\u6e2c\uff1a{passed} \u9805\u5df2\u56de\u8986\uff1b{failed} \u9805\u672a\u5b8c\u6210":
+        "Firmware self-tests: {passed} replies; {failed} incomplete",
+    "\u63d0\u793a\uff1a\u6c92\u6709\u97cc\u9ad4\u8cc7\u6599\u6642\uff0c\u4ecd\u53ef\u8a18\u9304\u624b\u628a\u8f38\u5165\u8207\u4e3b\u7a0b\u5f0f\u9707\u52d5\u8f38\u51fa\u3002":
+        "Tip: controller input and desktop rumble output can still be recorded without firmware data.",
+    "\u91cd\u8981\u4e8b\u4ef6\uff1a{event}": "Important event: {event}",
+    "需要更新 ESP32-S3 韌體": "ESP32-S3 Firmware Update Required",
+    "需要更新韌體才能使用診斷模式": "Firmware update required for Diagnostics",
+    "目前 ESP32 韌體不支援診斷模式。\n\n請回到設定頁按「刷入韌體」，刷入 S2P-FW 1.0.0 後，按 RESET / EN 或重新插拔 ESP32，再重新開啟手把測試。":
+        "The current ESP32 firmware does not support Diagnostics.\n\n"
+        "Return to Settings and choose Flash Firmware. After flashing "
+        "S2P-FW 1.0.0, press RESET / EN or reconnect the ESP32, then open "
+        "Gamepad Test again.",
+    "診斷模式": "Diagnostics",
+    "尚未開始診斷": "Diagnostics not started",
+    "開始診斷": "Start Diagnostics",
+    "停止診斷": "Stop Diagnostics",
+    "匯出診斷 Log": "Export Diagnostic Log",
+    "診斷時間": "Duration",
+    "秒": "s",
+    "即時診斷摘要": "Live Diagnostic Summary",
+    "感測器": "Sensors",
+    "最近狀態": "Recent Status",
+    "診斷執行中": "Diagnostics running",
+    "診斷完成": "Diagnostics complete",
+    "診斷已停止": "Diagnostics stopped",
+    "目前沒有可匯出的診斷資料。": "There is no diagnostic data to export.",
+    "文字檔": "Text file",
+    "無法寫入診斷 Log：{error}": "Could not write the diagnostic log: {error}",
+    "診斷 Log 已匯出。": "Diagnostic log exported.",
+    "剩餘 {seconds:.0f} 秒": "{seconds:.0f} s remaining",
+    "已完成": "Complete",
+    "橋接模式": "Bridge mode",
+    "獨立 XInput 模式": "Standalone XInput mode",
+    "獨立 HID 模式": "Standalone HID mode",
+    "USB 有線模式": "Wired USB mode",
+    "Windows BLE 模式": "Windows BLE mode",
+    "建議保持手把靜止完成初始化": "Keep the controller still to finish initialization",
+    "暫時不需要校正": "No calibration currently needed",
+    "建議重新校正": "Recalibration recommended",
+    "等待第一筆座標": "Waiting for the first coordinates",
+    "Raw HID 實際回報": "Actual Raw HID reports",
+    "S2P-XInput-Lite 啟動中…": "Starting S2P-XInput-Lite…",
+    "手把測試": "Gamepad Test",
+    "手把測試程式初始化中": "Starting Gamepad Test",
+    "正在初始化手把測試程式，請稍候…":
+        "Initializing the gamepad tester. Please wait…",
+    "手把測試無法開啟": "Could Not Open Gamepad Test",
+    "關閉程式": "Close Application",
+    "關閉設定視窗後：\n\n• 桌面橋接模式會中斷連線。\n• ESP32 獨立模式會繼續運作。":
+        "After closing the settings window:\n\n"
+        "• Desktop bridge mode will disconnect.\n"
+        "• ESP32 standalone mode will continue running.",
+    "以後不再提示": "Do not show this again",
+    "仍要關閉": "Close Anyway",
+    "無法讀取 Windows 手把介面。":
+        "Could not access the Windows gamepad interface.",
+    "測試手把": "Device",
+    "XInput 手把 {index}": "XInput Gamepad {index}",
+    "一般手把 {index}": "Generic Gamepad {index}",
+    "重新整理": "Refresh",
+    "輸入監看": "Input Monitor",
+    "Raw HID 實際採樣": "Raw HID Actual Sampling",
+    "實際採樣": "Sampling",
+    "使用 Windows 收到的每筆 Raw HID 回報":
+        "Use every Raw HID report delivered by Windows",
+    "正在開啟 Raw HID 實際採樣...": "Opening Raw HID actual sampling...",
+    "正在使用 Raw HID 實際回報": "Using actual Raw HID reports",
+    "Raw HID 實際回報；緩衝區遺失 {count} 筆":
+        "Actual Raw HID reports; {count} lost to buffer overwrite",
+    "目前手把無法對應 Raw HID，使用 Windows 快照":
+        "The selected gamepad cannot be matched to Raw HID; using Windows snapshots",
+    "Raw HID 實際採樣無法啟動": "Could not start Raw HID actual sampling",
+    "Raw HID 實際採樣無法停止": "Could not stop Raw HID actual sampling",
+    "Raw HID 介面仍被實際採樣占用":
+        "The Raw HID interface is still in use by actual sampling",
+    "Raw HID 實際採樣失敗（錯誤代碼 {code}）":
+        "Raw HID actual sampling failed (error {code})",
+    "Raw HID 實際採樣已停止": "Raw HID actual sampling stopped",
+    "震動測試": "Rumble Test",
+    "高頻量測": "High-Rate Test",
+    "回報率量測": "Report Rate Test",
+    "量測設定": "Measurement Settings",
+    "量測秒數": "Duration (s)",
+    "開始量測": "Start",
+    "提前停止": "Stop Early",
+    "回報率量測需要先在「測試手把」選擇 Raw HID collection。XInput、WinMM 與 S2P 橋接輸出本身不能直接量測原始 HID 回報率。":
+        "Select a Raw HID collection in Test Device before measuring report rate. XInput, WinMM, and the S2P bridge output cannot directly measure raw HID report timing.",
+    "目前到達率": "Current Delivery Rate",
+    "累計 reports": "Reports Collected",
+    "目前回報率": "Current Report Rate",
+    "HID 回報率": "HID Report Rate",
+    "有效回報率": "Effective Report Rate",
+    "判讀：尚未量測。": "Reading: not measured yet.",
+    "判讀：量測中，完成後顯示分析結果。":
+        "Reading: measuring; analysis will appear when complete.",
+    "判讀：量測時請持續以中等速度，大幅繞圈轉動一支搖桿。\n完成後會同時判讀回報穩定度與有效狀態更新率。":
+        "Reading: continuously rotate one stick in wide circles at a moderate "
+        "speed during measurement.\nThe result will evaluate both delivery "
+        "stability and effective state update rate.",
+    "判讀：量測中，請持續以中等速度，大幅繞圈轉動一支搖桿。\n請避免長時間停在中心或壓住外圈不動。":
+        "Reading: keep rotating one stick in wide circles at a moderate "
+        "speed.\nAvoid holding it at the centre or against the outer edge.",
+    "判讀：量測失敗，無法分析回報穩定度與有效狀態更新率。":
+        "Reading: measurement failed; delivery stability and effective state "
+        "update rate could not be analysed.",
+    "回報間隔資料不足，無法判讀穩定度。":
+        "There is not enough report-interval data to evaluate stability.",
+    "主要回報間隔接近預期值，P95／P99 尾端也集中，回報穩定。":
+        "The main report interval is near the expected value, and the P95/P99 "
+        "tail is concentrated; delivery is stable.",
+    "主要回報間隔接近預期值，尾端有少量跨週期回報，未見持續堆積。":
+        "The main interval is near the expected value. A small tail crosses "
+        "one period, with no sign of continuing backlog.",
+    "主要回報間隔穩定；最大間隔約為典型間隔的 2 倍，代表少數回報跨到下一個傳輸週期。這可能是低延遲傳輸策略的預期特性，不代表平均輸入延遲加倍。":
+        "The main report interval is stable. The maximum is about twice the "
+        "typical interval, indicating that a small number of reports crossed "
+        "into the next transport cycle. This can be an expected property of "
+        "a low-latency transport strategy and does not mean that average "
+        "input latency doubled.",
+    "P99 與最大間隔皆接近典型間隔的 2 倍，跨週期情形並非單一極端值；可能存在較頻繁的排程等待或傳輸波動。":
+        "Both P99 and the maximum interval are close to twice the typical "
+        "interval, so cross-cycle delivery is not limited to one extreme "
+        "sample; scheduling waits or transport variation may be occurring "
+        "more frequently.",
+    "回報間隔分散或偏離預期值，存在較明顯的排程波動。":
+        "Report intervals are dispersed or differ from the expected value, "
+        "indicating more noticeable scheduling variation.",
+    "無法解析標準搖桿軸，因此本次不提供有效回報率。":
+        "Standard stick axes could not be parsed, so no effective report rate "
+        "is available for this measurement.",
+    "搖桿活動不足，請持續大幅繞圈後重新量測，避免把靜止資料判成重複回報。":
+        "Stick movement was insufficient. Repeat the test with continuous wide "
+        "circles so stationary data is not mistaken for repeated reports.",
+    "搖桿活動量或資料量不足，本次有效回報率不具判讀條件。":
+        "Stick activity or sample volume was insufficient, so the effective "
+        "report rate is not valid for interpretation.",
+    "偵測到規律重複狀態：每個搖桿狀態通常維持 {count} 筆；有效更新率明顯低於 HID 回報率。":
+        "Regular repeated states were detected: each stick state usually lasts "
+        "{count} reports; the effective update rate is well below the HID "
+        "report rate.",
+    "有效狀態更新率接近 HID 回報率，未發現明顯規律重複。":
+        "The effective state update rate is close to the HID report rate; no "
+        "clear regular repetition was detected.",
+    "有效狀態更新率略低於 HID 回報率，未發現固定重複規律。":
+        "The effective state update rate is slightly below the HID report rate; "
+        "no fixed repetition pattern was detected.",
+    "有效狀態更新率明顯較低，但未發現固定重複規律；可能受軸解析度、濾波或轉動速度影響。":
+        "The effective state update rate is substantially lower, but no fixed "
+        "repetition pattern was found; axis resolution, filtering, or rotation "
+        "speed may be contributing.",
+    "判讀：{cadence}\n{effective}": "Reading: {cadence}\n{effective}",
+    "收到回報數": "Reports Received",
+    "剩餘時間": "Time Remaining",
+    "Report 到達間隔（ms）": "Report Arrival Intervals (ms)",
+    "前後兩筆回報的時間差（ms）": "Time Between Reports (ms)",
+    "綠色：接近預期": "Green: near expected",
+    "橘色：稍有波動": "Orange: some variation",
+    "紅色：偏差明顯": "Red: significant deviation",
+    "尚無足夠資料可供判讀。": "Not enough data to evaluate this value.",
+    "綠色：接近目前回報率的預期時間差，回報穩定。":
+        "Green: close to the expected timing for the current report rate; "
+        "delivery is stable.",
+    "橘色：與預期時間差有些差距，可能存在輕微波動。":
+        "Orange: somewhat different from the expected timing; minor "
+        "variation may be present.",
+    "紅色：與預期時間差偏差明顯，可能有集中到達或較大的抖動。":
+        "Red: significantly different from the expected timing; reports may "
+        "be arriving in bursts or with substantial jitter.",
+    "綠色：與本次平均時間差接近，回報分佈穩定。":
+        "Green: close to the mean timing in this measurement; report delivery "
+        "is consistent.",
+    "橘色：與本次平均時間差有些差距，可能存在輕微波動。":
+        "Orange: somewhat different from the mean timing in this measurement; "
+        "minor variation may be present.",
+    "紅色：與本次平均時間差偏差明顯，可能有集中到達或較大的抖動。":
+        "Red: significantly different from the mean timing in this "
+        "measurement; reports may be arriving in bursts or with substantial "
+        "jitter.",
+    "平均值是本次量測的比較基準，不單獨判定好壞。":
+        "The mean is the comparison baseline for this measurement and is not "
+        "rated by itself.",
+    "最小值與最大值是單筆極端資料，不適合單獨判定好壞。":
+        "Minimum and maximum are single extreme samples and should not be "
+        "rated by themselves.",
+    "最小": "Minimum",
+    "平均": "Mean",
+    "最大": "Maximum",
+    "P50／P95／P99 間隔分佈": "P50 / P95 / P99 Interval Distribution",
+    "回報時間差分佈": "Time Between Reports Distribution",
+    "尚未量測": "Not measured",
+    "Raw HID 量測元件不可用": "Raw HID measurement component unavailable",
+    "量測來源：實體 Raw HID 輸入":
+        "Measurement source: physical Raw HID input",
+    "請先選擇要量測的 Raw HID collection":
+        "Select the Raw HID collection to measure first",
+    "選取的 Raw HID collection 已不存在":
+        "The selected Raw HID collection is no longer present",
+    "可用軸：{axes}": "Available axes: {axes}",
+    "無法解析：{axes}": "Unavailable: {axes}",
+    "無法解析標準搖桿軸；仍可量測原始 HID reports":
+        "No standard stick axes parsed; raw HID reports remain measurable",
+    "虛擬": "Virtual",
+    "找不到 Raw HID 遊戲手把介面":
+        "No Raw HID gamepad interface found",
+    "無法將目前測試手把對應至 Raw HID 介面":
+        "Could not match the selected test gamepad to a Raw HID interface",
+    "量測秒數必須介於 1 到 300 秒":
+        "Duration must be between 1 and 300 seconds",
+    "Raw HID 量測器無法啟動": "Could not start the Raw HID probe",
+    "正在開啟 Raw HID 介面...": "Opening Raw HID interface...",
+    "準備量測...": "Preparing measurement...",
+    "{seconds:.1f} 秒後開始": "Starts in {seconds:.1f} s",
+    "已取消量測": "Measurement cancelled",
+    "量測中": "Measuring",
+    "量測完成": "Measurement complete",
+    "已提前停止": "Stopped early",
+    "量測失敗": "Measurement failed",
+    "Raw HID 量測失敗（錯誤代碼 {code}）":
+        "Raw HID measurement failed (error {code})",
+    "P50：50% 的 report 間隔不超過此值":
+        "P50: 50% of report intervals are at or below this value",
+    "P95：95% 的 report 間隔不超過此值":
+        "P95: 95% of report intervals are at or below this value",
+    "P99：99% 的 report 間隔不超過此值；最適合看偶發抖動":
+        "P99: 99% of report intervals are at or below this value; best for "
+        "viewing occasional jitter",
+    "P50｜典型間隔：50% 的 report 間隔不超過此值":
+        "P50 | Typical: 50% of report intervals are at or below this value",
+    "P95｜多數間隔：95% 的 report 間隔不超過此值":
+        "P95 | Most: 95% of report intervals are at or below this value",
+    "P99｜尾端抖動：99% 的 report 間隔不超過此值":
+        "P99 | Tail jitter: 99% of report intervals are at or below this value",
+    "P50｜典型間隔：50% 的間隔不超過此值　{count}／{total} 筆":
+        "P50 | Typical: 50% of intervals are at or below this value  "
+        "{count} / {total}",
+    "P95｜多數間隔：95% 的間隔不超過此值　{count}／{total} 筆":
+        "P95 | Most: 95% of intervals are at or below this value  "
+        "{count} / {total}",
+    "P99｜尾端抖動：99% 的間隔不超過此值　{count}／{total} 筆":
+        "P99 | Tail jitter: 99% of intervals are at or below this value  "
+        "{count} / {total}",
+    "P50｜典型間隔：50% 的間隔不超過此值":
+        "P50 | Typical: 50% of intervals are at or below this value",
+    "P95｜多數間隔：95% 的間隔不超過此值":
+        "P95 | Most: 95% of intervals are at or below this value",
+    "P99｜尾端抖動：99% 的間隔不超過此值":
+        "P99 | Tail jitter: 99% of intervals are at or below this value",
+    "P50｜一般表現：一半的回報時間差不超過這個數值":
+        "P50 | Typical: half of report gaps are at or below this value",
+    "P95｜大多數表現：95% 的回報時間差不超過這個數值":
+        "P95 | Most: 95% of report gaps are at or below this value",
+    "P99｜偶發抖動：99% 的回報時間差不超過這個數值":
+        "P99 | Occasional jitter: 99% of report gaps are at or below this value",
+    "{count}／{total} 筆": "{count} / {total}",
+    "{count}／{total} 筆資料": "{count} / {total} samples",
+    "{count} 筆資料": "{count} samples",
+    "判讀：數值越小、三者越接近，回報越穩定。理論間隔可用「1000 ÷ 回報率（Hz）」計算；P50 接近理論間隔，且 P99 沒有明顯升高，即屬穩定。":
+        "Reading the result: lower and closer values mean more consistent "
+        "delivery. Calculate the theoretical interval as 1000 divided by the "
+        "report rate in Hz; delivery is stable when P50 is near that interval "
+        "and P99 is not significantly higher.",
+    "判讀：數值越小且三者越接近，回報越穩定。\n理論間隔（ms）＝1000 ÷ Hz；P50 接近理論值且 P99 接近 P50，即屬穩定。":
+        "Reading the result: lower and closer values mean more consistent "
+        "delivery.\nTheoretical interval (ms) = 1000 / Hz; delivery is stable "
+        "when P50 is near that value and P99 is close to P50.",
+    "判讀：三個數值越小、彼此越接近，代表回報越穩定。\n預期時間差（ms）＝1000 ÷ 回報率（Hz）；P50 接近預期值、P99 接近 P50，表示表現穩定。":
+        "Reading the result: lower and closer values mean more consistent "
+        "delivery.\nExpected time between reports (ms) = 1000 / report rate "
+        "(Hz); performance is stable when P50 is near the expected value and "
+        "P99 is close to P50.",
+    "尚未開始量測\n無數據顯示":
+        "Measurement not started\nNo data to display",
+    "怎樣算好：數值越小、P50／P95／P99 越接近，代表回報越穩定。以 8000 Hz 為例，理想間隔約為 0.125 ms；P50 接近 0.125 ms 且 P99 沒有明顯升高，表示只有少量排程抖動。":
+        "What is good: lower values and closer P50 / P95 / P99 values mean "
+        "more consistent delivery. At 8000 Hz the ideal interval is about "
+        "0.125 ms; a P50 near 0.125 ms with no large P99 increase indicates "
+        "only minor scheduling jitter.",
+    "山形代表所有已收集 report 間隔的分佈；這些數值是 Windows Raw HID 到達間隔，不是端到端輸入延遲。":
+        "The mountain shape represents the distribution of all collected "
+        "report intervals. These are Windows Raw HID arrival intervals, not "
+        "end-to-end input latency.",
+    "山形顯示量測期間前後兩筆回報時間差的分佈。數值只代表資料到達 Windows 的時間規律，不代表按下按鍵到遊戲反應的延遲。":
+        "The mountain shape shows the distribution of time between reports "
+        "during measurement. It describes delivery timing at Windows, not the "
+        "delay from pressing a control to seeing a response in a game.",
+    "山形顯示量測期間，前後兩筆回報時間差的分佈。\n這只反映資料送到 Windows 是否穩定，不代表按下按鍵到遊戲反應的延遲。":
+        "The mountain shape shows the distribution of time between reports.\n"
+        "It reflects delivery stability at Windows, not the delay from "
+        "pressing a control to seeing a response in a game.",
+    "山形顯示回報時間差分佈；僅反映資料到達 Windows 的穩定度，不代表按鍵到遊戲反應的延遲。":
+        "The mountain shows report timing distribution and delivery stability "
+        "at Windows, not input-to-game response latency.",
+    "清除軌跡與統計": "Clear",
+    "顯示輸出形狀": "Shape",
+    "輸出形狀": "Shape",
+    "顯示陀螺圖例": "Gyro Legend",
+    "陀螺儀圖例": "Gyro",
+    "採樣點": "Samples",
+    "採樣點100%\n顯示目前軌跡長度內，所選Windows輸入介面實際收到的全部座標點。\n\nXInput限制\nXInput只保留最新座標，無法把兩次讀取之間已被覆蓋的中間座標還原成路徑點。\n\nRaw HID 實際採樣\n啟用後會直接使用 Windows 收到的每筆 Raw HID 回報；此時100%代表顯示緩衝區內全部實際回報點。\n\n顯示百分比\n降低百分比只會減少畫面上的路徑點，不會改變實際輸入。":
+        "Sample points 100%\n"
+        "Shows every coordinate point actually received through the selected "
+        "Windows input interface within the current trail length.\n\n"
+        "XInput limitation\n"
+        "XInput only retains the latest coordinates. Intermediate coordinates "
+        "overwritten between reads cannot be reconstructed as trail points."
+        "\n\n"
+        "Raw HID actual sampling\n"
+        "When enabled, every Raw HID report delivered by Windows is used. "
+        "At 100%, every actual report point retained in the buffer is shown."
+        "\n\n"
+        "Display percentage\n"
+        "Lowering the percentage only reduces trail points on screen; it does "
+        "not change the actual input.",
+    "軌跡長度": "Trail",
+    "軌跡": "Trail",
+    "實體搖桿": "Stick",
+    "陀螺儀": "Gyro",
+    "合成結果": "Final",
+    "實際輸入": "Input",
+    "陀螺": "Gyro",
+    "待命": "Ready",
+    "啟用": "Active",
+    "常駐": "Always",
+    "無按鍵": "None",
+    "線性扳機": "Triggers",
+    "按鍵與映射事件": "Button Events",
+    "來源按鍵": "Source",
+    "狀態": "State",
+    "持續時間": "Time",
+    "生效映射": "Mapping",
+    "震動模板": "Patterns",
+    "手動震動輸出": "Manual Output",
+    "LF（左馬達）": "LF Motor",
+    "HF（右馬達）": "HF Motor",
+    "重複播放": "Repeat",
+    "模板 LF（左馬達）": "LF",
+    "模板 HF（右馬達）": "HF",
+    "播放頻率": "Rate",
+    "模板強度": "Strength",
+    "還原震動預設": "Reset",
+    "正在搜尋手把...": "Searching...",
+    "等待輸入": "Waiting",
+    "輸出形狀記錄未啟用": "Shape log off",
+    "反應": "Response",
+    "基礎": "Base",
+    "X 0.000   Y 0.000   半徑 0.0%": "X 0.000   Y 0.000   R 0.0%",
+    "X {x:+.3f}   Y {y:+.3f}   半徑 {radius:.1f}%":
+        "X {x:+.3f}   Y {y:+.3f}   R {radius:.1f}%",
+    "{curve}   自適死區 {adaptive:.0f}%   加速抑制 {accel:.0f}%   防晃 {freeze:.0f} ms":
+        "{curve}   Adapt DZ {adaptive:.0f}%   Accel {accel:.0f}%   "
+        "Guard {freeze:.0f} ms",
+    "覆蓋 {coverage:.0f}%   圓度誤差 {error}   最大 {maximum:.1f}%":
+        "Cov {coverage:.0f}%   Circ err {error}   Max {maximum:.1f}%",
+    "區段 P{start}–P{end}   中心死區 {deadzone:.1f}%   外圈死區 {outer:.1f}%":
+        "P{start}–P{end}   C-DZ {deadzone:.1f}%   O-DZ {outer:.1f}%",
+    "傾斜   最大角 {maximum:.0f}°   死區 {deadzone:.2f}°":
+        "Tilt   Max {maximum:.0f}°   DZ {deadzone:.2f}°",
+    "回中   感度 {sensitivity:.1f}   死區 {deadzone:.2f}°/s":
+        "Aim   Sens {sensitivity:.1f}   DZ {deadzone:.2f}°/s",
+    "{gyro}：{active}｜{mode} {buttons}｜DZ {deadzone:.2f}｜ADZ {anti_deadzone:.0f}%":
+        "{gyro}: {active} | {mode} {buttons} | "
+        "DZ {deadzone:.2f} | ADZ {anti_deadzone:.0f}%",
+    "搖桿中心死區 {stick_deadzone:.1f}%   外圈死區 {outer_deadzone:.1f}%   觸發 {mode}":
+        "C-DZ {stick_deadzone:.1f}%   O-DZ {outer_deadzone:.1f}%   "
+        "Trig {mode}",
+    "實體搖桿的最終輸出": "Final stick output",
+    "原始裝置輸出（無曲線／死區設定資料）":
+        "Raw input (no curve/DZ data)",
+    "{seconds:.1f} 秒": "{seconds:.1f} s",
+    "{seconds:.2f} 秒": "{seconds:.2f} s",
+    "S2P-XInput-Lite（目前橋接輸出）": "S2P-XInput-Lite (Bridge)",
+    "主方案": "Main",
+    "原始輸入": "Raw",
+    "無": "None",
+    "裝置未提供標準扳機軸": "No trigger axis",
+    "搖桿": "Stick",
+    "按鍵／原生扳機輸出": "Button / native trigger",
+    "裝置實際輸出": "Device output",
+    "持續按壓": "Held",
+    "已放開": "Released",
+    "心跳": "Heartbeat",
+    "節拍": "Footsteps",
+    "路感": "Terrain",
+    "低鳴": "Low Rumble",
+    "爆裂": "Burst",
+    "機槍": "Machine Gun",
+    "散彈": "Shotgun",
+    "加速": "Turbo",
+    "旋翼": "Rotor",
+    "倒數": "Countdown",
+    "繪製 — FPS": "Render — FPS",
+    "繪製 {fps:.0f} FPS": "Render {fps:.0f} FPS",
+    "選擇支援震動的 XInput 手把":
+        "Select an XInput pad with rumble",
+    "LF 脈衝": "LF Pulse",
+    "HF 脈衝": "HF Pulse",
+    "交替": "Alternate",
+    "撞擊": "Impact",
+    "漸強": "Ramp",
+    "雙擊": "Double",
+    "連射": "Rapid",
+    "引擎": "Engine",
+    "波浪": "Wave",
+    "警示": "Alert",
+    "停止": "Stop",
+    "停止所有震動": "Stop All Rumble",
+    "重設": "Reset",
+    "● 已連線": "● Connected",
+    "● 未連線": "● Disconnected",
+    "此手把沒有可用的 XInput 震動介面":
+        "No XInput rumble",
+    "目前為純音訊震動模式，遊戲震動模板不會輸出":
+        "Audio-only mode; patterns disabled",
+    "震動會套用目前方案的 LF／HF 設定":
+        "Uses current LF/HF profile",
     "寫入 ESP32": "ESP32",
     "寫入 ESP32 ▼": "ESP32 ▼",
     "寫入並啟用獨立模式": "Write and enable standalone",
@@ -87,7 +564,7 @@ EN_TEXT = {
     "線性滑鼠滾輪": "Linear Mouse Wheel",
     "線性 Xbox LT": "Linear Xbox LT",
     "線性 Xbox RT": "Linear Xbox RT",
-    "映射層": "Mapping Layers",
+    "映射層": "Layers",
     "只在「混合」模式生效。\n\n0.00 = 只保留遊戲原生震動\n0.35 = 建議起始值（遊戲 65%、音訊 35%）\n1.00 = 只保留音訊震動":
         "Only applies in Mix mode.\n\n0.00 = game rumble only\n0.35 = recommended starting point (65% game, 35% audio)\n1.00 = audio rumble only",
     "控制音訊轉換成震動前的總靈敏度。\n\n0.60 = 建議起始值":
@@ -246,9 +723,9 @@ EN_TEXT = {
     "感度曲線": "Sens. Curve",
     "還原陀螺儀預設": "Reset Gyro Defaults",
     "還原曲線": "Reset Curve",
-    "動態": "Dynamic",
-    "後段加速": "Late Boost",
-    "前段加速": "Early Boost",
+    "動態": "Dyn.",
+    "後段加速": "Late",
+    "前段加速": "Early",
     "曲線強度": "Curve Strength",
     "基礎輸出": "Base Output",
     "曲線輸出": "Curve Output",
@@ -300,7 +777,7 @@ EN_TEXT = {
     "X 比例": "X Ratio",
     "Y 比例": "Y Ratio",
     "死區": "DZ",
-    "反死區": "Anti DZ",
+    "反死區": "Anti-DZ",
     "傾斜死區": "Tilt DZ",
     "平滑 ms": "Smooth ms",
     "傾斜平滑": "Tilt Smooth",
@@ -519,8 +996,11 @@ EN_TEXT = {
         "Adjustable settings were reset, but HidHide could not be disabled. Close HidHide Configuration Client and try again.",
     "無法讀取 HidHide 設定。請先關閉 HidHide Configuration Client，再重新啟動連接程式。":
         "Could not read HidHide settings. Close HidHide Configuration Client, then restart the connector.",
-    "偵測到 USB 有線手把。為避免遊戲同時收到實體 HID 與虛擬 Xbox 手把，程式可以將實體手把加入 HidHide 隱藏清單，並允許攜帶版 Python 繼續讀取。":
-        "A wired USB controller was detected. To prevent games from receiving both the physical HID and virtual Xbox controller, the app can hide the physical device while allowing the portable Python runtime to read it.",
+    "偵測到 USB 有線手把。為避免遊戲同時收到實體 HID 與虛擬 Xbox 手把，程式可以將實體手把加入 HidHide 隱藏清單，並允許攜帶版 Python 與 Raw HID 量測器繼續讀取。":
+        "A wired USB controller was detected. To prevent games from receiving "
+        "both the physical HID and virtual Xbox controller, the app can hide "
+        "the physical device while allowing the portable Python runtime and "
+        "Raw HID probe to read it.",
     "HidHide 全域隱藏目前關閉；繼續將會開啟它。":
         "Global HidHide cloaking is off; continuing will enable it.",
     "HidHide 清單內另有其他隱藏裝置；開啟後也會套用到它們。":
@@ -558,8 +1038,16 @@ EN_TEXT = {
         "Invalid integer format.\n\nLF/HF frequencies and max amplitude must be integers.",
     "線性：控制點之間使用直線。\n\n平滑：使用單調三次插值，平滑通過所有控制點，並避免反向與超調。":
         "Linear: straight segments between control points.\n\nSmooth: monotonic cubic interpolation through every point, without reversal or overshoot.",
-    "輸出形狀會在圓形與方形之間分成 10 段。\n\n灰色圓：圓形基準；虛線方框：方形極限；藍線：目前設定的最大輸出範圍。\n\n對角方向每軸約為：\n0 = 0.707　2 = 0.766　5 = 0.854\n8 = 0.941　10 = 1.000\n\n數值越高，對角方向可輸出的範圍越大。\n\n拉桿後方百分比是預估圓周誤差；實際結果會受校正與取樣影響。":
-        "Output shape is divided into 10 steps between round and square.\n\nGray circle: round reference; dashed box: square limit; blue line: the current maximum output range.\n\nApprox. diagonal output per axis:\n0 = 0.707   2 = 0.766   5 = 0.854\n8 = 0.941   10 = 1.000\n\nHigher values allow more diagonal output.\n\nThe percentage after the slider is an estimated circularity error; calibration and sampling affect actual results.",
+    "輸出形狀會在圓形與方形之間分成 10 段。灰色圓：圓形基準；虛線方框：方形極限；藍線：目前設定的最大輸出範圍。\n\n對角方向每軸約為：\n0 = 0.707　2 = 0.766　5 = 0.854\n8 = 0.941　10 = 1.000\n\n數值越高，對角方向可輸出的範圍越大。拉桿後方百分比是預估圓周誤差；實際結果會受校正與取樣影響。":
+        "Output shape is divided into 10 steps between round and square. "
+        "Gray circle: round reference; dashed box: square limit; blue line: "
+        "the current maximum output range.\n\n"
+        "Approx. diagonal output per axis:\n"
+        "0 = 0.707   2 = 0.766   5 = 0.854\n"
+        "8 = 0.941   10 = 1.000\n\n"
+        "Higher values allow more diagonal output. The percentage after the "
+        "slider is an estimated circularity error; calibration and sampling "
+        "affect actual results.",
     "防抖\n\n根據位移曲線目前區段的放大倍率，自動增加防抖強度。\n\n設定範圍：0.0 ～ 3.0\n\n0.0：關閉防抖補償。\n1.0：標準補償，曲線放大幾倍，就按相同倍率增加防抖。\n2.0：加強補償。\n3.0：更強的補償。\n\n僅在曲線斜率大於 1:1 的區域生效。\n平滑使用實際時間計算，不會因 BLE 或 ESP32 更新頻率不同而改變手感。\n數值越高，輸出越穩定，但也可能產生較明顯的平滑感。":
         "Stabilizer\n\nAutomatically increases stabilization where the response curve amplifies motion.\n\nRange: 0.0–3.0\n\n0.0: off\n1.0: standard slope-based compensation\n2.0: stronger\n3.0: strongest\n\nOnly applies where curve slope exceeds 1:1. Time-based smoothing keeps the feel consistent across BLE/ESP32 update rates. Higher values are steadier but feel smoother.",
     "用來消除左搖桿放開後的輕微飄移。\n\n設定範圍：0.00 ～ 0.99\n中心死區與外圍死區總和必須小於 1.00。\n0.00 = 無死區\n0.03 = 在 3% 範圍內忽略輸入\n\n數值越大，搖桿中心附近越不敏感。\n\n勾選「壓縮」後，曲線的 0% 起點會移到中心死區邊界，並將完整曲線重新分布到剩餘行程。\n\n曲線圖左側的灰色區域代表中心死區範圍。":

@@ -105,8 +105,188 @@ class StandaloneFirmwareContractTests(unittest.TestCase):
         task_start = MAIN_SOURCE.index("static void cdc_task")
         task_end = MAIN_SOURCE.index("static void gap_cb", task_start)
         task = MAIN_SOURCE[task_start:task_end]
-        self.assertIn("handle_command", task)
+        self.assertIn("handle_query_command", task)
         self.assertIn("standalone_xinput_accept_switch_report", task)
+
+    def test_standalone_usb_is_pumped_after_fresh_input(self):
+        task_start = MAIN_SOURCE.index("static void cdc_task")
+        task_end = MAIN_SOURCE.index("static void gap_cb", task_start)
+        task = MAIN_SOURCE[task_start:task_end]
+        accepted = task.rindex("standalone_xinput_accept_switch_report")
+        post_input_pump = task.rindex("standalone_xinput_pump()")
+        command_output = task.index(
+            "xQueueReceive(s_out_queue", accepted
+        )
+        self.assertLess(accepted, post_input_pump)
+        self.assertLess(post_input_pump, command_output)
+
+    def test_standalone_usb_completion_wakes_pending_output(self):
+        self.assertIn(
+            "standalone_xinput_set_wakeup_cb(wake_standalone_output)",
+            MAIN_SOURCE,
+        )
+        self.assertIn(
+            "wake_output_if_pending(false)", XINPUT_SOURCE
+        )
+        self.assertIn(
+            "void tud_hid_report_complete_cb(", XINPUT_SOURCE
+        )
+        self.assertIn(
+            "wake_output_if_pending(true)", XINPUT_SOURCE
+        )
+
+    def test_latency_diagnostics_cover_source_shadow_and_usb(self):
+        self.assertIn('"latency status"', MAIN_SOURCE)
+        self.assertIn('"latency reset"', MAIN_SOURCE)
+        self.assertIn("note_ble_input_report(", MAIN_SOURCE)
+        self.assertIn("source_gap_events", MAIN_SOURCE)
+        self.assertIn("shadow_overwrites", MAIN_SOURCE)
+        self.assertIn("notify_queue_drops", MAIN_SOURCE)
+        self.assertIn("busy_events", XINPUT_SOURCE)
+        self.assertIn("pending_overwrites", XINPUT_SOURCE)
+        self.assertIn("wait_total_us", XINPUT_SOURCE)
+        self.assertIn(
+            "standalone_xinput_reset_latency_metrics", XINPUT_HEADER
+        )
+        self.assertIn("s_ch[channel].itvl", MAIN_SOURCE)
+        self.assertIn("gap_threshold_ms", MAIN_SOURCE)
+        self.assertIn(
+            "s_last_input_report_time_valid[ch] = false",
+            MAIN_SOURCE,
+        )
+        self.assertIn(
+            "s_widened_mask & (1u << channel)",
+            MAIN_SOURCE,
+        )
+        widen_start = MAIN_SOURCE.index("if (r0 >= 2)")
+        widen_end = MAIN_SOURCE.index(
+            "s_conn_open_after = now_ms() + 250", widen_start
+        )
+        widen = MAIN_SOURCE[widen_start:widen_end]
+        self.assertIn("portENTER_CRITICAL(&s_in_mux)", widen)
+        self.assertIn(
+            "s_last_input_report_time_valid[i] = false",
+            widen,
+        )
+        self.assertIn("static void cancel_usb_wait(void)", XINPUT_SOURCE)
+        self.assertIn(
+            "if (!tud_ready()) {\n"
+            "            cancel_usb_wait();",
+            XINPUT_SOURCE,
+        )
+        reset = XINPUT_SOURCE.index("static void xinput_reset(")
+        opened = XINPUT_SOURCE.index("static uint16_t xinput_open(", reset)
+        self.assertIn("cancel_usb_wait();", XINPUT_SOURCE[reset:opened])
+
+    def test_cdc_partial_writes_resume_before_next_queue_item(self):
+        self.assertIn("#define CDC_TX_BUFFER_SIZE        512", MAIN_SOURCE)
+        self.assertIn("size_t offset;", MAIN_SOURCE)
+        self.assertIn("bool valid;", MAIN_SOURCE)
+        submit_start = MAIN_SOURCE.index("static bool cdc_tx_submit(")
+        pump_start = MAIN_SOURCE.index(
+            "static bool cdc_tx_pump_until(", submit_start
+        )
+        submit = MAIN_SOURCE[submit_start:pump_start]
+        self.assertIn("memcpy(s_cdc_tx.data, data, len)", submit)
+        self.assertIn("s_cdc_tx.offset = 0", submit)
+        self.assertIn("s_cdc_tx.valid = true", submit)
+        pump_end = MAIN_SOURCE.index(
+            "static bool cdc_tx_can_submit(", pump_start
+        )
+        pump = MAIN_SOURCE[pump_start:pump_end]
+        self.assertIn("s_cdc_tx.offset += written", pump)
+        self.assertIn(
+            "if (s_cdc_tx.offset >= s_cdc_tx.length)",
+            pump,
+        )
+        task_start = MAIN_SOURCE.index("static void cdc_task(")
+        task_end = MAIN_SOURCE.index(
+            "static void wake_standalone_output", task_start
+        )
+        task = MAIN_SOURCE[task_start:task_end]
+        self.assertIn(
+            "esp_timer_get_time() + CDC_TX_PHASE_BUDGET_US",
+            task,
+        )
+        self.assertIn("cdc_tx_can_submit(cdc_deadline_us)", task)
+        self.assertIn("CDC_QUEUE_BUDGET_PER_LOOP", task)
+        self.assertNotIn("safe_cdc_write", MAIN_SOURCE)
+
+    def test_cdc_control_and_event_queues_precede_low_priority_output(self):
+        task_start = MAIN_SOURCE.index("static void cdc_task")
+        task_end = MAIN_SOURCE.index(
+            "static void wake_standalone_output", task_start
+        )
+        task = MAIN_SOURCE[task_start:task_end]
+        control = task.index("xQueueReceive(\n                    s_control_queue")
+        event = task.index("xQueueReceive(s_event_queue")
+        query = task.index("xQueueReceive(s_query_queue")
+        low_priority = task.index("xQueueReceive(s_out_queue")
+        self.assertLess(control, event)
+        self.assertLess(event, query)
+        self.assertLess(query, low_priority)
+        control_loop = task[task.rfind("for (", 0, control):control]
+        self.assertNotIn("cdc_tx_can_submit", control_loop)
+
+    def test_scan_flood_cannot_consume_lifecycle_event_capacity(self):
+        self.assertIn(
+            "s_event_queue = xQueueCreate(16, sizeof(line_t))",
+            MAIN_SOURCE,
+        )
+        self.assertIn(
+            "s_out_queue = xQueueCreate(24, sizeof(line_t))",
+            MAIN_SOURCE,
+        )
+        self.assertIn("queue_json(s_event_queue, s)", MAIN_SOURCE)
+        self.assertIn("queue_json(s_out_queue, s)", MAIN_SOURCE)
+        for command in (
+            "connected",
+            "connect_fail",
+            "disconnected",
+            "gatt_done",
+        ):
+            marker = f'\\"cmd\\":\\"{command}\\"'
+            event_start = MAIN_SOURCE.index(marker)
+            event_end = MAIN_SOURCE.index(";", event_start)
+            self.assertIn(
+                "out_event(",
+                MAIN_SOURCE[event_end:event_end + 350],
+                command,
+            )
+        scan_start = MAIN_SOURCE.index('\\"cmd\\":\\"scan_result\\"')
+        scan_end = MAIN_SOURCE.index(";", scan_start)
+        self.assertIn(
+            "out_json(",
+            MAIN_SOURCE[scan_end:scan_end + 350],
+        )
+        self.assertIn("s_event_queue_drops", MAIN_SOURCE)
+
+    def test_direction_mapping_consumes_native_stick_before_gyro(self):
+        helper = XINPUT_SOURCE.index(
+            "static bool stick_direction_consumes_native_output"
+        )
+        self.assertIn(
+            "config->mode == STICK_DIRECTION_LT",
+            XINPUT_SOURCE[helper:],
+        )
+        self.assertIn(
+            "config->targets[index] != 0",
+            XINPUT_SOURCE[helper:],
+        )
+        mapping = XINPUT_SOURCE.index(
+            "direction_targets |= apply_stick_direction"
+        )
+        consume = XINPUT_SOURCE.index(
+            "stick_direction_consumes_native_output(&directions[0])",
+            mapping,
+        )
+        zero_axis = XINPUT_SOURCE.index("report.left_x = 0", consume)
+        gyro = XINPUT_SOURCE.index(
+            "apply_gyro_to_report_runtime(", zero_axis
+        )
+        self.assertLess(mapping, consume)
+        self.assertLess(consume, zero_axis)
+        self.assertLess(zero_axis, gyro)
 
     def test_connection_watchdog_covers_unready_channels(self):
         self.assertIn("connect_deadline_ms", MAIN_SOURCE)
@@ -177,14 +357,40 @@ class StandaloneFirmwareContractTests(unittest.TestCase):
             )
         )
         command = (
-            f'call "{idf_path / "export.bat"}" && '
-            "set IDF_CCACHE_ENABLE=0 && idf.py build"
+            f'set "S2P_IDF_EXPORT={idf_path / "export.bat"}" && '
+            'call "%S2P_IDF_EXPORT%" && '
+            'set "IDF_CCACHE_ENABLE=0" && idf.py build'
         )
         subprocess.run(
-            ["cmd.exe", "/d", "/s", "/c", command],
+            command,
             cwd=FIRMWARE,
             check=True,
+            shell=True,
         )
+        if os.environ.get("S2P_VERIFY_RELEASE_IMAGE") == "1":
+            bundled = ROOT / "esp32s3" / "firmware"
+            outputs = {
+                "bootloader.bin": (
+                    FIRMWARE / "build" / "bootloader" / "bootloader.bin"
+                ),
+                "partition-table.bin": (
+                    FIRMWARE
+                    / "build"
+                    / "partition_table"
+                    / "partition-table.bin"
+                ),
+                "esp32s3_bluedroid_bridge.bin": (
+                    FIRMWARE
+                    / "build"
+                    / "esp32s3_bluedroid_bridge.bin"
+                ),
+            }
+            for name, built in outputs.items():
+                with self.subTest(release_image=name):
+                    self.assertEqual(
+                        built.read_bytes(),
+                        (bundled / name).read_bytes(),
+                    )
 
 
 if __name__ == "__main__":

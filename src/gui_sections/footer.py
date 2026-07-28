@@ -92,9 +92,21 @@ def build_status_and_footer(gui, right_frame):
             uniform="footer_column",
         )
 
-    profile_selector = ttk.Frame(footer_frame)
+    # Use the same seven equal columns as the action row below. The profile
+    # selector uses two columns and each action uses one, so Save through
+    # Gamepad Test match the Reconnect button width exactly.
+    profile_row = ttk.Frame(footer_frame)
+    profile_row.grid(
+        row=0, column=0, columnspan=7, sticky="ew", pady=(0, 5)
+    )
+    for column in range(7):
+        profile_row.columnconfigure(
+            column, weight=1, uniform="profile_column"
+        )
+
+    profile_selector = ttk.Frame(profile_row)
     profile_selector.grid(
-        row=0, column=0, columnspan=3, sticky="ew", padx=(3, 3), pady=(0, 5)
+        row=0, column=0, columnspan=2, sticky="ew", padx=3
     )
     ttk.Label(profile_selector, text="目前方案").pack(side="left")
     gui.profile_combo = ttk.Combobox(
@@ -117,25 +129,33 @@ def build_status_and_footer(gui, right_frame):
     gui.bind_profile_popdown_context_menu()
 
     ttk.Button(
-        footer_frame,
+        profile_row,
         text="儲存/套用",
         command=gui.save_current_profile,
-    ).grid(row=0, column=3, sticky="nsew", padx=3, pady=(0, 5), ipady=5)
+    ).grid(row=0, column=2, sticky="nsew", padx=3, ipady=5)
     ttk.Button(
-        footer_frame,
+        profile_row,
         text="另存新方案",
         command=gui.save_profile_as,
-    ).grid(row=0, column=4, sticky="nsew", padx=3, pady=(0, 5), ipady=5)
+    ).grid(row=0, column=3, sticky="nsew", padx=3, ipady=5)
     ttk.Button(
-        footer_frame,
+        profile_row,
         text="匯入方案",
         command=gui.import_profile_file,
-    ).grid(row=0, column=5, sticky="nsew", padx=3, pady=(0, 5), ipady=5)
+    ).grid(row=0, column=4, sticky="nsew", padx=3, ipady=5)
     ttk.Button(
-        footer_frame,
+        profile_row,
         text="管理方案",
         command=gui.open_profile_folder,
-    ).grid(row=0, column=6, sticky="nsew", padx=3, pady=(0, 5), ipady=5)
+    ).grid(row=0, column=5, sticky="nsew", padx=3, ipady=5)
+    gui.gamepad_test_button = ttk.Button(
+        profile_row,
+        text=gui.tr("手把測試"),
+        command=gui.open_gamepad_test_window,
+    )
+    gui.gamepad_test_button.grid(
+        row=0, column=6, sticky="nsew", padx=3, ipady=5
+    )
 
     language_pin_frame = ttk.Frame(footer_frame)
     language_pin_frame.grid(
