@@ -10,6 +10,10 @@ import tkinter as tk
 from config_utils import CONFIG_PATH, load_config
 from gamepad_test_window import GamepadTestWindow, TEST_ICON_PATH
 from localization import translate_text
+from raw_hid_effective_rate import (
+    install_effective_rate_patch,
+    translate_effective_rate,
+)
 
 
 GAMEPAD_TEST_APP_ID = "S2P-XInput-Lite.GamepadTest"
@@ -116,10 +120,16 @@ class GamepadTestHost:
         )
 
     def tr(self, text):
-        return translate_text(text, self.language)
+        feature_text = translate_effective_rate(text, self.language)
+        return (
+            feature_text
+            if feature_text is not None
+            else translate_text(text, self.language)
+        )
 
 
 def main():
+    install_effective_rate_patch()
     # AppUserModelID must be set before the first top-level window is created.
     configure_windows_taskbar_identity()
     root = tk.Tk()
