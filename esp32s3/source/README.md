@@ -30,7 +30,12 @@ The S2P bridge protocol uses a latency-focused CDC schedule:
 - host control commands and lifecycle events use dedicated priority queues, so
   scan/debug floods cannot delay connection control or discard connection state;
 - rumble uses direct `wr` latest-only output from the host, avoiding the legacy
-  five-packet `rs` FIFO.
+  five-packet `rs` FIFO;
+- each controller has at most one GATT rumble write in flight and one latest
+  pending state; congestion, queue-full and write completion are counted, and
+  only the latest state is retried after the stack becomes writable;
+- standalone XInput OUT rumble wakes the output task immediately instead of
+  waiting for the 2 ms maintenance timeout.
 
 The current images in `../firmware/` were built from this source. The
 transport baseline was verified on real hardware; the `S2P-FW 1.0.1`
@@ -40,7 +45,7 @@ revision is linked above for comparison.
 
 | Current file | SHA-256 |
 |---|---|
-| `esp32s3_bluedroid_bridge.bin` | `23C05CB19CB6745B960FB81B6529956521113CDACB0FEC68CBAC2569C4273F79` |
+| `esp32s3_bluedroid_bridge.bin` | `C83609E11DF3C207D359439C421DC79EBF54E31BB4D2368C71B78BC7C19640C0` |
 | `bootloader.bin` | `1E6B5148E11223F7E50E98549B0D220C77CF48F55D6F7397365A7EFBAF3711D4` |
 | `partition-table.bin` | `7F00B6C042A89B15B0CAC534F82ED988CAF29278FF5700B0C511EB1B5BB7C820` |
 

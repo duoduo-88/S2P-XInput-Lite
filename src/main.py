@@ -16,8 +16,6 @@ from xinput_controller import XInputController
 from audio_haptics import AudioHaptics
 from input_dispatcher import InputDispatcher
 import serial
-import json
-import threading
 from version import APP_TITLE
 from config_utils import (
     CONFIG_PATH,
@@ -34,11 +32,8 @@ from config_utils import (
     store_accelerometer_calibration,
     store_magnetometer_calibration,
 )
-from command_queue import (
-    cleanup_controller_commands,
-    finish_controller_command,
-    next_controller_command,
-)
+from runtime_commands import ControllerCommandInbox
+from runtime_status import ControllerStatusPublisher
 from test_telemetry import SharedTestTelemetry
 from console_i18n import current_language
 from console_i18n import localized_print as print
@@ -54,10 +49,6 @@ from runtime_cleanup import (
     controller_application_ready,
 )
 
-COMMAND_PATH = Path(__file__).with_name(
-    "controller_command.txt"
-)
-STATUS_PATH = Path(__file__).with_name("controller_status.json")
 HIDHIDE_APPLICATION_PATHS = (
     Path(sys.executable),
     Path(__file__).with_name("raw_hid_probe.exe"),
@@ -157,85 +148,12 @@ def _finish_orientation_coverage():
 
 def main():
     process_started_at = time.time()
-    cleanup_controller_commands(process_started_at)
-    status_lock = threading.Lock()
-    status_write_lock = threading.Lock()
-    controller_status = {
-        "state": "starting", "mode": None,
-        "battery_percent": None, "battery_voltage": None,
-        "charging": False,
-        "wired_full_report": None, "wired_polling_rate": None,
-        "wired_processing_rate": None,
-        "input_report_rate": None, "xinput_output_rate": None,
-        "xinput_slot": None,
-        "sensor_mode": None,
-        "gyro_raw": None, "accel_raw": None,
-        "report_time": None, "report_delta": None,
-        "mag_field_valid": None,
-        "gyro_bias_samples": 0,
-        "gyro_calibration_state": "idle",
-        "gyro_calibration_message": "",
-        "gyro_calibration_quality": None,
-        "mag_calibration_state": "idle",
-        "mag_calibration_message": "",
-        "mag_calibration_progress": 0,
-        "mag_calibration_spans": [0.0, 0.0, 0.0],
-        "mag_calibration_quality": None,
-        "mag_orientation_bins": [],
-        "mag_orientation_coverage": 0.0,
-        "accel_calibration_state": "idle",
-        "accel_calibration_message": "",
-        "accel_calibration_progress": 0,
-        "accel_calibration_quality": None,
-        "accel_orientation_bins": [],
-        "accel_orientation_coverage": 0.0,
-        "tilt_recenter_state": "idle",
-        "tilt_recenter_updated_at": 0.0,
-        "settings_reload_state": "idle",
-        "settings_reload_message": "",
-        "settings_reload_updated_at": 0.0,
-        "rumble": {},
-        "firmware_diagnostics": {},
-        "updated_at": time.time(),
-    }
-
-    def publish_status(**changes):
-        # Serialize file replacement separately from the short-lived state
-        # lock.  Input callbacks can keep staging reports even if disk I/O is
-        # temporarily slow.
-        with status_write_lock:
-            with status_lock:
-                controller_status.update(changes)
-                controller_status["updated_at"] = time.time()
-                serialized_status = json.dumps(
-                    controller_status, ensure_ascii=False
-                )
-            temp_path = STATUS_PATH.with_suffix(".json.tmp")
-            try:
-                temp_path.write_text(
-                    serialized_status,
-                    encoding="utf-8",
-                )
-                temp_path.replace(STATUS_PATH)
-            except OSError:
-                try:
-                    temp_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
-
-    def stage_status(**changes):
-        """Update status in memory without doing disk I/O on an input thread."""
-        with status_lock:
-            controller_status.update(changes)
-            controller_status["updated_at"] = time.time()
-
+    command_inbox = ControllerCommandInbox()
+    command_inbox.reset(process_started_at)
+    status_publisher = ControllerStatusPublisher()
+    publish_status = status_publisher.publish
+    stage_status = status_publisher.stage
     publish_status()
-    # Commands are one-shot messages from the GUI. Never replay a command
-    # left behind by a previous process that ended unexpectedly.
-    try:
-        COMMAND_PATH.unlink(missing_ok=True)
-    except OSError:
-        pass
 
     config = load_config(CONFIG_PATH)
 
@@ -1059,27 +977,12 @@ def main():
                         f"閒置自動斷線失敗：{exc}",
                         f"Idle disconnect failed: {exc}",
                     ))
-            queued_request = next_controller_command()
-            try:
-                legacy_command_ready = (
-                    COMMAND_PATH.is_file() and COMMAND_PATH.stat().st_size > 0
-                )
-            except OSError:
-                legacy_command_ready = False
-            if queued_request is not None or legacy_command_ready:
+            pending_command = command_inbox.next()
+            if pending_command is not None:
                 try:
-                    if queued_request is not None:
-                        command = queued_request["command"]
-                        request_id = queued_request["id"]
-                    else:
-                        command = COMMAND_PATH.read_text(
-                            encoding="utf-8"
-                        ).strip()
-                        request_id = ""
-
-                    def clear_legacy_command():
-                        if queued_request is None:
-                            COMMAND_PATH.unlink(missing_ok=True)
+                    command = pending_command.command
+                    request_id = pending_command.request_id
+                    clear_legacy_command = pending_command.clear_legacy
 
                     if command == "pin":
                         # 先清除指令，避免重複執行
@@ -1223,7 +1126,7 @@ def main():
                         f"處理控制器指令失敗：{exc}"
                     )
                 finally:
-                    finish_controller_command(queued_request)
+                    pending_command.finish()
 
             if gyro_initialization_tracking and controller_is_connected():
                 initialization = xinput.get_gyro_initialization_status()

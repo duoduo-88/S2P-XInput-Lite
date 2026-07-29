@@ -5,15 +5,21 @@ from __future__ import annotations
 import ctypes
 import sys
 import threading
+import time
 import tkinter as tk
 
 from config_utils import CONFIG_PATH, load_config
 from gamepad_test_window import GamepadTestWindow, TEST_ICON_PATH
 from localization import translate_text
+from version import VERSION
 
 
 GAMEPAD_TEST_APP_ID = "S2P-XInput-Lite.GamepadTest"
 SUPPORTED_LANGUAGES = frozenset(("zh", "en"))
+GAMEPAD_TEST_STARTUP_IMAGE = (
+    TEST_ICON_PATH.parent / "S2P-XInput-Lite-600x340.png"
+)
+GAMEPAD_TEST_SPLASH_MIN_SECONDS = 0.75
 
 
 def command_line_language(arguments):
@@ -49,6 +55,100 @@ def apply_root_icon(root):
         return icon
     except tk.TclError:
         return None
+
+
+class GamepadTestStartupOverlay:
+    """Show the product banner while the direct tester is constructed."""
+
+    DOT_INTERVAL_MS = 320
+
+    def __init__(self, root, language="zh"):
+        self.root = root
+        self.language = (
+            language if language in SUPPORTED_LANGUAGES else "zh"
+        )
+        self._dot_count = 3
+        self._animation_job = None
+        self.window = tk.Toplevel(root)
+        self.window.withdraw()
+        self.window.overrideredirect(True)
+        self.window.attributes("-topmost", True)
+        self.image = tk.PhotoImage(
+            master=self.window,
+            file=str(GAMEPAD_TEST_STARTUP_IMAGE),
+        )
+        width = int(self.image.width())
+        height = int(self.image.height())
+        self.canvas = tk.Canvas(
+            self.window,
+            width=width,
+            height=height,
+            borderwidth=0,
+            highlightthickness=0,
+        )
+        self.canvas.pack()
+        self.canvas.create_image(
+            0, 0, anchor="nw", image=self.image
+        )
+        self._text_item = self.canvas.create_text(
+            width - 12,
+            height - 8,
+            anchor="se",
+            text=self._loading_text(),
+            font=("Segoe UI", 9),
+            fill="#4a4a4a",
+        )
+        x = max(0, (int(root.winfo_screenwidth()) - width) // 2)
+        y = max(0, (int(root.winfo_screenheight()) - height) // 2)
+        self.window.geometry(f"{width}x{height}+{x}+{y}")
+        self.window.update_idletasks()
+        self.window.deiconify()
+        self.window.lift()
+        self._schedule_animation()
+        root.update()
+
+    def _loading_text(self):
+        label = translate_text(
+            "手把測試程式啟動中", self.language
+        )
+        return f"v{VERSION} {label}{'.' * self._dot_count}"
+
+    def _schedule_animation(self):
+        try:
+            self._animation_job = self.window.after(
+                self.DOT_INTERVAL_MS,
+                self._animate,
+            )
+        except (AttributeError, tk.TclError):
+            self._animation_job = None
+
+    def _animate(self):
+        self._animation_job = None
+        try:
+            if not self.window.winfo_exists():
+                return
+            self._dot_count = (self._dot_count % 3) + 1
+            self.canvas.itemconfigure(
+                self._text_item,
+                text=self._loading_text(),
+            )
+            self.window.update_idletasks()
+        except (AttributeError, tk.TclError):
+            return
+        self._schedule_animation()
+
+    def destroy(self):
+        job = self._animation_job
+        self._animation_job = None
+        if job is not None:
+            try:
+                self.window.after_cancel(job)
+            except (AttributeError, tk.TclError):
+                pass
+        try:
+            self.window.destroy()
+        except (AttributeError, tk.TclError):
+            pass
 
 
 def notify_parent(message, stream=None):
@@ -131,8 +231,29 @@ def main():
         root,
         language=command_line_language(sys.argv[1:]),
     )
+    splash = None
+    splash_started_at = time.monotonic()
+    if "--parent-pipe" not in sys.argv:
+        try:
+            splash = GamepadTestStartupOverlay(
+                root, language=host.language
+            )
+        except (OSError, tk.TclError):
+            splash = None
     tester = GamepadTestWindow(host)
     tester.open()
+    if splash is not None:
+        delay_ms = max(
+            0,
+            int(round(
+                (
+                    GAMEPAD_TEST_SPLASH_MIN_SECONDS
+                    - (time.monotonic() - splash_started_at)
+                )
+                * 1000.0
+            )),
+        )
+        root.after(delay_ms, splash.destroy)
 
     closing = False
 
@@ -141,6 +262,8 @@ def main():
         if closing:
             return
         closing = True
+        if splash is not None:
+            splash.destroy()
         if "--parent-pipe" in sys.argv:
             notify_parent_closing()
         tester.close()

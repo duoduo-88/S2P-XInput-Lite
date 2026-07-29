@@ -74,6 +74,11 @@ static const char *TAG = "S3_BLUEDROID";
 #define NINTENDO_COMPANY_ID       0x0553
 #define MAX_CH                    8     // one GATTC app per channel
 #define REPORT_SIZE               64
+#define GATT_OUTPUT_MAX_SIZE       96
+#define GATT_OUTPUT_RETRY_MS       2u
+#define GATT_OUTPUT_MAX_RETRIES    8u
+#define GATT_OUTPUT_BLOCK_CONGESTED 0x01u
+#define GATT_OUTPUT_BLOCK_QUEUE_FULL 0x02u
 #define NINTENDO_VENDOR_ID        0x057E
 #define PRO_CONTROLLER2_PID       0x2069
 static bool s_standalone_mode;
@@ -328,6 +333,34 @@ static in_report_t s_in_shadow[MAX_CH];
 static volatile bool s_in_dirty[MAX_CH];
 static portMUX_TYPE s_in_mux = portMUX_INITIALIZER_UNLOCKED;
 typedef struct {
+    uint32_t generation;
+    uint32_t sequence;
+    uint32_t in_flight_sequence;
+    uint32_t retry_after_ms;
+    uint16_t handle;
+    uint16_t length;
+    uint8_t block_flags;
+    uint8_t retry_attempts;
+    bool pending;
+    bool in_flight;
+    bool retry_pending;
+    uint8_t data[GATT_OUTPUT_MAX_SIZE];
+} gatt_output_state_t;
+typedef struct {
+    uint32_t submitted;
+    uint32_t overwritten;
+    uint32_t accepted;
+    uint32_t completed;
+    uint32_t busy;
+    uint32_t failed;
+    uint32_t retries;
+    uint32_t congestion_events;
+    uint32_t queue_full_events;
+} gatt_output_metrics_t;
+static gatt_output_state_t s_gatt_output[MAX_CH];
+static gatt_output_metrics_t s_gatt_output_metrics;
+static portMUX_TYPE s_gatt_output_mux = portMUX_INITIALIZER_UNLOCKED;
+typedef struct {
     uint32_t ble_input_reports;
     uint32_t source_gap_events;
     uint32_t source_gap_max_ms;
@@ -473,6 +506,295 @@ static void format_link_status(char *output, size_t size) {
     if (used + 4u < size) snprintf(output + used, size - used, "]}\n");
 }
 
+/*
+ * Characteristic writes with NO_RSP still complete asynchronously in
+ * Bluedroid. Keep at most one rumble write in flight per controller and one
+ * latest pending state behind it. This prevents an opaque GATT queue from
+ * turning fresh motor states (especially zero) into stale delayed playback.
+ */
+static bool gatt_status_is_retryable(esp_gatt_status_t status) {
+    return
+        status == ESP_GATT_BUSY ||
+        status == ESP_GATT_CONGESTED ||
+        status == ESP_GATT_NO_RESOURCES ||
+        status == ESP_GATT_INSUF_RESOURCE ||
+        status == ESP_GATT_ERROR;
+}
+
+static void reset_gatt_output_channel(int ch, uint32_t generation) {
+    if (ch < 0 || ch >= MAX_CH) return;
+    portENTER_CRITICAL(&s_gatt_output_mux);
+    memset(&s_gatt_output[ch], 0, sizeof(s_gatt_output[ch]));
+    s_gatt_output[ch].generation = generation;
+    portEXIT_CRITICAL(&s_gatt_output_mux);
+}
+
+static void reset_gatt_output_metrics(void) {
+    portENTER_CRITICAL(&s_gatt_output_mux);
+    memset(&s_gatt_output_metrics, 0, sizeof(s_gatt_output_metrics));
+    portEXIT_CRITICAL(&s_gatt_output_mux);
+}
+
+static void get_gatt_output_metrics(
+    gatt_output_metrics_t *metrics, uint8_t *pending
+) {
+    if (!metrics) return;
+    uint8_t pending_count = 0;
+    portENTER_CRITICAL(&s_gatt_output_mux);
+    *metrics = s_gatt_output_metrics;
+    for (int ch = 0; ch < MAX_CH; ch++) {
+        if (s_gatt_output[ch].pending || s_gatt_output[ch].in_flight)
+            pending_count++;
+    }
+    portEXIT_CRITICAL(&s_gatt_output_mux);
+    if (pending) *pending = pending_count;
+}
+
+static bool write_gatt_char_checked(
+    int ch, uint16_t handle, const uint8_t *data, size_t length
+) {
+    if (
+        ch < 0 || ch >= MAX_CH || !data || length == 0 ||
+        length > GATT_OUTPUT_MAX_SIZE || !s_ch[ch].used ||
+        !s_ch[ch].link_open || handle == 0
+    ) return false;
+    portENTER_CRITICAL(&s_gatt_output_mux);
+    s_gatt_output_metrics.submitted++;
+    portEXIT_CRITICAL(&s_gatt_output_mux);
+    esp_err_t err = esp_ble_gattc_write_char(
+        s_ch[ch].gattc_if, s_ch[ch].conn_id, handle,
+        (uint16_t)length, (uint8_t *)data,
+        ESP_GATT_WRITE_TYPE_NO_RSP, ESP_GATT_AUTH_REQ_NONE
+    );
+    portENTER_CRITICAL(&s_gatt_output_mux);
+    if (err == ESP_OK) {
+        s_gatt_output_metrics.accepted++;
+    } else if (err == ESP_FAIL) {
+        /*
+         * IDF 5.5 maps an already-congested ATT channel and a full BTC
+         * transfer queue to ESP_FAIL. Higher-level command state machines
+         * already retry commands whose ACK does not arrive.
+         */
+        s_gatt_output_metrics.busy++;
+    } else {
+        s_gatt_output_metrics.failed++;
+    }
+    portEXIT_CRITICAL(&s_gatt_output_mux);
+    return err == ESP_OK;
+}
+
+static void pump_gatt_output_channel(int ch) {
+    if (ch < 0 || ch >= MAX_CH) return;
+    uint8_t payload[GATT_OUTPUT_MAX_SIZE];
+    uint16_t length = 0;
+    uint16_t handle = 0;
+    uint16_t conn_id = 0;
+    esp_gatt_if_t gattc_if = ESP_GATT_IF_NONE;
+    uint32_t generation = 0;
+    uint32_t sequence = 0;
+    uint32_t now = now_ms();
+    bool retry_attempt = false;
+
+    portENTER_CRITICAL(&s_gatt_output_mux);
+    gatt_output_state_t *state = &s_gatt_output[ch];
+    if (
+        !state->pending || state->in_flight || state->block_flags ||
+        (
+            state->retry_after_ms &&
+            !time_reached(now, state->retry_after_ms)
+        )
+    ) {
+        portEXIT_CRITICAL(&s_gatt_output_mux);
+        return;
+    }
+    if (
+        !s_ch[ch].used || !s_ch[ch].link_open ||
+        !s_ch[ch].rumble_handle ||
+        state->generation != s_ch[ch].generation ||
+        state->handle != s_ch[ch].rumble_handle
+    ) {
+        state->pending = false;
+        state->retry_pending = false;
+        state->retry_after_ms = 0;
+        s_gatt_output_metrics.failed++;
+        portEXIT_CRITICAL(&s_gatt_output_mux);
+        return;
+    }
+    length = state->length;
+    handle = state->handle;
+    generation = state->generation;
+    sequence = state->sequence;
+    conn_id = s_ch[ch].conn_id;
+    gattc_if = s_ch[ch].gattc_if;
+    memcpy(payload, state->data, length);
+    retry_attempt = state->retry_pending;
+    state->retry_pending = false;
+    state->retry_after_ms = 0;
+    state->in_flight = true;
+    state->in_flight_sequence = sequence;
+    if (retry_attempt) s_gatt_output_metrics.retries++;
+    portEXIT_CRITICAL(&s_gatt_output_mux);
+
+    esp_err_t err = esp_ble_gattc_write_char(
+        gattc_if, conn_id, handle, length, payload,
+        ESP_GATT_WRITE_TYPE_NO_RSP, ESP_GATT_AUTH_REQ_NONE
+    );
+    uint32_t retry_after_ms =
+        err == ESP_OK ? 0 : now_ms() + GATT_OUTPUT_RETRY_MS;
+
+    portENTER_CRITICAL(&s_gatt_output_mux);
+    state = &s_gatt_output[ch];
+    if (err == ESP_OK) s_gatt_output_metrics.accepted++;
+    if (
+        state->generation == generation && state->in_flight &&
+        state->in_flight_sequence == sequence
+    ) {
+        if (err != ESP_OK) {
+            state->in_flight = false;
+            if (
+                err == ESP_FAIL &&
+                state->retry_attempts < GATT_OUTPUT_MAX_RETRIES
+            ) {
+                state->retry_attempts++;
+                state->retry_pending = true;
+                state->retry_after_ms = retry_after_ms;
+                s_gatt_output_metrics.busy++;
+            } else {
+                if (state->sequence == sequence) state->pending = false;
+                state->retry_pending = false;
+                state->retry_after_ms = 0;
+                s_gatt_output_metrics.failed++;
+            }
+        }
+    }
+    portEXIT_CRITICAL(&s_gatt_output_mux);
+}
+
+static void pump_gatt_outputs(void) {
+    for (int ch = 0; ch < MAX_CH; ch++)
+        pump_gatt_output_channel(ch);
+}
+
+static bool queue_latest_rumble_write(
+    int ch, const uint8_t *data, size_t length
+) {
+    if (
+        ch < 0 || ch >= MAX_CH || !data || length == 0 ||
+        length > GATT_OUTPUT_MAX_SIZE || !s_ch[ch].used ||
+        !s_ch[ch].link_open || !s_ch[ch].rumble_handle
+    ) return false;
+    uint32_t generation = s_ch[ch].generation;
+    uint16_t handle = s_ch[ch].rumble_handle;
+    portENTER_CRITICAL(&s_gatt_output_mux);
+    gatt_output_state_t *state = &s_gatt_output[ch];
+    if (state->generation != generation) {
+        portEXIT_CRITICAL(&s_gatt_output_mux);
+        return false;
+    }
+    if (state->pending || state->in_flight)
+        s_gatt_output_metrics.overwritten++;
+    state->sequence++;
+    if (state->sequence == 0) state->sequence = 1;
+    state->handle = handle;
+    state->length = (uint16_t)length;
+    memcpy(state->data, data, length);
+    state->pending = true;
+    /*
+     * A newly submitted latest state, including zero, bypasses an older
+     * retry delay. It still waits for the current in-flight write or a
+     * stack-reported congestion window to finish.
+     */
+    state->retry_attempts = 0;
+    state->retry_pending = false;
+    state->retry_after_ms = 0;
+    s_gatt_output_metrics.submitted++;
+    portEXIT_CRITICAL(&s_gatt_output_mux);
+    pump_gatt_output_channel(ch);
+    return true;
+}
+
+static void note_gatt_write_complete(
+    int ch, uint16_t conn_id, uint16_t handle, esp_gatt_status_t status
+) {
+    bool wake = false;
+    bool retryable = gatt_status_is_retryable(status);
+    uint32_t retry_after_ms =
+        retryable ? now_ms() + GATT_OUTPUT_RETRY_MS : 0;
+    portENTER_CRITICAL(&s_gatt_output_mux);
+    if (status == ESP_GATT_OK) {
+        s_gatt_output_metrics.completed++;
+    } else if (retryable) {
+        s_gatt_output_metrics.busy++;
+    } else {
+        s_gatt_output_metrics.failed++;
+    }
+    if (ch >= 0 && ch < MAX_CH) {
+        gatt_output_state_t *state = &s_gatt_output[ch];
+        if (
+            state->in_flight && state->handle == handle &&
+            s_ch[ch].used && s_ch[ch].link_open &&
+            s_ch[ch].conn_id == conn_id &&
+            state->generation == s_ch[ch].generation
+        ) {
+            uint32_t completed_sequence = state->in_flight_sequence;
+            state->in_flight = false;
+            if (status == ESP_GATT_OK) {
+                state->retry_attempts = 0;
+                state->retry_pending = false;
+                state->retry_after_ms = 0;
+                if (state->sequence == completed_sequence)
+                    state->pending = false;
+            } else if (
+                retryable &&
+                state->retry_attempts < GATT_OUTPUT_MAX_RETRIES
+            ) {
+                state->retry_attempts++;
+                state->retry_pending = true;
+                state->retry_after_ms = retry_after_ms;
+            } else {
+                if (state->sequence == completed_sequence)
+                    state->pending = false;
+                state->retry_pending = false;
+                state->retry_after_ms = 0;
+                if (retryable) s_gatt_output_metrics.failed++;
+            }
+            wake = state->pending;
+        }
+    }
+    portEXIT_CRITICAL(&s_gatt_output_mux);
+    if (wake && s_cdc_task_h) xTaskNotifyGive(s_cdc_task_h);
+}
+
+static void note_gatt_congestion(
+    int ch, uint16_t conn_id, uint8_t flag, bool blocked
+) {
+    if (ch < 0 || ch >= MAX_CH) return;
+    bool wake = false;
+    portENTER_CRITICAL(&s_gatt_output_mux);
+    gatt_output_state_t *state = &s_gatt_output[ch];
+    if (
+        !s_ch[ch].used || !s_ch[ch].link_open ||
+        s_ch[ch].conn_id != conn_id ||
+        state->generation != s_ch[ch].generation
+    ) {
+        portEXIT_CRITICAL(&s_gatt_output_mux);
+        return;
+    }
+    if (blocked) {
+        state->block_flags |= flag;
+        s_gatt_output_metrics.busy++;
+        if (flag == GATT_OUTPUT_BLOCK_CONGESTED)
+            s_gatt_output_metrics.congestion_events++;
+        if (flag == GATT_OUTPUT_BLOCK_QUEUE_FULL)
+            s_gatt_output_metrics.queue_full_events++;
+    } else {
+        state->block_flags &= (uint8_t)~flag;
+        wake = state->pending && !state->in_flight && !state->block_flags;
+    }
+    portEXIT_CRITICAL(&s_gatt_output_mux);
+    if (wake && s_cdc_task_h) xTaskNotifyGive(s_cdc_task_h);
+}
+
 // --- Jitter Buffer (FIFO) for Audio Haptics ---
 #define RUMBLE_QUEUE_SIZE 5
 typedef struct {
@@ -495,8 +817,7 @@ static void rumble_playout_task(void *arg) {
                 s_ch[pkt.ch].generation == pkt.generation &&
                 s_ch[pkt.ch].rumble_handle
             ) {
-                esp_ble_gattc_write_char(s_ch[pkt.ch].gattc_if, s_ch[pkt.ch].conn_id, s_ch[pkt.ch].rumble_handle, pkt.len, pkt.data,
-                                         ESP_GATT_WRITE_TYPE_NO_RSP, ESP_GATT_AUTH_REQ_NONE);
+                queue_latest_rumble_write(pkt.ch, pkt.data, pkt.len);
             }
             // Strict 15ms minimum gap between packets as requested
             vTaskDelay(pdMS_TO_TICKS(15));
@@ -605,6 +926,7 @@ static void clear_channel_state(int ch) {
     s_last_input_report_time[ch] = 0;
     s_last_input_report_time_valid[ch] = false;
     portEXIT_CRITICAL(&s_in_mux);
+    reset_gatt_output_channel(ch, generation);
     memset(&s_ch[ch], 0, sizeof(s_ch[ch]));
     s_ch[ch].gattc_if = keep;
     s_ch[ch].generation = generation;
@@ -1122,8 +1444,10 @@ static void do_wr(char *args) {  // wr <ch> <c|r> <hex>
     if (len == 0) return;
     uint16_t handle = (k_s[0] == 'c') ? s_ch[ch].cmd_handle : s_ch[ch].rumble_handle;
     if (handle == 0) return;
-    esp_ble_gattc_write_char(s_ch[ch].gattc_if, s_ch[ch].conn_id, handle, len, buf,
-                             ESP_GATT_WRITE_TYPE_NO_RSP, ESP_GATT_AUTH_REQ_NONE);
+    if (k_s[0] == 'r')
+        queue_latest_rumble_write(ch, buf, len);
+    else
+        write_gatt_char_checked(ch, handle, buf, len);
 }
 static void do_rs(char *args) {  // rs <ch> <hex>
     char *save = NULL;
@@ -1147,12 +1471,15 @@ static void do_rs(char *args) {  // rs <ch> <hex>
         }
     }
 }
-static void wr_one(int ch, char kind, const uint8_t *buf, size_t len) {
-    if (ch < 0 || ch >= MAX_CH || !s_ch[ch].used || len == 0) return;
+static bool wr_one(
+    int ch, char kind, const uint8_t *buf, size_t len
+) {
+    if (ch < 0 || ch >= MAX_CH || !s_ch[ch].used || len == 0)
+        return false;
     uint16_t handle = (kind == 'c') ? s_ch[ch].cmd_handle : s_ch[ch].rumble_handle;
-    if (handle == 0) return;
-    esp_ble_gattc_write_char(s_ch[ch].gattc_if, s_ch[ch].conn_id, handle, len, (uint8_t *)buf,
-                             ESP_GATT_WRITE_TYPE_NO_RSP, ESP_GATT_AUTH_REQ_NONE);
+    if (handle == 0) return false;
+    if (kind == 'r') return queue_latest_rumble_write(ch, buf, len);
+    return write_gatt_char_checked(ch, handle, buf, len);
 }
 
 static void write_switch_command(
@@ -1218,16 +1545,25 @@ static void reset_standalone_rumble_metrics(void) {
         s_standalone_rumble_lf_amplitude;
     s_standalone_rumble_peak_hf_amplitude =
         s_standalone_rumble_hf_amplitude;
+    reset_gatt_output_metrics();
 }
 
 static void format_standalone_rumble_metrics(char *output, size_t size) {
+    gatt_output_metrics_t gatt;
+    uint8_t pending = 0;
+    get_gatt_output_metrics(&gatt, &pending);
     snprintf(
         output, size,
         "{\"cmd\":\"rumble_status\",\"ok\":1,"
         "\"received\":%lu,\"sent\":%lu,"
         "\"input\":[%u,%u],\"peak_input\":[%u,%u],"
         "\"frequency\":[%u,%u],\"output\":[%u,%u],"
-        "\"peak_output\":[%u,%u],\"zero_flush\":%u}\n",
+        "\"peak_output\":[%u,%u],\"zero_flush\":%u,"
+        "\"gatt_submitted\":%lu,\"gatt_overwritten\":%lu,"
+        "\"gatt_accepted\":%lu,\"gatt_completed\":%lu,"
+        "\"gatt_busy\":%lu,\"gatt_failed\":%lu,"
+        "\"gatt_retries\":%lu,\"gatt_congestion\":%lu,"
+        "\"gatt_queue_full\":%lu,\"gatt_pending\":%u}\n",
         (unsigned long)s_standalone_rumble_received,
         (unsigned long)s_standalone_rumble_sent,
         (unsigned)s_standalone_large_motor,
@@ -1240,7 +1576,17 @@ static void format_standalone_rumble_metrics(char *output, size_t size) {
         (unsigned)s_standalone_rumble_hf_amplitude,
         (unsigned)s_standalone_rumble_peak_lf_amplitude,
         (unsigned)s_standalone_rumble_peak_hf_amplitude,
-        (unsigned)s_standalone_zero_flush
+        (unsigned)s_standalone_zero_flush,
+        (unsigned long)gatt.submitted,
+        (unsigned long)gatt.overwritten,
+        (unsigned long)gatt.accepted,
+        (unsigned long)gatt.completed,
+        (unsigned long)gatt.busy,
+        (unsigned long)gatt.failed,
+        (unsigned long)gatt.retries,
+        (unsigned long)gatt.congestion_events,
+        (unsigned long)gatt.queue_full_events,
+        (unsigned)pending
     );
 }
 
@@ -1747,7 +2093,7 @@ static void handle_query_command(char *cmd) {
         send_json("{\"cmd\":\"latency_reset\",\"ok\":1}\n");
     }
     else if (strcmp(cmd, "rumble status") == 0) {
-        char status[384];
+        char status[512];
         format_standalone_rumble_metrics(status, sizeof(status));
         send_json(status);
     }
@@ -1919,6 +2265,7 @@ void tinyusb_cdc_rx_callback(int itf, cdcacm_event_t *event) {
 static void cdc_task(void *arg) {
     (void)arg;
     for (;;) {
+        pump_gatt_outputs();
         standalone_xinput_pump();
         pump_standalone_pairing();
         pump_standalone_controller_init();
@@ -2527,6 +2874,29 @@ static void gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
         ble_callback_metrics_record(callback_started_us);
         break;
     }
+
+    case ESP_GATTC_WRITE_CHAR_EVT:
+        note_gatt_write_complete(
+            ch, param->write.conn_id,
+            param->write.handle, param->write.status
+        );
+        break;
+
+    case ESP_GATTC_CONGEST_EVT:
+        note_gatt_congestion(
+            ch, param->congest.conn_id,
+            GATT_OUTPUT_BLOCK_CONGESTED,
+            param->congest.congested
+        );
+        break;
+
+    case ESP_GATTC_QUEUE_FULL_EVT:
+        note_gatt_congestion(
+            ch, param->queue_full.conn_id,
+            GATT_OUTPUT_BLOCK_QUEUE_FULL,
+            param->queue_full.is_full
+        );
+        break;
 
     case ESP_GATTC_WRITE_DESCR_EVT:
         if (param->write.handle == s_ch[ch].input_cccd_handle) {

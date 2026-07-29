@@ -36,8 +36,10 @@ from gamepad_devices import (
     winmm_pov_buttons,
 )
 from gamepad_test_app import (
+    GAMEPAD_TEST_STARTUP_IMAGE,
     GAMEPAD_TEST_APP_ID,
     GamepadTestHost,
+    GamepadTestStartupOverlay,
     apply_root_icon,
     command_line_language,
     configure_windows_taskbar_identity,
@@ -48,6 +50,7 @@ from gamepad_test_app import (
 from gamepad_test_window import (
     GYRO_RESPONSE_COLORS,
     GYRO_RESPONSE_OUTER_INSET,
+    GAMEPAD_TESTER_TITLE,
     GamepadTestWindow,
     PLOT_CENTER,
     PLOT_RADIUS,
@@ -58,6 +61,7 @@ from gamepad_test_window import (
     TEST_ICON_PATH,
     build_device_display_mapping,
     curve_output_radii,
+    diagnostic_telemetry_for_device,
     display_refresh_rate,
     encode_rgba_png,
     localized_device_name,
@@ -70,6 +74,67 @@ from stick_processing import apply_output_shape
 from raw_hid_probe import RawHidDevice
 import test_telemetry
 from test_telemetry import SharedTestTelemetry, TELEMETRY_SIZE
+
+
+class DiagnosticDeviceSelectionTests(unittest.TestCase):
+    def test_native_target_never_uses_fresh_s2p_telemetry(self):
+        target = GamepadDevice(
+            "xinput:1", "xinput", 1, "Other Controller", True
+        )
+        native = {
+            "device_key": "xinput:1",
+            "device_name": "Other Controller",
+            "source_rate_hz": 125.0,
+        }
+
+        selected = diagnostic_telemetry_for_device(
+            target,
+            {"device_key": "s2p", "source_rate_hz": 250.0},
+            native,
+            True,
+        )
+
+        self.assertEqual(selected["device_key"], "xinput:1")
+        self.assertEqual(selected["source_rate_hz"], 125.0)
+
+    def test_mismatched_native_snapshot_is_rejected(self):
+        target = GamepadDevice(
+            "xinput:2", "xinput", 2, "Selected Controller", True
+        )
+
+        selected = diagnostic_telemetry_for_device(
+            target,
+            {"device_key": "s2p", "source_rate_hz": 250.0},
+            {"device_key": "xinput:1", "source_rate_hz": 125.0},
+            True,
+        )
+
+        self.assertEqual(selected, {})
+
+    def test_s2p_target_uses_only_fresh_shared_telemetry(self):
+        target = GamepadDevice(
+            "s2p", "s2p", 0, "S2P-XInput-Lite", True
+        )
+        s2p = {"source_rate_hz": 250.0}
+
+        self.assertEqual(
+            diagnostic_telemetry_for_device(
+                target, s2p, {"device_key": "xinput:1"}, True
+            ),
+            s2p,
+        )
+        self.assertEqual(
+            diagnostic_telemetry_for_device(
+                target, s2p, {"device_key": "xinput:1"}, False
+            ),
+            {},
+        )
+
+    def test_gamepad_tester_title_includes_product_and_version(self):
+        self.assertEqual(
+            GAMEPAD_TESTER_TITLE,
+            "S2P-XInput-Lite v0.7.1 GamepadTester",
+        )
 
 
 class SharedTelemetryTests(unittest.TestCase):
@@ -1187,6 +1252,46 @@ class GamepadMathTests(unittest.TestCase):
         )
         root.iconphoto.assert_called_once_with(True, icon)
         self.assertIs(result, icon)
+
+    def test_direct_gamepad_tester_shows_requested_startup_banner(self):
+        root = Mock()
+        root.winfo_screenwidth.return_value = 1920
+        root.winfo_screenheight.return_value = 1080
+        window = Mock()
+        window.after.return_value = "animation-job"
+        image = Mock()
+        image.width.return_value = 600
+        image.height.return_value = 340
+        canvas = Mock()
+        canvas.create_text.return_value = "loading-text"
+
+        with (
+            patch(
+                "gamepad_test_app.tk.Toplevel",
+                return_value=window,
+            ),
+            patch(
+                "gamepad_test_app.tk.PhotoImage",
+                return_value=image,
+            ) as image_factory,
+            patch(
+                "gamepad_test_app.tk.Canvas",
+                return_value=canvas,
+            ),
+        ):
+            overlay = GamepadTestStartupOverlay(root, language="en")
+
+        image_factory.assert_called_once_with(
+            master=window,
+            file=str(GAMEPAD_TEST_STARTUP_IMAGE),
+        )
+        self.assertEqual(
+            canvas.create_text.call_args.kwargs["text"],
+            "v0.7.1 Starting Gamepad Tester...",
+        )
+        window.geometry.assert_called_once_with("600x340+660+370")
+        root.update.assert_called_once_with()
+        overlay.destroy()
 
     def test_gamepad_test_uses_separate_windows_app_id(self):
         setter = Mock()

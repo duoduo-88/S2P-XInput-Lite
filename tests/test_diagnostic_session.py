@@ -171,6 +171,54 @@ class DiagnosticSessionTests(unittest.TestCase):
             "INPUT_SOURCE_GAPS", session.summary()["warnings"]
         )
 
+    def test_basic_windows_modes_do_not_require_esp32_sensor_data(self):
+        for mode in ("wired", "bluetooth"):
+            with self.subTest(mode=mode):
+                session = DiagnosticSession(60)
+                session.start(now=1.0, wall_time=1_700_000_000.0)
+                session.add_sample(
+                    {},
+                    {"state": "connected", "mode": mode},
+                    {},
+                    now=1.25,
+                )
+
+                self.assertNotIn(
+                    "SENSOR_MODE_UNAVAILABLE",
+                    session.summary()["warnings"],
+                )
+
+    def test_selected_diagnostic_device_is_ai_visible(self):
+        session = DiagnosticSession(60)
+        session.start(now=1.0, wall_time=1_700_000_000.0)
+        session.add_sample(
+            {"device_key": "xinput:2", "source_rate_hz": 125.0},
+            {
+                "state": "connected",
+                "mode": "xinput",
+                "diagnostic_target": {
+                    "device_key": "xinput:2",
+                    "device_kind": "xinput",
+                    "device_name": "Selected Controller [XInput 3]",
+                },
+            },
+            {},
+            now=1.25,
+        )
+
+        summary = session.summary()
+        log = session.format_log()
+        self.assertEqual(summary["device_key"], "xinput:2")
+        self.assertEqual(
+            summary["device_name"],
+            "Selected Controller [XInput 3]",
+        )
+        self.assertIn("device_key=xinput:2", log)
+        self.assertIn(
+            "device_name=Selected Controller [XInput 3]",
+            log,
+        )
+
     def test_expired_controller_status_is_ignored(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "controller_status.json"

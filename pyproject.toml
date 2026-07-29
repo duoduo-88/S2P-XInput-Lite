@@ -1,0 +1,15 @@
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+# Start with correctness rules that can safely gate the existing codebase.
+# Formatting and import-order rules can be enabled incrementally after the
+# large GUI modules have been split.
+select = ["E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests deliberately import after inserting src/ into sys.path, and several
+# contract tests import names only to prove that the public surface exists.
+"tests/*.py" = ["F401"]
+"tests/**/*.py" = ["F401"]

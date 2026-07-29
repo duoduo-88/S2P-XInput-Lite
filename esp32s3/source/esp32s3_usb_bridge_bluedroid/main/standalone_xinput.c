@@ -3561,6 +3561,11 @@ static bool xinput_transfer(
             s_small_motor = s_out_buffer[4];
             s_rumble_dirty = true;
             portEXIT_CRITICAL(&s_state_mux);
+            /*
+             * Rumble conversion runs in cdc_task. Wake it immediately instead
+             * of adding up to the 2 ms idle maintenance timeout.
+             */
+            if (s_wakeup_cb) s_wakeup_cb();
         }
         arm_out_endpoint();
     }

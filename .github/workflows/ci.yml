@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - development
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  desktop-tests:
+    name: Windows desktop tests
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11.9"
+          cache: pip
+          cache-dependency-path: |
+            src/requirements*.txt
+            requirements-build.txt
+
+      - name: Build verified portable runtime
+        shell: powershell
+        run: .\scripts\build_runtime.ps1 -Python python
+
+      - name: Compile Python sources
+        run: python -m compileall -q src tests
+
+      - name: Run correctness lint
+        run: .\build\build-tools\Scripts\python.exe -m ruff check src tests
+
+      - name: Run automated tests
+        run: .\build\runtime\python.exe tests\run_tests.py
+
+  firmware:
+    name: ESP-IDF 5.5.4 firmware
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    container:
+      image: espressif/idf:v5.5.4
+
+    defaults:
+      run:
+        working-directory: esp32s3/source/esp32s3_usb_bridge_bluedroid
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Build firmware
+        run: idf.py build
+
+      - name: Verify release firmware hashes
+        working-directory: .
+        run: |
+          python - <<'PY'
+          from hashlib import sha256
+          from pathlib import Path
+
+          root = Path.cwd()
+          build = root / "esp32s3/source/esp32s3_usb_bridge_bluedroid/build"
+          bundled = root / "esp32s3/firmware"
+          pairs = {
+              build / "bootloader/bootloader.bin": bundled / "bootloader.bin",
+              build / "partition_table/partition-table.bin": bundled / "partition-table.bin",
+              build / "esp32s3_bluedroid_bridge.bin": bundled / "esp32s3_bluedroid_bridge.bin",
+          }
+          for generated, released in pairs.items():
+              generated_hash = sha256(generated.read_bytes()).hexdigest()
+              released_hash = sha256(released.read_bytes()).hexdigest()
+              if generated_hash != released_hash:
+                  raise SystemExit(
+                      f"firmware mismatch: {generated.name}: "
+                      f"{generated_hash} != {released_hash}"
+                  )
+          print("Firmware build matches the bundled release images.")
+          PY
+
+      - name: Upload firmware build
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32s3-firmware
+          path: |
+            esp32s3/source/esp32s3_usb_bridge_bluedroid/build/bootloader/bootloader.bin
+            esp32s3/source/esp32s3_usb_bridge_bluedroid/build/partition_table/partition-table.bin
+            esp32s3/source/esp32s3_usb_bridge_bluedroid/build/esp32s3_bluedroid_bridge.bin

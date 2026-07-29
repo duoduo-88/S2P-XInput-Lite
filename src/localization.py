@@ -1,6 +1,7 @@
 """Traditional Chinese / English text used by the settings GUI."""
 
 EN_TEXT = {
+    "手把測試程式啟動中": "Starting Gamepad Tester",
     "關於": "About",
     "版本": "Version",
     "贊助開發（Ko-fi）": "Support Development (Ko-fi)",
@@ -42,10 +43,15 @@ EN_TEXT = {
         "Controller CH{channel} MAC: {mac}; signal: {signal}; connection interval: {interval:.2f} ms",
     "\u8f38\u5165\u6642\u5e8f\uff1a\u56de\u5831\u7387\u5e73\u5747 {rate:.1f} Hz\uff1bP50 {p50:.2f} ms\uff1bP95 {p95:.2f} ms\uff1bP99 {p99:.2f} ms":
         "Input timing: average rate {rate:.1f} Hz; P50 {p50:.2f} ms; P95 {p95:.2f} ms; P99 {p99:.2f} ms",
-    "\u8a3a\u65b7\u6a21\u5f0f\u6703\u5728\u9078\u64c7\u7684\u6642\u9593\u5167\u8a18\u9304\u624b\u628a\u8f38\u5165\u983b\u7387\u3001\u5ef6\u9072\u3001\u6821\u6b63\u72c0\u614b\u8207\u9707\u52d5\u8cc7\u6599\u3002\n\n\u6e2c\u8a66\u671f\u9593\u4ecd\u53ef\u7e7c\u7e8c\u64cd\u4f5c\u624b\u628a\uff0c\u4e5f\u53ef\u4ee5\u7e2e\u5c0f\u6b64\u8996\u7a97\u3002\n\n\u5b8c\u6210\u5f8c\u53ef\u532f\u51fa TXT Log\uff0c\u4f9b AI \u6216\u652f\u63f4\u4eba\u54e1\u5206\u6790\u3002":
+    "診斷模式會在選擇的時間內記錄手把輸入頻率、延遲、校正狀態與震動資料。\n\n"
+    "測試期間仍可繼續操作手把，也可以縮小此視窗。\n\n"
+    "「匯出支援 Log」可隨時使用，會包含程式啟動紀錄；完成診斷後，"
+    "還會一併包含手把診斷資料，供 AI 或支援人員分析。":
         "Diagnostics records controller input rate, latency, calibration state, and rumble data for the selected duration.\n\n"
         "You can keep using the controller and minimize this window while it runs.\n\n"
-        "When complete, export a TXT log for AI or support analysis.",
+        "Export Support Log is always available and includes application startup records. "
+        "After Diagnostics completes, the same TXT also includes controller diagnostic data "
+        "for AI or support analysis.",
     "\u8cc7\u6599\u4f86\u6e90\uff1a\u4e3b\u7a0b\u5f0f\u6a4b\u63a5\u901a\u9053\uff08ESP32 \u5e8f\u5217\u57e0\u7531\u4e3b\u7a0b\u5f0f\u4f7f\u7528\uff09":
         "Source: desktop bridge channel (the application owns the ESP32 serial port)",
     "\u8cc7\u6599\u4f86\u6e90\uff1aESP32 \u7368\u7acb\u8a3a\u65b7\u901a\u9053":
@@ -77,9 +83,11 @@ EN_TEXT = {
         "Gamepad Test again.",
     "診斷模式": "Diagnostics",
     "尚未開始診斷": "Diagnostics not started",
+    "請先選擇要診斷的測試手把。": "Select the test controller to diagnose first.",
     "開始診斷": "Start Diagnostics",
     "停止診斷": "Stop Diagnostics",
     "匯出診斷 Log": "Export Diagnostic Log",
+    "匯出支援 Log": "Export Support Log",
     "診斷時間": "Duration",
     "秒": "s",
     "即時診斷摘要": "Live Diagnostic Summary",
@@ -88,10 +96,13 @@ EN_TEXT = {
     "診斷執行中": "Diagnostics running",
     "診斷完成": "Diagnostics complete",
     "診斷已停止": "Diagnostics stopped",
+    "診斷已停止：測試手把已變更": "Diagnostics stopped: the test controller changed",
     "目前沒有可匯出的診斷資料。": "There is no diagnostic data to export.",
     "文字檔": "Text file",
     "無法寫入診斷 Log：{error}": "Could not write the diagnostic log: {error}",
     "診斷 Log 已匯出。": "Diagnostic log exported.",
+    "無法寫入支援 Log：{error}": "Could not write the support log: {error}",
+    "支援 Log 已匯出。": "Support log exported.",
     "剩餘 {seconds:.0f} 秒": "{seconds:.0f} s remaining",
     "已完成": "Complete",
     "橋接模式": "Bridge mode",

@@ -43,6 +43,29 @@ def distribution(values):
     }
 
 
+def _remember_submission(entries, payload, timestamp_ns, limit=4096):
+    """Retain payload identity until its callback consumes the timestamp.
+
+    Keeping a strong payload reference prevents a coalesced report's stale
+    integer ``id`` from being reused by a later bytes allocation. Re-recording
+    the same object intentionally keeps its newest submission time, matching
+    the dispatcher's latest-state coalescing behavior. The probe lock must
+    serialize this helper with ``_take_submission``.
+    """
+    key = id(payload)
+    entries[key] = (payload, int(timestamp_ns))
+    entries.move_to_end(key)
+    while len(entries) > max(1, int(limit)):
+        entries.popitem(last=False)
+
+
+def _take_submission(entries, payload):
+    entry = entries.pop(id(payload), None)
+    if entry is None or entry[0] is not payload:
+        return None
+    return entry[1]
+
+
 def create_transport(mode):
     if mode == "bluetooth":
         return BluetoothController()
@@ -53,7 +76,7 @@ def create_transport(mode):
 
 
 def main(
-    mode, seconds=30.0, inline=False, rumble_stress=False,
+    mode, seconds=30.0, inline=True, rumble_stress=False,
     rumble_profile="priority",
 ):
     config = configparser.ConfigParser()
@@ -73,11 +96,15 @@ def main(
     sampling = False
     submitted_count = 0
     callback_count = 0
+    raw_button_edges = 0
+    processed_button_edges = 0
     expected_edges = 0
     output_edges = 0
     mapping_mismatches = 0
     last_expected = None
     last_output = None
+    last_raw_buttons = None
+    last_processed_buttons = None
     queue_ms = []
     parse_ms = []
     xinput_ms = []
@@ -95,23 +122,20 @@ def main(
         xinput._stick_direction_mapping_enabled.values()
     )
 
-    def payload_key(payload):
-        # Keep identity in the key so identical stationary reports remain
-        # distinct while waiting in the dispatcher.
-        return id(payload)
-
     def on_input(payload):
-        nonlocal callback_count, expected_edges, output_edges
+        nonlocal callback_count, processed_button_edges
+        nonlocal expected_edges, output_edges
         nonlocal mapping_mismatches, last_expected, last_output
+        nonlocal last_processed_buttons
         callback_started = time.perf_counter_ns()
         state = parse_input_report(payload)
         parsed = time.perf_counter_ns()
         if state is None:
+            with lock:
+                _take_submission(submitted_at, payload)
             return
         xinput.update(state)
         finished = time.perf_counter_ns()
-        if not sampling:
-            return
 
         output = int(xinput.pad.report.wButtons)
         expected = 0
@@ -128,7 +152,15 @@ def main(
                 expected_rt = 255
 
         with lock:
+            submitted = _take_submission(submitted_at, payload)
+            if submitted is None:
+                return
             callback_count += 1
+            if last_processed_buttons is not None:
+                processed_button_edges += (
+                    state.buttons ^ last_processed_buttons
+                ).bit_count()
+            last_processed_buttons = state.buttons
             if last_expected is not None:
                 expected_edges += (expected ^ last_expected).bit_count()
             if last_output is not None:
@@ -161,42 +193,52 @@ def main(
             parse_ms.append((parsed - callback_started) / 1_000_000.0)
             xinput_ms.append((finished - parsed) / 1_000_000.0)
             processing_ms.append((finished - callback_started) / 1_000_000.0)
-            submitted = submitted_at.pop(payload_key(payload), None)
-            if submitted is not None:
-                queue_ms.append((callback_started - submitted) / 1_000_000.0)
-                pipeline_ms.append((finished - submitted) / 1_000_000.0)
+            queue_ms.append((callback_started - submitted) / 1_000_000.0)
+            pipeline_ms.append((finished - submitted) / 1_000_000.0)
 
     dispatcher = InputDispatcher(
         on_input,
         max_pending=3,
-        # Default matches current production behavior.  --inline is an
-        # explicit experiment used before enabling a transport in main.py.
+        # Production enables the idle inline fast path for every transport.
+        # --no-inline remains available for an explicit worker-only A/B run.
         inline_fast_path=inline,
     )
 
     def submit(payload):
         nonlocal submitted_count, last_arrival_ns, last_report_time
-        snapshot = payload if isinstance(payload, bytes) else bytes(payload)
+        nonlocal raw_button_edges, last_raw_buttons
+        # A probe timestamp represents one logical submission. Force a unique
+        # immutable object even when a transport reuses the same bytes object,
+        # so identity-based timing cannot be consumed by the wrong callback.
+        snapshot = bytes(bytearray(payload))
         if sampling:
             arrived_ns = time.perf_counter_ns()
             with lock:
                 submitted_count += 1
-                submitted_at[payload_key(snapshot)] = arrived_ns
-                if len(snapshot) >= 4:
-                    report_time = struct.unpack_from("<I", snapshot, 0)[0]
-                    if last_arrival_ns is not None and last_report_time is not None:
+                _remember_submission(submitted_at, snapshot, arrived_ns)
+                if len(snapshot) >= 16:
+                    report_time, raw_buttons = struct.unpack_from(
+                        "<II", snapshot, 0
+                    )
+                    if last_raw_buttons is not None:
+                        raw_button_edges += (
+                            raw_buttons ^ last_raw_buttons
+                        ).bit_count()
+                    last_raw_buttons = raw_buttons
+                    if last_arrival_ns is not None:
                         arrival_delta = (arrived_ns - last_arrival_ns) / 1_000_000.0
-                        report_delta = (report_time - last_report_time) & 0xFFFFFFFF
                         arrival_interval_ms.append(arrival_delta)
-                        if 0 < report_delta < 1000:
+                        if last_report_time is not None:
+                            report_delta = (
+                                report_time - last_report_time
+                            ) & 0xFFFFFFFF
+                        else:
+                            report_delta = None
+                        if report_delta is not None and 0 < report_delta < 1000:
                             report_interval_ms.append(float(report_delta))
                             transport_variation_ms.append(arrival_delta - report_delta)
                     last_report_time = report_time
                 last_arrival_ns = arrived_ns
-                # Reports coalesced by the dispatcher never reach on_input.
-                # Bound diagnostic bookkeeping without affecting dispatch.
-                while len(submitted_at) > 4096:
-                    submitted_at.popitem(last=False)
         dispatcher.submit(snapshot)
 
     transport.input_callback = submit
@@ -307,6 +349,8 @@ def main(
                     "queued": dispatcher.queued_reports,
                     "backlog_batches": dispatcher.backlog_batches,
                     "dropped_analog": dispatcher.dropped_reports,
+                    "raw_button_edges": raw_button_edges,
+                    "processed_button_edges": processed_button_edges,
                     "expected_edges": expected_edges,
                     "output_edges": output_edges,
                     "mapping_mismatches": mapping_mismatches,
@@ -349,18 +393,35 @@ def main(
             gc.collect()
 
 
-if __name__ == "__main__":
+def _build_argument_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("bluetooth", "wired"), required=True)
     parser.add_argument("--seconds", type=float, default=30.0)
-    parser.add_argument("--inline", action="store_true")
+    inline_group = parser.add_mutually_exclusive_group()
+    inline_group.add_argument(
+        "--inline",
+        dest="inline",
+        action="store_true",
+        help="Use the production idle inline fast path (default)",
+    )
+    inline_group.add_argument(
+        "--no-inline",
+        dest="inline",
+        action="store_false",
+        help="Force every report through the dispatcher worker for A/B testing",
+    )
+    parser.set_defaults(inline=True)
     parser.add_argument("--rumble-stress", action="store_true")
     parser.add_argument(
         "--rumble-profile",
         choices=("priority", "audio", "normal"),
         default="priority",
     )
-    args = parser.parse_args()
+    return parser
+
+
+if __name__ == "__main__":
+    args = _build_argument_parser().parse_args()
     main(
         args.mode,
         max(1.0, args.seconds),

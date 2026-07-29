@@ -1,8 +1,16 @@
 import configparser
 import ctypes
+import os
 import subprocess
 import sys
+import traceback
 from pathlib import Path
+
+from support_log import (
+    STARTUP_LOG_PATH_ENV,
+    open_startup_log,
+    write_startup_field,
+)
 
 
 if getattr(sys, "frozen", False):
@@ -27,12 +35,25 @@ def get_language():
         return "zh"
 
 
-def show_startup_error(detail):
+def show_startup_error(detail, log_path=None):
+    log_text = ""
+    if log_path is not None:
+        if get_language() == "en":
+            log_text = (
+                f"\n\nA support log was saved to:\n{log_path}"
+                "\n\nOpen the log folder now?"
+            )
+        else:
+            log_text = (
+                f"\n\n支援 Log 已儲存至：\n{log_path}"
+                "\n\n是否立即開啟 Log 資料夾？"
+            )
     if get_language() == "en":
         message = (
             "The settings UI could not start.\n\n"
             "Check that the release package is complete, then try again.\n\n"
             f"Details: {detail}"
+            f"{log_text}"
         )
         title = "S2P-XInput-Lite Startup Error"
     else:
@@ -40,38 +61,104 @@ def show_startup_error(detail):
             "設定介面無法啟動。\n\n"
             "請確認發佈包檔案完整後再試一次。\n\n"
             f"詳細資訊：{detail}"
+            f"{log_text}"
         )
         title = "S2P-XInput-Lite 啟動錯誤"
-    ctypes.windll.user32.MessageBoxW(None, message, title, 0x10)
+    style = 0x10 | (0x04 if log_path is not None else 0x00)
+    result = ctypes.windll.user32.MessageBoxW(
+        None, message, title, style
+    )
+    if log_path is not None and result == 6:
+        try:
+            os.startfile(str(Path(log_path).parent))
+        except (AttributeError, OSError):
+            pass
 
 
 def main():
-    if not PYTHONW.is_file():
-        show_startup_error(f"pythonw.exe not found: {PYTHONW}")
-        return 1
-    if not GUI.is_file():
-        show_startup_error(f"config_gui.py not found: {GUI}")
-        return 1
-
     try:
-        process = subprocess.Popen(
-            [str(PYTHONW), str(GUI)],
-            cwd=str(BASE_DIR),
+        log_stream, log_path = open_startup_log(
+            BASE_DIR,
+            PYTHONW,
+            GUI,
         )
     except OSError as exc:
-        show_startup_error(str(exc))
+        show_startup_error(f"could not create startup log: {exc}")
         return 1
 
-    # pythonw normally hides import tracebacks. Watch the startup window long
-    # enough to turn an early non-zero exit into a visible native dialog.
     try:
-        return_code = process.wait(timeout=8.0)
-    except subprocess.TimeoutExpired:
-        return 0
+        if not PYTHONW.is_file():
+            detail = f"pythonw.exe not found: {PYTHONW}"
+            write_startup_field(log_stream, "RESULT", "PYTHON_NOT_FOUND")
+            write_startup_field(log_stream, "ERROR", detail)
+            show_startup_error(detail, log_path)
+            return 1
+        if not GUI.is_file():
+            detail = f"config_gui.py not found: {GUI}"
+            write_startup_field(log_stream, "RESULT", "GUI_SCRIPT_NOT_FOUND")
+            write_startup_field(log_stream, "ERROR", detail)
+            show_startup_error(detail, log_path)
+            return 1
 
-    if return_code != 0:
-        show_startup_error(f"config_gui.py exited with code {return_code}")
-    return return_code
+        environment = os.environ.copy()
+        environment[STARTUP_LOG_PATH_ENV] = str(log_path)
+        environment["PYTHONFAULTHANDLER"] = "1"
+        environment["PYTHONUNBUFFERED"] = "1"
+        write_startup_field(log_stream, "PHASE", "starting_gui_process")
+
+        try:
+            process = subprocess.Popen(
+                [str(PYTHONW), str(GUI)],
+                cwd=str(BASE_DIR),
+                stdout=log_stream,
+                stderr=subprocess.STDOUT,
+                env=environment,
+            )
+        except OSError as exc:
+            write_startup_field(log_stream, "RESULT", "GUI_SPAWN_FAILED")
+            write_startup_field(log_stream, "ERROR", exc)
+            show_startup_error(str(exc), log_path)
+            return 1
+
+        write_startup_field(log_stream, "GUI_PID", process.pid)
+
+        # pythonw normally hides import tracebacks. Watch the startup window
+        # long enough to turn an early non-zero exit into a visible native
+        # dialog while retaining stderr in the startup log.
+        try:
+            return_code = process.wait(timeout=8.0)
+        except subprocess.TimeoutExpired:
+            write_startup_field(
+                log_stream,
+                "RESULT",
+                "GUI_RUNNING_AFTER_STARTUP_WINDOW",
+            )
+            return 0
+
+        write_startup_field(log_stream, "RESULT", "GUI_EXITED_EARLY")
+        write_startup_field(
+            log_stream,
+            "EXIT_CODE",
+            (
+                f"0x{return_code & 0xFFFFFFFF:08X}"
+                if return_code < 0 or return_code > 255
+                else return_code
+            ),
+        )
+        if return_code != 0:
+            show_startup_error(
+                f"config_gui.py exited with code {return_code}",
+                log_path,
+            )
+        return return_code
+    except Exception as exc:
+        log_stream.write("\n[LAUNCHER_EXCEPTION]\n")
+        traceback.print_exc(file=log_stream)
+        write_startup_field(log_stream, "RESULT", "LAUNCHER_EXCEPTION")
+        show_startup_error(str(exc), log_path)
+        return 1
+    finally:
+        log_stream.close()
 
 
 if __name__ == "__main__":
