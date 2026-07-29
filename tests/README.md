@@ -29,7 +29,7 @@ The automated suite covers:
   fast-path contracts;
 - multi-controller calibration selection.
 
-The v0.7.0 release baseline contains 448 automated tests. One optional full
+The v0.7.1 release baseline contains 488 automated tests. One optional full
 ESP-IDF rebuild test is skipped unless `S2P_RUN_IDF_BUILD=1` is set.
 
 Desktop-output tests use a fake Windows backend. They do not connect to a

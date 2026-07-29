@@ -11,10 +11,10 @@
 
 S2P-XInput-Lite provides XInput-compatible controller output for a Switch 2 Pro Controller on Windows. It supports wired USB, an ESP32-S3 USB bridge, and native Windows BLE.
 
-Development build: **v0.7.1 beta**
+Current version: **v0.7.1**
 
-[v0.7.1 beta release notes](RELEASE_NOTES_v0.7.1-beta.md) ·
-[Development branch](https://github.com/duoduo-88/S2P-XInput-Lite/tree/development) ·
+[v0.7.1 release notes](RELEASE_NOTES_v0.7.1.md) ·
+[Source](https://github.com/duoduo-88/S2P-XInput-Lite/tree/main) ·
 [Latest published release](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 
 > This is an independent, unofficial community project. It is not affiliated with, endorsed by, sponsored by, or certified by Nintendo, Microsoft, Espressif Systems, Apple, or Google.
@@ -34,10 +34,13 @@ Development build: **v0.7.1 beta**
 - ESP32 standalone profile writing for PC XInput-compatible output or
   standards-based mobile USB HID without keeping the Windows application open
 - Gyroscope mapping to an XInput stick or mouse
-- Standalone gamepad tester with live input/output plots, button mapping
-  details, shape capture, vibration tests, and directly selectable Raw HID
-  collections for stick monitoring. Its report-rate page shows report count,
-  P50/P95/P99 intervals, distribution statistics, and a timeline.
+- Independently launchable gamepad tester designed primarily for a Switch 2
+  Pro Controller connected and processed by S2P-XInput-Lite, where it can show
+  complete physical/processed input, mapping, sensor, transport, and ESP32
+  diagnostics. Other XInput, WinMM, and Raw HID controllers can also be
+  tested, but S2P-specific telemetry is unavailable, so some information will
+  be missing. The report-rate page still shows report count, P50/P95/P99
+  intervals, distribution statistics, and a timeline.
 - Built-in ESP32 diagnostics with timed tests, a clear pass/warn/fail verdict,
   and exportable text reports
 - About page with project links, the software license, and third-party notices
@@ -83,7 +86,7 @@ Mapping Layer files are global and can temporarily override the active profile w
 - Wired USB input: 250 Hz, 4 ms report interval, zero queue/drop in concurrent rumble stress testing.
 - ESP32 input: about 132 Hz; the low-latency firmware reduced normal host arrival p50/p95 from 7.986/8.059 ms to 7.500/7.595 ms.
 - Native Windows BLE: 66.7 Hz / 15 ms, which matches WinRT's minimum `throughput_optimized` interval.
-- Rumble is latest-only on every transport. Verified priority pacing is about 8 ms on ESP32 and wired USB, 15 ms on native BLE, while wired audio/Mix updates use 25 ms.
+- Rumble is latest-only on every transport. Game changes and zero frames use 7.5 ms priority pacing on ESP32 and wired USB (about 8 ms measured), while native BLE uses 15 ms. Wired audio/Mix updates use 16.6 ms (about 60 Hz), and ordinary refreshes use 15 ms.
 
 Reusable hardware probes and automated tests are maintained in the development repository.
 

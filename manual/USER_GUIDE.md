@@ -1,11 +1,11 @@
-# S2P-XInput-Lite v0.7.0 User Guide
+# S2P-XInput-Lite v0.7.1 User Guide
 
 [繁體中文](USER_GUIDE_zh-TW.md)
 
 This guide covers installation, connections, profiles, stick tuning, mapping,
 gyro controls, rumble, HidHide, ESP32-S3 bridge and standalone operation, and
 the Gamepad Test, report-rate, diagnostics, and About pages in
-S2P-XInput-Lite v0.7.0.
+S2P-XInput-Lite v0.7.1.
 
 The screenshots use the English interface. Select **中 / En** in the lower-left corner of the main window to switch languages without changing the layout.
 
@@ -64,7 +64,7 @@ Connect the controller directly to the PC with USB-C. This normally provides low
 
 The controller connects to the ESP32-S3 over BLE. The bridge then sends controller data to the PC over USB.
 
-v0.7.0 provides two standalone outputs that do not require the Windows
+v0.7.1 provides two standalone outputs that do not require the Windows
 application to remain open:
 
 - **PC XInput Standalone Mode** — The ESP32 provides XInput-compatible output directly to Windows.
@@ -482,13 +482,23 @@ not guaranteed.
 Select **Gamepad Test** at the bottom of the main window to open the standalone
 tester. It runs separately from the settings window so high-rate drawing does
 not delay settings input. Selecting the button again raises the existing tester
-instead of opening a duplicate.
+instead of opening a duplicate. The standalone Gamepad Tester application can
+also be launched directly without opening the settings window first.
+
+> [!IMPORTANT]
+> Gamepad Tester is designed primarily for a Switch 2 Pro Controller connected
+> and processed by S2P-XInput-Lite. Other XInput, WinMM, or Raw HID controllers
+> can still run basic input, vibration, and report-rate tests, but they do not
+> publish S2P shared telemetry. Physical/processed sources, effective mappings,
+> Mapping Layers, battery, sensors, transport status, and ESP32 diagnostics may
+> therefore be unavailable. This is expected.
 
 ### 9.1 Selecting a source
 
 - **S2P-XInput-Lite** tests the current virtual XInput output and exposes
   physical, processed, and combined sources.
-- Other entries are XInput or generic game controllers detected by Windows.
+- Other entries are XInput or generic game controllers detected by Windows;
+  only information exposed by that interface is shown, without S2P-only data.
 - Duplicate names include the interface type and device number.
 - **Refresh** rescans devices. Changing the device or plotted source clears the
   old measurement so unrelated samples are not combined.
@@ -692,4 +702,4 @@ Gate → Lvl → six bands → LF/HF Balance → Tail/Decay.
 Keep one verified stable profile and use **Save New** for experimental settings.
 
 > [!NOTE]
-> This guide applies to S2P-XInput-Lite v0.7.0. For later releases, follow the in-app question-mark help and the latest release notes.
+> This guide applies to S2P-XInput-Lite v0.7.1. For later releases, follow the in-app question-mark help and the latest release notes.

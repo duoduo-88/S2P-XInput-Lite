@@ -11,10 +11,10 @@
 
 S2P-XInput-Lite 可在 Windows 為 Switch 2 Pro Controller 提供 XInput 相容控制器輸出，支援 USB 有線、ESP32-S3 USB 橋接器及 Windows 原生 BLE。
 
-開發版本：**v0.7.1 beta**
+目前版本：**v0.7.1**
 
-[v0.7.1 beta 發佈說明](RELEASE_NOTES_v0.7.1-beta.md) ·
-[開發分支](https://github.com/duoduo-88/S2P-XInput-Lite/tree/development) ·
+[v0.7.1 發佈說明](RELEASE_NOTES_v0.7.1.md) ·
+[原始碼](https://github.com/duoduo-88/S2P-XInput-Lite/tree/main) ·
 [最新正式版本](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 
 > 本專案是獨立、非官方的社群作品，未獲 Nintendo、Microsoft、Espressif Systems、Apple 或 Google 授權、認證、贊助或背書，亦與這些公司無關。
@@ -42,9 +42,11 @@ S2P-XInput-Lite 可在 Windows 為 Switch 2 Pro Controller 提供 XInput 相容�
 - 可將相容設定檔寫入 ESP32，讓它不開啟 Windows 程式也能提供 PC XInput
   相容輸出或標準手機 USB HID
 - 將陀螺儀映射至 XInput 搖桿或滑鼠
-- 獨立手把測試工具：XInput、WinMM、S2P 橋接輸出與每個 Raw HID
-  collection 都可直接選擇；可即時顯示搖桿軌跡、按鍵映射、輸出形狀與震動
-  測試，回報率頁面則顯示回報筆數、P50／P95／P99、間隔統計與時間軸
+- 可單獨啟動的手把測試工具，主要針對由 S2P-XInput-Lite 連線及輸出的
+  Switch 2 Pro Controller，可顯示完整的實體／處理後輸入、映射、感測器、
+  連線與 ESP32 診斷資訊。亦可測試其他 XInput、WinMM 及 Raw HID 手把，
+  但這些裝置不會提供 S2P 專屬遙測，因此部分資訊會缺少；回報率頁面仍可
+  顯示回報筆數、P50／P95／P99、間隔統計與時間軸
 - 內建 ESP32 診斷頁：支援定時測試、通過／警告／失敗判定及匯出文字報告
 - 關於頁：提供專案與贊助連結、軟體許可協議及第三方程式聲明
 - 完整遊戲設定檔，可一起切換搖桿、陀螺儀、震動、音訊觸覺與映射設定
@@ -91,7 +93,7 @@ Mapping Layer 檔案是全域資源，可在按住按鍵組合時暫時覆寫目
 - USB 有線輸入：250 Hz、4 ms 報告間隔；在同時進行震動壓力測試時未發生排隊或丟棄。
 - ESP32 輸入：約 132 Hz；低延遲韌體將正常主機到達時間 p50／p95 從 7.986／8.059 ms 降至 7.500／7.595 ms。
 - Windows 原生 BLE：66.7 Hz／15 ms，符合 WinRT `throughput_optimized` 的最低間隔。
-- 所有傳輸皆採用 latest-only 震動。ESP32 與 USB 有線的優先節流約 8 ms，原生 BLE 約 15 ms；USB 音訊／Mix 更新為 25 ms。
+- 所有傳輸皆採用 latest-only 震動。ESP32 與 USB 有線的遊戲變化及 zero 封包採用 7.5 ms 優先節流（實測約 8 ms），原生 BLE 為 15 ms；USB 音訊／Mix 更新採用 16.6 ms（約 60 Hz），一般刷新則為 15 ms。
 
 ## 注意事項與限制
 

@@ -5,9 +5,28 @@ __pycache__/
 .coverage
 htmlcov/
 
+# Local build and documentation workspaces
+/build/
+/.publish-manual/
+/tmp/
+/manual/rendered/
+/manual/rendered-final/
+/manual/S2P-XInput-Lite-legacy-v*.docx
+
 # Local application state
 src/config.ini
 src/controller_status.json
+
+# User-created profiles. Bundled profiles are explicitly kept reproducible.
+/src/profiles/*.ini
+!/src/profiles/Action.ini
+!/src/profiles/Audio.ini
+!/src/profiles/FPS-COMP.ini
+!/src/profiles/FPS-IMM.ini
+!/src/profiles/General.ini
+!/src/profiles/Racing.ini
+!/src/profiles/Rhythm.ini
+!/src/profiles/System Default.ini
 
 # Generated release packages
 dist/

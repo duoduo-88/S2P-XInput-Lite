@@ -11,6 +11,7 @@ import tkinter as tk
 from config_utils import CONFIG_PATH, load_config
 from gamepad_test_window import GamepadTestWindow, TEST_ICON_PATH
 from localization import translate_text
+from version import VERSION
 
 
 GAMEPAD_TEST_APP_ID = "S2P-XInput-Lite.GamepadTest"
@@ -110,7 +111,7 @@ class GamepadTestStartupOverlay:
         label = translate_text(
             "手把測試程式啟動中", self.language
         )
-        return f"{label}{'.' * self._dot_count}"
+        return f"v{VERSION} {label}{'.' * self._dot_count}"
 
     def _schedule_animation(self):
         try:

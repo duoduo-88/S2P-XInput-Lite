@@ -2,6 +2,7 @@ import threading
 import time
 import math
 import ctypes
+import os
 import imufusion
 import numpy as np
 import vgamepad as vg
@@ -14,13 +15,13 @@ from imu_calibration import (
     gyro_calibration_quality,
 )
 from switch2_input import SWITCH_BUTTONS
-from config_utils import parse_output_shape_steps
+from config_utils import parse_output_shape_steps as parse_output_shape_steps
 from mapping_layers import load_layers
 from mapping_targets import (
     validate_button_source,
     validate_button_target,
     validate_direction_target,
-    validate_stick_analog_direction,
+    validate_stick_analog_direction as validate_stick_analog_direction,
     validate_stick_setting_key,
 )
 from stick_curve import apply_stick_curve
@@ -29,11 +30,11 @@ from settings_schema import (
     read_section_settings,
 )
 from stick_processing import (
-    _apply_compressed_radial_deadzone,
+    _apply_compressed_radial_deadzone as _apply_compressed_radial_deadzone,
     _apply_linear_axis_response,
     _calibration_with_center_override,
     _compile_stick_direction_settings,
-    _normalize_stick_direction_mode,
+    _normalize_stick_direction_mode as _normalize_stick_direction_mode,
     _STICK_DIRECTION_NAMES,
     apply_calibration_to_axis,
     apply_output_shape,
@@ -73,6 +74,29 @@ from mapping_runtime import (
 
 def _tr(zh, en):
     return en if current_language() == "en" else zh
+
+
+def _begin_windows_timer_period():
+    """Request 1 ms timer resolution and return the acquired WinMM handle."""
+    if os.name != "nt":
+        return None
+    try:
+        winmm = ctypes.windll.winmm
+        if winmm.timeBeginPeriod(1) == 0:
+            return winmm
+    except Exception:
+        pass
+    return None
+
+
+def _end_windows_timer_period(winmm):
+    """Release a successful timer-period request without masking shutdown."""
+    if winmm is None:
+        return
+    try:
+        winmm.timeEndPeriod(1)
+    except Exception:
+        pass
 
 
 XB_BUTTONS = {
@@ -140,6 +164,8 @@ class XInputController:
     RUNTIME_NEUTRAL_SAMPLE_COUNT = 8
     RUNTIME_NEUTRAL_MAX_OFFSET = 0.04
     RUNTIME_NEUTRAL_STABILITY_RADIUS = 0.02
+    RUMBLE_ACTIVE_REFRESH_SECONDS = 0.015
+    RUMBLE_WAIT_SLICE_SECONDS = 0.001
 
     def __init__(
         self, config, calibration, pad=None, activate_runtime=True,
@@ -605,6 +631,9 @@ class XInputController:
         self._rumble_priority = False
         self._rumble_sequence = 0
         self._rumble_running = True
+        # False means no active window. None means an active window whose
+        # WinMM request was unnecessary or unavailable on this platform.
+        self._rumble_timer_period = False
         self._rumble_thread = None
         if activate_runtime:
             self._rumble_thread = threading.Thread(
@@ -655,6 +684,7 @@ class XInputController:
                 "_rumble_priority": self._rumble_priority,
                 "_rumble_sequence": self._rumble_sequence,
                 "_rumble_running": self._rumble_running,
+                "_rumble_timer_period": self._rumble_timer_period,
                 "_rumble_thread": self._rumble_thread,
                 "_rumble_input": self._rumble_input,
                 "_rumble_input_count": self._rumble_input_count,
@@ -1156,16 +1186,75 @@ class XInputController:
                 max(self._rumble_peak_output[1], int(hf_amp)),
             )
             self._rumble_force_zero = bool(force_zero)
-            self._rumble_priority = bool(priority or force_zero)
+            # Urgency belongs to the whole unsent pending run. A newer audio
+            # payload may replace a game/zero payload, but it must not extend
+            # an already requested 7.5 ms deadline back to 16.6 ms.
+            self._rumble_priority = bool(
+                self._rumble_priority or priority or force_zero
+            )
             self._rumble_sequence += 1
             self._rumble_condition.notify_all()
 
+    def _wait_for_rumble_refresh(self, sequence, output_active):
+        """Wait for a new state or the next active-tail refresh deadline.
+
+        A single 15 ms ``Condition.wait()`` depends on the condition's timeout
+        clock and can overshoot on Windows.  Short, blocking slices retain
+        immediate notification/stop wakeups, while the perf-counter deadline
+        prevents timeout rounding from accumulating across slices. The caller
+        owns the Windows timer-period request across the whole active window.
+        """
+        if not output_active:
+            with self._rumble_condition:
+                if (
+                    self._rumble_running
+                    and self._rumble_sequence == sequence
+                ):
+                    self._rumble_condition.wait()
+            return
+
+        with self._rumble_condition:
+            deadline = (
+                time.perf_counter()
+                + self.RUMBLE_ACTIVE_REFRESH_SECONDS
+            )
+            while (
+                self._rumble_running
+                and self._rumble_sequence == sequence
+            ):
+                remaining = deadline - time.perf_counter()
+                if remaining <= 0.0:
+                    return
+                self._rumble_condition.wait(
+                    timeout=min(
+                        remaining,
+                        self.RUMBLE_WAIT_SLICE_SECONDS,
+                    )
+                )
+
+    def _begin_rumble_timer_window(self):
+        if getattr(self, "_rumble_timer_period", False) is False:
+            self._rumble_timer_period = _begin_windows_timer_period()
+
+    def _end_rumble_timer_window(self):
+        timer_period = getattr(self, "_rumble_timer_period", False)
+        if timer_period is False:
+            return
+        self._rumble_timer_period = False
+        _end_windows_timer_period(timer_period)
+
     def _rumble_dispatch_loop(self):
+        try:
+            self._rumble_dispatch_loop_impl()
+        finally:
+            self._end_rumble_timer_window()
+
+    def _rumble_dispatch_loop_impl(self):
         """Send rumble and continue any configured final-output tail."""
         last_sequence = -1
         tail_lf = 0.0
         tail_hf = 0.0
-        last_time = time.monotonic()
+        last_time = time.perf_counter()
         while True:
             with self._rumble_condition:
                 while (
@@ -1175,6 +1264,7 @@ class XInputController:
                         or self._rumble_state is None
                     )
                 ):
+                    self._end_rumble_timer_window()
                     self._rumble_condition.wait()
                 if not self._rumble_running:
                     return
@@ -1183,9 +1273,12 @@ class XInputController:
                 sequence = self._rumble_sequence
                 force_zero = self._rumble_force_zero
                 priority = self._rumble_priority
+                # Claim pending urgency with this snapshot. Later updates begin
+                # a fresh pending run while force_zero remains latest-only.
+                self._rumble_priority = False
                 supports_priority = self._rumble_sender_supports_priority
 
-            now = time.monotonic()
+            now = time.perf_counter()
             delta_time = max(0.001, min(0.1, now - last_time))
             last_time = now
             target_lf = max(0, int(state[1]))
@@ -1233,14 +1326,11 @@ class XInputController:
 
             last_sequence = sequence
             output_active = output_state[1] > 0 or output_state[3] > 0
-            with self._rumble_condition:
-                if (
-                    self._rumble_running
-                    and self._rumble_sequence == sequence
-                ):
-                    self._rumble_condition.wait(
-                        timeout=0.015 if output_active else None
-                    )
+            if output_active:
+                self._begin_rumble_timer_window()
+            else:
+                self._end_rumble_timer_window()
+            self._wait_for_rumble_refresh(sequence, output_active)
 
     def stop_rumble_dispatcher(self, timeout=1.0):
         """Stop producing physical rumble without touching virtual-pad state."""

@@ -13,9 +13,9 @@ FIRMWARE_ROOT = (
 
 
 class ReleaseBaselineTests(unittest.TestCase):
-    def test_desktop_development_version_is_071_beta(self):
+    def test_desktop_release_version_is_071(self):
         source = (ROOT / "src" / "version.py").read_text(encoding="utf-8")
-        self.assertRegex(source, r'VERSION\s*=\s*"0\.7\.1 beta"')
+        self.assertRegex(source, r'VERSION\s*=\s*"0\.7\.1"')
 
     def test_bundled_firmware_is_s2p_101(self):
         main_source = (
@@ -55,7 +55,7 @@ class ReleaseBaselineTests(unittest.TestCase):
                 "7f00b6c042a89b15b0cac534f82ed988caf29278ff5700b0c511eb1b5bb7c820"
             ),
             "esp32s3_bluedroid_bridge.bin": (
-                "23c05cb19cb6745b960fb81b6529956521113cdacb0fec68cbac2569c4273f79"
+                "c83609e11df3c207d359439c421dc79ebf54e31bb4d2368c71b78bc7c19640c0"
             ),
         }
         firmware_dir = ROOT / "esp32s3" / "firmware"

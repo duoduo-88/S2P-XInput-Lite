@@ -873,20 +873,24 @@ float normalize_xinput_hid_axis(ULONG raw, bool invert) {
 }
 
 uint32_t pro2_buttons_to_u32(uint8_t b0, uint8_t b1, uint8_t b2) {
+    struct ButtonMapping {
+        uint8_t mask;
+        uint32_t target;
+    };
     uint32_t value = 0;
-    const std::pair<uint8_t, uint32_t> first[] = {
+    const ButtonMapping first[] = {
         {0x01, 0x00000004}, {0x02, 0x00000008},
         {0x04, 0x00000001}, {0x08, 0x00000002},
         {0x10, 0x00000040}, {0x20, 0x00000080},
         {0x40, 0x00000200}, {0x80, 0x00000400},
     };
-    const std::pair<uint8_t, uint32_t> second[] = {
+    const ButtonMapping second[] = {
         {0x01, 0x00010000}, {0x02, 0x00040000},
         {0x04, 0x00080000}, {0x08, 0x00020000},
         {0x10, 0x00400000}, {0x20, 0x00800000},
         {0x40, 0x00000100}, {0x80, 0x00000800},
     };
-    const std::pair<uint8_t, uint32_t> third[] = {
+    const ButtonMapping third[] = {
         {0x01, 0x00001000}, {0x02, 0x00002000},
         {0x04, 0x01000000}, {0x08, 0x02000000}, {0x10, 0x00004000},
     };

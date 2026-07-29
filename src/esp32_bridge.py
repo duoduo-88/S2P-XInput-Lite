@@ -458,12 +458,19 @@ class ESP32Bridge:
             self._rumble_submitted += 1
             if self._rumble_pending is not None:
                 self._rumble_overwritten += 1
-                # Preserve when this continuously pending run began.  The
-                # latest submission time remains separate for zero latency.
-                state = state[:9] + (
-                    self._rumble_pending[9],
-                    generation,
-                )
+                if self._rumble_pending[10] == generation:
+                    # Keep the latest payload and zero status, but preserve
+                    # urgency for this continuously pending generation.
+                    state = (
+                        state[:6]
+                        + (
+                            bool(state[6] or self._rumble_pending[6]),
+                            state[7],
+                            state[8],
+                            self._rumble_pending[9],
+                            generation,
+                        )
+                    )
             self._rumble_pending = state
             self._rumble_condition.notify_all()
         return True
@@ -591,31 +598,6 @@ class ESP32Bridge:
                 else:
                     sleep_for = 0.0
 
-                if sleep_for <= 0.0:
-                    state = self._rumble_pending
-                    self._rumble_pending = None
-                    send_started = time.perf_counter()
-                    # Do not count deliberate idle gaps between effects as a
-                    # pacing interval.  A sample is meaningful only when work
-                    # was already pending before this route's deadline.
-                    if (
-                        self._rumble_last_send > 0.0
-                        and state[9] < due_time
-                    ):
-                        interval_ms = (
-                            send_started - self._rumble_last_send
-                        ) * 1000.0
-                        self._rumble_send_intervals_ms.append(interval_ms)
-                        if state[6]:
-                            self._rumble_priority_intervals_ms.append(interval_ms)
-                        else:
-                            self._rumble_direct_intervals_ms.append(interval_ms)
-                    self._rumble_last_send = send_started
-                    if state[7]:
-                        self._rumble_zero_latencies_ms.append(
-                            (send_started - state[8]) * 1000.0
-                        )
-
             if sleep_for > 0.0:
                 # Keep the condition available to producers while the high-
                 # resolution timer runs.  The next slice re-reads the latest
@@ -623,26 +605,92 @@ class ESP32Bridge:
                 time.sleep(sleep_for)
                 continue
 
-            # Keep serial I/O outside the condition so producers never block.
-            # Recheck the accepting gate after acquiring the send lock.  This
-            # lets shutdown/idle disconnect make a zero frame the last output.
+            # Keep the slot replaceable while a feedback cue or shutdown zero
+            # owns the send lock. Re-read the latest state and its deadline
+            # after acquiring the lock, then claim immediately before send.
+            attempted = False
+            sent = False
+            sleep_for = 0.0
             with self._rumble_send_lock:
+                with self._state_lock:
+                    with self._rumble_condition:
+                        if not self._rumble_worker_running:
+                            return
+                        state = self._rumble_pending
+                        current_generation = (
+                            state is not None
+                            and self.connected_channel == state[1]
+                            and self._connection_generation == state[10]
+                        )
+                        accepting = (
+                            current_generation
+                            and self._rumble_accepting
+                            and not self._feedback_active
+                        )
+                        if state is not None and not accepting:
+                            self._rumble_pending = None
+                        elif state is not None:
+                            route = state[0]
+                            priority = state[6]
+                            if route == "wr":
+                                interval = (
+                                    self._rumble_priority_interval
+                                    if priority
+                                    else self._rumble_direct_interval
+                                )
+                            else:
+                                interval = self._rumble_shadow_interval
+                            due_time = self._rumble_last_send + interval
+                            remaining = (
+                                due_time - time.perf_counter()
+                            )
+                            if remaining > 0.0:
+                                sleep_for = min(remaining, 0.001)
+                            else:
+                                self._rumble_pending = None
+                                send_started = time.perf_counter()
+                                # Only actual send attempts contribute timing.
+                                # Taking this timestamp after the send lock also
+                                # includes any time spent waiting behind it.
+                                if (
+                                    self._rumble_last_send > 0.0
+                                    and state[9] < due_time
+                                ):
+                                    interval_ms = (
+                                        send_started
+                                        - self._rumble_last_send
+                                    ) * 1000.0
+                                    self._rumble_send_intervals_ms.append(
+                                        interval_ms
+                                    )
+                                    if state[6]:
+                                        self._rumble_priority_intervals_ms.append(
+                                            interval_ms
+                                        )
+                                    else:
+                                        self._rumble_direct_intervals_ms.append(
+                                            interval_ms
+                                        )
+                                self._rumble_last_send = send_started
+                                if state[7]:
+                                    self._rumble_zero_latencies_ms.append(
+                                        (
+                                            send_started - state[8]
+                                        ) * 1000.0
+                                    )
+                                self._rumble_send_attempts += 1
+                                attempted = True
+                    if attempted:
+                        sent = self._send_rumble_state_now(state)
+            if sleep_for > 0.0:
+                time.sleep(sleep_for)
+                continue
+            if attempted:
                 with self._rumble_condition:
-                    accepting = (
-                        self._rumble_accepting
-                        and not self._feedback_active
-                    )
-                sent = (
-                    self._send_rumble_state_now(state)
-                    if accepting
-                    else False
-                )
-            with self._rumble_condition:
-                self._rumble_send_attempts += 1
-                if sent:
-                    self._rumble_send_successes += 1
-                else:
-                    self._rumble_send_failures += 1
+                    if sent:
+                        self._rumble_send_successes += 1
+                    else:
+                        self._rumble_send_failures += 1
 
     def _send_final_zero_rumble(self, timeout=None):
         """Send a zero frame after all accepted worker output."""

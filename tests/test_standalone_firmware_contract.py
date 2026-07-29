@@ -135,6 +135,57 @@ class StandaloneFirmwareContractTests(unittest.TestCase):
             "wake_output_if_pending(true)", XINPUT_SOURCE
         )
 
+    def test_standalone_usb_rumble_wakes_output_task_immediately(self):
+        transfer_start = XINPUT_SOURCE.index("static bool xinput_transfer(")
+        transfer_end = XINPUT_SOURCE.index(
+            "static const usbd_class_driver_t", transfer_start
+        )
+        transfer = XINPUT_SOURCE[transfer_start:transfer_end]
+        dirty = transfer.index("s_rumble_dirty = true")
+        wake = transfer.index("if (s_wakeup_cb) s_wakeup_cb()", dirty)
+        self.assertLess(dirty, wake)
+
+    def test_gatt_rumble_keeps_only_latest_state_and_retries(self):
+        self.assertIn("gatt_output_state_t", MAIN_SOURCE)
+        self.assertIn("queue_latest_rumble_write", MAIN_SOURCE)
+        self.assertIn("state->sequence++", MAIN_SOURCE)
+        self.assertIn("s_gatt_output_metrics.overwritten++", MAIN_SOURCE)
+        self.assertIn("GATT_OUTPUT_MAX_RETRIES", MAIN_SOURCE)
+        self.assertIn("state->retry_pending = true", MAIN_SOURCE)
+        self.assertIn("pump_gatt_outputs();", MAIN_SOURCE)
+        do_wr_start = MAIN_SOURCE.index("static void do_wr(")
+        do_wr_end = MAIN_SOURCE.index("static void do_rs(", do_wr_start)
+        do_wr = MAIN_SOURCE[do_wr_start:do_wr_end]
+        self.assertIn("queue_latest_rumble_write(ch, buf, len)", do_wr)
+
+    def test_gatt_write_completion_and_congestion_are_observed(self):
+        callback_start = MAIN_SOURCE.index("static void gattc_cb(")
+        callback_end = MAIN_SOURCE.index(
+            "static esp_ble_scan_params_t", callback_start
+        )
+        callback = MAIN_SOURCE[callback_start:callback_end]
+        self.assertIn("case ESP_GATTC_WRITE_CHAR_EVT:", callback)
+        self.assertIn("note_gatt_write_complete(", callback)
+        self.assertIn("param->write.conn_id", callback)
+        self.assertIn("case ESP_GATTC_CONGEST_EVT:", callback)
+        self.assertIn("param->congest.conn_id", callback)
+        self.assertIn("param->congest.congested", callback)
+        self.assertIn("case ESP_GATTC_QUEUE_FULL_EVT:", callback)
+        self.assertIn("param->queue_full.conn_id", callback)
+        self.assertIn("param->queue_full.is_full", callback)
+        self.assertIn("s_ch[ch].conn_id != conn_id", MAIN_SOURCE)
+        self.assertIn(
+            "state->generation != s_ch[ch].generation", MAIN_SOURCE
+        )
+        for metric in (
+            "gatt_accepted",
+            "gatt_busy",
+            "gatt_failed",
+            "gatt_retries",
+            "gatt_pending",
+        ):
+            self.assertIn(metric, MAIN_SOURCE)
+
     def test_latency_diagnostics_cover_source_shadow_and_usb(self):
         self.assertIn('"latency status"', MAIN_SOURCE)
         self.assertIn('"latency reset"', MAIN_SOURCE)

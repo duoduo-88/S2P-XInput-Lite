@@ -9,8 +9,8 @@ if (-not $OutputDirectory) {
     $OutputDirectory = $repoRoot
 }
 $OutputDirectory = [System.IO.Path]::GetFullPath($OutputDirectory)
-$entryPoint = Join-Path $repoRoot "src\gamepad_tester_launcher.py"
-$buildRoot = Join-Path $repoRoot "build\pyinstaller\GamepadTester"
+$entryPoint = Join-Path $repoRoot "src\launcher.py"
+$buildRoot = Join-Path $repoRoot "build\pyinstaller\S2P-XInput-Lite"
 $distRoot = Join-Path $buildRoot "dist"
 $workRoot = Join-Path $buildRoot "work"
 $specRoot = Join-Path $buildRoot "spec"
@@ -25,7 +25,7 @@ New-Item -ItemType Directory -Force -Path $specRoot | Out-Null
     --clean `
     --onefile `
     --windowed `
-    --name GamepadTester `
+    --name S2P-XInput-Lite `
     --distpath $distRoot `
     --workpath $workRoot `
     --specpath $specRoot `
@@ -33,10 +33,10 @@ New-Item -ItemType Directory -Force -Path $specRoot | Out-Null
     $entryPoint
 
 if ($LASTEXITCODE -ne 0) {
-    throw "GamepadTester launcher build failed with exit code $LASTEXITCODE"
+    throw "S2P-XInput-Lite launcher build failed with exit code $LASTEXITCODE"
 }
 
-$builtExe = Join-Path $distRoot "GamepadTester.exe"
-$targetExe = Join-Path $OutputDirectory "GamepadTester.exe"
+$builtExe = Join-Path $distRoot "S2P-XInput-Lite.exe"
+$targetExe = Join-Path $OutputDirectory "S2P-XInput-Lite.exe"
 Copy-Item -LiteralPath $builtExe -Destination $targetExe -Force
 Write-Output "Built $targetExe"

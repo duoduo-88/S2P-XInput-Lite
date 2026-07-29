@@ -4800,7 +4800,6 @@ class GamepadTestWindow:
         p50 = summary_stats.get("input_interval_ms_p50")
         p95 = summary_stats.get("input_interval_ms_p95")
         p99 = summary_stats.get("input_interval_ms_p99")
-        rate_average = summary_stats.get("source_rate_hz_avg")
         if any(value is not None for value in (p50, p95, p99)):
             event_lines.append(
                 self.gui.tr(
@@ -4906,7 +4905,6 @@ class GamepadTestWindow:
         firmware = latest.get("firmware") or {}
         capabilities = firmware.get("capabilities") or {}
         runtime = firmware.get("runtime_status") or {}
-        latency = firmware.get("latency_status") or {}
         rumble = dict(status.get("rumble") or {})
         rumble.update(firmware.get("rumble_status") or {})
         stats = session.summary()

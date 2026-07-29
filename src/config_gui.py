@@ -19,7 +19,6 @@ if (
 import configparser
 import ctypes
 import hashlib
-import importlib.util
 import json
 import logging
 import math
@@ -37,7 +36,7 @@ from ctypes import wintypes
 from pathlib import Path
 import serial.tools.list_ports
 import winreg
-from version import APP_TITLE
+from version import APP_TITLE, VERSION
 from esp32_detection import find_esp32_port
 from standalone_profile import (
     StandaloneTransferError,
@@ -1831,7 +1830,7 @@ class StartupOverlay:
 
     def _loading_text(self):
         label = translate_text("啟動中", self.language)
-        return f"{label}{'.' * self._dot_count}"
+        return f"v{VERSION} {label}{'.' * self._dot_count}"
 
     def _schedule_animation(self):
         try:

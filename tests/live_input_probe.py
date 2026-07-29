@@ -4,9 +4,11 @@ import argparse
 import configparser
 import gc
 import statistics
+import struct
 import sys
 import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
 
 
@@ -41,6 +43,22 @@ def distribution(values):
     }
 
 
+def _remember_submission(entries, payload, timestamp_ns, limit=4096):
+    """Retain identity; the probe lock serializes remember/take operations."""
+    key = id(payload)
+    entries[key] = (payload, int(timestamp_ns))
+    entries.move_to_end(key)
+    while len(entries) > max(1, int(limit)):
+        entries.popitem(last=False)
+
+
+def _take_submission(entries, payload):
+    entry = entries.pop(id(payload), None)
+    if entry is None or entry[0] is not payload:
+        return None
+    return entry[1]
+
+
 def main(port="COM3", seconds=30.0, rumble_stress=False):
     config = configparser.ConfigParser()
     path = (
@@ -55,15 +73,18 @@ def main(port="COM3", seconds=30.0, rumble_stress=False):
     xinput = XInputController(config, load_stick_calibration(config))
     connected = threading.Event()
     disconnected = threading.Event()
-    tls = threading.local()
     lock = threading.Lock()
+    submitted_at = OrderedDict()
     sampling = False
+    submitted_count = 0
     callback_count = 0
     raw_edges = 0
+    processed_raw_edges = 0
     output_edges = 0
     expected_edges = 0
     mapping_mismatches = 0
-    last_raw = None
+    last_submitted_buttons = None
+    last_processed_buttons = None
     last_output = None
     last_expected = None
     queue_ms = []
@@ -81,18 +102,19 @@ def main(port="COM3", seconds=30.0, rumble_stress=False):
     rumble_thread = None
 
     def on_input(payload):
-        nonlocal callback_count, raw_edges, output_edges, expected_edges
-        nonlocal mapping_mismatches, last_raw, last_output, last_expected
-        nonlocal last_arrival_ns, last_report_time
+        nonlocal callback_count, processed_raw_edges
+        nonlocal output_edges, expected_edges
+        nonlocal mapping_mismatches, last_output, last_expected
+        nonlocal last_processed_buttons
         callback_started = time.perf_counter_ns()
         state = parse_input_report(payload)
         parsed = time.perf_counter_ns()
         if state is None:
+            with lock:
+                _take_submission(submitted_at, payload)
             return
         xinput.update(state)
         finished = time.perf_counter_ns()
-        if not sampling:
-            return
         output = int(xinput.pad.report.wButtons)
         expected = 0
         expected_lt = 0
@@ -107,22 +129,15 @@ def main(port="COM3", seconds=30.0, rumble_stress=False):
             elif target == "RT":
                 expected_rt = 255
         with lock:
+            submitted = _take_submission(submitted_at, payload)
+            if submitted is None:
+                return
             callback_count += 1
-            if last_arrival_ns is not None:
-                arrival_delta = (callback_started - last_arrival_ns) / 1_000_000.0
-                arrival_interval_ms.append(arrival_delta)
-                if last_report_time is not None and state.report_time is not None:
-                    report_delta = (int(state.report_time) - last_report_time) & 0xFFFFFFFF
-                    # Switch input report_time is a millisecond counter.  Reject
-                    # reconnect/reset gaps so they do not pollute transport jitter.
-                    if 0 < report_delta < 1000:
-                        report_interval_ms.append(float(report_delta))
-                        transport_variation_ms.append(arrival_delta - report_delta)
-            last_arrival_ns = callback_started
-            if state.report_time is not None:
-                last_report_time = int(state.report_time)
-            if last_raw is not None:
-                raw_edges += (state.buttons ^ last_raw).bit_count()
+            if last_processed_buttons is not None:
+                processed_raw_edges += (
+                    state.buttons ^ last_processed_buttons
+                ).bit_count()
+            last_processed_buttons = state.buttons
             if last_output is not None:
                 output_edges += (output ^ last_output).bit_count()
             if last_expected is not None:
@@ -133,35 +148,97 @@ def main(port="COM3", seconds=30.0, rumble_stress=False):
                 or int(xinput.pad.report.bRightTrigger) != expected_rt
             ):
                 mapping_mismatches += 1
-            last_raw = state.buttons
             last_output = output
             last_expected = expected
             parse_ms.append((parsed - callback_started) / 1_000_000.0)
             xinput_ms.append((finished - parsed) / 1_000_000.0)
             processing_ms.append((finished - callback_started) / 1_000_000.0)
-            submitted = getattr(tls, "submitted_ns", None)
-            if submitted is not None:
-                queue_ms.append((callback_started - submitted) / 1_000_000.0)
-                pipeline_ms.append((finished - submitted) / 1_000_000.0)
+            queue_ms.append((callback_started - submitted) / 1_000_000.0)
+            pipeline_ms.append((finished - submitted) / 1_000_000.0)
 
     dispatcher = InputDispatcher(on_input, max_pending=3, inline_fast_path=True)
 
     class MeasuredSubmitter:
+        @staticmethod
+        def _snapshot(payload):
+            # Keep one unique identity per logical submission. This probe-only
+            # copy avoids ambiguity if a transport ever reuses a bytes object.
+            return bytes(bytearray(payload))
+
+        @staticmethod
+        def _record(snapshot, arrived_ns=None, sample_arrival=True):
+            nonlocal submitted_count, raw_edges
+            nonlocal last_submitted_buttons
+            nonlocal last_arrival_ns, last_report_time
+            if not sampling:
+                return
+            if arrived_ns is None:
+                arrived_ns = time.perf_counter_ns()
+            with lock:
+                submitted_count += 1
+                _remember_submission(submitted_at, snapshot, arrived_ns)
+                if len(snapshot) >= 16:
+                    report_time, buttons = struct.unpack_from("<II", snapshot, 0)
+                    if last_submitted_buttons is not None:
+                        raw_edges += (
+                            buttons ^ last_submitted_buttons
+                        ).bit_count()
+                    last_submitted_buttons = buttons
+                    if sample_arrival and last_arrival_ns is not None:
+                        arrival_delta = (
+                            arrived_ns - last_arrival_ns
+                        ) / 1_000_000.0
+                        arrival_interval_ms.append(arrival_delta)
+                        if last_report_time is not None:
+                            report_delta = (
+                                report_time - last_report_time
+                            ) & 0xFFFFFFFF
+                        else:
+                            report_delta = None
+                        if report_delta is not None and 0 < report_delta < 1000:
+                            report_interval_ms.append(float(report_delta))
+                            transport_variation_ms.append(
+                                arrival_delta - report_delta
+                            )
+                    # Only the first report in a CDC drain batch has a real
+                    # host-arrival sample. Keep report-time anchors aligned
+                    # first-to-first as well, so transport variation compares
+                    # equivalent batch boundaries instead of last-to-first.
+                    if sample_arrival:
+                        last_report_time = report_time
+                if sample_arrival:
+                    last_arrival_ns = arrived_ns
+
         def __call__(self, payload):
             self.submit(payload)
 
         def submit(self, payload):
-            tls.submitted_ns = time.perf_counter_ns()
-            try:
-                dispatcher.submit(payload)
-            finally:
-                tls.submitted_ns = None
+            snapshot = self._snapshot(payload)
+            self._record(snapshot)
+            dispatcher.submit(snapshot)
 
         def submit_batch(self, payloads):
-            if len(payloads) == 1:
-                self.submit(payloads[0])
-            else:
-                dispatcher.submit_batch(payloads)
+            snapshots = [
+                self._snapshot(payload) for payload in payloads if payload
+            ]
+            if not snapshots:
+                return
+            # Serial drain exposes one host-arrival instant for the batch, not
+            # an arrival instant for every contained BLE report. Use that same
+            # instant for queue/pipeline latency and emit one arrival/jitter
+            # sample, while still retaining every report for queue/pipeline
+            # latency and raw-edge accounting.
+            batch_arrived_ns = time.perf_counter_ns()
+            for index, snapshot in enumerate(snapshots):
+                self._record(
+                    snapshot,
+                    arrived_ns=batch_arrived_ns,
+                    sample_arrival=(index == 0),
+                )
+            if len(snapshots) == 1:
+                dispatcher.submit(snapshots[0])
+                return
+            dispatcher.submit_batch(snapshots)
 
     bridge.input_callback = MeasuredSubmitter()
 
@@ -240,6 +317,7 @@ def main(port="COM3", seconds=30.0, rumble_stress=False):
             with lock:
                 result = {
                     "elapsed_s": round(elapsed, 1),
+                    "submitted": submitted_count,
                     "received": callback_count,
                     "rate_hz": round(callback_count / elapsed, 1),
                     "inline": dispatcher.inline_reports,
@@ -247,6 +325,7 @@ def main(port="COM3", seconds=30.0, rumble_stress=False):
                     "backlog_batches": dispatcher.backlog_batches,
                     "dropped_analog": dispatcher.dropped_reports,
                     "raw_edges": raw_edges,
+                    "processed_raw_edges": processed_raw_edges,
                     "expected_edges": expected_edges,
                     "output_edges": output_edges,
                     "mapping_mismatches": mapping_mismatches,

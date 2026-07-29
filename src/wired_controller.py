@@ -978,7 +978,10 @@ class WiredController:
                     pass
 
     def set_audio_haptics_active(self, active):
-        """Use the safer 40 Hz USB output pace while audio haptics are active."""
+        """Use 16.6 ms (~60 Hz) for audio; game/zero uses 7.5 ms priority.
+
+        Ordinary non-audio refreshes retain the 15 ms USB output pace.
+        """
         self._audio_haptics_active = bool(active)
 
     @staticmethod
@@ -1010,7 +1013,9 @@ class WiredController:
             pending_since = submitted_at
             if self._rumble_slot is not None:
                 self._rumble_overwritten += 1
-                pending_since = self._rumble_slot[2]
+                if self._rumble_slot[5] == generation:
+                    pending_since = self._rumble_slot[2]
+                    priority = bool(priority or self._rumble_slot[3])
             self._rumble_slot = (
                 payload,
                 submitted_at,
@@ -1221,13 +1226,11 @@ class WiredController:
         inactive = 0
         try:
             while not self._rumble_stop.is_set():
-                self._rumble_wake.wait(0.5)
-                self._rumble_wake.clear()
-                if self._rumble_stop.is_set():
-                    break
                 with self._rumble_lock:
-                    state, self._rumble_slot = self._rumble_slot, None
+                    state = self._rumble_slot
                 if state is None:
+                    self._rumble_wake.wait(0.5)
+                    self._rumble_wake.clear()
                     continue
                 (
                     data,
@@ -1238,84 +1241,176 @@ class WiredController:
                     generation,
                 ) = state
                 with self._state_lock:
-                    if (
-                        not self.connected
-                        or self._connection_generation != generation
-                    ):
-                        continue
-                active = _rumble_active(data)
-                inactive = 0 if active else inactive + 1
-                if inactive > 3:
-                    continue
-                if priority:
-                    interval = 0.0075
-                elif self._audio_haptics_active:
-                    interval = 0.0166
-                else:
-                    interval = 0.015
-                if time.perf_counter() < self._rumble_congested_until:
-                    interval = max(interval, self._rumble_congest_interval)
-                delay = last_write + interval - time.perf_counter()
-                if delay > 0:
-                    time.sleep(delay)
-                report = _usb_output_report(data)
-                written = None
-                started = time.perf_counter()
-                with self._rumble_lock:
-                    if last_write > 0.0 and pending_since < last_write + interval:
-                        interval_ms = (started - last_write) * 1000.0
-                        self._rumble_send_intervals_ms.append(interval_ms)
-                        if priority:
-                            self._rumble_priority_intervals_ms.append(interval_ms)
-                        else:
-                            self._rumble_direct_intervals_ms.append(interval_ms)
-                    if is_zero:
-                        self._rumble_zero_latencies_ms.append(
-                            (started - submitted_at) * 1000.0
-                        )
-                    self._rumble_send_attempts += 1
-                with self._rumble_send_lock:
-                    with self._state_lock:
-                        current_generation = (
-                            self.connected
-                            and self._connection_generation == generation
-                        )
+                    current_generation = (
+                        self.connected
+                        and self._connection_generation == generation
+                    )
+                if not current_generation:
                     with self._rumble_lock:
-                        accepting = (
-                            current_generation
-                            and
-                            self._rumble_accepting
-                            and not self._feedback_active
-                            and not self._rumble_stop.is_set()
-                        )
-                    if not accepting:
+                        if self._rumble_slot is state:
+                            self._rumble_slot = None
+                    continue
+
+                # Keep the shared slot replaceable until this route's deadline.
+                # Audio may submit every 5 ms, and a game/zero update must be
+                # able to replace that older state and shorten a 16.6 ms wait
+                # to the 7.5 ms priority cadence. Claim only when it is time to
+                # start the HID write.
+                with self._rumble_lock:
+                    if self._rumble_slot is not state:
                         continue
-                    try:
-                        with self._hid_write_lock:
-                            with self._state_lock:
-                                if (
-                                    not self.connected
-                                    or self._connection_generation
-                                    != generation
-                                ):
-                                    continue
-                            with self._device_lock:
-                                device = self._device
-                            if device is None:
-                                continue
+                    if priority:
+                        interval = 0.0075
+                    elif self._audio_haptics_active:
+                        interval = 0.0166
+                    else:
+                        interval = 0.015
+                    if time.perf_counter() < self._rumble_congested_until:
+                        interval = max(
+                            interval, self._rumble_congest_interval
+                        )
+                    delay = (
+                        last_write + interval - time.perf_counter()
+                    )
+                if delay > 0.0:
+                    # Re-read the slot at least once per millisecond so a new
+                    # priority or zero frame can move the deadline forward
+                    # without relying on Windows Event timeout precision.
+                    time.sleep(min(delay, 0.001))
+                    continue
+
+                # The deadline looked ready, but a fixed feedback cue or
+                # shutdown zero may hold the send lock for much longer than a
+                # pacing interval. Keep the slot replaceable while waiting,
+                # then re-read and claim the latest state immediately before
+                # the HID write.
+                sleep_for = 0.0
+                attempted = False
+                written = None
+                started = 0.0
+                finished = 0.0
+                with self._rumble_send_lock:
+                    with self._hid_write_lock:
+                        device = None
+                        report = None
+                        with self._state_lock:
+                            with self._rumble_lock:
+                                state = self._rumble_slot
+                                if state is not None:
+                                    (
+                                        data,
+                                        submitted_at,
+                                        pending_since,
+                                        priority,
+                                        is_zero,
+                                        generation,
+                                    ) = state
+                                current_generation = (
+                                    state is not None
+                                    and self.connected
+                                    and self._connection_generation
+                                    == generation
+                                )
+                                accepting = (
+                                    current_generation
+                                    and self._rumble_accepting
+                                    and not self._feedback_active
+                                    and not self._rumble_stop.is_set()
+                                )
+                                if state is not None and not accepting:
+                                    self._rumble_slot = None
+                                elif state is not None:
+                                    if priority:
+                                        interval = 0.0075
+                                    elif self._audio_haptics_active:
+                                        interval = 0.0166
+                                    else:
+                                        interval = 0.015
+                                    if (
+                                        time.perf_counter()
+                                        < self._rumble_congested_until
+                                    ):
+                                        interval = max(
+                                            interval,
+                                            self._rumble_congest_interval,
+                                        )
+                                    due_time = last_write + interval
+                                    remaining = (
+                                        due_time - time.perf_counter()
+                                    )
+                                    if remaining > 0.0:
+                                        sleep_for = min(remaining, 0.001)
+                                    else:
+                                        active = _rumble_active(data)
+                                        next_inactive = (
+                                            0 if active else inactive + 1
+                                        )
+                                        if next_inactive > 3:
+                                            inactive = next_inactive
+                                            self._rumble_slot = None
+                                        else:
+                                            with self._device_lock:
+                                                device = self._device
+                                            if device is None:
+                                                self._rumble_slot = None
+                                            else:
+                                                inactive = next_inactive
+                                                report = _usb_output_report(
+                                                    data
+                                                )
+                                                self._rumble_slot = None
+                                                started = (
+                                                    time.perf_counter()
+                                                )
+                                                if (
+                                                    last_write > 0.0
+                                                    and pending_since
+                                                    < due_time
+                                                ):
+                                                    interval_ms = (
+                                                        started - last_write
+                                                    ) * 1000.0
+                                                    self._rumble_send_intervals_ms.append(
+                                                        interval_ms
+                                                    )
+                                                    if priority:
+                                                        self._rumble_priority_intervals_ms.append(
+                                                            interval_ms
+                                                        )
+                                                    else:
+                                                        self._rumble_direct_intervals_ms.append(
+                                                            interval_ms
+                                                        )
+                                                if is_zero:
+                                                    self._rumble_zero_latencies_ms.append(
+                                                        (
+                                                            started
+                                                            - submitted_at
+                                                        )
+                                                        * 1000.0
+                                                    )
+                                                self._rumble_send_attempts += 1
+                                                last_write = started
+                                                attempted = True
+                        if attempted:
                             try:
-                                written = device.write(report)
-                            except TypeError:
-                                written = device.write(list(report))
-                    except Exception:
-                        written = None
-                finished = time.perf_counter()
+                                try:
+                                    written = device.write(report)
+                                except TypeError:
+                                    written = device.write(list(report))
+                            except Exception:
+                                written = None
+                            finished = time.perf_counter()
+
+                if not attempted:
+                    if sleep_for > 0.0:
+                        time.sleep(sleep_for)
+                    continue
+
                 elapsed = finished - started
                 # Pace write *starts*. A slow HID call already consumes the
                 # interval; waiting again from its completion would double the
                 # intended backoff (for example 45 ms + another 45 ms).
-                last_write = started
-
                 if elapsed > 0.040:
                     self._rumble_congest_interval = min(
                         0.040, max(0.025, elapsed)
