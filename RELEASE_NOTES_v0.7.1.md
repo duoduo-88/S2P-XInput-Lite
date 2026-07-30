@@ -56,8 +56,8 @@ This release contains the changes made after v0.7.0.
 
 - The automated suite runs 490 tests successfully; one optional full ESP-IDF
   test is skipped in the normal run.
-- The ESP32 firmware was also built with ESP-IDF 5.5.4 and verified against
-  the bundled release image.
+- The ESP32 firmware was clean-built with ESP-IDF 5.5.4; both generated and
+  bundled images pass ESP32-S3 structure and S2P firmware-version validation.
 
 ### Updating
 
@@ -111,7 +111,8 @@ This release contains the changes made after v0.7.0.
 
 - 自動化測試共執行 490 項並全部成功；一般測試會略過一項選用的完整
   ESP-IDF 建置測試。
-- 另以 ESP-IDF 5.5.4 完整建置 ESP32 韌體，並確認輸出與隨附映像一致。
+- 另以 ESP-IDF 5.5.4 乾淨建置 ESP32 韌體；新建與隨附映像皆通過
+  ESP32-S3 結構及 S2P 韌體版本驗證。
 
 ### 更新方式
 

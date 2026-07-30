@@ -4,6 +4,8 @@ from pathlib import Path
 import sys
 import unittest
 
+from vgamepad_test_stub import install_if_vigembus_unavailable
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TESTS_DIR = PROJECT_ROOT / "tests"
@@ -13,6 +15,7 @@ if str(SRC_DIR) not in sys.path:
 
 
 def main():
+    install_if_vigembus_unavailable()
     suite = unittest.defaultTestLoader.discover(
         str(TESTS_DIR), pattern="test_*.py"
     )

@@ -34,6 +34,8 @@ class ReleaseBaselineTests(unittest.TestCase):
         )
         self.assertIn('. "$IDF_PATH/export.sh"', source)
         self.assertIn("idf.py build", source)
+        self.assertIn('"esptool.py", "--chip", "esp32s3", "image_info"', source)
+        self.assertIn('for marker in (b"S2P-FW", b"1.0.1")', source)
 
     def test_bundled_firmware_is_s2p_101(self):
         main_source = (

@@ -52,7 +52,8 @@ class HidHideApplicationTests(unittest.TestCase):
 
             self.assertFalse(status["app_registered"])
             self.assertEqual(
-                status["missing_application_paths"], [str(probe_path)]
+                status["missing_application_paths"],
+                [str(probe_path.resolve())],
             )
             self.assertEqual(status["state"], "setup")
 
@@ -127,7 +128,7 @@ class HidHideApplicationTests(unittest.TestCase):
             run_cli.assert_called_once_with(
                 cli_path,
                 "--dev-unhide", "HID\\PAD",
-                "--app-unreg", str(python_path),
+                "--app-unreg", str(python_path.resolve()),
             )
 
 

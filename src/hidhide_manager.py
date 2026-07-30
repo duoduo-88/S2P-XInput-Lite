@@ -80,7 +80,7 @@ def _quoted_values(output, command):
 
 
 def _normalize_application_path(value):
-    return os.path.normcase(os.path.abspath(os.fspath(value)))
+    return os.path.normcase(str(Path(os.fsdecode(value)).resolve()))
 
 
 def _application_paths(value):

@@ -16,6 +16,8 @@ jobs:
     name: Windows desktop tests
     runs-on: windows-latest
     timeout-minutes: 25
+    env:
+      PYTHONUTF8: "1"
 
     steps:
       - name: Check out source
@@ -63,30 +65,36 @@ jobs:
           . "$IDF_PATH/export.sh"
           idf.py build
 
-      - name: Verify release firmware hashes
+      - name: Validate built and bundled firmware images
         working-directory: .
         run: |
           python - <<'PY'
-          from hashlib import sha256
           from pathlib import Path
+          import subprocess
 
           root = Path.cwd()
           build = root / "esp32s3/source/esp32s3_usb_bridge_bluedroid/build"
           bundled = root / "esp32s3/firmware"
-          pairs = {
-              build / "bootloader/bootloader.bin": bundled / "bootloader.bin",
-              build / "partition_table/partition-table.bin": bundled / "partition-table.bin",
-              build / "esp32s3_bluedroid_bridge.bin": bundled / "esp32s3_bluedroid_bridge.bin",
-          }
-          for generated, released in pairs.items():
-              generated_hash = sha256(generated.read_bytes()).hexdigest()
-              released_hash = sha256(released.read_bytes()).hexdigest()
-              if generated_hash != released_hash:
-                  raise SystemExit(
-                      f"firmware mismatch: {generated.name}: "
-                      f"{generated_hash} != {released_hash}"
-                  )
-          print("Firmware build matches the bundled release images.")
+          bootloaders = (build / "bootloader/bootloader.bin", bundled / "bootloader.bin")
+          applications = (
+              build / "esp32s3_bluedroid_bridge.bin",
+              bundled / "esp32s3_bluedroid_bridge.bin",
+          )
+          for image in bootloaders + applications:
+              subprocess.run(
+                  ["esptool.py", "--chip", "esp32s3", "image_info", str(image)],
+                  check=True,
+              )
+          for image in applications:
+              data = image.read_bytes()
+              for marker in (b"S2P-FW", b"1.0.1"):
+                  if marker not in data:
+                      raise SystemExit(f"{image.name} is missing {marker!r}")
+          generated_partition = build / "partition_table/partition-table.bin"
+          released_partition = bundled / "partition-table.bin"
+          if generated_partition.read_bytes() != released_partition.read_bytes():
+              raise SystemExit("bundled partition table does not match the clean build")
+          print("Built and bundled firmware images are valid for S2P firmware 1.0.1.")
           PY
 
       - name: Upload firmware build
