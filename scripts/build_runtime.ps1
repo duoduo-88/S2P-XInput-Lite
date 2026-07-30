@@ -324,10 +324,21 @@ Get-ChildItem -LiteralPath $OutputDirectory -File -Recurse -Force |
     ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
 
 $runtimePython = Join-Path $OutputDirectory "python.exe"
+# Importing vgamepad itself immediately connects to ViGEmBus. A clean build
+# runner does not have that driver, so validate the package metadata and load
+# its native client DLL without constructing a virtual controller.
 $importCheck = (
-    "import tkinter; " +
-    "import serial, vgamepad, bleak, bluetooth, pyaudiowpatch, numpy, " +
+    "import ctypes, importlib.metadata as metadata, " +
+    "import importlib.util as util, pathlib, tkinter; " +
+    "import serial, bleak, bluetooth, pyaudiowpatch, numpy, " +
     "imufusion, hid, usb, libusb_package; " +
+    "spec = util.find_spec('vgamepad'); " +
+    "assert spec is not None and spec.submodule_search_locations; " +
+    "package = pathlib.Path(next(iter(spec.submodule_search_locations))); " +
+    "client = package / 'win' / 'vigem' / 'client' / 'x64' / " +
+    "'ViGEmClient.dll'; " +
+    "assert metadata.version('vgamepad') == '0.1.0' and client.is_file(); " +
+    "ctypes.CDLL(str(client)); " +
     "print('portable runtime imports passed')"
 )
 & $runtimePython -c $importCheck

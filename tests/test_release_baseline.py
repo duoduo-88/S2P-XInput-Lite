@@ -17,6 +17,17 @@ class ReleaseBaselineTests(unittest.TestCase):
         source = (ROOT / "src" / "version.py").read_text(encoding="utf-8")
         self.assertRegex(source, r'VERSION\s*=\s*"0\.7\.1"')
 
+    def test_runtime_build_check_does_not_require_installed_vigembus(self):
+        source = (ROOT / "scripts" / "build_runtime.ps1").read_text(
+            encoding="utf-8"
+        )
+        import_check = source.split("$importCheck = (", 1)[1].split(
+            "& $runtimePython -c $importCheck", 1
+        )[0]
+        self.assertNotIn("import serial, vgamepad", import_check)
+        self.assertIn("util.find_spec('vgamepad')", import_check)
+        self.assertIn("ctypes.CDLL(str(client))", import_check)
+
     def test_bundled_firmware_is_s2p_101(self):
         main_source = (
             FIRMWARE_ROOT / "main" / "main.c"
