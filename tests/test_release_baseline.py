@@ -28,6 +28,13 @@ class ReleaseBaselineTests(unittest.TestCase):
         self.assertIn("util.find_spec('vgamepad')", import_check)
         self.assertIn("ctypes.CDLL(str(client))", import_check)
 
+    def test_firmware_ci_initializes_esp_idf_environment(self):
+        source = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('. "$IDF_PATH/export.sh"', source)
+        self.assertIn("idf.py build", source)
+
     def test_bundled_firmware_is_s2p_101(self):
         main_source = (
             FIRMWARE_ROOT / "main" / "main.c"

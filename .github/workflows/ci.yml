@@ -59,7 +59,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build firmware
-        run: idf.py build
+        run: |
+          . "$IDF_PATH/export.sh"
+          idf.py build
 
       - name: Verify release firmware hashes
         working-directory: .

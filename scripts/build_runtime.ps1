@@ -329,7 +329,7 @@ $runtimePython = Join-Path $OutputDirectory "python.exe"
 # its native client DLL without constructing a virtual controller.
 $importCheck = (
     "import ctypes, importlib.metadata as metadata, " +
-    "import importlib.util as util, pathlib, tkinter; " +
+    "importlib.util as util, pathlib, tkinter; " +
     "import serial, bleak, bluetooth, pyaudiowpatch, numpy, " +
     "imufusion, hid, usb, libusb_package; " +
     "spec = util.find_spec('vgamepad'); " +
