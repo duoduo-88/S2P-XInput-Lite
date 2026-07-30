@@ -121,6 +121,14 @@ from hidhide_manager import (
     inspect_hidhide,
     remove_hidhide_configuration,
 )
+from update_manager import (
+    UpdateCheckError,
+    automatic_update_checks_enabled,
+    check_latest_release,
+    ignored_update_version,
+    is_newer_version,
+    save_update_preferences,
+)
 
 
 _GUI_LANGUAGE = "zh"
@@ -1906,6 +1914,8 @@ class ConfigGUI:
         self._modal_windows = []
         self._close_in_progress = False
         self._close_warning_window = None
+        self._update_check_in_progress = False
+        self._update_prompt_window = None
         self._adaptive_layout_job = None
         self._root_restore_pending = False
         self._root_restore_repaint_job = None
@@ -2071,6 +2081,7 @@ class ConfigGUI:
         # 主動啟動連接程序，使 ESP32/Windows BLE 模式在尚未連上
         # 手把時也能刷新到狀態列，而不是顯示上次留下的狀態。
         self.root.after(250, self.start_connection_on_launch)
+        self.root.after(1400, self.start_automatic_update_check)
 
     def get_serial_ports(self):
         """取得目前所有可用的 COM Port。"""
@@ -4202,6 +4213,191 @@ class ConfigGUI:
                 "Could not save close reminder preference: %s",
                 exc,
             )
+
+    def start_automatic_update_check(self):
+        """Start the quiet startup check only when the shared preference allows."""
+        if automatic_update_checks_enabled(CONFIG_PATH):
+            self.check_for_updates(manual=False)
+
+    def check_for_updates(self, manual=False):
+        """Query GitHub outside Tk's event loop and report on the UI thread."""
+        if self._update_check_in_progress:
+            if manual:
+                messagebox.showinfo(
+                    self.tr("檢查更新"),
+                    self.tr("正在檢查最新版本，請稍候。"),
+                    parent=self.root,
+                )
+            return False
+        self._update_check_in_progress = True
+
+        def worker():
+            release = None
+            error = None
+            try:
+                release = check_latest_release(VERSION)
+            except (UpdateCheckError, OSError, ValueError) as exc:
+                error = exc
+            try:
+                self.root.after(
+                    0,
+                    lambda: self._finish_update_check(
+                        release,
+                        error,
+                        bool(manual),
+                    ),
+                )
+            except (AttributeError, tk.TclError):
+                self._update_check_in_progress = False
+
+        threading.Thread(
+            target=worker,
+            daemon=True,
+            name="UpdateCheck",
+        ).start()
+        return True
+
+    def _finish_update_check(self, release, error, manual):
+        """Apply a completed network result without prompting on quiet failures."""
+        self._update_check_in_progress = False
+        try:
+            if not self.root.winfo_exists():
+                return
+        except (AttributeError, tk.TclError):
+            return
+        if error is not None:
+            if manual:
+                messagebox.showerror(
+                    self.tr("無法檢查更新"),
+                    self.tr(
+                        "目前無法連線至 GitHub 檢查版本，請稍後再試。"
+                    )
+                    + f"\n\n{error}",
+                    parent=self.root,
+                )
+            else:
+                LOGGER.info("Automatic update check failed: %s", error)
+            return
+        if release is None:
+            return
+        try:
+            newer = is_newer_version(release.version, VERSION)
+        except ValueError as exc:
+            if manual:
+                messagebox.showerror(
+                    self.tr("無法檢查更新"),
+                    str(exc),
+                    parent=self.root,
+                )
+            return
+        if not newer:
+            if manual:
+                messagebox.showinfo(
+                    self.tr("檢查更新"),
+                    self.tr("目前已是最新版本。")
+                    + f"\n\nv{VERSION}",
+                    parent=self.root,
+                )
+            return
+        if (
+            not manual
+            and ignored_update_version(CONFIG_PATH) == release.version
+        ):
+            return
+        self._show_update_available_prompt(release)
+
+    def _show_update_available_prompt(self, release):
+        """Show one non-blocking release prompt with per-version suppression."""
+        current = self._update_prompt_window
+        if current is not None:
+            try:
+                if current.winfo_exists():
+                    current.deiconify()
+                    current.lift()
+                    return
+            except (AttributeError, tk.TclError):
+                pass
+
+        window = tk.Toplevel(self.root)
+        window.withdraw()
+        window.title(self.tr("發現新版本"))
+        window.resizable(False, False)
+        window.transient(self.root)
+        self._update_prompt_window = window
+        suppress_var = tk.BooleanVar(master=window, value=False)
+        content = ttk.Frame(window, padding=(18, 16))
+        content.pack(fill="both", expand=True)
+        ttk.Label(
+            content,
+            text=(
+                self.tr("S2P-XInput-Lite 有新版本可用。")
+                + f"\n\n{self.tr('目前版本')}：v{VERSION}\n"
+                + f"{self.tr('最新版本')}：v{release.version}\n\n"
+                + self.tr(
+                    "按下「開啟下載頁」後，請從官方 GitHub Release "
+                    "下載並手動解壓縮更新。"
+                )
+            ),
+            justify="left",
+            wraplength=430,
+        ).pack(fill="x")
+        ttk.Checkbutton(
+            content,
+            text=self.tr("不再提醒此版本"),
+            variable=suppress_var,
+        ).pack(anchor="w", pady=(14, 0))
+        actions = ttk.Frame(content)
+        actions.pack(fill="x", pady=(16, 0))
+
+        def close_prompt(open_release=False):
+            if suppress_var.get():
+                try:
+                    save_update_preferences(
+                        ignored_version=release.version,
+                        path=CONFIG_PATH,
+                    )
+                except (OSError, ValueError, configparser.Error) as exc:
+                    LOGGER.warning(
+                        "Could not save ignored update version: %s",
+                        exc,
+                    )
+            if self._update_prompt_window is window:
+                self._update_prompt_window = None
+            try:
+                window.destroy()
+            except tk.TclError:
+                pass
+            if open_release:
+                try:
+                    if webbrowser.open(release.html_url, new=2) is False:
+                        raise OSError(
+                            "The default browser did not accept the URL."
+                        )
+                except (OSError, webbrowser.Error) as exc:
+                    messagebox.showerror(
+                        self.tr("無法開啟下載頁"),
+                        f"{release.html_url}\n\n{exc}",
+                        parent=self.root,
+                    )
+
+        ttk.Button(
+            actions,
+            text=self.tr("稍後"),
+            command=close_prompt,
+            width=9,
+        ).pack(side="right")
+        ttk.Button(
+            actions,
+            text=self.tr("開啟下載頁"),
+            command=lambda: close_prompt(True),
+            width=13,
+        ).pack(side="right", padx=(0, 8))
+        window.protocol("WM_DELETE_WINDOW", close_prompt)
+        window.bind("<Escape>", lambda _event: close_prompt())
+        window.update_idletasks()
+        self._center_child_window(window, width=480)
+        window.deiconify()
+        window.lift()
 
     def open_hidhide_download_page(self):
         """Open the official download page when the missing status is clicked."""

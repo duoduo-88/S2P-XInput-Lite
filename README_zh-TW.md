@@ -17,6 +17,10 @@ S2P-XInput-Lite 可在 Windows 為 Switch 2 Pro Controller 提供 XInput 相容�
 [原始碼](https://github.com/duoduo-88/S2P-XInput-Lite/tree/main) ·
 [最新正式版本](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 
+程式可在啟動時檢查新版本，也可在手把測試程式的「關於」頁手動檢查、
+開關自動檢查，或選擇不再提醒特定版本。更新通知只會開啟官方 GitHub
+Release 頁面供手動下載；程式不會自動下載、執行或覆蓋任何檔案。
+
 > 本專案是獨立、非官方的社群作品，未獲 Nintendo、Microsoft、Espressif Systems、Apple 或 Google 授權、認證、贊助或背書，亦與這些公司無關。
 >
 > Nintendo Switch 為 Nintendo 的商標；Windows 與 Xbox 為 Microsoft 的商標；ESP32 為 Espressif Systems 的商標；Apple、macOS、iOS 與 iPadOS 為 Apple Inc. 的商標；Android 為 Google LLC 的商標。其他商標均屬其各自權利人所有。

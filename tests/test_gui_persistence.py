@@ -1032,6 +1032,64 @@ class GuiPersistenceTests(unittest.TestCase):
             self.assertEqual(gui.active_profile, "Racing")
             self.assertEqual(gui._active_profile_content_baseline, expected)
 
+    def test_automatic_update_check_respects_shared_toggle(self):
+        gui = object.__new__(config_gui.ConfigGUI)
+        gui.check_for_updates = Mock()
+
+        with patch.object(
+            config_gui,
+            "automatic_update_checks_enabled",
+            return_value=False,
+        ):
+            gui.start_automatic_update_check()
+
+        gui.check_for_updates.assert_not_called()
+
+    def test_automatic_update_check_skips_ignored_version(self):
+        gui = object.__new__(config_gui.ConfigGUI)
+        gui.root = Mock()
+        gui.root.winfo_exists.return_value = True
+        gui._update_check_in_progress = True
+        gui._show_update_available_prompt = Mock()
+        release = SimpleNamespace(version="0.7.3")
+
+        with (
+            patch.object(
+                config_gui, "is_newer_version", return_value=True
+            ),
+            patch.object(
+                config_gui,
+                "ignored_update_version",
+                return_value="0.7.3",
+            ),
+        ):
+            gui._finish_update_check(release, None, manual=False)
+
+        self.assertFalse(gui._update_check_in_progress)
+        gui._show_update_available_prompt.assert_not_called()
+
+    def test_manual_update_check_still_shows_ignored_version(self):
+        gui = object.__new__(config_gui.ConfigGUI)
+        gui.root = Mock()
+        gui.root.winfo_exists.return_value = True
+        gui._update_check_in_progress = True
+        gui._show_update_available_prompt = Mock()
+        release = SimpleNamespace(version="0.7.3")
+
+        with (
+            patch.object(
+                config_gui, "is_newer_version", return_value=True
+            ),
+            patch.object(
+                config_gui,
+                "ignored_update_version",
+                return_value="0.7.3",
+            ),
+        ):
+            gui._finish_update_check(release, None, manual=True)
+
+        gui._show_update_available_prompt.assert_called_once_with(release)
+
 
 if __name__ == "__main__":
     unittest.main()

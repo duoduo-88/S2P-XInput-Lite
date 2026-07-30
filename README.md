@@ -43,6 +43,10 @@ Current version: **v0.7.2**
   intervals, distribution statistics, and a timeline.
 - Built-in ESP32 diagnostics with timed tests, a clear pass/warn/fail verdict,
   and exportable text reports
+- Startup update notifications plus a manual check and shared automatic-check
+  toggle on the Gamepad Tester About page. Updates always open the official
+  GitHub Release page for manual download; the application never downloads,
+  runs, or replaces files automatically.
 - About page with project links, the software license, and third-party notices
 - Full game profiles for switching stick, gyro, rumble, audio-haptics, and mapping settings together, with automatic UI refresh
 - Traditional Chinese and English interface

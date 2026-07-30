@@ -203,8 +203,16 @@ class GamepadTestHost:
     interpreter keeps the high-refresh tester independent from settings input.
     """
 
-    def __init__(self, root, language=None):
+    def __init__(
+        self,
+        root,
+        language=None,
+        allow_automatic_update_prompt=True,
+    ):
         self.root = root
+        self.allow_automatic_update_prompt = bool(
+            allow_automatic_update_prompt
+        )
         requested = str(language or "").strip().lower()
         if requested not in SUPPORTED_LANGUAGES:
             config = load_config(CONFIG_PATH)
@@ -230,6 +238,7 @@ def main():
     host = GamepadTestHost(
         root,
         language=command_line_language(sys.argv[1:]),
+        allow_automatic_update_prompt="--parent-pipe" not in sys.argv,
     )
     splash = None
     splash_started_at = time.monotonic()

@@ -21,6 +21,16 @@ S2P-FW 1.0.1.
   requires `SHA256SUMS.txt` to cover the complete package payload exactly.
 - The packaged import smoke test no longer creates bytecode cache files.
 
+### Update notifications
+
+- The desktop application can check the official GitHub latest-release API at
+  startup and show a non-blocking new-version notice.
+- The Gamepad Tester About page provides a manual version check and a shared
+  automatic-check toggle.
+- A release can be ignored without suppressing later versions. The simplified
+  updater never downloads, runs, or replaces files; it only opens the official
+  GitHub Release page for manual download.
+
 ## 繁體中文
 
 v0.7.2 是桌面端維護版本；隨附的 ESP32 韌體版本維持 S2P-FW 1.0.1。
@@ -38,3 +48,11 @@ v0.7.2 是桌面端維護版本；隨附的 ESP32 韌體版本維持 S2P-FW 1.0.
 - 發佈驗證現在會拒絕不安全或重複的 manifest 路徑，並要求
   `SHA256SUMS.txt` 完整且精確涵蓋套件中的所有檔案。
 - 套件匯入冒煙測試不再產生 Python bytecode 快取檔案。
+
+### 更新通知
+
+- 桌面程式可在啟動時透過 GitHub 官方 latest-release API 檢查版本，並在有
+  新版本時顯示非阻塞通知。
+- 手把測試程式的「關於」頁提供手動版本檢查與共用的自動檢查開關。
+- 可忽略單一版本而不影響後續版本通知。此簡化功能不會下載、執行或覆蓋
+  檔案，只會開啟官方 GitHub Release 頁面供使用者手動下載。

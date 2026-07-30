@@ -21,6 +21,7 @@ class ReleaseBaselineTests(unittest.TestCase):
         source = (ROOT / "scripts" / "verify_release.ps1").read_text(
             encoding="utf-8"
         )
+        self.assertIn('"src\\update_manager.py"', source)
         self.assertIn("$manifestEntries.ContainsKey", source)
         self.assertIn("$actualPayload.Contains", source)
         self.assertIn("$manifestEntries.Count -ne $actualPayload.Count", source)

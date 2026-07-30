@@ -93,6 +93,7 @@ $required = @(
     "runtime\pythonw.exe",
     "src\config_gui.py",
     "src\gamepad_test_app.py",
+    "src\update_manager.py",
     "src\main.py",
     "src\layers\mouse.json",
     "src\requirements.txt",

@@ -1311,7 +1311,64 @@ class GamepadMathTests(unittest.TestCase):
             host = GamepadTestHost(Mock(), language="ZH")
 
         self.assertEqual(host.language, "zh")
+        self.assertTrue(host.allow_automatic_update_prompt)
         load_config.assert_not_called()
+
+    def test_parent_gamepad_tester_can_disable_duplicate_update_prompt(self):
+        host = GamepadTestHost(
+            Mock(),
+            language="en",
+            allow_automatic_update_prompt=False,
+        )
+
+        self.assertFalse(host.allow_automatic_update_prompt)
+
+    def test_gamepad_update_check_skips_ignored_automatic_prompt(self):
+        tester = object.__new__(GamepadTestWindow)
+        tester.gui = SimpleNamespace(tr=lambda text: text)
+        tester.window = Mock()
+        tester.update_check_button = None
+        tester.update_check_status_var = Mock()
+        tester._update_check_in_progress = True
+        tester._show_update_available_prompt = Mock()
+        release = SimpleNamespace(version="0.7.3")
+
+        with (
+            patch(
+                "gamepad_test_window.is_newer_version",
+                return_value=True,
+            ),
+            patch(
+                "gamepad_test_window.ignored_update_version",
+                return_value="0.7.3",
+            ),
+        ):
+            tester._finish_update_check(release, None, manual=False)
+
+        tester.update_check_status_var.set.assert_called_once_with(
+            "已有新版本：v0.7.3"
+        )
+        tester._show_update_available_prompt.assert_not_called()
+
+    def test_gamepad_manual_update_check_shows_new_release(self):
+        tester = object.__new__(GamepadTestWindow)
+        tester.gui = SimpleNamespace(tr=lambda text: text)
+        tester.window = Mock()
+        tester.update_check_button = None
+        tester.update_check_status_var = Mock()
+        tester._update_check_in_progress = True
+        tester._show_update_available_prompt = Mock()
+        release = SimpleNamespace(version="0.7.3")
+
+        with patch(
+            "gamepad_test_window.is_newer_version",
+            return_value=True,
+        ):
+            tester._finish_update_check(release, None, manual=True)
+
+        tester._show_update_available_prompt.assert_called_once_with(
+            release
+        )
 
     def test_gamepad_test_language_argument_is_validated(self):
         self.assertEqual(
