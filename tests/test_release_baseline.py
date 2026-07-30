@@ -27,6 +27,10 @@ class ReleaseBaselineTests(unittest.TestCase):
         self.assertNotIn("import serial, vgamepad", import_check)
         self.assertIn("util.find_spec('vgamepad')", import_check)
         self.assertIn("ctypes.CDLL(str(client))", import_check)
+        runner = (ROOT / "tests" / "run_tests.py").read_text(encoding="utf-8")
+        path_setup = runner.index("sys.path.insert(0, str(TESTS_DIR))")
+        stub_import = runner.index("from vgamepad_test_stub import")
+        self.assertLess(path_setup, stub_import)
 
     def test_firmware_ci_initializes_esp_idf_environment(self):
         source = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
@@ -34,7 +38,11 @@ class ReleaseBaselineTests(unittest.TestCase):
         )
         self.assertIn('. "$IDF_PATH/export.sh"', source)
         self.assertIn("idf.py build", source)
-        self.assertIn('"esptool.py", "--chip", "esp32s3", "image_info"', source)
+        self.assertGreaterEqual(source.count('. "$IDF_PATH/export.sh"'), 2)
+        self.assertIn(
+            'sys.executable, "-m", "esptool", "--chip", "esp32s3"',
+            source,
+        )
         self.assertIn('for marker in (b"S2P-FW", b"1.0.1")', source)
 
     def test_bundled_firmware_is_s2p_101(self):

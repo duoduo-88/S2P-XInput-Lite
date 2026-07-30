@@ -68,9 +68,11 @@ jobs:
       - name: Validate built and bundled firmware images
         working-directory: .
         run: |
+          . "$IDF_PATH/export.sh"
           python - <<'PY'
           from pathlib import Path
           import subprocess
+          import sys
 
           root = Path.cwd()
           build = root / "esp32s3/source/esp32s3_usb_bridge_bluedroid/build"
@@ -82,7 +84,10 @@ jobs:
           )
           for image in bootloaders + applications:
               subprocess.run(
-                  ["esptool.py", "--chip", "esp32s3", "image_info", str(image)],
+                  [
+                      sys.executable, "-m", "esptool", "--chip", "esp32s3",
+                      "image_info", str(image),
+                  ],
                   check=True,
               )
           for image in applications:
