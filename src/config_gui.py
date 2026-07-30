@@ -10579,16 +10579,41 @@ class ConfigGUI:
                 self._close_warning_window = None
         return result["confirmed"], result["suppress"]
 
+    def _restore_minimized_root_for_close_prompt(self):
+        """Give close prompts a mapped owner instead of Tk's (0, 0) fallback."""
+        try:
+            if self.root.state() != "iconic":
+                return False
+            self.root.deiconify()
+            # Process the map request without waiting indefinitely for a
+            # visibility notification from the Windows window manager.
+            self.root.update()
+            self.root.lift()
+            return True
+        except (tk.TclError, AttributeError):
+            return False
+
     def on_close(self):
         """Serialize close attempts across modal Tk message loops."""
         if getattr(self, "_close_in_progress", False):
             return
         self._close_in_progress = True
+        restore_to_taskbar = self._restore_minimized_root_for_close_prompt()
         try:
             self._perform_on_close()
         except Exception:
             self._close_in_progress = False
             raise
+        finally:
+            if (
+                restore_to_taskbar and
+                not getattr(self, "_close_in_progress", False)
+            ):
+                try:
+                    if self.root.winfo_exists():
+                        self.root.iconify()
+                except (tk.TclError, AttributeError):
+                    pass
 
     def _perform_on_close(self):
         """關閉 GUI 前檢查未儲存設定，並清理所有子程序。"""
@@ -10598,7 +10623,8 @@ class ConfigGUI:
             confirmed = messagebox.askyesno(
                 "尚未儲存",
                 "目前有尚未儲存的設定。\n\n"
-                "確定要放棄變更並關閉嗎？"
+                "確定要放棄變更並關閉嗎？",
+                parent=self.root,
             )
 
             if not confirmed:

@@ -151,7 +151,7 @@ class GuiPersistenceTests(unittest.TestCase):
         )
         self.assertEqual(
             canvas.create_text.call_args.kwargs["text"],
-            "v0.7.1 Starting...",
+            "v0.7.2 Starting...",
         )
         window.geometry.assert_called_once_with("600x340+660+370")
         self.assertLess(
@@ -164,7 +164,7 @@ class GuiPersistenceTests(unittest.TestCase):
         animation()
         canvas.itemconfigure.assert_called_with(
             "loading-text",
-            text="v0.7.1 Starting.",
+            text="v0.7.2 Starting.",
         )
 
     def test_initial_window_is_positioned_before_it_is_revealed(self):
@@ -290,6 +290,38 @@ class GuiPersistenceTests(unittest.TestCase):
         gui.on_close()
 
         gui._perform_on_close.assert_not_called()
+
+    def test_minimized_root_is_restored_for_close_prompt_and_reminimized_on_cancel(self):
+        gui = object.__new__(config_gui.ConfigGUI)
+        gui._close_in_progress = False
+        gui.root = Mock()
+        gui.root.state.return_value = "iconic"
+        gui.root.winfo_exists.return_value = True
+
+        def cancel_close():
+            gui._close_in_progress = False
+
+        gui._perform_on_close = Mock(side_effect=cancel_close)
+
+        gui.on_close()
+
+        gui.root.deiconify.assert_called_once_with()
+        gui.root.update.assert_called_once_with()
+        gui.root.wait_visibility.assert_not_called()
+        gui.root.lift.assert_called_once_with()
+        gui.root.iconify.assert_called_once_with()
+
+    def test_minimized_root_stays_restored_when_close_is_confirmed(self):
+        gui = object.__new__(config_gui.ConfigGUI)
+        gui._close_in_progress = False
+        gui.root = Mock()
+        gui.root.state.return_value = "iconic"
+        gui._perform_on_close = Mock()
+
+        gui.on_close()
+
+        gui.root.deiconify.assert_called_once_with()
+        gui.root.iconify.assert_not_called()
 
     def test_canceling_close_warning_does_not_save_suppression(self):
         gui = object.__new__(config_gui.ConfigGUI)

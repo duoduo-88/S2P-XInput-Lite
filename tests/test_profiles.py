@@ -369,6 +369,19 @@ class ProfileTests(unittest.TestCase):
                 rename_profile("新名稱", "另一個", directory)
             self.assertTrue((Path(directory) / "新名稱.ini").exists())
 
+    def test_profile_case_only_rename_changes_the_filename_spelling(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = make_config("base")
+            save_profile(config, "Alpha", directory)
+
+            renamed = rename_profile("Alpha", "alpha", directory)
+
+            self.assertEqual(renamed.name, "alpha.ini")
+            self.assertEqual(
+                [path.name for path in Path(directory).glob("*.ini")],
+                ["alpha.ini"],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
