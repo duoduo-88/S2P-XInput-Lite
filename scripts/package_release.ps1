@@ -94,6 +94,7 @@ if (-not (Test-Path -LiteralPath $releaseNotes -PathType Leaf)) {
 
 $runtimeOutput = Join-Path $buildRoot "runtime"
 $launcherOutput = Join-Path $buildRoot "launchers"
+$launcherMetadataPath = Join-Path $launcherOutput "LAUNCHER_BUILD.json"
 $nativeOutput = Join-Path $buildRoot "native"
 if (-not $UseExistingBuildOutputs) {
     & (Join-Path $PSScriptRoot "build_runtime.ps1") `
@@ -110,11 +111,42 @@ foreach ($requiredBuild in @(
     (Join-Path $runtimeOutput "python.exe"),
     (Join-Path $launcherOutput "S2P-XInput-Lite.exe"),
     (Join-Path $launcherOutput "GamepadTester.exe"),
+    $launcherMetadataPath,
     (Join-Path $nativeOutput "raw_hid_probe.exe"),
     (Join-Path $nativeOutput "raw_hid_stream_probe.exe")
 )) {
     if (-not (Test-Path -LiteralPath $requiredBuild -PathType Leaf)) {
         throw "Required build output is missing: $requiredBuild"
+    }
+}
+
+try {
+    $launcherMetadata = Get-Content `
+        -LiteralPath $launcherMetadataPath `
+        -Raw `
+        -Encoding utf8 | ConvertFrom-Json
+}
+catch {
+    throw "Launcher build metadata is invalid: $($_.Exception.Message)"
+}
+if (
+    $launcherMetadata.schema_version -ne 1 -or
+    $launcherMetadata.source_version -ne $version
+) {
+    throw "Launcher build version does not match source VERSION $version. Rebuild the launchers."
+}
+foreach ($name in @("S2P-XInput-Lite.exe", "GamepadTester.exe")) {
+    $entry = $launcherMetadata.launchers.PSObject.Properties[$name].Value
+    if ($null -eq $entry -or $entry.sha256 -notmatch '^[0-9A-Fa-f]{64}$') {
+        throw "Launcher build metadata is missing a valid hash for $name."
+    }
+    $actualHash = (
+        Get-FileHash `
+            -LiteralPath (Join-Path $launcherOutput $name) `
+            -Algorithm SHA256
+    ).Hash
+    if ($actualHash -ne $entry.sha256) {
+        throw "Launcher build hash does not match $name. Rebuild the launchers."
     }
 }
 
@@ -156,6 +188,11 @@ foreach ($name in @(
         -RelativePath $name `
         -DestinationRoot $packageRoot
 }
+Copy-CuratedTree `
+    -SourceRoot (Join-Path $repoRoot "third_party") `
+    -RelativeRoot "third_party" `
+    -Extensions @("", ".md", ".txt", ".zip") `
+    -DestinationRoot $packageRoot
 Copy-ReleaseFile `
     -Source $releaseNotes `
     -RelativePath (Split-Path -Leaf $releaseNotes) `
@@ -240,6 +277,10 @@ Copy-ReleaseFile `
 Copy-ReleaseFile `
     -Source (Join-Path $launcherOutput "GamepadTester.exe") `
     -RelativePath "GamepadTester.exe" `
+    -DestinationRoot $packageRoot
+Copy-ReleaseFile `
+    -Source $launcherMetadataPath `
+    -RelativePath "LAUNCHER_BUILD.json" `
     -DestinationRoot $packageRoot
 Copy-ReleaseFile `
     -Source (Join-Path $nativeOutput "raw_hid_probe.exe") `

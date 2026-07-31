@@ -50,6 +50,11 @@ upstream licenses and copyright notices.
 - PyUSB: https://github.com/pyusb/pyusb
 - libusb-package: https://github.com/pyocd/libusb-package
 
+The portable runtime retains upstream package metadata and license files.
+Because the pyserial 3.5 and PyWinRT 3.2.1 wheels omit standalone license
+files, the release builder adds their exact upstream BSD-3-Clause and MIT
+license texts from `third_party/licenses`.
+
 ---
 
 ## ESP32-S3 Firmware Files
@@ -91,6 +96,9 @@ components:
   hathach (tinyusb.org)  
   https://github.com/hathach/tinyusb
 
+The Apache 2.0 and TinyUSB MIT license texts shipped with the release are
+retained under `third_party/licenses`.
+
 The development standalone XInput device interface is based in part on the
 USB interface layout, Microsoft OS 2.0 compatible-ID approach, report format,
 and rumble command handling documented or implemented by these MIT-licensed
@@ -101,12 +109,10 @@ projects:
 - GP2040-CE XInput implementation, copyright Jason Skuby and
   OpenStickCommunity contributors
   https://github.com/OpenStickCommunity/GP2040-CE
-- tinyusb-xinput reference implementation
-  https://github.com/fluffymadness/tinyusb-xinput
 
 These components retain their respective copyright notices, disclaimers, and
-license terms. Their inclusion in the firmware binary does not change the
-license of the original components.
+license terms under `third_party/licenses`. Their inclusion in the firmware
+binary does not change the license of the original components.
 
 ### Fusion AHRS
 
@@ -133,13 +139,18 @@ esptool is an open-source utility developed by Espressif Systems for flashing an
 **Upstream project:**  
 https://github.com/espressif/esptool
 
-`esptool.exe` is distributed under the GNU General Public License version 2.
+`esptool.exe` is distributed under the GNU General Public License version 2 or
+later.
 Its copyright and applicable license terms remain with its original authors
 and contributors.
 
-Distribution of `esptool.exe` alongside S2P-XInput-Lite or as part of an upstream firmware package does not change its original copyright or applicable license terms.
+The bundled executable is the unmodified file extracted from Espressif's
+official `esptool-v4.11.0-windows-amd64.zip` release asset. Its exact source
+tag, release hashes, complete GPLv2 license text, upstream README, and a copy of
+the corresponding tagged source are distributed under `third_party`.
 
-For the complete license terms applicable to a specific version of esptool, refer to the corresponding upstream source release and its accompanying license files.
+Distribution of `esptool.exe` alongside S2P-XInput-Lite does not change its
+original copyright or applicable license terms.
 
 ---
 
@@ -170,3 +181,6 @@ S2P-XInput-Lite is not affiliated with, endorsed by, sponsored by, or officially
 It does not represent Microsoft licensing, certification, approval, or hardware
 identity. The ESP32 development firmware uses a non-retail development VID/PID
 and does not copy the USB VID/PID of a retail Microsoft or Xbox controller.
+
+Project artwork and screenshot provenance is recorded in
+`third_party/ASSET_PROVENANCE.md`.

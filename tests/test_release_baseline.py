@@ -13,9 +13,9 @@ FIRMWARE_ROOT = (
 
 
 class ReleaseBaselineTests(unittest.TestCase):
-    def test_desktop_release_version_is_072(self):
+    def test_desktop_release_version_is_073(self):
         source = (ROOT / "src" / "version.py").read_text(encoding="utf-8")
-        self.assertRegex(source, r'VERSION\s*=\s*"0\.7\.2"')
+        self.assertRegex(source, r'VERSION\s*=\s*"0\.7\.3"')
 
     def test_release_manifest_requires_exact_payload_coverage(self):
         source = (ROOT / "scripts" / "verify_release.ps1").read_text(
@@ -27,6 +27,29 @@ class ReleaseBaselineTests(unittest.TestCase):
         self.assertIn("$manifestEntries.Count -ne $actualPayload.Count", source)
         self.assertIn("Unsafe SHA256SUMS path", source)
         self.assertIn("& $runtimePython -B -c $importCheck", source)
+        self.assertIn('"LAUNCHER_BUILD.json"', source)
+        self.assertIn("Packaged launcher version does not match", source)
+        self.assertIn("Packaged launcher hash does not match", source)
+        self.assertIn("third_party\\sources\\esptool-v4.11.0-source.zip", source)
+        self.assertIn("audited official v4.11.0 binary", source)
+        self.assertIn("audited v4.11.0 tag archive", source)
+
+        package_source = (
+            ROOT / "scripts" / "package_release.ps1"
+        ).read_text(encoding="utf-8")
+        build_source = (
+            ROOT / "scripts" / "build_launchers.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Launcher build version does not match", package_source)
+        self.assertIn('"third_party"', package_source)
+        self.assertIn("source_version = $version", build_source)
+
+        runtime_source = (
+            ROOT / "scripts" / "build_runtime.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("pyserial-3.5\\LICENSE.txt", runtime_source)
+        self.assertIn("pywinrt-3.2.1\\LICENSE", runtime_source)
+        self.assertIn('Filter "winrt_*-3.2.1.dist-info"', runtime_source)
 
     def test_runtime_build_check_does_not_require_installed_vigembus(self):
         source = (ROOT / "scripts" / "build_runtime.ps1").read_text(

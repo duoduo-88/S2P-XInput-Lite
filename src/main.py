@@ -397,6 +397,18 @@ def main():
         )
 
     stop_requested = False
+
+    def handle_shutdown_signal(signum, frame):
+        nonlocal stop_requested
+        stop_requested = True
+
+    # Register before any transport open/scan can block.  The settings GUI
+    # uses CTRL_BREAK_EVENT to request the cleanup path below.
+    signal.signal(
+        signal.SIGBREAK,
+        handle_shutdown_signal
+    )
+
     last_status_stage = 0.0
     last_input_error = 0.0
     gyro_initialization_tracking = False
@@ -903,15 +915,6 @@ def main():
             cleanup()
             input(tr("\n按 Enter 鍵關閉...", "\nPress Enter to close..."))
             return
-
-    def handle_shutdown_signal(signum, frame):
-        nonlocal stop_requested
-        stop_requested = True
-
-    signal.signal(
-        signal.SIGBREAK,
-        handle_shutdown_signal
-    )
 
     try:
         last_heartbeat = 0.0

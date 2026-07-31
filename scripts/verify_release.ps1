@@ -85,12 +85,28 @@ if ((Split-Path -Leaf $PackageDirectory) -ne $expectedName) {
 $required = @(
     "S2P-XInput-Lite.exe",
     "GamepadTester.exe",
+    "LAUNCHER_BUILD.json",
     "LICENSE",
     "README.md",
     "README_zh-TW.md",
     "THIRD_PARTY_NOTICES.md",
+    "third_party\README.md",
+    "third_party\ASSET_PROVENANCE.md",
+    "third_party\licenses\adafruit-tinyusb-xinput\LICENSE",
+    "third_party\licenses\esp-idf-5.5.4\LICENSE",
+    "third_party\licenses\esp-tinyusb-1.7.6\LICENSE",
+    "third_party\licenses\esptool-4.11.0\LICENSE",
+    "third_party\licenses\esptool-4.11.0\UPSTREAM_README.md",
+    "third_party\licenses\fusion-1.2.11\LICENSE.md",
+    "third_party\licenses\gp2040-ce\LICENSE",
+    "third_party\licenses\pyserial-3.5\LICENSE.txt",
+    "third_party\licenses\pywinrt-3.2.1\LICENSE",
+    "third_party\licenses\tinyusb-0.19.0\LICENSE",
+    "third_party\sources\esptool-v4.11.0-source.zip",
     "runtime\python.exe",
     "runtime\pythonw.exe",
+    "runtime\Lib\site-packages\pyserial-3.5.dist-info\LICENSE.txt",
+    "runtime\Lib\site-packages\winrt_runtime-3.2.1.dist-info\LICENSE",
     "src\config_gui.py",
     "src\gamepad_test_app.py",
     "src\update_manager.py",
@@ -104,12 +120,70 @@ $required = @(
     "esp32s3\firmware\bootloader.bin",
     "esp32s3\firmware\partition-table.bin",
     "esp32s3\firmware\esp32s3_bluedroid_bridge.bin",
+    "esp32s3\tools\esptool.exe",
     "SHA256SUMS.txt"
 )
 foreach ($relative in $required) {
     $path = Join-Path $PackageDirectory $relative
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Release package is missing required file: $relative"
+    }
+}
+
+$esptoolPath = Join-Path $PackageDirectory "esp32s3\tools\esptool.exe"
+$expectedEsptoolHash = (
+    "71B8C5E129A44E26851BD8E59DC8D299" +
+    "A1EB07BBD445A8E0A49ED64A0444ED1A"
+)
+$actualEsptoolHash = (
+    Get-FileHash -LiteralPath $esptoolPath -Algorithm SHA256
+).Hash
+if ($actualEsptoolHash -ne $expectedEsptoolHash) {
+    throw "Packaged esptool.exe is not the audited official v4.11.0 binary."
+}
+
+$esptoolSourcePath = Join-Path $PackageDirectory (
+    "third_party\sources\esptool-v4.11.0-source.zip"
+)
+$expectedEsptoolSourceHash = (
+    "18B07BF6307C659A7752F81113C4EBFF" +
+    "56F656B95FDB4D08296240E4A6030793"
+)
+$actualEsptoolSourceHash = (
+    Get-FileHash -LiteralPath $esptoolSourcePath -Algorithm SHA256
+).Hash
+if ($actualEsptoolSourceHash -ne $expectedEsptoolSourceHash) {
+    throw "Packaged esptool source is not the audited v4.11.0 tag archive."
+}
+
+$launcherMetadataPath = Join-Path $PackageDirectory "LAUNCHER_BUILD.json"
+try {
+    $launcherMetadata = Get-Content `
+        -LiteralPath $launcherMetadataPath `
+        -Raw `
+        -Encoding utf8 | ConvertFrom-Json
+}
+catch {
+    throw "Launcher build metadata is invalid: $($_.Exception.Message)"
+}
+if (
+    $launcherMetadata.schema_version -ne 1 -or
+    $launcherMetadata.source_version -ne $version
+) {
+    throw "Packaged launcher version does not match source VERSION $version."
+}
+foreach ($name in @("S2P-XInput-Lite.exe", "GamepadTester.exe")) {
+    $entry = $launcherMetadata.launchers.PSObject.Properties[$name].Value
+    if ($null -eq $entry -or $entry.sha256 -notmatch '^[0-9A-Fa-f]{64}$') {
+        throw "Launcher build metadata is missing a valid hash for $name."
+    }
+    $actualHash = (
+        Get-FileHash `
+            -LiteralPath (Join-Path $PackageDirectory $name) `
+            -Algorithm SHA256
+    ).Hash
+    if ($actualHash -ne $entry.sha256) {
+        throw "Packaged launcher hash does not match $name."
     }
 }
 

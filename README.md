@@ -11,9 +11,9 @@
 
 S2P-XInput-Lite provides XInput-compatible controller output for a Switch 2 Pro Controller on Windows. It supports wired USB, an ESP32-S3 USB bridge, and native Windows BLE.
 
-Current version: **v0.7.2**
+Current version: **v0.7.3**
 
-[v0.7.2 release notes](RELEASE_NOTES_v0.7.2.md) ·
+[v0.7.3 release notes](RELEASE_NOTES_v0.7.3.md) ·
 [Source](https://github.com/duoduo-88/S2P-XInput-Lite/tree/main) ·
 [Latest published release](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 
@@ -127,8 +127,10 @@ Reusable hardware probes and automated tests are maintained in the development r
   writing, direct USB controller output, and the diagnostic page require the
   bundled `S2P-FW 1.0.1`; older S2P builds and upstream firmware cannot provide
   the complete `s2p_bridge 1.0.0` feature set.
-- The GitHub repository includes the complete ESP32 source. Packaged releases
-  contain only the flashing tool and required firmware images under `esp32s3`.
+- The GitHub source release includes the complete ESP32 source. Packaged
+  releases include the flashing tool and firmware images under `esp32s3`, plus
+  the flashing tool's exact tagged source and retained licenses under
+  `third_party`.
 - HidHide is not bundled and is not required for ESP32 or BLE. Without it, wired input still works, but games may detect both the physical HID and virtual XInput controller.
 - If wired status shows Basic mode, fully exit Steam or other controller tools, reconnect the controller, and start this application first
 - Wired USB always requests the controller's complete sensor report; the 6-axis/9-axis label reflects the data actually received rather than a selectable polling mode
@@ -137,7 +139,7 @@ Reusable hardware probes and automated tests are maintained in the development r
 
 Parts of this project are based on or derived from [Switch2Connect](https://github.com/TommyWabg/Switch2Connect) by TommyWabg and have been modified and reorganized for this project.
 
-S2P-XInput-Lite is licensed under the [GNU General Public License v3.0](LICENSE). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for third-party attribution and license information.
+S2P-XInput-Lite is licensed under the [GNU General Public License v3.0](LICENSE). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for attribution and [third_party/README.md](third_party/README.md) for the retained license and source materials shipped with releases.
 
 ## Compatibility and Trademarks
 

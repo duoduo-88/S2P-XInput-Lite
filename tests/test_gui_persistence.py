@@ -151,7 +151,7 @@ class GuiPersistenceTests(unittest.TestCase):
         )
         self.assertEqual(
             canvas.create_text.call_args.kwargs["text"],
-            "v0.7.2 Starting...",
+            "v0.7.3 Starting...",
         )
         window.geometry.assert_called_once_with("600x340+660+370")
         self.assertLess(
@@ -164,7 +164,7 @@ class GuiPersistenceTests(unittest.TestCase):
         animation()
         canvas.itemconfigure.assert_called_with(
             "loading-text",
-            text="v0.7.2 Starting.",
+            text="v0.7.3 Starting.",
         )
 
     def test_initial_window_is_positioned_before_it_is_revealed(self):

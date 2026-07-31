@@ -1904,6 +1904,10 @@ class ConfigGUI:
         self.main_process = None
         self.calibration_process = None
         self.flash_process = None
+        self._main_start_job = None
+        self._calibration_start_job = None
+        self._flash_detection_job = None
+        self._flash_operation_active = False
         self.vigembus_install_process = None
         self.vigembus_prompt_shown = False
         self.hidhide_prompt_shown = False
@@ -2094,13 +2098,17 @@ class ConfigGUI:
     def flash_firmware(self):
         """自動偵測 ESP32-S3 刷機連接埠並刷入相容韌體。"""
 
+        flash_process = getattr(self, "flash_process", None)
         if (
-            self.flash_process is not None
-            and self.flash_process.poll() is None
+            getattr(self, "_flash_operation_active", False)
+            or (
+                flash_process is not None
+                and flash_process.poll() is None
+            )
         ):
             messagebox.showinfo(
                 self.tr("韌體刷寫中"),
-                self.tr("ESP32-S3 韌體仍在刷寫中，請等待完成。"),
+                self.tr("ESP32-S3 韌體偵測或刷寫仍在進行，請等待完成。"),
             )
             return
 
@@ -2135,29 +2143,53 @@ class ConfigGUI:
         if not confirmed:
             return
 
-        # 關閉主連接程式，釋放正常模式的 COM Port
-        self.stop_main_process()
+        self._flash_operation_active = True
+        try:
+            # 關閉主連接程式，釋放正常模式的 COM Port
+            self.stop_main_process()
 
-        # 記錄目前存在的 COM Port
-        self.ports_before_flash = self.get_serial_ports()
+            # 記錄目前存在的 COM Port
+            self.ports_before_flash = self.get_serial_ports()
 
-        messagebox.showinfo(
-            "進入刷機模式",
-            "請讓 ESP32-S3 進入刷機模式：\n\n"
-            "1. 連接 ESP32-S3 的 OTG 接口\n"
-            "2. 按住 BOOT 按鈕\n"
-            "3. 按一下 RESET / EN 按鈕\n"
-            "4. 放開 RESET / EN\n"
-            "5. 再放開 BOOT\n\n"
-            "完成後不需要做其他操作。\n"
-            "程式會自動偵測刷機連接埠。"
-        )
+            messagebox.showinfo(
+                "進入刷機模式",
+                "請讓 ESP32-S3 進入刷機模式：\n\n"
+                "1. 連接 ESP32-S3 的 OTG 接口\n"
+                "2. 按住 BOOT 按鈕\n"
+                "3. 按一下 RESET / EN 按鈕\n"
+                "4. 放開 RESET / EN\n"
+                "5. 再放開 BOOT\n\n"
+                "完成後不需要做其他操作。\n"
+                "程式會自動偵測刷機連接埠。"
+            )
 
-        self.flash_detect_attempts = 0
-        self.detect_flash_port()
+            self.flash_detect_attempts = 0
+            self.detect_flash_port()
+        except Exception:
+            self._finish_flash_operation()
+            raise
+
+    def _cancel_scheduled_job(self, attribute):
+        """Cancel one tracked Tk job and clear its ownership token."""
+        job = getattr(self, attribute, None)
+        setattr(self, attribute, None)
+        if job is None:
+            return False
+        try:
+            self.root.after_cancel(job)
+        except (tk.TclError, AttributeError):
+            pass
+        return True
+
+    def _finish_flash_operation(self):
+        self._cancel_scheduled_job("_flash_detection_job")
+        self._flash_operation_active = False
 
     def detect_flash_port(self):
         """等待 ESP32-S3 刷機模式的新 COM Port。"""
+
+        if not getattr(self, "_flash_operation_active", False):
+            return
 
         current_ports = self.get_serial_ports()
 
@@ -2184,6 +2216,7 @@ class ConfigGUI:
         self.flash_detect_attempts += 1
 
         if self.flash_detect_attempts >= 60:
+            self._finish_flash_operation()
             messagebox.showerror(
                 "未偵測到刷機連接埠",
                 "30 秒內未偵測到新的 COM Port。\n\n"
@@ -2192,10 +2225,11 @@ class ConfigGUI:
             )
             return
 
-        self.root.after(
-            500,
-            self.detect_flash_port
-        )
+        def poll_again():
+            self._flash_detection_job = None
+            self.detect_flash_port()
+
+        self._flash_detection_job = self.root.after(500, poll_again)
 
     def start_firmware_flash(self, port):
         try:
@@ -2249,6 +2283,7 @@ class ConfigGUI:
 
         except Exception as exc:
             self.flash_process = None
+            self._finish_flash_operation()
             messagebox.showerror(
                 self.tr("刷機失敗"),
                 self.tr("無法啟動韌體刷入程序：\n") + str(exc)
@@ -2269,6 +2304,7 @@ class ConfigGUI:
     def finish_firmware_flash(self, process, return_code):
         if self.flash_process is process:
             self.flash_process = None
+        self._finish_flash_operation()
 
         if return_code == 0:
             messagebox.showinfo(
@@ -6177,7 +6213,7 @@ class ConfigGUI:
             return
         main_path = Path(__file__).with_name("main.py")
         if main_path.exists():
-            self.root.after(500, lambda: self.start_main(main_path))
+            self._schedule_main_start(main_path, 500)
 
     def request_live_settings_reload(self):
         """Ask a running connector to apply config.ini without reconnecting."""
@@ -10080,13 +10116,17 @@ class ConfigGUI:
             )
             return
 
+        calibration_process = getattr(self, "calibration_process", None)
         if (
-            self.calibration_process is not None
-            and self.calibration_process.poll() is None
+            getattr(self, "_calibration_start_job", None) is not None
+            or (
+                calibration_process is not None
+                and calibration_process.poll() is None
+            )
         ):
             messagebox.showinfo(
                 "校正已啟動",
-                "搖桿校正程式已經在執行。"
+                "搖桿校正程式正在啟動或已經在執行。"
             )
             return
 
@@ -10097,17 +10137,33 @@ class ConfigGUI:
             and self.main_process.poll() is None
         ):
             self.stop_main_process()
-            self.root.after(
-                500,
-                lambda: self._start_calibration_process(
-                    calibration_path
-                )
-            )
+            self._schedule_calibration_start(calibration_path, 500)
             return
 
         self._start_calibration_process(calibration_path)
 
+    def _schedule_calibration_start(self, calibration_path, delay_ms):
+        if getattr(self, "_calibration_start_job", None) is not None:
+            return False
+
+        def start_calibration():
+            self._calibration_start_job = None
+            self._start_calibration_process(calibration_path)
+
+        self._calibration_start_job = self.root.after(
+            delay_ms, start_calibration
+        )
+        return True
+
     def _start_calibration_process(self, calibration_path):
+        if getattr(self, "_close_in_progress", False):
+            return False
+        calibration_process = getattr(self, "calibration_process", None)
+        if (
+            calibration_process is not None
+            and calibration_process.poll() is None
+        ):
+            return False
         try:
             child_env = os.environ.copy()
             child_env["PYTHONUTF8"] = "1"
@@ -10124,11 +10180,13 @@ class ConfigGUI:
                     0
                 )
             )
+            return True
         except Exception as exc:
             messagebox.showerror(
                 "錯誤",
                 f"無法啟動校正程序：\n{exc}"
             )
+            return False
 
     def stop_main_process(self):
         """先正常關閉主連接程式，失敗時再強制終止。"""
@@ -10199,13 +10257,27 @@ class ConfigGUI:
         self.main_process = None
 
     def start_main(self, main_path):
+        if getattr(self, "_close_in_progress", False):
+            return False
+        main_process = getattr(self, "main_process", None)
+        if main_process is not None and main_process.poll() is None:
+            return False
+        self._cancel_scheduled_job("_main_start_job")
         if not self.prepare_hidhide_before_start():
-            return
+            return False
         try:
             child_env = os.environ.copy()
             child_env["PYTHONUNBUFFERED"] = "1"
             child_env["PYTHONUTF8"] = "1"
             child_env["PYTHONIOENCODING"] = "utf-8"
+            popen_options = {}
+            if hasattr(subprocess, "STARTUPINFO"):
+                startup_info = subprocess.STARTUPINFO()
+                startup_info.dwFlags |= getattr(
+                    subprocess, "STARTF_USESHOWWINDOW", 0
+                )
+                startup_info.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+                popen_options["startupinfo"] = startup_info
             self.main_process = subprocess.Popen(
                 [str(PYTHON_EXE), str(main_path)],
                 cwd=str(main_path.parent),
@@ -10214,12 +10286,29 @@ class ConfigGUI:
                     getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
                     | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
                 ),
+                **popen_options,
             )
+            return True
         except Exception as exc:
             messagebox.showerror(
                 "錯誤",
                 f"無法啟動連接程式：\n{exc}"
             )
+            return False
+
+    def _schedule_main_start(self, main_path, delay_ms):
+        """Coalesce connector restarts so only the newest request survives."""
+        self._cancel_scheduled_job("_main_start_job")
+        if getattr(self, "_close_in_progress", False):
+            return False
+
+        def start_connector():
+            self._main_start_job = None
+            self.start_main(main_path)
+
+        self._main_start_job = self.root.after(delay_ms, start_connector)
+        return True
+
     def start_connection_on_launch(self):
         """啟動 GUI 時立即探測傳輸模式並刷新狀態檔。"""
         if not self.refresh_vigembus_status():
@@ -10633,7 +10722,7 @@ class ConfigGUI:
             if main_path.exists():
                 # A USB personality change needs time to disappear and
                 # enumerate again before the connector scans serial ports.
-                self.root.after(1800, lambda: self.start_main(main_path))
+                self._schedule_main_start(main_path, 1800)
 
 
     def restart_main(self):
@@ -10685,12 +10774,11 @@ class ConfigGUI:
             self.stop_main_process()
 
             # 等待 COM Port 完全釋放
-            self.root.after(
-                500,
-                lambda: self.start_main(
-                    main_path
-                )
-            )
+            self._schedule_main_start(main_path, 500)
+            return
+
+        if getattr(self, "_main_start_job", None) is not None:
+            self._schedule_main_start(main_path, 500)
             return
 
         # 沒有舊程序時直接啟動
@@ -10814,6 +10902,16 @@ class ConfigGUI:
     def _perform_on_close(self):
         """關閉 GUI 前檢查未儲存設定，並清理所有子程序。"""
 
+        flash_process = getattr(self, "flash_process", None)
+        if flash_process is not None and flash_process.poll() is None:
+            messagebox.showinfo(
+                self.tr("韌體刷寫中"),
+                self.tr("韌體刷寫完成前無法關閉設定視窗。"),
+                parent=self.root,
+            )
+            self._close_in_progress = False
+            return
+
         # 先檢查是否有尚未儲存的設定
         if self.has_unsaved_changes():
             confirmed = messagebox.askyesno(
@@ -10864,6 +10962,9 @@ class ConfigGUI:
             self._gamepad_test_language_restart_job = None
         self._gamepad_test_reopen_requested = False
         self._close_gamepad_test_process()
+        self._cancel_scheduled_job("_main_start_job")
+        self._cancel_scheduled_job("_calibration_start_job")
+        self._finish_flash_operation()
 
         # 先正常關閉主連接程式
         # 讓 main.py 執行 finally，

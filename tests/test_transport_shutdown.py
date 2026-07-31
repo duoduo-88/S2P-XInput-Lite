@@ -2,6 +2,7 @@ import asyncio
 import threading
 import time
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from bluetooth_controller import BluetoothController
@@ -39,6 +40,16 @@ class _HidDevice:
 
 
 class TransportShutdownTests(unittest.TestCase):
+    def test_shutdown_handler_is_registered_before_transport_open(self):
+        source = (
+            Path(__file__).resolve().parents[1] / "src" / "main.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertLess(
+            source.index("signal.signal("),
+            source.index("controller.open()"),
+        )
+
     @patch("esp32_bridge.time.sleep")
     def test_esp32_zero_rumble_precedes_serial_close(self, _sleep):
         events = []

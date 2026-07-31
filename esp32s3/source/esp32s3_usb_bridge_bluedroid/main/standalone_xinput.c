@@ -2,9 +2,13 @@
  * USB XInput device support for S2P-XInput-Lite.
  *
  * The vendor interface, XUSB20 Microsoft OS 2.0 descriptor and 20-byte report
- * layout are based on the MIT-licensed Adafruit TinyUSB XInput example and the
- * MIT-licensed GP2040-CE XInput implementation. This implementation uses a
- * development VID/PID and does not impersonate a retail Xbox controller.
+ * layout incorporate or adapt portions of the MIT-licensed Adafruit TinyUSB
+ * XInput example (Copyright (c) 2019 Ha Thach for Adafruit Industries) and the
+ * MIT-licensed GP2040-CE XInput implementation (Copyright (c) 2021 Jason
+ * Skuby; Copyright (c) 2024 OpenStickCommunity). Complete notices are retained
+ * under third_party/licenses in the repository and release package. This
+ * implementation uses a development VID/PID and does not impersonate a retail
+ * Xbox controller.
  */
 #include "standalone_xinput.h"
 

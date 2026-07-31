@@ -133,7 +133,7 @@ class DiagnosticDeviceSelectionTests(unittest.TestCase):
     def test_gamepad_tester_title_includes_product_and_version(self):
         self.assertEqual(
             GAMEPAD_TESTER_TITLE,
-            "S2P-XInput-Lite v0.7.2 GamepadTester",
+            "S2P-XInput-Lite v0.7.3 GamepadTester",
         )
 
 
@@ -1287,7 +1287,7 @@ class GamepadMathTests(unittest.TestCase):
         )
         self.assertEqual(
             canvas.create_text.call_args.kwargs["text"],
-            "v0.7.2 Starting Gamepad Tester...",
+            "v0.7.3 Starting Gamepad Tester...",
         )
         window.geometry.assert_called_once_with("600x340+660+370")
         root.update.assert_called_once_with()
