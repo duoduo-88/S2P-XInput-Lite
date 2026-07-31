@@ -155,6 +155,35 @@ if ($LASTEXITCODE -ne 0) {
     throw "Could not install the pinned binary runtime dependencies."
 }
 
+# Some upstream wheels identify their licenses in METADATA but omit the
+# actual notice file. Retain the exact, version-pinned upstream license text in
+# their dist-info directories so binary redistribution carries the notices.
+$pyserialLicense = Join-Path `
+    $repoRoot "third_party\licenses\pyserial-3.5\LICENSE.txt"
+$pyserialDistInfo = Join-Path $sitePackages "pyserial-3.5.dist-info"
+Copy-Item `
+    -LiteralPath $pyserialLicense `
+    -Destination (Join-Path $pyserialDistInfo "LICENSE.txt") `
+    -Force
+
+$pywinrtLicense = Join-Path `
+    $repoRoot "third_party\licenses\pywinrt-3.2.1\LICENSE"
+$winrtDistInfo = @(
+    Get-ChildItem `
+        -LiteralPath $sitePackages `
+        -Directory `
+        -Filter "winrt_*-3.2.1.dist-info"
+)
+if (-not $winrtDistInfo.Count) {
+    throw "The pinned PyWinRT dist-info directories were not installed."
+}
+foreach ($directory in $winrtDistInfo) {
+    Copy-Item `
+        -LiteralPath $pywinrtLicense `
+        -Destination (Join-Path $directory.FullName "LICENSE") `
+        -Force
+}
+
 $downloadDirectory = Join-Path $buildRoot "downloads\vgamepad"
 Assert-BuildPath $downloadDirectory
 if (Test-Path -LiteralPath $downloadDirectory) {

@@ -188,6 +188,11 @@ foreach ($name in @(
         -RelativePath $name `
         -DestinationRoot $packageRoot
 }
+Copy-CuratedTree `
+    -SourceRoot (Join-Path $repoRoot "third_party") `
+    -RelativeRoot "third_party" `
+    -Extensions @("", ".md", ".txt", ".zip") `
+    -DestinationRoot $packageRoot
 Copy-ReleaseFile `
     -Source $releaseNotes `
     -RelativePath (Split-Path -Leaf $releaseNotes) `

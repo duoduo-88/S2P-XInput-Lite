@@ -125,7 +125,10 @@ Mapping Layer 檔案是全域資源，可在按住按鍵組合時暫時覆寫目
 
 本專案部分內容以 TommyWabg 的 [Switch2Connect](https://github.com/TommyWabg/Switch2Connect) 為基礎或由其衍生，並已為本專案修改與重整。
 
-S2P-XInput-Lite 採用 [GNU General Public License v3.0](LICENSE)。第三方來源及授權資訊請參閱 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+S2P-XInput-Lite 採用 [GNU General Public License v3.0](LICENSE)。第三方來源與
+著作權聲明請參閱 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)；發佈包所附的
+完整授權文字、版本雜湊與對應源碼位置記錄在
+[third_party/README.md](third_party/README.md)。
 
 ## 相容性與商標
 

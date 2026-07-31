@@ -16,6 +16,12 @@ S2P-FW 1.0.1.
   CTRL+BREAK shutdown support.
 - Records launcher source version and SHA-256 hashes during the build. Release
   packaging now rejects missing, stale, or mismatched launcher artifacts.
+- Replaces the previously untraceable esptool executable with the verified
+  binary from Espressif's official v4.11.0 Windows release.
+- Ships the complete esptool GPLv2 license and tagged source, retained
+  firmware-component license texts, and project asset provenance.
+- Restores the upstream pyserial and PyWinRT license files omitted from their
+  binary wheels into the portable runtime.
 
 ## 繁體中文
 
@@ -27,3 +33,8 @@ v0.7.3 是桌面端可靠性修正版；隨附的 ESP32 韌體版本維持 S2P-F
 - 在 transport 啟動前註冊關閉訊號，裝置搜尋期間關閉也能執行完整清理。
 - 隱藏連接程式的 console，同時保留 CTRL+BREAK 正常關閉能力。
 - 建置 launcher 時記錄來源版本及 SHA-256；封裝會拒絕缺少、過期或雜湊不符的 launcher。
+- 將原本無法追溯建置來源的 esptool，換成經 SHA-256 核對的 Espressif 官方
+  v4.11.0 Windows 執行檔。
+- 發佈包會附上 esptool 的完整 GPLv2 授權及對應標籤源碼、韌體元件授權全文，
+  並記錄專案圖片與截圖來源。
+- 將 pyserial 與 PyWinRT wheel 未附的上游授權全文補回可攜式 runtime。

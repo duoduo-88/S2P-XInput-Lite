@@ -30,6 +30,9 @@ class ReleaseBaselineTests(unittest.TestCase):
         self.assertIn('"LAUNCHER_BUILD.json"', source)
         self.assertIn("Packaged launcher version does not match", source)
         self.assertIn("Packaged launcher hash does not match", source)
+        self.assertIn("third_party\\sources\\esptool-v4.11.0-source.zip", source)
+        self.assertIn("audited official v4.11.0 binary", source)
+        self.assertIn("audited v4.11.0 tag archive", source)
 
         package_source = (
             ROOT / "scripts" / "package_release.ps1"
@@ -38,7 +41,15 @@ class ReleaseBaselineTests(unittest.TestCase):
             ROOT / "scripts" / "build_launchers.ps1"
         ).read_text(encoding="utf-8")
         self.assertIn("Launcher build version does not match", package_source)
+        self.assertIn('"third_party"', package_source)
         self.assertIn("source_version = $version", build_source)
+
+        runtime_source = (
+            ROOT / "scripts" / "build_runtime.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("pyserial-3.5\\LICENSE.txt", runtime_source)
+        self.assertIn("pywinrt-3.2.1\\LICENSE", runtime_source)
+        self.assertIn('Filter "winrt_*-3.2.1.dist-info"', runtime_source)
 
     def test_runtime_build_check_does_not_require_installed_vigembus(self):
         source = (ROOT / "scripts" / "build_runtime.ps1").read_text(
