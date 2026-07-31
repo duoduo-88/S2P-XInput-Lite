@@ -105,6 +105,25 @@ class GuiOperationSerializationTests(unittest.TestCase):
         self.assertFalse(gui.start_main(config_gui.Path("main.py")))
         gui.prepare_hidhide_before_start.assert_not_called()
 
+    def test_connector_starts_in_a_visible_console(self):
+        gui = self.make_gui()
+        gui.prepare_hidhide_before_start = Mock(return_value=True)
+        process = Mock()
+
+        with patch.object(
+            config_gui.subprocess, "Popen", return_value=process
+        ) as popen:
+            self.assertTrue(gui.start_main(config_gui.Path("main.py")))
+
+        self.assertIs(gui.main_process, process)
+        options = popen.call_args.kwargs
+        console_flag = getattr(config_gui.subprocess, "CREATE_NEW_CONSOLE", 0)
+        self.assertEqual(
+            options["creationflags"] & console_flag,
+            console_flag,
+        )
+        self.assertNotIn("startupinfo", options)
+
 
 if __name__ == "__main__":
     unittest.main()

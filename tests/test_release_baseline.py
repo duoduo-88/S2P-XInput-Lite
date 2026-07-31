@@ -13,9 +13,9 @@ FIRMWARE_ROOT = (
 
 
 class ReleaseBaselineTests(unittest.TestCase):
-    def test_desktop_release_version_is_073(self):
+    def test_desktop_release_version_is_074(self):
         source = (ROOT / "src" / "version.py").read_text(encoding="utf-8")
-        self.assertRegex(source, r'VERSION\s*=\s*"0\.7\.3"')
+        self.assertRegex(source, r'VERSION\s*=\s*"0\.7\.4"')
 
     def test_release_manifest_requires_exact_payload_coverage(self):
         source = (ROOT / "scripts" / "verify_release.ps1").read_text(
@@ -28,6 +28,7 @@ class ReleaseBaselineTests(unittest.TestCase):
         self.assertIn("Unsafe SHA256SUMS path", source)
         self.assertIn("& $runtimePython -B -c $importCheck", source)
         self.assertIn('"LAUNCHER_BUILD.json"', source)
+        self.assertIn('"image\\icon.ico"', source)
         self.assertIn("Packaged launcher version does not match", source)
         self.assertIn("Packaged launcher hash does not match", source)
         self.assertIn("third_party\\sources\\esptool-v4.11.0-source.zip", source)
@@ -42,7 +43,13 @@ class ReleaseBaselineTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("Launcher build version does not match", package_source)
         self.assertIn('"third_party"', package_source)
+        self.assertIn('".ico"', package_source)
         self.assertIn("source_version = $version", build_source)
+
+        launcher_source = (
+            ROOT / "native" / "build_launcher.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn('"image\\icon.ico"', launcher_source)
 
         runtime_source = (
             ROOT / "scripts" / "build_runtime.ps1"

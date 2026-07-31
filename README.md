@@ -11,9 +11,9 @@
 
 S2P-XInput-Lite provides XInput-compatible controller output for a Switch 2 Pro Controller on Windows. It supports wired USB, an ESP32-S3 USB bridge, and native Windows BLE.
 
-Current version: **v0.7.3**
+Current version: **v0.7.4**
 
-[v0.7.3 release notes](RELEASE_NOTES_v0.7.3.md) ·
+[v0.7.4 release notes](RELEASE_NOTES_v0.7.4.md) ·
 [Source](https://github.com/duoduo-88/S2P-XInput-Lite/tree/main) ·
 [Latest published release](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 
@@ -73,7 +73,9 @@ The packaged release includes a portable Python runtime and all required package
 5. Choose a game profile or adjust settings, then use **Save Profile** or **Save New Profile**.
 6. Saving the active profile updates its stored settings. Switching profiles while connected automatically stops the connection program, applies the selected profile, refreshes the GUI, and reconnects. Use **Restart** only after changing the connection method, device, or serial settings.
 
-The application checks wired USB first, then ESP32, and finally native BLE. Keep the connection program running while playing.
+The application checks wired USB first, then ESP32, and finally native BLE. The connector opens a separate black command window with live connection and input status; keep that command window open while playing. Minimizing the settings UI sends only its main window to the Windows notification area, while the command window remains visible and the connection continues. Click the notification icon to restore Settings, or right-click it for **Show Settings** and **Exit**.
+
+The settings UI and Gamepad Tester are global single-instance applications. Reopening `S2P-XInput-Lite.exe`, `GamepadTester.exe`, or the in-app tester restores and foregrounds the existing window instead of starting a second process.
 
 If HidHide is missing, the application offers to open its official download page. Declining suppresses the reminder on later launches and does not block the connection; click **HidHide: Missing** at the bottom of the window to open the download page later. When a wired controller is detected and HidHide is installed but not configured, the application asks before adding the portable `runtime\python.exe`, `src\raw_hid_probe.exe`, and the selected physical Nintendo HID to HidHide. Declining also suppresses later reminders; click **HidHide: Off/Setup** to reopen the setup confirmation. Accepting may enable global cloaking; existing HidHide entries belonging to other applications are preserved. **Restore Defaults** removes these two application entries and the selected controller from HidHide while preserving unrelated entries; reconnect the USB controller first if it is currently hidden.
 

@@ -11,6 +11,7 @@ import tkinter as tk
 from config_utils import CONFIG_PATH, load_config
 from gamepad_test_window import GamepadTestWindow, TEST_ICON_PATH
 from localization import translate_text
+from single_instance import SingleInstance, activate_tk_window
 from version import VERSION
 
 
@@ -20,6 +21,7 @@ GAMEPAD_TEST_STARTUP_IMAGE = (
     TEST_ICON_PATH.parent / "S2P-XInput-Lite-600x340.png"
 )
 GAMEPAD_TEST_SPLASH_MIN_SECONDS = 0.75
+GAMEPAD_TEST_INSTANCE_NAME = "S2P-XInput-Lite.GamepadTester.v1"
 
 
 def command_line_language(arguments):
@@ -227,90 +229,116 @@ class GamepadTestHost:
         return translate_text(text, self.language)
 
 
-def main():
+def main(instance=None):
+    instance = instance or SingleInstance(GAMEPAD_TEST_INSTANCE_NAME)
+    if not instance.is_primary:
+        try:
+            instance.notify_existing()
+        finally:
+            instance.close()
+        return False
+    instance_error = getattr(instance, "error", None)
+    if instance_error is not None:
+        print(f"Single-instance guard unavailable: {instance_error}")
+
     # AppUserModelID must be set before the first top-level window is created.
-    configure_windows_taskbar_identity()
-    root = tk.Tk()
-    root_icon = apply_root_icon(root)
-    # Keep the PhotoImage alive for the complete Tk interpreter lifetime.
-    root._gamepad_test_icon = root_icon
-    root.withdraw()
-    host = GamepadTestHost(
-        root,
-        language=command_line_language(sys.argv[1:]),
-        allow_automatic_update_prompt="--parent-pipe" not in sys.argv,
-    )
-    splash = None
-    splash_started_at = time.monotonic()
-    if "--parent-pipe" not in sys.argv:
-        try:
-            splash = GamepadTestStartupOverlay(
-                root, language=host.language
-            )
-        except (OSError, tk.TclError):
-            splash = None
-    tester = GamepadTestWindow(host)
-    tester.open()
-    if splash is not None:
-        delay_ms = max(
-            0,
-            int(round(
-                (
-                    GAMEPAD_TEST_SPLASH_MIN_SECONDS
-                    - (time.monotonic() - splash_started_at)
-                )
-                * 1000.0
-            )),
+    try:
+        configure_windows_taskbar_identity()
+        root = tk.Tk()
+        root_icon = apply_root_icon(root)
+        # Keep the PhotoImage alive for the complete Tk interpreter lifetime.
+        root._gamepad_test_icon = root_icon
+        root.withdraw()
+        host = GamepadTestHost(
+            root,
+            language=command_line_language(sys.argv[1:]),
+            allow_automatic_update_prompt="--parent-pipe" not in sys.argv,
         )
-        root.after(delay_ms, splash.destroy)
-
-    closing = False
-
-    def close_all():
-        nonlocal closing
-        if closing:
-            return
-        closing = True
+        splash = None
+        splash_started_at = time.monotonic()
+        if "--parent-pipe" not in sys.argv:
+            try:
+                splash = GamepadTestStartupOverlay(
+                    root, language=host.language
+                )
+            except (OSError, tk.TclError):
+                splash = None
+        tester = GamepadTestWindow(host)
+        tester.open()
         if splash is not None:
-            splash.destroy()
+            delay_ms = max(
+                0,
+                int(round(
+                    (
+                        GAMEPAD_TEST_SPLASH_MIN_SECONDS
+                        - (time.monotonic() - splash_started_at)
+                    )
+                    * 1000.0
+                )),
+            )
+            root.after(delay_ms, splash.destroy)
+
+        closing = False
+
+        def close_all():
+            nonlocal closing
+            if closing:
+                return
+            closing = True
+            if splash is not None:
+                splash.destroy()
+            if "--parent-pipe" in sys.argv:
+                notify_parent_closing()
+            tester.close()
+            root.quit()
+            try:
+                root.destroy()
+            except tk.TclError:
+                pass
+
+        tester.window.protocol("WM_DELETE_WINDOW", close_all)
         if "--parent-pipe" in sys.argv:
-            notify_parent_closing()
-        tester.close()
-        root.quit()
-        try:
-            root.destroy()
-        except tk.TclError:
-            pass
+            notify_parent_ready()
 
-    tester.window.protocol("WM_DELETE_WINDOW", close_all)
-    if "--parent-pipe" in sys.argv:
-        notify_parent_ready()
+        if "--parent-pipe" in sys.argv:
+            shutdown_requested = threading.Event()
+            show_requested = threading.Event()
 
-    if "--parent-pipe" in sys.argv:
-        shutdown_requested = threading.Event()
-        show_requested = threading.Event()
+            def poll_parent_request():
+                if shutdown_requested.is_set():
+                    close_all()
+                elif not closing:
+                    if show_requested.is_set():
+                        show_requested.clear()
+                        tester.open()
+                    root.after(50, poll_parent_request)
 
-        def poll_parent_request():
-            if shutdown_requested.is_set():
-                close_all()
-            elif not closing:
-                if show_requested.is_set():
-                    show_requested.clear()
+            threading.Thread(
+                target=watch_parent_commands,
+                args=(
+                    getattr(sys.stdin, "buffer", sys.stdin),
+                    shutdown_requested,
+                    show_requested,
+                ),
+                daemon=True,
+                name="GamepadTestParentWatch",
+            ).start()
+            root.after(50, poll_parent_request)
+
+        def poll_activation_request():
+            try:
+                if instance.activation_requested() and not closing:
                     tester.open()
-                root.after(50, poll_parent_request)
+                    activate_tk_window(tester.window)
+                root.after(100, poll_activation_request)
+            except (OSError, tk.TclError):
+                pass
 
-        threading.Thread(
-            target=watch_parent_commands,
-            args=(
-                getattr(sys.stdin, "buffer", sys.stdin),
-                shutdown_requested,
-                show_requested,
-            ),
-            daemon=True,
-            name="GamepadTestParentWatch",
-        ).start()
-        root.after(50, poll_parent_request)
-    root.mainloop()
+        root.after(100, poll_activation_request)
+        root.mainloop()
+        return True
+    finally:
+        instance.close()
 
 
 if __name__ == "__main__":

@@ -99,6 +99,8 @@ from mapping_targets import (
     stick_setting_key_error,
 )
 from settings_schema import SettingValidationError
+from single_instance import SingleInstance, activate_tk_window
+from system_tray import SystemTrayIcon
 from gui_settings import (
     apply_gui_settings_to_config,
     canonical_settings_snapshot,
@@ -136,6 +138,7 @@ _GUI_ROOT = None
 _MESSAGEBOX_FUNCTIONS = {}
 HIDHIDE_DOWNLOAD_URL = "https://github.com/nefarius/HidHide/releases/latest"
 LOGGER = logging.getLogger(__name__)
+SETTINGS_INSTANCE_NAME = "S2P-XInput-Lite.Settings.v1"
 
 
 GYRO_DEFAULT_KEYS = (
@@ -1931,6 +1934,10 @@ class ConfigGUI:
         self._restore_splash = None
         self._restore_splash_generation = None
         self._main_window_positioned = False
+        self._hidden_to_system_tray = False
+        self._system_tray = None
+        self._system_tray_poll_job = None
+        self._system_tray_minimize_job = None
         self.root.bind("<Unmap>", self._on_root_unmap, add="+")
         self.root.bind("<Map>", self._on_root_map, add="+")
 
@@ -2086,6 +2093,7 @@ class ConfigGUI:
         # 手把時也能刷新到狀態列，而不是顯示上次留下的狀態。
         self.root.after(250, self.start_connection_on_launch)
         self.root.after(1400, self.start_automatic_update_check)
+        self._start_system_tray()
 
     def get_serial_ports(self):
         """取得目前所有可用的 COM Port。"""
@@ -3492,6 +3500,166 @@ class ConfigGUI:
         self.root.update_idletasks()
         self.update_adaptive_window(allow_unmapped=True)
         self.root.deiconify()
+
+    def _system_tray_labels(self):
+        """Return native tray-menu labels in the selected GUI language."""
+        if self.language == "en":
+            return "Show Settings", "Exit"
+        return "顯示設定", "結束程式"
+
+    def _start_system_tray(self):
+        """Prepare an invisible tray icon for later minimize requests."""
+        show_label, exit_label = self._system_tray_labels()
+        tray = SystemTrayIcon(
+            APP_TITLE,
+            executable_path=PROJECT_ROOT / "S2P-XInput-Lite.exe",
+            show_label=show_label,
+            exit_label=exit_label,
+            icon_path=PROJECT_ROOT / "image" / "icon.ico",
+        )
+        if not tray.start():
+            tray.stop()
+            return False
+        self._system_tray = tray
+        self._schedule_system_tray_poll()
+        return True
+
+    def _system_tray_available(self):
+        tray = getattr(self, "_system_tray", None)
+        return bool(tray is not None and tray.available)
+
+    def _schedule_system_tray_poll(self):
+        if not self._system_tray_available():
+            self._system_tray_poll_job = None
+            if getattr(self, "_hidden_to_system_tray", False):
+                try:
+                    self.root.after_idle(self.restore_from_system_tray)
+                except (AttributeError, tk.TclError):
+                    pass
+            return
+        try:
+            self._system_tray_poll_job = self.root.after(
+                100, self._poll_system_tray_actions
+            )
+        except (AttributeError, tk.TclError):
+            self._system_tray_poll_job = None
+
+    def _poll_system_tray_actions(self):
+        """Handle native menu choices exclusively on Tk's GUI thread."""
+        self._system_tray_poll_job = None
+        tray = getattr(self, "_system_tray", None)
+        if tray is None:
+            return
+        while True:
+            action = tray.get_action()
+            if action is None:
+                break
+            if action == "show":
+                self.restore_from_system_tray()
+            elif action == "exit":
+                self.restore_from_system_tray()
+                try:
+                    self.root.after(50, self.on_close)
+                except (AttributeError, tk.TclError):
+                    pass
+        self._schedule_system_tray_poll()
+
+    def _schedule_minimize_to_system_tray(self, delay=30):
+        if getattr(self, "_system_tray_minimize_job", None) is not None:
+            return
+
+        def minimize_if_iconic():
+            self._system_tray_minimize_job = None
+            try:
+                if self.root.state() == "iconic":
+                    self._minimize_to_system_tray()
+            except (AttributeError, tk.TclError):
+                pass
+
+        try:
+            self._system_tray_minimize_job = self.root.after(
+                max(0, int(delay)), minimize_if_iconic
+            )
+        except (AttributeError, tk.TclError):
+            self._system_tray_minimize_job = None
+
+    def _minimize_to_system_tray(self):
+        """Hide only the settings root after its tray icon is confirmed."""
+        if getattr(self, "_hidden_to_system_tray", False):
+            return True
+        tray = getattr(self, "_system_tray", None)
+        if tray is None or not tray.available or not tray.show():
+            return False
+
+        self._hidden_to_system_tray = True
+        self._root_restore_pending = True
+        self._hide_restore_splash()
+        self._begin_root_restore_cycle()
+        try:
+            current = self.root.grab_current()
+            if current is not None:
+                current.grab_release()
+            self.root.withdraw()
+            return True
+        except (AttributeError, tk.TclError):
+            self._hidden_to_system_tray = False
+            tray.hide()
+            try:
+                self.root.deiconify()
+            except (AttributeError, tk.TclError):
+                pass
+            return False
+
+    def restore_from_system_tray(self):
+        """Restore and foreground a settings root hidden in the tray."""
+        if not getattr(self, "_hidden_to_system_tray", False):
+            return False
+        self._hidden_to_system_tray = False
+        tray = getattr(self, "_system_tray", None)
+        if tray is not None:
+            tray.hide()
+        self._root_restore_pending = True
+        try:
+            self.root.deiconify()
+            self.root.after(75, lambda: activate_tk_window(self.root))
+            return True
+        except (AttributeError, tk.TclError):
+            return False
+
+    def activate_existing_settings(self):
+        """Restore the existing root or its active dialog after relaunch."""
+        if self.restore_from_system_tray():
+            return True
+        target = self.root
+        try:
+            focused = self.root.focus_get()
+            if focused is not None:
+                target = focused.winfo_toplevel()
+        except (AttributeError, tk.TclError):
+            pass
+        return activate_tk_window(target)
+
+    def _stop_system_tray(self):
+        """Cancel Tk polling and synchronously remove the native tray icon."""
+        poll_job = getattr(self, "_system_tray_poll_job", None)
+        self._system_tray_poll_job = None
+        if poll_job is not None:
+            try:
+                self.root.after_cancel(poll_job)
+            except (AttributeError, tk.TclError):
+                pass
+        minimize_job = getattr(self, "_system_tray_minimize_job", None)
+        self._system_tray_minimize_job = None
+        if minimize_job is not None:
+            try:
+                self.root.after_cancel(minimize_job)
+            except (AttributeError, tk.TclError):
+                pass
+        tray = getattr(self, "_system_tray", None)
+        self._system_tray = None
+        self._hidden_to_system_tray = False
+        if tray is not None:
+            tray.stop()
 
     def request_adaptive_window_update(self, delay=0):
         """Coalesce profile/language layout changes into one safe resize."""
@@ -6851,6 +7019,9 @@ class ConfigGUI:
             )
 
         self.apply_language()
+        tray = getattr(self, "_system_tray", None)
+        if tray is not None:
+            tray.update_labels(*self._system_tray_labels())
         if restart_gamepad_test:
             if self._gamepad_test_language_restart_job is not None:
                 try:
@@ -8155,6 +8326,15 @@ class ConfigGUI:
     def _on_root_unmap(self, event=None):
         """Release Tk grab while the complete application is minimized."""
         if event is not None and event.widget is not self.root:
+            return
+
+        if getattr(self, "_hidden_to_system_tray", False):
+            return
+        if self._system_tray_available():
+            # Windows can deliver <Unmap> just before Tk reports ``iconic``.
+            # The delayed check converts only a genuine user minimize into a
+            # tray hide; unrelated withdraws retain their original meaning.
+            self._schedule_minimize_to_system_tray()
             return
 
         try:
@@ -10270,14 +10450,8 @@ class ConfigGUI:
             child_env["PYTHONUNBUFFERED"] = "1"
             child_env["PYTHONUTF8"] = "1"
             child_env["PYTHONIOENCODING"] = "utf-8"
-            popen_options = {}
-            if hasattr(subprocess, "STARTUPINFO"):
-                startup_info = subprocess.STARTUPINFO()
-                startup_info.dwFlags |= getattr(
-                    subprocess, "STARTF_USESHOWWINDOW", 0
-                )
-                startup_info.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
-                popen_options["startupinfo"] = startup_info
+            # Keep the connector console visible: it is the live status view
+            # for connection, pairing, input and transport diagnostics.
             self.main_process = subprocess.Popen(
                 [str(PYTHON_EXE), str(main_path)],
                 cwd=str(main_path.parent),
@@ -10286,7 +10460,6 @@ class ConfigGUI:
                     getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
                     | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
                 ),
-                **popen_options,
             )
             return True
         except Exception as exc:
@@ -10996,6 +11169,7 @@ class ConfigGUI:
             except Exception:
                 pass
 
+        self._stop_system_tray()
         self.root.destroy()
 
     def save_config(self, show_confirmation=True):
@@ -11163,37 +11337,62 @@ def show_startup_window(root):
     )
 
 
-def main():
+def main(instance=None):
+    instance = instance or SingleInstance(SETTINGS_INSTANCE_NAME)
+    if not instance.is_primary:
+        try:
+            instance.notify_existing()
+        finally:
+            instance.close()
+        return False
+    instance_error = getattr(instance, "error", None)
+    if instance_error is not None:
+        print(f"Single-instance guard unavailable: {instance_error}")
+
     if _STARTUP_LOG_STREAM is not None:
         write_startup_field(
             _STARTUP_LOG_STREAM, "PHASE", "creating_tk_root"
         )
-    root = tk.Tk()
-    # Tk starts a new root at its small default geometry. Keep it hidden until
-    # every widget has been created and the final centred geometry is ready.
-    root.withdraw()
-    startup_window = show_startup_window(root)
-    root._s2p_startup_overlay = startup_window
     try:
-        gui = ConfigGUI(root)
-    except Exception:
+        root = tk.Tk()
+        # Tk starts a new root at its small default geometry. Keep it hidden
+        # until every widget has been created and final geometry is ready.
+        root.withdraw()
+        startup_window = show_startup_window(root)
+        root._s2p_startup_overlay = startup_window
+        try:
+            gui = ConfigGUI(root)
+        except Exception:
+            root._s2p_startup_overlay = None
+            startup_window.destroy()
+            raise
+        if _STARTUP_LOG_STREAM is not None:
+            write_startup_field(
+                _STARTUP_LOG_STREAM, "PHASE", "config_gui_built"
+            )
         root._s2p_startup_overlay = None
+        gui.show_initial_window()
+        root.update_idletasks()
+        gui._flush_dwm_composition()
         startup_window.destroy()
-        raise
-    if _STARTUP_LOG_STREAM is not None:
-        write_startup_field(
-            _STARTUP_LOG_STREAM, "PHASE", "config_gui_built"
-        )
-    root._s2p_startup_overlay = None
-    gui.show_initial_window()
-    root.update_idletasks()
-    gui._flush_dwm_composition()
-    startup_window.destroy()
-    if _STARTUP_LOG_STREAM is not None:
-        write_startup_field(
-            _STARTUP_LOG_STREAM, "PHASE", "gui_visible"
-        )
-    root.mainloop()
+
+        def poll_activation_request():
+            try:
+                if instance.activation_requested():
+                    gui.activate_existing_settings()
+                root.after(100, poll_activation_request)
+            except (OSError, tk.TclError):
+                pass
+
+        root.after(100, poll_activation_request)
+        if _STARTUP_LOG_STREAM is not None:
+            write_startup_field(
+                _STARTUP_LOG_STREAM, "PHASE", "gui_visible"
+            )
+        root.mainloop()
+        return True
+    finally:
+        instance.close()
 
 if __name__ == "__main__":
     main()

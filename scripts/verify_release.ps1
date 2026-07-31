@@ -89,6 +89,7 @@ $required = @(
     "LICENSE",
     "README.md",
     "README_zh-TW.md",
+    "image\icon.ico",
     "THIRD_PARTY_NOTICES.md",
     "third_party\README.md",
     "third_party\ASSET_PROVENANCE.md",

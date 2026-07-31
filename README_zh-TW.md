@@ -11,9 +11,9 @@
 
 S2P-XInput-Lite 可在 Windows 為 Switch 2 Pro Controller 提供 XInput 相容控制器輸出，支援 USB 有線、ESP32-S3 USB 橋接器及 Windows 原生 BLE。
 
-目前版本：**v0.7.3**
+目前版本：**v0.7.4**
 
-[v0.7.3 發佈說明](RELEASE_NOTES_v0.7.3.md) ·
+[v0.7.4 發佈說明](RELEASE_NOTES_v0.7.4.md) ·
 [原始碼](https://github.com/duoduo-88/S2P-XInput-Lite/tree/main) ·
 [最新正式版本](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 
@@ -78,7 +78,9 @@ Release 頁面供手動下載；程式不會自動下載、執行或覆蓋任何
 5. 選擇遊戲設定檔或調整設定，再使用 **儲存設定檔** 或 **另存新設定檔**。
 6. 儲存目前設定檔會更新其保存內容。連線中切換設定檔時，程式會自動停止連線、套用選定設定檔、刷新 GUI，並自動重新連線。只有變更連線方式、裝置或序列埠設定時才需要 **重新啟動**。
 
-程式會先檢查 USB 有線，再檢查 ESP32，最後使用 Windows 原生 BLE。遊玩期間請保持連線程式開啟。
+程式會先檢查 USB 有線，再檢查 ESP32，最後使用 Windows 原生 BLE。連線程序會開啟獨立黑色 CMD 視窗，即時顯示連線與輸入狀態；遊玩期間請保持該 CMD 視窗開啟。縮小設定介面時，只有主視窗會收進 Windows 右下角通知區，黑色 CMD 仍會顯示且連線不中斷。按一下通知區圖示可還原設定介面；按右鍵則可選擇「顯示設定」或「結束程式」。
+
+設定介面與手把測試程式皆採全域單例。重複執行 `S2P-XInput-Lite.exe`、`GamepadTester.exe`，或重複按下「手把測試」，只會還原並帶出既有視窗，不會建立第二份程序。
 
 第一次使用原生 BLE 配對時，啟動連線後按住控制器的 **SYNC** 鍵。已配對的控制器通常按任意鍵即可喚醒。
 

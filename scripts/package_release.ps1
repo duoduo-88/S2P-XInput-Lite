@@ -206,7 +206,7 @@ Copy-CuratedTree `
 Copy-CuratedTree `
     -SourceRoot (Join-Path $repoRoot "image") `
     -RelativeRoot "image" `
-    -Extensions @(".png", ".jpg", ".jpeg", ".gif") `
+    -Extensions @(".png", ".jpg", ".jpeg", ".gif", ".ico") `
     -DestinationRoot $packageRoot
 Copy-CuratedTree `
     -SourceRoot (Join-Path $repoRoot "manual\assets\annotated") `

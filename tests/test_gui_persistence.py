@@ -86,6 +86,7 @@ class GuiPersistenceTests(unittest.TestCase):
         gui._flush_dwm_composition.side_effect = lambda: events.append(
             "compose-main"
         )
+        instance = Mock(is_primary=True, error=None)
 
         def build_gui(received_root):
             self.assertIs(received_root, root)
@@ -105,7 +106,7 @@ class GuiPersistenceTests(unittest.TestCase):
             ),
             patch.object(config_gui, "ConfigGUI", side_effect=build_gui),
         ):
-            config_gui.main()
+            config_gui.main(instance=instance)
 
         self.assertEqual(
             events,
@@ -120,6 +121,7 @@ class GuiPersistenceTests(unittest.TestCase):
                 "mainloop",
             ],
         )
+        instance.close.assert_called_once_with()
 
     def test_startup_artwork_is_centered_and_painted_before_gui_build(self):
         root = Mock()
@@ -151,7 +153,7 @@ class GuiPersistenceTests(unittest.TestCase):
         )
         self.assertEqual(
             canvas.create_text.call_args.kwargs["text"],
-            "v0.7.3 Starting...",
+            "v0.7.4 Starting...",
         )
         window.geometry.assert_called_once_with("600x340+660+370")
         self.assertLess(
@@ -164,7 +166,7 @@ class GuiPersistenceTests(unittest.TestCase):
         animation()
         canvas.itemconfigure.assert_called_with(
             "loading-text",
-            text="v0.7.3 Starting.",
+            text="v0.7.4 Starting.",
         )
 
     def test_initial_window_is_positioned_before_it_is_revealed(self):

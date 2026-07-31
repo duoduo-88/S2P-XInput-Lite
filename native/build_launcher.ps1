@@ -26,6 +26,7 @@ New-Item -ItemType Directory -Force -Path $specRoot | Out-Null
     --onefile `
     --windowed `
     --name S2P-XInput-Lite `
+    --icon (Join-Path $repoRoot "image\icon.ico") `
     --distpath $distRoot `
     --workpath $workRoot `
     --specpath $specRoot `
