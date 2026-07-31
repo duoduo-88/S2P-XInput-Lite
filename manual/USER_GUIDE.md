@@ -1,11 +1,11 @@
-# S2P-XInput-Lite v0.7.2 User Guide
+# S2P-XInput-Lite v0.7.3 User Guide
 
 [繁體中文](USER_GUIDE_zh-TW.md)
 
 This guide covers installation, connections, profiles, stick tuning, mapping,
 gyro controls, rumble, HidHide, ESP32-S3 bridge and standalone operation, and
 the Gamepad Test, report-rate, diagnostics, and About pages in
-S2P-XInput-Lite v0.7.2.
+S2P-XInput-Lite v0.7.3.
 
 The screenshots use the English interface. Select **中 / En** in the lower-left corner of the main window to switch languages without changing the layout.
 
@@ -64,7 +64,7 @@ Connect the controller directly to the PC with USB-C. This normally provides low
 
 The controller connects to the ESP32-S3 over BLE. The bridge then sends controller data to the PC over USB.
 
-v0.7.2 provides two standalone outputs that do not require the Windows
+v0.7.3 provides two standalone outputs that do not require the Windows
 application to remain open:
 
 - **PC XInput Standalone Mode** — The ESP32 provides XInput-compatible output directly to Windows.
@@ -702,4 +702,4 @@ Gate → Lvl → six bands → LF/HF Balance → Tail/Decay.
 Keep one verified stable profile and use **Save New** for experimental settings.
 
 > [!NOTE]
-> This guide applies to S2P-XInput-Lite v0.7.2. For later releases, follow the in-app question-mark help and the latest release notes.
+> This guide applies to S2P-XInput-Lite v0.7.3. For later releases, follow the in-app question-mark help and the latest release notes.

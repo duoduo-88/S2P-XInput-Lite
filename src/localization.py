@@ -1055,7 +1055,8 @@ EN_TEXT = {
     "（充電中）": " (charging)",
     "找不到 calibration.py。": "calibration.py was not found.",
     "找不到 main.py。": "main.py was not found.",
-    "搖桿校正程式已經在執行。": "Stick calibration is already running.",
+    "搖桿校正程式正在啟動或已經在執行。":
+        "Stick calibration is starting or already running.",
     "可調設定已恢復為預設值。\n\n請按「儲存設定」套用變更。":
         "Adjustable settings were restored.\n\nSelect Save to apply them.",
     "可調設定已恢復為預設值。\n\n請按「儲存設定」套用變更。\n下次啟動連線時可重新設定 HidHide。":
@@ -1119,8 +1120,10 @@ EN_TEXT = {
     "30 秒內未偵測到新的 COM Port。\n\n請確認 ESP32-S3 已正確進入刷機模式，然後重新嘗試。":
         "No new COM port was found within 30 seconds.\n\nConfirm that the ESP32-S3 is in flash mode and try again.",
     "韌體刷寫中": "Firmware flashing",
-    "ESP32-S3 韌體仍在刷寫中，請等待完成。":
-        "ESP32-S3 firmware is still being flashed. Please wait for it to finish.",
+    "ESP32-S3 韌體偵測或刷寫仍在進行，請等待完成。":
+        "ESP32-S3 detection or flashing is still in progress. Please wait.",
+    "韌體刷寫完成前無法關閉設定視窗。":
+        "The settings window cannot close until firmware flashing finishes.",
     "韌體刷寫完成": "Firmware flashing completed",
     "ESP32-S3 韌體已刷寫完成。\n\n請按一下 RESET / EN 按鈕，或拔除後重新插入 ESP32-S3，再重新開啟本軟體。":
         "ESP32-S3 firmware was flashed successfully.\n\nPress RESET / EN, or unplug and reconnect the ESP32-S3, then restart this application.",

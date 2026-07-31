@@ -11,9 +11,9 @@
 
 S2P-XInput-Lite 可在 Windows 為 Switch 2 Pro Controller 提供 XInput 相容控制器輸出，支援 USB 有線、ESP32-S3 USB 橋接器及 Windows 原生 BLE。
 
-目前版本：**v0.7.2**
+目前版本：**v0.7.3**
 
-[v0.7.2 發佈說明](RELEASE_NOTES_v0.7.2.md) ·
+[v0.7.3 發佈說明](RELEASE_NOTES_v0.7.3.md) ·
 [原始碼](https://github.com/duoduo-88/S2P-XInput-Lite/tree/main) ·
 [最新正式版本](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 

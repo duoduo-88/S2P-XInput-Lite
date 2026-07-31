@@ -85,6 +85,7 @@ if ((Split-Path -Leaf $PackageDirectory) -ne $expectedName) {
 $required = @(
     "S2P-XInput-Lite.exe",
     "GamepadTester.exe",
+    "LAUNCHER_BUILD.json",
     "LICENSE",
     "README.md",
     "README_zh-TW.md",
@@ -110,6 +111,37 @@ foreach ($relative in $required) {
     $path = Join-Path $PackageDirectory $relative
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Release package is missing required file: $relative"
+    }
+}
+
+$launcherMetadataPath = Join-Path $PackageDirectory "LAUNCHER_BUILD.json"
+try {
+    $launcherMetadata = Get-Content `
+        -LiteralPath $launcherMetadataPath `
+        -Raw `
+        -Encoding utf8 | ConvertFrom-Json
+}
+catch {
+    throw "Launcher build metadata is invalid: $($_.Exception.Message)"
+}
+if (
+    $launcherMetadata.schema_version -ne 1 -or
+    $launcherMetadata.source_version -ne $version
+) {
+    throw "Packaged launcher version does not match source VERSION $version."
+}
+foreach ($name in @("S2P-XInput-Lite.exe", "GamepadTester.exe")) {
+    $entry = $launcherMetadata.launchers.PSObject.Properties[$name].Value
+    if ($null -eq $entry -or $entry.sha256 -notmatch '^[0-9A-Fa-f]{64}$') {
+        throw "Launcher build metadata is missing a valid hash for $name."
+    }
+    $actualHash = (
+        Get-FileHash `
+            -LiteralPath (Join-Path $PackageDirectory $name) `
+            -Algorithm SHA256
+    ).Hash
+    if ($actualHash -ne $entry.sha256) {
+        throw "Packaged launcher hash does not match $name."
     }
 }
 
