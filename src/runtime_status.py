@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import threading
 import time
@@ -95,6 +96,6 @@ class ControllerStatusPublisher:
         return True
 
     def snapshot(self):
-        """Return a shallow copy for diagnostics and tests."""
+        """Return an isolated copy for diagnostics and tests."""
         with self._state_lock:
-            return dict(self._status)
+            return copy.deepcopy(self._status)

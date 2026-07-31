@@ -13,9 +13,20 @@ FIRMWARE_ROOT = (
 
 
 class ReleaseBaselineTests(unittest.TestCase):
-    def test_desktop_release_version_is_071(self):
+    def test_desktop_release_version_is_072(self):
         source = (ROOT / "src" / "version.py").read_text(encoding="utf-8")
-        self.assertRegex(source, r'VERSION\s*=\s*"0\.7\.1"')
+        self.assertRegex(source, r'VERSION\s*=\s*"0\.7\.2"')
+
+    def test_release_manifest_requires_exact_payload_coverage(self):
+        source = (ROOT / "scripts" / "verify_release.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"src\\update_manager.py"', source)
+        self.assertIn("$manifestEntries.ContainsKey", source)
+        self.assertIn("$actualPayload.Contains", source)
+        self.assertIn("$manifestEntries.Count -ne $actualPayload.Count", source)
+        self.assertIn("Unsafe SHA256SUMS path", source)
+        self.assertIn("& $runtimePython -B -c $importCheck", source)
 
     def test_runtime_build_check_does_not_require_installed_vigembus(self):
         source = (ROOT / "scripts" / "build_runtime.ps1").read_text(

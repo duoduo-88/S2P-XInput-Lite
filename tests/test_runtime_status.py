@@ -37,7 +37,11 @@ class RuntimeStatusTests(unittest.TestCase):
         publisher = ControllerStatusPublisher(clock=lambda: 1.0)
         snapshot = publisher.snapshot()
         snapshot["state"] = "changed"
+        snapshot["rumble"]["injected"] = True
+        snapshot["mag_orientation_bins"].append("injected")
         self.assertEqual(publisher.snapshot()["state"], "starting")
+        self.assertEqual(publisher.snapshot()["rumble"], {})
+        self.assertEqual(publisher.snapshot()["mag_orientation_bins"], [])
 
 
 if __name__ == "__main__":

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import configparser
 import ctypes
 import heapq
 import json
 import math
 import struct
+import threading
 import time
 import tkinter as tk
 import webbrowser
@@ -40,6 +42,14 @@ from switch2_input import SWITCH_BUTTONS
 from support_log import format_support_log
 from test_telemetry import SharedTestTelemetry
 from tooltip_layout import wrap_tooltip_text
+from update_manager import (
+    UpdateCheckError,
+    automatic_update_checks_enabled,
+    check_latest_release,
+    ignored_update_version,
+    is_newer_version,
+    save_update_preferences,
+)
 from version import APP_NAME, VERSION
 
 
@@ -2201,6 +2211,16 @@ class GamepadTestWindow:
         self._window_icon = None
         self._about_logo = None
         self._about_fonts = ()
+        self.automatic_update_checks_var = tk.BooleanVar(
+            value=automatic_update_checks_enabled()
+        )
+        self.update_check_status_var = tk.StringVar(
+            value=self.gui.tr("尚未檢查版本")
+        )
+        self.update_check_button = None
+        self._update_check_in_progress = False
+        self._automatic_update_check_started = False
+        self._update_prompt_window = None
         self._parameter_editor_window = None
         self.diagnostic_session = DiagnosticSession(
             DEFAULT_DIAGNOSTIC_SECONDS
@@ -2632,6 +2652,16 @@ class GamepadTestWindow:
             window,
             f"{initial_width}x{initial_height}+{x}+{y}",
         )
+        if (
+            getattr(self.gui, "allow_automatic_update_prompt", False)
+            and self.automatic_update_checks_var.get()
+            and not self._automatic_update_check_started
+        ):
+            self._automatic_update_check_started = True
+            window.after(
+                1400,
+                lambda: self.check_for_updates(manual=False),
+            )
 
     def _retry_native_sampler_start(self, sampler):
         """Restart after a previous sampler generation finishes winding down."""
@@ -3972,6 +4002,214 @@ class GamepadTestWindow:
         except (OSError, webbrowser.Error):
             return False
 
+    def _save_automatic_update_preference(self):
+        """Persist the About-page update toggle for both desktop programs."""
+        enabled = bool(self.automatic_update_checks_var.get())
+        try:
+            save_update_preferences(automatic_checks=enabled)
+        except (OSError, ValueError, configparser.Error) as exc:
+            self.automatic_update_checks_var.set(not enabled)
+            messagebox.showerror(
+                self.gui.tr("無法儲存設定"),
+                str(exc),
+                parent=self.window,
+            )
+
+    def check_for_updates(self, manual=True):
+        """Check GitHub in the background and update the About-page status."""
+        if self._update_check_in_progress:
+            return False
+        self._update_check_in_progress = True
+        self.update_check_status_var.set(
+            self.gui.tr("正在檢查版本…")
+        )
+        if self.update_check_button is not None:
+            self.update_check_button.configure(state="disabled")
+
+        def worker():
+            release = None
+            error = None
+            try:
+                release = check_latest_release(VERSION)
+            except (UpdateCheckError, OSError, ValueError) as exc:
+                error = exc
+            window = self.window
+            if window is None:
+                self._update_check_in_progress = False
+                return
+            try:
+                window.after(
+                    0,
+                    lambda: self._finish_update_check(
+                        release,
+                        error,
+                        bool(manual),
+                    ),
+                )
+            except (AttributeError, tk.TclError):
+                self._update_check_in_progress = False
+
+        threading.Thread(
+            target=worker,
+            daemon=True,
+            name="GamepadTesterUpdateCheck",
+        ).start()
+        return True
+
+    def _finish_update_check(self, release, error, manual):
+        """Apply a completed check on Tk's UI thread."""
+        self._update_check_in_progress = False
+        if self.update_check_button is not None:
+            self.update_check_button.configure(state="normal")
+        if error is not None:
+            self.update_check_status_var.set(
+                self.gui.tr("版本檢查失敗")
+            )
+            if manual:
+                messagebox.showerror(
+                    self.gui.tr("無法檢查更新"),
+                    self.gui.tr(
+                        "目前無法連線至 GitHub 檢查版本，請稍後再試。"
+                    )
+                    + f"\n\n{error}",
+                    parent=self.window,
+                )
+            return
+        if release is None:
+            return
+        try:
+            newer = is_newer_version(release.version, VERSION)
+        except ValueError as exc:
+            self.update_check_status_var.set(
+                self.gui.tr("版本檢查失敗")
+            )
+            if manual:
+                messagebox.showerror(
+                    self.gui.tr("無法檢查更新"),
+                    str(exc),
+                    parent=self.window,
+                )
+            return
+        if not newer:
+            self.update_check_status_var.set(
+                self.gui.tr("目前為最新版本：v{version}").format(
+                    version=VERSION
+                )
+            )
+            return
+        self.update_check_status_var.set(
+            self.gui.tr("已有新版本：v{version}").format(
+                version=release.version
+            )
+        )
+        if (
+            not manual
+            and ignored_update_version() == release.version
+        ):
+            return
+        self._show_update_available_prompt(release)
+
+    def _show_update_available_prompt(self, release):
+        """Show the simplified manual-download prompt."""
+        current = self._update_prompt_window
+        if current is not None:
+            try:
+                if current.winfo_exists():
+                    current.deiconify()
+                    current.lift()
+                    return
+            except (AttributeError, tk.TclError):
+                pass
+
+        window = tk.Toplevel(self.window)
+        window.withdraw()
+        window.title(self.gui.tr("發現新版本"))
+        window.resizable(False, False)
+        window.transient(self.window)
+        self._update_prompt_window = window
+        suppress_var = tk.BooleanVar(master=window, value=False)
+        content = ttk.Frame(window, padding=(18, 16))
+        content.pack(fill="both", expand=True)
+        ttk.Label(
+            content,
+            text=(
+                self.gui.tr("S2P-XInput-Lite 有新版本可用。")
+                + f"\n\n{self.gui.tr('目前版本')}：{VERSION}\n"
+                + f"{self.gui.tr('最新版本')}：{release.version}\n\n"
+                + self.gui.tr(
+                    "按下「開啟下載頁」後，請從官方 GitHub Release "
+                    "下載並手動解壓縮更新。"
+                )
+            ),
+            justify="left",
+            wraplength=430,
+        ).pack(fill="x")
+        ttk.Checkbutton(
+            content,
+            text=self.gui.tr("不再提醒此版本"),
+            variable=suppress_var,
+        ).pack(anchor="w", pady=(14, 0))
+        actions = ttk.Frame(content)
+        actions.pack(fill="x", pady=(16, 0))
+
+        def close_prompt(open_release=False):
+            if suppress_var.get():
+                try:
+                    save_update_preferences(
+                        ignored_version=release.version
+                    )
+                except (OSError, ValueError, configparser.Error) as exc:
+                    messagebox.showerror(
+                        self.gui.tr("無法儲存設定"),
+                        str(exc),
+                        parent=self.window,
+                    )
+            if self._update_prompt_window is window:
+                self._update_prompt_window = None
+            try:
+                window.destroy()
+            except tk.TclError:
+                pass
+            if (
+                open_release
+                and not self._open_about_link(release.html_url)
+            ):
+                messagebox.showerror(
+                    self.gui.tr("無法開啟下載頁"),
+                    release.html_url,
+                    parent=self.window,
+                )
+
+        ttk.Button(
+            actions,
+            text=self.gui.tr("稍後"),
+            command=close_prompt,
+            width=9,
+        ).pack(side="right")
+        ttk.Button(
+            actions,
+            text=self.gui.tr("開啟下載頁"),
+            command=lambda: close_prompt(True),
+            width=15,
+        ).pack(side="right", padx=(0, 8))
+        window.protocol("WM_DELETE_WINDOW", close_prompt)
+        window.bind("<Escape>", lambda _event: close_prompt())
+        window.update_idletasks()
+        width = max(480, window.winfo_reqwidth())
+        height = window.winfo_reqheight()
+        try:
+            x = self.window.winfo_rootx() + (
+                self.window.winfo_width() - width
+            ) // 2
+            y = self.window.winfo_rooty() + (
+                self.window.winfo_height() - height
+            ) // 2
+            window.geometry(f"{width}x{height}+{max(0, x)}+{max(0, y)}")
+        except tk.TclError:
+            pass
+        window.deiconify()
+        window.lift()
+
     def _build_about_document(self, notebook, title, path):
         page = ttk.Frame(notebook, padding=(6, 6))
         page.columnconfigure(0, weight=1)
@@ -4012,7 +4250,6 @@ class GamepadTestWindow:
         left.grid(row=0, column=0, sticky="nsew")
         left.columnconfigure(0, weight=1)
         left.rowconfigure(0, weight=1)
-        left.rowconfigure(7, weight=1)
 
         ttk.Separator(parent, orient="vertical").grid(
             row=0, column=1, sticky="ns", padx=5
@@ -4054,7 +4291,29 @@ class GamepadTestWindow:
             text=f"{self.gui.tr('版本')} {VERSION}",
             foreground="#666666",
             anchor="center",
-        ).grid(row=row, column=0, sticky="ew", pady=(3, 18))
+        ).grid(row=row, column=0, sticky="ew", pady=(3, 8))
+        row += 1
+        ttk.Label(
+            left,
+            textvariable=self.update_check_status_var,
+            foreground="#666666",
+            anchor="center",
+        ).grid(row=row, column=0, sticky="ew", pady=(0, 6))
+        row += 1
+        self.update_check_button = ttk.Button(
+            left,
+            text=self.gui.tr("檢查更新"),
+            command=lambda: self.check_for_updates(manual=True),
+            width=18,
+        )
+        self.update_check_button.grid(row=row, column=0, pady=(0, 6))
+        row += 1
+        ttk.Checkbutton(
+            left,
+            text=self.gui.tr("自動檢查更新"),
+            variable=self.automatic_update_checks_var,
+            command=self._save_automatic_update_preference,
+        ).grid(row=row, column=0, pady=(0, 12))
         row += 1
 
         link_font = tkfont.Font(
@@ -4087,6 +4346,7 @@ class GamepadTestWindow:
                 lambda _event, target=url: self._open_about_link(target),
             )
             row += 1
+        left.rowconfigure(row, weight=1)
 
         right = ttk.Frame(parent, padding=(10, 4, 4, 4))
         right.grid(row=0, column=2, sticky="nsew")

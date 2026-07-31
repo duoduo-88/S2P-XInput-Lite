@@ -1,6 +1,31 @@
 """Traditional Chinese / English text used by the settings GUI."""
 
 EN_TEXT = {
+    "檢查更新": "Check for Updates",
+    "正在檢查最新版本，請稍候。": "Checking the latest version. Please wait.",
+    "無法檢查更新": "Could Not Check for Updates",
+    "目前無法連線至 GitHub 檢查版本，請稍後再試。":
+        "Could not connect to GitHub to check the version. Please try again later.",
+    "目前已是最新版本。": "You already have the latest version.",
+    "發現新版本": "New Version Available",
+    "S2P-XInput-Lite 有新版本可用。":
+        "A new version of S2P-XInput-Lite is available.",
+    "目前版本": "Current version",
+    "最新版本": "Latest version",
+    "按下「開啟下載頁」後，請從官方 GitHub Release 下載並手動解壓縮更新。":
+        "Select “Open Download Page” to download the update from the official "
+        "GitHub Release and extract it manually.",
+    "不再提醒此版本": "Do not remind me about this version again",
+    "稍後": "Later",
+    "開啟下載頁": "Open Download Page",
+    "無法開啟下載頁": "Could Not Open Download Page",
+    "自動檢查更新": "Automatically check for updates",
+    "尚未檢查版本": "Version has not been checked",
+    "正在檢查版本…": "Checking for updates…",
+    "已有新版本：v{version}": "New version available: v{version}",
+    "目前為最新版本：v{version}": "Up to date: v{version}",
+    "版本檢查失敗": "Update check failed",
+    "無法儲存設定": "Could Not Save Settings",
     "手把測試程式啟動中": "Starting Gamepad Tester",
     "關於": "About",
     "版本": "Version",

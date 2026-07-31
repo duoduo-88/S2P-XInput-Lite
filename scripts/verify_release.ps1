@@ -93,6 +93,7 @@ $required = @(
     "runtime\pythonw.exe",
     "src\config_gui.py",
     "src\gamepad_test_app.py",
+    "src\update_manager.py",
     "src\main.py",
     "src\layers\mouse.json",
     "src\requirements.txt",
@@ -155,20 +156,89 @@ if ($profileDifference) {
 
 $manifestPath = Join-Path $PackageDirectory "SHA256SUMS.txt"
 $manifestLines = Get-Content -LiteralPath $manifestPath -Encoding utf8
+$manifestEntries = [System.Collections.Generic.Dictionary[string,string]]::new(
+    [System.StringComparer]::OrdinalIgnoreCase
+)
+$packagePrefix = $PackageDirectory.TrimEnd("\") + "\"
 foreach ($line in $manifestLines) {
     if ($line -notmatch '^([0-9A-F]{64})  (.+)$') {
         throw "Malformed SHA256SUMS entry: $line"
     }
     $expectedHash = $Matches[1]
     $relative = $Matches[2].Replace("/", "\")
-    $path = Join-Path $PackageDirectory $relative
+    $segments = @($relative -split "\\")
+    if (
+        [System.IO.Path]::IsPathRooted($relative) -or
+        $segments.Count -eq 0 -or
+        @($segments | Where-Object { $_ -in @("", ".", "..") }).Count
+    ) {
+        throw "Unsafe SHA256SUMS path: $relative"
+    }
+    $path = [System.IO.Path]::GetFullPath(
+        (Join-Path $PackageDirectory $relative)
+    )
+    if (-not $path.StartsWith(
+        $packagePrefix,
+        [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw "SHA256SUMS path escapes the package: $relative"
+    }
+    $normalizedRelative = Get-RelativePath `
+        -BasePath $PackageDirectory `
+        -Path $path
+    if ($normalizedRelative -eq "SHA256SUMS.txt") {
+        throw "SHA256SUMS must not contain a hash for itself."
+    }
+    if ($manifestEntries.ContainsKey($normalizedRelative)) {
+        throw "Duplicate SHA256SUMS entry: $normalizedRelative"
+    }
+    $manifestEntries.Add($normalizedRelative, $expectedHash)
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        throw "SHA256SUMS references a missing file: $relative"
+        throw "SHA256SUMS references a missing file: $normalizedRelative"
     }
     $actualHash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
     if ($actualHash -ne $expectedHash) {
-        throw "SHA-256 mismatch for $relative."
+        throw "SHA-256 mismatch for $normalizedRelative."
     }
+}
+
+$actualPayload = [System.Collections.Generic.HashSet[string]]::new(
+    [System.StringComparer]::OrdinalIgnoreCase
+)
+foreach ($file in (
+    Get-ChildItem -LiteralPath $PackageDirectory -File -Recurse
+)) {
+    if ($file.FullName -eq $manifestPath) {
+        continue
+    }
+    $relative = Get-RelativePath `
+        -BasePath $PackageDirectory `
+        -Path $file.FullName
+    [void]$actualPayload.Add($relative)
+}
+$unlistedPayload = @(
+    $actualPayload |
+        Where-Object { -not $manifestEntries.ContainsKey($_) } |
+        Sort-Object
+)
+$missingPayload = @(
+    $manifestEntries.Keys |
+        Where-Object { -not $actualPayload.Contains($_) } |
+        Sort-Object
+)
+if (
+    $manifestEntries.Count -ne $actualPayload.Count -or
+    $unlistedPayload.Count -or
+    $missingPayload.Count
+) {
+    $details = @()
+    if ($unlistedPayload.Count) {
+        $details += "unlisted: $($unlistedPayload -join ', ')"
+    }
+    if ($missingPayload.Count) {
+        $details += "missing: $($missingPayload -join ', ')"
+    }
+    throw "SHA256SUMS does not exactly cover the package payload ($($details -join '; '))."
 }
 
 $runtimePython = Join-Path $PackageDirectory "runtime\python.exe"
@@ -176,7 +246,7 @@ $importCheck = (
     "import config_gui, gamepad_test_window, main; " +
     "print('release import smoke test passed')"
 )
-& $runtimePython -c $importCheck
+& $runtimePython -B -c $importCheck
 if ($LASTEXITCODE -ne 0) {
     throw "Packaged runtime import smoke test failed."
 }

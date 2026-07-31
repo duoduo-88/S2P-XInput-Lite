@@ -651,7 +651,9 @@ def rename_profile(old_name, new_name, profile_dir=PROFILE_DIR):
     new_path = profile_path(new_name, profile_dir)
     if not old_path.is_file():
         raise FileNotFoundError(old_path)
-    if old_path == new_path:
+    # WindowsPath equality is case-insensitive.  Compare the filename text so
+    # a case-only rename still takes the temporary-hop path below.
+    if old_path.name == new_path.name:
         return new_path
     if new_path.exists() and old_path.resolve() != new_path.resolve():
         raise FileExistsError(new_path)
