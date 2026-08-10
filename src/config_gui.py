@@ -45,7 +45,7 @@ from standalone_profile import (
     write_standalone_profile,
 )
 from stick_curve import apply_stick_curve
-from switch2_input import SWITCH_BUTTONS
+from switch2_input import battery_level, SWITCH_BUTTONS
 from config_utils import (
     CONFIG_PATH,
     DEFAULT_CONFIG_PATH,
@@ -4820,13 +4820,13 @@ class ConfigGUI:
                         text += " · 基本"
                 elif battery is not None:
                     battery = int(battery)
-                    if battery >= 75:
-                        battery_level = "高"
-                    elif battery >= 40:
-                        battery_level = "中"
-                    else:
-                        battery_level = "低"
-                    text += f" · 電量{battery_level}"
+                    level_text = {
+                        1: "低",
+                        2: "中低",
+                        3: "中高",
+                        4: "高",
+                    }[battery_level(battery)]
+                    text += f" · 電量{level_text}"
                     voltage = data.get("battery_voltage")
                     if voltage is not None:
                         text += f" ({float(voltage):.2f}V)"

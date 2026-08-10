@@ -95,6 +95,7 @@ def main(port="COM3", seconds=30.0, rumble_stress=False):
     arrival_interval_ms = []
     report_interval_ms = []
     transport_variation_ms = []
+    battery_samples = []
     last_arrival_ns = None
     last_report_time = None
     rumble_submitted = 0
@@ -113,6 +114,19 @@ def main(port="COM3", seconds=30.0, rumble_stress=False):
             with lock:
                 _take_submission(submitted_at, payload)
             return
+        if len(payload) >= 36:
+            voltage_mv = struct.unpack_from("<H", payload, 31)[0]
+            charge_status = payload[33]
+            current_raw = struct.unpack_from("<H", payload, 34)[0]
+            with lock:
+                battery_samples.append((
+                    voltage_mv,
+                    charge_status,
+                    current_raw,
+                    bytes(payload[31:40]).hex(" "),
+                ))
+                if len(battery_samples) > 4096:
+                    del battery_samples[:2048]
         xinput.update(state)
         finished = time.perf_counter_ns()
         output = int(xinput.pad.report.wButtons)
@@ -315,6 +329,14 @@ def main(port="COM3", seconds=30.0, rumble_stress=False):
                 time.sleep(0.05)
             elapsed = time.monotonic() - started
             with lock:
+                valid_battery_samples = [
+                    sample for sample in battery_samples
+                    if 2500 <= sample[0] <= 5000
+                ]
+                latest_battery = (
+                    valid_battery_samples[-1]
+                    if valid_battery_samples else None
+                )
                 result = {
                     "elapsed_s": round(elapsed, 1),
                     "submitted": submitted_count,
@@ -337,6 +359,18 @@ def main(port="COM3", seconds=30.0, rumble_stress=False):
                     "arrival_interval_ms": distribution(arrival_interval_ms),
                     "report_interval_ms": distribution(report_interval_ms),
                     "transport_variation_ms": distribution(transport_variation_ms),
+                    "battery": ({
+                        "samples": len(valid_battery_samples),
+                        "voltage_mv_min": min(
+                            sample[0] for sample in valid_battery_samples
+                        ),
+                        "voltage_mv_max": max(
+                            sample[0] for sample in valid_battery_samples
+                        ),
+                        "charge_status": latest_battery[1],
+                        "current_raw": latest_battery[2],
+                        "raw_31_39": latest_battery[3],
+                    } if latest_battery is not None else None),
                     "rumble_submitted_by_probe": rumble_submitted,
                     "rumble": bridge.get_rumble_diagnostics(),
                 }

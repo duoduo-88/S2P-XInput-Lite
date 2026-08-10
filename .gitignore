@@ -16,6 +16,7 @@ htmlcov/
 # Local application state
 src/config.ini
 src/controller_status.json
+/src/controller_commands/
 
 # User-created profiles. Bundled profiles are explicitly kept reproducible.
 /src/profiles/*.ini

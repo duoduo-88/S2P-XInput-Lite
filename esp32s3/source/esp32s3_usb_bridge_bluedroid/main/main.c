@@ -33,6 +33,7 @@
 // 1st).  Per-channel gattc_if fixes that.
 
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -62,7 +63,7 @@
 static const char *TAG = "S3_BLUEDROID";
 
 #define APP_FIRMWARE_PRODUCT      "S2P-FW"
-#define APP_FIRMWARE_VERSION      "1.0.1"
+#define APP_FIRMWARE_VERSION      "1.0.2"
 #define APP_PROTOCOL_NAME         "s2p_bridge"
 #define APP_PROTOCOL_VERSION      "1.0.0"
 #define EXPECTED_FIRMWARE_PROFILE "s2p_usb_bridge"
@@ -160,6 +161,11 @@ typedef struct {
     uint8_t  standalone_init_attempts;
     bool     standalone_init_waiting;
     uint32_t standalone_init_next_ms;
+    uint8_t  standalone_battery_led_desired_mask;
+    uint8_t  standalone_battery_led_pending_mask;
+    uint8_t  standalone_battery_led_applied_mask;
+    bool     standalone_battery_led_waiting;
+    uint32_t standalone_battery_led_next_ms;
     bool     standalone_pair_required;
     uint8_t  standalone_pair_step;
     uint8_t  standalone_pair_attempts;
@@ -1482,7 +1488,7 @@ static bool wr_one(
     return write_gatt_char_checked(ch, handle, buf, len);
 }
 
-static void write_switch_command(
+static bool write_switch_command(
     int ch,
     uint8_t command_id,
     uint8_t subcommand_id,
@@ -1500,7 +1506,7 @@ static void write_switch_command(
     payload[7] = 0x00;
     if (data_len && command_data)
         memcpy(payload + 8, command_data, data_len);
-    wr_one(ch, 'c', payload, 8u + data_len);
+    return wr_one(ch, 'c', payload, 8u + data_len);
 }
 
 static void do_wrpair(char *args) {  // wrpair <ch_l> <ch_r> <kind> <hex_l> <hex_r>
@@ -1621,6 +1627,71 @@ static const standalone_init_command_t s_standalone_init_commands[] = {
     {0x09, 0x07, 8,  {0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00}},
 };
 
+#define STANDALONE_BATTERY_LEVEL_2_MV 3223u
+#define STANDALONE_BATTERY_LEVEL_3_MV 3369u
+#define STANDALONE_BATTERY_LEVEL_4_MV 3535u
+#define STANDALONE_BATTERY_HYSTERESIS_MV 15u
+#define STANDALONE_BATTERY_LED_RETRY_MS 250u
+
+static uint8_t standalone_battery_level_from_voltage(uint16_t voltage_mv) {
+    if (voltage_mv >= STANDALONE_BATTERY_LEVEL_4_MV) return 4;
+    if (voltage_mv >= STANDALONE_BATTERY_LEVEL_3_MV) return 3;
+    if (voltage_mv >= STANDALONE_BATTERY_LEVEL_2_MV) return 2;
+    return 1;
+}
+
+static uint8_t standalone_battery_level_from_mask(uint8_t mask) {
+    switch (mask) {
+    case 0x01: return 1;
+    case 0x03: return 2;
+    case 0x07: return 3;
+    case 0x0F: return 4;
+    default: return 0;
+    }
+}
+
+static void note_standalone_battery_report(
+    int ch, const uint8_t *payload, size_t length
+) {
+    if (
+        !s_standalone_mode || ch < 0 || ch >= MAX_CH ||
+        !payload || length < 33
+    ) return;
+    uint16_t voltage_mv =
+        (uint16_t)payload[31] | ((uint16_t)payload[32] << 8);
+    if (voltage_mv < 2500u || voltage_mv > 5000u) return;
+
+    uint8_t previous_mask = s_ch[ch].standalone_battery_led_desired_mask;
+    if (!previous_mask)
+        previous_mask = s_ch[ch].standalone_battery_led_applied_mask;
+    uint8_t previous_level =
+        standalone_battery_level_from_mask(previous_mask);
+    uint8_t measured_level =
+        standalone_battery_level_from_voltage(voltage_mv);
+
+    /*
+     * Rumble momentarily lowers the measured cell voltage.  Apply symmetric
+     * hysteresis around the desktop curve's four display transitions so the
+     * player LEDs do not flicker while the motors start and stop.
+     */
+    if (previous_level && measured_level != previous_level) {
+        uint16_t adjusted_mv = voltage_mv;
+        if (measured_level > previous_level) {
+            adjusted_mv = voltage_mv > STANDALONE_BATTERY_HYSTERESIS_MV
+                ? voltage_mv - STANDALONE_BATTERY_HYSTERESIS_MV
+                : 0;
+        } else if (
+            voltage_mv <= UINT16_MAX - STANDALONE_BATTERY_HYSTERESIS_MV
+        ) {
+            adjusted_mv = voltage_mv + STANDALONE_BATTERY_HYSTERESIS_MV;
+        }
+        measured_level =
+            standalone_battery_level_from_voltage(adjusted_mv);
+    }
+    s_ch[ch].standalone_battery_led_desired_mask =
+        (uint8_t)((1u << measured_level) - 1u);
+}
+
 static const uint8_t s_pair_ltk1[] = {
     0x00,
     0xEA, 0xBD, 0x47, 0x13,
@@ -1712,7 +1783,12 @@ static void pump_standalone_pairing(void) {
             data,
             &data_len
         );
-        write_switch_command(ch, 0x15, subcommand_id, data, data_len);
+        if (!write_switch_command(
+                ch, 0x15, subcommand_id, data, data_len
+            )) {
+            s_ch[ch].standalone_pair_next_ms = now + 20u;
+            continue;
+        }
         s_ch[ch].standalone_pair_attempts++;
         s_ch[ch].standalone_pair_waiting = true;
         s_ch[ch].standalone_pair_next_ms = now + 800u;
@@ -1782,13 +1858,16 @@ static void pump_standalone_controller_init(void) {
         }
         const standalone_init_command_t *command =
             &s_standalone_init_commands[step];
-        write_switch_command(
-            ch,
-            command->command_id,
-            command->subcommand_id,
-            command->data,
-            command->data_len
-        );
+        if (!write_switch_command(
+                ch,
+                command->command_id,
+                command->subcommand_id,
+                command->data,
+                command->data_len
+            )) {
+            s_ch[ch].standalone_init_next_ms = now + 20u;
+            continue;
+        }
         s_ch[ch].standalone_init_attempts++;
         s_ch[ch].standalone_init_waiting = true;
         s_ch[ch].standalone_init_next_ms = now + 800u;
@@ -1821,6 +1900,7 @@ static void note_standalone_init_ack(
         sizeof(s_standalone_init_commands) /
         sizeof(s_standalone_init_commands[0])
     ) {
+        s_ch[ch].standalone_battery_led_applied_mask = 0x01;
         /*
          * Match the desktop connection cue, but only after the complete
          * feature-selection sequence is acknowledged.  "Connected" here
@@ -1831,6 +1911,66 @@ static void note_standalone_init_ack(
         s_ch[ch].standalone_feedback_active =
             s_ch[ch].rumble_handle != 0;
         s_ch[ch].standalone_feedback_next_ms = now_ms() + 20u;
+    }
+}
+
+static void note_standalone_battery_led_ack(
+    int ch, const uint8_t *payload, size_t length
+) {
+    if (
+        !s_standalone_mode || ch < 0 || ch >= MAX_CH ||
+        !payload || length < 4 ||
+        !s_ch[ch].standalone_battery_led_waiting ||
+        payload[0] != 0x09 || payload[3] != 0x07
+    ) return;
+    s_ch[ch].standalone_battery_led_applied_mask =
+        s_ch[ch].standalone_battery_led_pending_mask;
+    s_ch[ch].standalone_battery_led_pending_mask = 0;
+    s_ch[ch].standalone_battery_led_waiting = false;
+    s_ch[ch].standalone_battery_led_next_ms = now_ms() + 20u;
+}
+
+static void pump_standalone_battery_leds(void) {
+    if (!s_standalone_mode) return;
+    uint32_t now = now_ms();
+    const uint8_t init_count = (uint8_t)(
+        sizeof(s_standalone_init_commands) /
+        sizeof(s_standalone_init_commands[0])
+    );
+    for (int ch = 0; ch < MAX_CH; ch++) {
+        if (
+            !s_ch[ch].used || !s_ch[ch].ready || !s_ch[ch].cmd_handle ||
+            s_ch[ch].standalone_pair_required ||
+            s_ch[ch].standalone_init_step < init_count ||
+            s_ch[ch].standalone_init_waiting
+        ) continue;
+        if ((int32_t)(now - s_ch[ch].standalone_battery_led_next_ms) < 0)
+            continue;
+
+        if (s_ch[ch].standalone_battery_led_waiting) {
+            /* ACK was lost: retry the exact mask that was sent. */
+            s_ch[ch].standalone_battery_led_waiting = false;
+        } else {
+            uint8_t desired =
+                s_ch[ch].standalone_battery_led_desired_mask;
+            if (
+                !desired ||
+                desired == s_ch[ch].standalone_battery_led_applied_mask
+            ) continue;
+            s_ch[ch].standalone_battery_led_pending_mask = desired;
+        }
+
+        uint8_t data[8] = {
+            s_ch[ch].standalone_battery_led_pending_mask,
+            0, 0, 0, 0, 0, 0, 0,
+        };
+        if (!write_switch_command(ch, 0x09, 0x07, data, sizeof(data))) {
+            s_ch[ch].standalone_battery_led_next_ms = now + 20u;
+            continue;
+        }
+        s_ch[ch].standalone_battery_led_waiting = true;
+        s_ch[ch].standalone_battery_led_next_ms =
+            now + STANDALONE_BATTERY_LED_RETRY_MS;
     }
 }
 
@@ -2269,6 +2409,7 @@ static void cdc_task(void *arg) {
         standalone_xinput_pump();
         pump_standalone_pairing();
         pump_standalone_controller_init();
+        pump_standalone_battery_leds();
         pump_standalone_connection_feedback();
         pump_standalone_xinput_rumble();
         pump_connection_watchdogs();
@@ -2345,6 +2486,9 @@ static void cdc_task(void *arg) {
                 r.generation == s_ch[r.ch].generation
             ) {
                 if (s_standalone_mode) {
+                    note_standalone_battery_report(
+                        r.ch, r.data, r.len
+                    );
                     standalone_xinput_accept_switch_report(
                         r.ch, r.data, r.len
                     );
@@ -2377,6 +2521,9 @@ static void cdc_task(void *arg) {
                     note_standalone_init_ack(
                         ack.ch, ack.data, ack.len
                     );
+                    note_standalone_battery_led_ack(
+                        ack.ch, ack.data, ack.len
+                    );
                 }
             } else {
                 send_report_frame(ack.ch, ack.data, ack.len, true);
@@ -2402,6 +2549,9 @@ static void cdc_task(void *arg) {
                 s_standalone_mode &&
                 ntf.handle == s_ch[ntf.ch].input_handle
             ) {
+                note_standalone_battery_report(
+                    ntf.ch, ntf.data, ntf.len
+                );
                 standalone_xinput_accept_switch_report(
                     ntf.ch, ntf.data, ntf.len
                 );
@@ -2604,6 +2754,11 @@ static void mark_channel_ready(int ch) {
     s_ch[ch].standalone_init_attempts = 0;
     s_ch[ch].standalone_init_waiting = false;
     s_ch[ch].standalone_init_next_ms = now_ms() + 25u;
+    s_ch[ch].standalone_battery_led_desired_mask = 0;
+    s_ch[ch].standalone_battery_led_pending_mask = 0;
+    s_ch[ch].standalone_battery_led_applied_mask = 0;
+    s_ch[ch].standalone_battery_led_waiting = false;
+    s_ch[ch].standalone_battery_led_next_ms = 0;
     s_ch[ch].standalone_pair_step = 0;
     s_ch[ch].standalone_pair_attempts = 0;
     s_ch[ch].standalone_pair_waiting = false;

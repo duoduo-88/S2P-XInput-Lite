@@ -4,7 +4,7 @@
 ESP32-S3 bridge firmware.
 
 - Product: `S2P-FW`
-- Firmware version: `1.0.1`
+- Firmware version: `1.0.2`
 - S2P bridge protocol: `1.0.0`
 - Firmware profile: `s2p_usb_bridge`
 - Build: `standalone_diagnostics`
@@ -36,17 +36,20 @@ The S2P bridge protocol uses a latency-focused CDC schedule:
   only the latest state is retried after the stack becomes writable;
 - standalone XInput OUT rumble wakes the output task immediately instead of
   waiting for the 2 ms maintenance timeout.
+- standalone mode derives the same four battery levels as the desktop client
+  from controller voltage reports and shows them on the four player LEDs;
+  hysteresis prevents motor-load voltage sag from making the LEDs flicker.
 
-The current images in `../firmware/` were built from this source. The
-transport baseline was verified on real hardware; the `S2P-FW 1.0.1`
-diagnostic build has passed compilation, automated contract tests, and the
-documented controller-side reconnect regression checks. The exact upstream
-revision is linked above for comparison.
+The current images in `../firmware/` were built from this source. The existing
+transport and reconnect baseline was verified on real hardware; the
+`S2P-FW 1.0.2` battery-LED build has passed compilation and automated contract
+tests, but its new standalone LED behavior still requires a post-flash hardware
+check. The exact upstream revision is linked above for comparison.
 
 | Current file | SHA-256 |
 |---|---|
-| `esp32s3_bluedroid_bridge.bin` | `C83609E11DF3C207D359439C421DC79EBF54E31BB4D2368C71B78BC7C19640C0` |
-| `bootloader.bin` | `1E6B5148E11223F7E50E98549B0D220C77CF48F55D6F7397365A7EFBAF3711D4` |
+| `esp32s3_bluedroid_bridge.bin` | `4B6A8CE62D7AA909CEDB56F8A685A291EE113183EE362821B71825469BF00557` |
+| `bootloader.bin` | `6C8D58E019BA2B3C3B5D1FA5E736971F46E296DF85E578AD2CB9A40E37696FF5` |
 | `partition-table.bin` | `7F00B6C042A89B15B0CAC534F82ED988CAF29278FF5700B0C511EB1B5BB7C820` |
 
 Real-controller A/B testing improved the normal host arrival interval from

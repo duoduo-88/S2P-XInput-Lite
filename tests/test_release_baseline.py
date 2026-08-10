@@ -13,9 +13,9 @@ FIRMWARE_ROOT = (
 
 
 class ReleaseBaselineTests(unittest.TestCase):
-    def test_desktop_release_version_is_074(self):
+    def test_desktop_release_version_is_075(self):
         source = (ROOT / "src" / "version.py").read_text(encoding="utf-8")
-        self.assertRegex(source, r'VERSION\s*=\s*"0\.7\.4"')
+        self.assertRegex(source, r'VERSION\s*=\s*"0\.7\.5"')
 
     def test_release_manifest_requires_exact_payload_coverage(self):
         source = (ROOT / "scripts" / "verify_release.ps1").read_text(
@@ -84,9 +84,9 @@ class ReleaseBaselineTests(unittest.TestCase):
             'sys.executable, "-m", "esptool", "--chip", "esp32s3"',
             source,
         )
-        self.assertIn('for marker in (b"S2P-FW", b"1.0.1")', source)
+        self.assertIn('for marker in (b"S2P-FW", b"1.0.2")', source)
 
-    def test_bundled_firmware_is_s2p_101(self):
+    def test_bundled_firmware_is_s2p_102(self):
         main_source = (
             FIRMWARE_ROOT / "main" / "main.c"
         ).read_text(encoding="utf-8")
@@ -99,7 +99,7 @@ class ReleaseBaselineTests(unittest.TestCase):
         )
         self.assertRegex(
             main_source,
-            r'APP_FIRMWARE_VERSION\s+"1\.0\.1"',
+            r'APP_FIRMWARE_VERSION\s+"1\.0\.2"',
         )
         self.assertRegex(
             main_source,
@@ -109,22 +109,22 @@ class ReleaseBaselineTests(unittest.TestCase):
             main_source,
             r'APP_PROTOCOL_VERSION\s+"1\.0\.0"',
         )
-        self.assertNotIn("1.0.1-dev", main_source)
+        self.assertNotIn("1.0.2-dev", main_source)
         self.assertRegex(
             cmake_source,
-            r'set\(PROJECT_VER\s+"1\.0\.1"\)',
+            r'set\(PROJECT_VER\s+"1\.0\.2"\)',
         )
 
     def test_bundled_firmware_hashes_match_current_release(self):
         expected = {
             "bootloader.bin": (
-                "1e6b5148e11223f7e50e98549b0d220c77cf48f55d6f7397365a7efbaf3711d4"
+                "6c8d58e019ba2b3c3b5d1fa5e736971f46e296df85e578ad2cb9a40e37696ff5"
             ),
             "partition-table.bin": (
                 "7f00b6c042a89b15b0cac534f82ed988caf29278ff5700b0c511eb1b5bb7c820"
             ),
             "esp32s3_bluedroid_bridge.bin": (
-                "c83609e11df3c207d359439c421dc79ebf54e31bb4d2368c71b78bc7c19640c0"
+                "4b6a8ce62d7aa909cedb56f8a685a291ee113183ee362821b71825469bf00557"
             ),
         }
         firmware_dir = ROOT / "esp32s3" / "firmware"

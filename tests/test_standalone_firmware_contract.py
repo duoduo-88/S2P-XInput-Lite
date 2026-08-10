@@ -383,11 +383,113 @@ class StandaloneFirmwareContractTests(unittest.TestCase):
     def test_init_ack_matches_command_and_subcommand(self):
         start = MAIN_SOURCE.index("static void note_standalone_init_ack")
         end = MAIN_SOURCE.index(
-            "static void encode_standalone_vibration", start
+            "static void note_standalone_battery_led_ack", start
         )
         handler = MAIN_SOURCE[start:end]
         self.assertIn(".command_id", handler)
         self.assertIn(".subcommand_id", handler)
+
+    def test_standalone_battery_uses_desktop_curve_level_boundaries(self):
+        self.assertIn(
+            "#define STANDALONE_BATTERY_LEVEL_2_MV 3223u",
+            MAIN_SOURCE,
+        )
+        self.assertIn(
+            "#define STANDALONE_BATTERY_LEVEL_3_MV 3369u",
+            MAIN_SOURCE,
+        )
+        self.assertIn(
+            "#define STANDALONE_BATTERY_LEVEL_4_MV 3535u",
+            MAIN_SOURCE,
+        )
+        level_start = MAIN_SOURCE.index(
+            "static uint8_t standalone_battery_level_from_mask"
+        )
+        level_end = MAIN_SOURCE.index(
+            "static void note_standalone_battery_report", level_start
+        )
+        levels = MAIN_SOURCE[level_start:level_end]
+        for mask in ("0x01", "0x03", "0x07", "0x0F"):
+            self.assertIn(mask, levels)
+
+    def test_standalone_battery_report_is_bounds_checked_and_observed(self):
+        report_start = MAIN_SOURCE.index(
+            "static void note_standalone_battery_report"
+        )
+        report_end = MAIN_SOURCE.index(
+            "static const uint8_t s_pair_ltk1", report_start
+        )
+        report = MAIN_SOURCE[report_start:report_end]
+        self.assertIn("length < 33", report)
+        self.assertIn("payload[31]", report)
+        self.assertIn("payload[32]", report)
+        self.assertIn("voltage_mv < 2500u", report)
+        self.assertIn("voltage_mv > 5000u", report)
+
+        task_start = MAIN_SOURCE.index("static void cdc_task")
+        task_end = MAIN_SOURCE.index("static void gap_cb", task_start)
+        task = MAIN_SOURCE[task_start:task_end]
+        self.assertEqual(
+            task.count("note_standalone_battery_report("), 2
+        )
+
+    def test_standalone_battery_led_waits_for_init_and_ack(self):
+        pump_start = MAIN_SOURCE.index(
+            "static void pump_standalone_battery_leds"
+        )
+        pump_end = MAIN_SOURCE.index(
+            "static void encode_standalone_vibration", pump_start
+        )
+        pump = MAIN_SOURCE[pump_start:pump_end]
+        self.assertIn("standalone_init_step < init_count", pump)
+        self.assertIn("standalone_init_waiting", pump)
+        self.assertIn(
+            "desired == s_ch[ch].standalone_battery_led_applied_mask",
+            pump,
+        )
+        self.assertIn(
+            "if (!write_switch_command(ch, 0x09, 0x07",
+            pump,
+        )
+        self.assertIn("standalone_battery_led_waiting = true", pump)
+
+        ack_start = MAIN_SOURCE.index(
+            "static void note_standalone_battery_led_ack"
+        )
+        ack_end = MAIN_SOURCE.index(
+            "static void pump_standalone_battery_leds", ack_start
+        )
+        ack = MAIN_SOURCE[ack_start:ack_end]
+        self.assertIn("payload[0] != 0x09", ack)
+        self.assertIn("payload[3] != 0x07", ack)
+        self.assertIn("standalone_battery_led_applied_mask", ack)
+
+    def test_standalone_command_state_only_waits_after_accepted_write(self):
+        pair_start = MAIN_SOURCE.index(
+            "static void pump_standalone_pairing"
+        )
+        pair_end = MAIN_SOURCE.index(
+            "static bool note_standalone_pair_ack", pair_start
+        )
+        pair = MAIN_SOURCE[pair_start:pair_end]
+        self.assertIn("if (!write_switch_command(", pair)
+        self.assertLess(
+            pair.index("if (!write_switch_command("),
+            pair.index("standalone_pair_waiting = true"),
+        )
+
+        init_start = MAIN_SOURCE.index(
+            "static void pump_standalone_controller_init"
+        )
+        init_end = MAIN_SOURCE.index(
+            "static void note_standalone_init_ack", init_start
+        )
+        init = MAIN_SOURCE[init_start:init_end]
+        self.assertIn("if (!write_switch_command(", init)
+        self.assertLess(
+            init.index("if (!write_switch_command("),
+            init.index("standalone_init_waiting = true"),
+        )
 
     def test_output_mode_uses_single_nvs_enum_with_legacy_migration(self):
         self.assertIn("standalone_output_mode_t", XINPUT_HEADER)

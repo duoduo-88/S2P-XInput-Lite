@@ -65,7 +65,25 @@ def reference_parse(payload):
         millivolts = int.from_bytes(payload[31:33], "little")
         if 2500 <= millivolts <= 5000:
             voltage = millivolts / 1000.0
-            percent = 100 if voltage > 3.25 else 50 if voltage > 3.125 else 25
+            curve = (
+                (2589, 0), (3000, 3), (3100, 5), (3150, 10),
+                (3200, 22), (3250, 34), (3300, 45), (3350, 51),
+                (3400, 55), (3450, 66), (3500, 72), (3550, 80),
+                (3600, 87), (3650, 95), (3687, 100),
+            )
+            if millivolts <= curve[0][0]:
+                percent = 0
+            elif millivolts >= curve[-1][0]:
+                percent = 100
+            else:
+                for (low_mv, low_pct), (high_mv, high_pct) in zip(
+                    curve, curve[1:]
+                ):
+                    if millivolts <= high_mv:
+                        fraction = (millivolts - low_mv) / (high_mv - low_mv)
+                        estimate = low_pct + fraction * (high_pct - low_pct)
+                        percent = min(100, max(0, int(5 * round(estimate / 5))))
+                        break
     return (
         int.from_bytes(payload[4:8], "little"),
         stick(10),
@@ -75,7 +93,7 @@ def reference_parse(payload):
         magnetometer,
         percent,
         voltage,
-        False,
+        bool(payload[33]) if len(payload) >= 34 else False,
         int.from_bytes(payload[0:4], "little"),
     )
 

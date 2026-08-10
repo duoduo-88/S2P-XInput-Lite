@@ -1069,8 +1069,11 @@ class ESP32Bridge:
         ))
         return True
 
-    def set_player_led_1(self):
-        """將 Switch 2 Pro Controller 設定為 Player 1 LED。"""
+    def set_player_led_mask(self, mask):
+        """Set a cumulative player-LED mask (used as a battery bar)."""
+        mask = int(mask) & 0x0F
+        if mask == 0:
+            return False
         with self._state_lock:
             channel = self.connected_channel
         if channel is None:
@@ -1088,9 +1091,12 @@ class ESP32Bridge:
         command_id = 0x09
         subcommand_id = 0x07
 
-        # Player 1 LED pattern
         command_data = bytes([
-            0x01,
+            mask,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
             0x00,
             0x00,
             0x00,
@@ -1109,10 +1115,13 @@ class ESP32Bridge:
         command = f"wr {int(channel)} c {payload.hex()}"
 
         if self.send(command):
-            print("已送出 Player 1 LED 設定。")
             return True
 
         return False
+
+    def set_player_led_1(self):
+        """Backward-compatible Player 1 LED helper."""
+        return self.set_player_led_mask(0x01)
 
     def _reserve_feedback(self, expected_generation=None):
         """Reserve one cue for exactly one ready connection generation."""

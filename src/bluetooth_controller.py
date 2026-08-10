@@ -113,6 +113,8 @@ class BluetoothController:
 
         self._response_future = None
         self._expected_command = None
+        self._player_led_request = None
+        self._player_led_applied = None
 
         self._rumble_packet_id = 0
         
@@ -1115,6 +1117,57 @@ class BluetoothController:
             ))
 
         return response[8:]
+
+    def set_player_led_mask(self, mask):
+        """Schedule an LED update; return true only after its ACK arrived."""
+        mask = int(mask) & 0x0F
+        if mask == 0:
+            return False
+        with self._state_lock:
+            generation = self._connection_generation
+            ready = self.connected and self._application_ready
+            loop = self._loop
+            request = (generation, mask)
+            if not ready or loop is None or not loop.is_running():
+                return False
+            if self._player_led_applied == request:
+                return True
+            if (
+                self._player_led_request is not None
+                and self._player_led_request != self._player_led_applied
+            ):
+                return False
+            self._player_led_request = request
+
+        command = self._write_command(
+            0x09,
+            0x07,
+            bytes([mask, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
+            generation=generation,
+        )
+        try:
+            future = asyncio.run_coroutine_threadsafe(command, loop)
+        except Exception:
+            command.close()
+            with self._state_lock:
+                if self._player_led_request == request:
+                    self._player_led_request = None
+            return False
+
+        def finished(result):
+            try:
+                result.result()
+            except Exception:
+                with self._state_lock:
+                    if self._player_led_request == request:
+                        self._player_led_request = None
+            else:
+                with self._state_lock:
+                    if self._player_led_request == request:
+                        self._player_led_applied = request
+
+        future.add_done_callback(finished)
+        return False
 
     async def _pair_controller(
         self,

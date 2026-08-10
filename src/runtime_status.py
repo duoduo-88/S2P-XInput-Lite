@@ -19,6 +19,8 @@ def initial_controller_status(updated_at):
         "battery_percent": None,
         "battery_voltage": None,
         "charging": False,
+        "charge_status_raw": None,
+        "battery_current_raw": None,
         "wired_full_report": None,
         "wired_polling_rate": None,
         "wired_processing_rate": None,

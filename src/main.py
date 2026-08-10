@@ -11,7 +11,7 @@ from bluetooth_controller import (
     BluetoothController
 )
 from wired_controller import WiredController, find_wired_controller
-from switch2_input import SensorModeTracker, parse_input_report
+from switch2_input import battery_led_mask, SensorModeTracker, parse_input_report
 from xinput_controller import XInputController
 from audio_haptics import AudioHaptics
 from input_dispatcher import InputDispatcher
@@ -411,6 +411,7 @@ def main():
 
     last_status_stage = 0.0
     last_input_error = 0.0
+    latest_battery_percent = None
     gyro_initialization_tracking = False
     gyro_initialization_announced = set()
     gyro_initialization_ready_announced = False
@@ -423,11 +424,13 @@ def main():
 
     def on_input(payload):
         nonlocal last_status_stage, last_input_error
+        nonlocal latest_battery_percent
         state = parse_input_report(
             payload
         )
 
         if state is not None:
+            latest_battery_percent = state.battery_percent
             if connection_mode != "wired":
                 idle_tracker.observe(state)
             sensor_mode = sensor_mode_tracker.update(state)
@@ -460,6 +463,8 @@ def main():
                     battery_percent=state.battery_percent,
                     battery_voltage=state.battery_voltage,
                     charging=state.charging,
+                    charge_status_raw=state.charge_status_raw,
+                    battery_current_raw=state.battery_current_raw,
                     wired_full_report=(
                         getattr(controller, "full_report", None)
                         if connection_mode == "wired" else None
@@ -619,12 +624,14 @@ def main():
         nonlocal gyro_initialization_ready_announced
         nonlocal gyro_initialization_complete_announced
         nonlocal idle_disconnect_requested
+        nonlocal latest_battery_percent
         if not input_dispatcher.reset(timeout=1.0):
             raise TimeoutError(
                 "Input processing did not quiesce during connection startup."
             )
         sensor_mode_tracker.reset()
         last_status_stage = 0.0
+        latest_battery_percent = None
         idle_disconnect_requested = False
         idle_tracker.reset()
         set_input_gc_suppressed(True)
@@ -745,9 +752,11 @@ def main():
         nonlocal gyro_initialization_tracking
         nonlocal gyro_initialization_announced
         nonlocal idle_disconnect_requested
+        nonlocal latest_battery_percent
         dispatcher_reset = input_dispatcher.reset(timeout=1.0)
         sensor_mode_tracker.reset()
         last_status_stage = 0.0
+        latest_battery_percent = None
         gyro_initialization_tracking = False
         gyro_initialization_announced.clear()
         set_input_gc_suppressed(False)
@@ -918,6 +927,7 @@ def main():
 
     try:
         last_heartbeat = 0.0
+        last_battery_led_mask = None
         last_gyro_calibration_state = ("idle", "")
         last_mag_calibration_state = ("idle", "", -1, ())
         last_accel_calibration_state = ("idle", "", -1, ())
@@ -950,6 +960,21 @@ def main():
                     rumble=rumble_status,
                     firmware_diagnostics=firmware_diagnostics,
                 )
+                if not controller_is_connected():
+                    last_battery_led_mask = None
+                else:
+                    led_mask = battery_led_mask(latest_battery_percent)
+                    if (
+                        led_mask is not None
+                        and led_mask != last_battery_led_mask
+                    ):
+                        set_led_mask = getattr(
+                            controller,
+                            "set_player_led_mask",
+                            None,
+                        )
+                        if set_led_mask is not None and set_led_mask(led_mask):
+                            last_battery_led_mask = led_mask
                 last_heartbeat = now
             if (
                 connection_mode != "wired"

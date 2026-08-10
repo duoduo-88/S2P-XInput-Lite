@@ -2,6 +2,28 @@ from dataclasses import dataclass
 import struct
 
 
+BATTERY_PERCENT_STEP = 5
+BATTERY_DISCHARGE_CURVE = (
+    # Measured under a continuous Audio Haptics load from full charge until
+    # controller cutoff. Percentages represent remaining observed runtime.
+    (2589, 0),
+    (3000, 3),
+    (3100, 5),
+    (3150, 10),
+    (3200, 22),
+    (3250, 34),
+    (3300, 45),
+    (3350, 51),
+    (3400, 55),
+    (3450, 66),
+    (3500, 72),
+    (3550, 80),
+    (3600, 87),
+    (3650, 95),
+    (3687, 100),
+)
+
+
 SWITCH_BUTTONS = {
     "Y":     0x00000001,
     "X":     0x00000002,
@@ -31,6 +53,45 @@ SWITCH_BUTTONS = {
 }
 
 
+def estimate_battery_percent(voltage_mv):
+    """Estimate remaining runtime in coarse steps from the measured curve."""
+    voltage_mv = int(voltage_mv)
+    if voltage_mv <= BATTERY_DISCHARGE_CURVE[0][0]:
+        return 0
+    if voltage_mv >= BATTERY_DISCHARGE_CURVE[-1][0]:
+        return 100
+
+    for (low_mv, low_percent), (high_mv, high_percent) in zip(
+        BATTERY_DISCHARGE_CURVE,
+        BATTERY_DISCHARGE_CURVE[1:],
+    ):
+        if voltage_mv <= high_mv:
+            fraction = (voltage_mv - low_mv) / (high_mv - low_mv)
+            estimate = low_percent + fraction * (high_percent - low_percent)
+            quantized = int(
+                BATTERY_PERCENT_STEP
+                * round(estimate / BATTERY_PERCENT_STEP)
+            )
+            return min(100, max(0, quantized))
+    return 100
+
+
+def battery_level(percent):
+    """Return the shared 1-4 battery level used by the UI and LEDs."""
+    if percent is None:
+        return None
+    percent = min(100, max(0, int(percent)))
+    return min(4, max(0, percent - 1) // 25 + 1)
+
+
+def battery_led_mask(percent):
+    """Return a cumulative 1-4 LED battery bar mask."""
+    level = battery_level(percent)
+    if level is None:
+        return None
+    return (1 << level) - 1
+
+
 def get_stick_xy(data):
     if len(data) != 3:
         return 2048, 2048
@@ -57,6 +118,8 @@ class InputState:
     battery_voltage: float | None
     charging: bool
     report_time: int | None = None
+    charge_status_raw: int | None = None
+    battery_current_raw: int | None = None
 
 
 class SensorModeTracker:
@@ -137,17 +200,17 @@ def parse_input_report(payload):
         # presenting a corrupted report as a believable battery percentage.
         if 2500 <= voltage_mv <= 5000:
             battery_voltage = voltage_mv / 1000.0
-            # Match Switch2Connect's high/medium/low voltage thresholds.
-            if battery_voltage > 3.25:
-                battery_percent = 100
-            elif battery_voltage > 3.125:
-                battery_percent = 50
-            else:
-                battery_percent = 25
+            battery_percent = estimate_battery_percent(voltage_mv)
 
-    # Switch2Connect exposes current but does not establish a reliable sign or
-    # charging flag for this report, so do not guess a charging state.
-    charging = False
+    charge_status_raw = payload[33] if len(payload) >= 34 else None
+    battery_current_raw = (
+        struct.unpack_from("<H", payload, 34)[0]
+        if len(payload) >= 36 else None
+    )
+    # Hardware comparison: the status byte is 0x34 with external power and
+    # 0x00 immediately after unplugging. Keep the raw value for future protocol
+    # research while exposing the observed powered/charging state to the UI.
+    charging = bool(charge_status_raw)
     return InputState(
         buttons,
         left,
@@ -159,4 +222,6 @@ def parse_input_report(payload):
         battery_voltage,
         charging,
         report_time,
+        charge_status_raw,
+        battery_current_raw,
     )

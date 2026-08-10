@@ -1,6 +1,6 @@
 # S2P-XInput-Lite ESP32-S3 BLE Bridge
 
-This directory contains the stable bridge and standalone `S2P-FW 1.0.1`
+This directory contains the stable bridge and standalone `S2P-FW 1.0.2`
 source. It targets an ESP32-S3. Bridge mode keeps
 the existing USB CDC transport. Standalone mode can expose either a CDC +
 XInput-compatible composite device for PCs or a CDC + standards-based
@@ -21,6 +21,8 @@ The firmware uses the independent `s2p_bridge 1.0.0` protocol and includes:
 - profile-driven Switch input to XInput buttons, calibrated sticks, direction
   mappings, linear triggers, compatible mapping layers, and gyro-to-stick;
 - XInput large/small motor commands translated to LF/HF controller rumble;
+- four battery levels displayed cumulatively on the controller player LEDs in
+  standalone mode, using measured discharge thresholds with voltage hysteresis;
 - mobile USB HID output driven by the same processed buttons, calibrated
   sticks, direction mappings, mapping layers and gyro-to-stick state;
 - resumable CDC transmission with a shared per-loop time budget, preventing
@@ -39,8 +41,9 @@ with 7.68/9.01 ms p50/p95 intervals. Profile data is validated, stored, and
 applied at runtime. Keyboard/mouse output, Windows audio haptics, process-based
 profile switching, phone rumble, and BLE HID output remain desktop-only or
 unimplemented.
-The standalone runtime has completed automated, full ESP-IDF build, and
-controller-side reconnect regression testing for the current release.
+The standalone runtime has completed automated and full ESP-IDF build testing.
+Its existing reconnect path has a real-controller regression baseline; the new
+1.0.2 battery LED behavior still requires a post-flash hardware check.
 
 The Windows client uses these CDC commands:
 
@@ -126,4 +129,4 @@ flash frequency, and a 16 MB flash size. Upstream Switch2Connect firmware is
 not treated as protocol-compatible. The previous bundled S2P `0.14.3` build is
 recognized only so the desktop application can guide an upgrade; standalone
 profile storage, diagnostics, and direct USB controller output require the
-current `S2P-FW 1.0.1` firmware.
+current `S2P-FW 1.0.2` firmware.

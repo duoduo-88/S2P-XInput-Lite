@@ -977,6 +977,34 @@ class WiredController:
                 except Exception:
                     pass
 
+    def set_player_led_mask(self, mask):
+        """Set a cumulative player-LED mask (used as a battery bar)."""
+        mask = int(mask) & 0x0F
+        if mask == 0:
+            return False
+        command = bytearray(USB_SET_LED_COMMAND)
+        command[8] = mask
+        report = bytes([OUTPUT_REPORT_ID_PRO2]) + bytes(command).ljust(
+            PRO2_OUTPUT_REPORT_BODY_SIZE,
+            b"\x00",
+        )
+        try:
+            with self._hid_write_lock:
+                with self._state_lock:
+                    if not self.connected:
+                        return False
+                with self._device_lock:
+                    device = self._device
+                if device is None:
+                    return False
+                try:
+                    written = device.write(report)
+                except TypeError:
+                    written = device.write(list(report))
+            return written is not None and written > 0
+        except Exception:
+            return False
+
     def set_audio_haptics_active(self, active):
         """Use 16.6 ms (~60 Hz) for audio; game/zero uses 7.5 ms priority.
 
