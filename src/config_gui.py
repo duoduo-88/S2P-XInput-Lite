@@ -677,22 +677,32 @@ class ToolTip:
         translator=None,
         illustration=None,
         wraplength=None,
+        show_condition=None,
     ):
         self.widget = widget
         self.text = text
         self.translator = translator or (lambda value: value)
         self.illustration = illustration
+        self.show_condition = show_condition
         self.wraplength = (
             None if wraplength is None
             else max(160, int(wraplength))
         )
         self.window = None
 
-        self.widget.bind("<Enter>", self.show)
-        self.widget.bind("<Leave>", self.hide)
+        self.widget.bind("<Enter>", self.show, add="+")
+        self.widget.bind("<Leave>", self.hide, add="+")
 
     def show(self, event=None):
         if self.window is not None:
+            return
+        try:
+            if self.show_condition is not None and not self.show_condition():
+                return
+            tooltip_text = self.text() if callable(self.text) else self.text
+        except (AttributeError, tk.TclError, TypeError, ValueError):
+            return
+        if not str(tooltip_text).strip():
             return
 
         # 讓提示框只隸屬於問號所在的 Tk 視窗。
@@ -740,7 +750,7 @@ class ToolTip:
         )
         label_font = tkfont.Font(font=label.cget("font"))
         label.configure(text=wrap_tooltip_text(
-            self.translator(self.text),
+            self.translator(str(tooltip_text)),
             effective_wrap,
             label_font.measure,
         ))
@@ -5752,6 +5762,8 @@ class ConfigGUI:
         """
         self._parameter_reset_bound_widgets = set()
         self._parameter_wheel_bound_widgets = set()
+        self._combobox_overflow_bound_widgets = set()
+        self._combobox_overflow_tooltips = {}
         self._bind_parameter_reset_widget_tree(self.root)
 
         # Some controls (for example the enlarged stick-curve editor) are
@@ -5790,6 +5802,7 @@ class ConfigGUI:
         }:
             if widget_class == "TCombobox":
                 self._bind_combobox_popdown_mousewheel_guard(widget)
+                self._bind_combobox_overflow_tooltip(widget)
             widget_name = str(widget)
             if widget_name not in self._parameter_wheel_bound_widgets:
                 widget.bind(
@@ -5822,6 +5835,56 @@ class ConfigGUI:
             add="+",
         )
         self._parameter_reset_bound_widgets.add(widget_name)
+
+    @staticmethod
+    def combobox_text_is_truncated(widget):
+        """Return whether the current Combobox value exceeds its text area."""
+        try:
+            value = str(widget.get())
+            if not value:
+                return False
+            widget.update_idletasks()
+            width = int(widget.winfo_width())
+            if width <= 1:
+                width = int(widget.winfo_reqwidth())
+            height = max(1, int(widget.winfo_height()))
+            middle_y = height // 2
+
+            # ttk themes expose the actual editable/display region as the
+            # ``textarea`` element. Measuring it avoids guessing the width of
+            # the arrow, borders and DPI-scaled theme padding.
+            text_pixels = []
+            for x in range(max(0, width)):
+                element = str(widget.identify(x, middle_y)).casefold()
+                if "textarea" in element:
+                    text_pixels.append(x)
+            if text_pixels:
+                available_width = text_pixels[-1] - text_pixels[0] + 1
+            else:
+                # Safe fallback for third-party themes that do not expose
+                # element names through ``identify``.
+                available_width = max(0, width - 28)
+
+            font = tkfont.Font(root=widget, font=widget.cget("font"))
+            return font.measure(value) > available_width
+        except (AttributeError, tk.TclError, TypeError, ValueError):
+            return False
+
+    def _bind_combobox_overflow_tooltip(self, widget):
+        """Show the complete selected value only when it is visibly clipped."""
+        widget_name = str(widget)
+        if widget_name in self._combobox_overflow_bound_widgets:
+            return
+        tooltip = ToolTip(
+            widget,
+            widget.get,
+            wraplength=420,
+            show_condition=lambda current=widget: (
+                self.combobox_text_is_truncated(current)
+            ),
+        )
+        self._combobox_overflow_bound_widgets.add(widget_name)
+        self._combobox_overflow_tooltips[widget_name] = tooltip
 
     def parameter_binding_for_widget(self, widget):
         if widget is self.profile_combo:
@@ -6806,9 +6869,9 @@ class ConfigGUI:
                 self.tr("無法匯入方案檔：") + f"\n{exc}",
             )
 
-    def delete_selected_profile(self):
+    def delete_selected_profile(self, selected=None):
         selected = (
-            self._profile_context_target or self.active_profile
+            selected or self._profile_context_target or self.active_profile
         ).strip()
         self._profile_context_target = None
         if is_protected_profile(selected):
@@ -6858,17 +6921,23 @@ class ConfigGUI:
 
     def open_profile_context_menu(self, x_root, y_root):
         menu = tk.Menu(self.root, tearoff=False)
-        selected = self._profile_context_target or self.active_profile
+        # Capture the right-clicked item in each command. ``tk_popup`` only
+        # posts the menu and may return before the user chooses an action, so
+        # reading ``_profile_context_target`` later can incorrectly fall back
+        # to the active profile after the cleanup below runs.
+        selected = (
+            self._profile_context_target or self.active_profile
+        ).strip()
         protected = is_protected_profile(selected)
         menu.add_command(
             label=self.tr("重新命名方案"),
-            command=self.rename_selected_profile,
+            command=lambda name=selected: self.rename_selected_profile(name),
             state="disabled" if protected else "normal",
         )
         menu.add_separator()
         menu.add_command(
             label=self.tr("刪除方案"),
-            command=self.delete_selected_profile,
+            command=lambda name=selected: self.delete_selected_profile(name),
             state="disabled" if protected else "normal",
         )
         try:
@@ -6912,9 +6981,9 @@ class ConfigGUI:
         except (tk.TclError, ValueError):
             pass
 
-    def rename_selected_profile(self):
+    def rename_selected_profile(self, selected=None):
         selected = (
-            self._profile_context_target or self.active_profile
+            selected or self._profile_context_target or self.active_profile
         ).strip()
         self._profile_context_target = None
         if is_protected_profile(selected):

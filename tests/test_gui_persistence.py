@@ -34,6 +34,43 @@ class DummyLabel:
 
 
 class GuiPersistenceTests(unittest.TestCase):
+    def test_profile_context_menu_commands_keep_right_clicked_profile(self):
+        class Menu:
+            def __init__(self):
+                self.commands = []
+
+            def add_command(self, **options):
+                self.commands.append(options)
+
+            def add_separator(self):
+                pass
+
+            def tk_popup(self, _x_root, _y_root):
+                pass
+
+            def grab_release(self):
+                pass
+
+        gui = object.__new__(config_gui.ConfigGUI)
+        gui.root = object()
+        gui.active_profile = "Current"
+        gui._profile_context_target = "Right Clicked"
+        gui.profile_name_var = DummyVariable("Right Clicked")
+        gui.rename_selected_profile = Mock()
+        gui.delete_selected_profile = Mock()
+        gui.tr = lambda text: text
+        menu = Menu()
+
+        with patch.object(config_gui.tk, "Menu", return_value=menu):
+            gui.open_profile_context_menu(100, 200)
+
+        self.assertIsNone(gui._profile_context_target)
+        self.assertEqual(gui.profile_name_var.get(), "Current")
+        menu.commands[0]["command"]()
+        menu.commands[1]["command"]()
+        gui.rename_selected_profile.assert_called_once_with("Right Clicked")
+        gui.delete_selected_profile.assert_called_once_with("Right Clicked")
+
     def test_zoom_deadzone_label_uses_numeric_scrubber(self):
         gui = object.__new__(config_gui.ConfigGUI)
         gui.bind_numeric_scrubber = Mock()
@@ -729,6 +766,9 @@ class GuiPersistenceTests(unittest.TestCase):
             def bind(self, sequence, callback, add=None):
                 self.bindings.append((sequence, callback, add))
 
+            def get(self):
+                return "KEYBOARD"
+
             def __str__(self):
                 return ".parameter"
 
@@ -736,16 +776,67 @@ class GuiPersistenceTests(unittest.TestCase):
         gui.profile_combo = None
         gui._parameter_wheel_bound_widgets = set()
         gui._parameter_reset_bound_widgets = set()
+        gui._combobox_overflow_bound_widgets = set()
+        gui._combobox_overflow_tooltips = {}
         gui.parameter_binding_for_widget = lambda _widget: None
         widget = Widget()
 
         gui._bind_parameter_reset_widget(widget)
 
-        self.assertEqual(len(widget.bindings), 1)
-        sequence, callback, add = widget.bindings[0]
+        wheel_bindings = [
+            binding for binding in widget.bindings
+            if binding[0] == "<MouseWheel>"
+        ]
+        self.assertEqual(len(wheel_bindings), 1)
+        sequence, callback, add = wheel_bindings[0]
         self.assertEqual(sequence, "<MouseWheel>")
         self.assertEqual(callback, gui._on_parameter_control_mousewheel)
         self.assertEqual(add, "+")
+
+    def test_combobox_overflow_tooltip_uses_theme_text_area(self):
+        class Widget:
+            def __init__(self, value):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+            def update_idletasks(self):
+                pass
+
+            def winfo_width(self):
+                return 100
+
+            def winfo_reqwidth(self):
+                return 100
+
+            def winfo_height(self):
+                return 24
+
+            def identify(self, x, _y):
+                if 5 <= x <= 64:
+                    return "Combobox.textarea"
+                if x >= 75:
+                    return "Combobox.downarrow"
+                return "Combobox.padding"
+
+            def cget(self, option):
+                self.assert_font_option = option
+                return "TkTextFont"
+
+        measured_font = Mock()
+        measured_font.measure.side_effect = lambda value: len(value) * 10
+        with patch.object(config_gui.tkfont, "Font", return_value=measured_font):
+            self.assertTrue(
+                config_gui.ConfigGUI.combobox_text_is_truncated(
+                    Widget("KEYBOARD")
+                )
+            )
+            self.assertFalse(
+                config_gui.ConfigGUI.combobox_text_is_truncated(
+                    Widget("4WAY")
+                )
+            )
 
     def test_combobox_popdown_list_ignores_mousewheel(self):
         calls = []
