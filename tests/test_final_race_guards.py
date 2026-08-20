@@ -217,7 +217,10 @@ class CleanupGuardTests(unittest.IsolatedAsyncioTestCase):
         controller.client = _BleClient()
         discovery_calls = []
         disconnect_calls = []
-        controller._get_local_mac_value = lambda: 0
+        async def get_local_mac_value():
+            return 0
+
+        controller._get_local_mac_value = get_local_mac_value
 
         async def fail_disconnect():
             disconnect_calls.append(True)

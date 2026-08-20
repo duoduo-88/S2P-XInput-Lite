@@ -13,9 +13,9 @@ FIRMWARE_ROOT = (
 
 
 class ReleaseBaselineTests(unittest.TestCase):
-    def test_desktop_release_version_is_076(self):
+    def test_desktop_release_version_is_077(self):
         source = (ROOT / "src" / "version.py").read_text(encoding="utf-8")
-        self.assertRegex(source, r'VERSION\s*=\s*"0\.7\.6"')
+        self.assertRegex(source, r'VERSION\s*=\s*"0\.7\.7"')
 
     def test_release_manifest_requires_exact_payload_coverage(self):
         source = (ROOT / "scripts" / "verify_release.ps1").read_text(
@@ -118,13 +118,13 @@ class ReleaseBaselineTests(unittest.TestCase):
     def test_bundled_firmware_hashes_match_current_release(self):
         expected = {
             "bootloader.bin": (
-                "6c8d58e019ba2b3c3b5d1fa5e736971f46e296df85e578ad2cb9a40e37696ff5"
+                "0674ee7d6721269bff482811b4441f6a85d6f590afde9f7f71f6e7db39c68e94"
             ),
             "partition-table.bin": (
                 "7f00b6c042a89b15b0cac534f82ed988caf29278ff5700b0c511eb1b5bb7c820"
             ),
             "esp32s3_bluedroid_bridge.bin": (
-                "4b6a8ce62d7aa909cedb56f8a685a291ee113183ee362821b71825469bf00557"
+                "3a5623604d865d3e7d3233b5cd8c9477fca54f31548341a54a83bf7c58eaf71f"
             ),
         }
         firmware_dir = ROOT / "esp32s3" / "firmware"
@@ -134,6 +134,12 @@ class ReleaseBaselineTests(unittest.TestCase):
                     (firmware_dir / name).read_bytes()
                 ).hexdigest()
                 self.assertEqual(actual, digest)
+
+    def test_release_firmware_build_is_reproducible(self):
+        defaults = (FIRMWARE_ROOT / "sdkconfig.defaults").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("CONFIG_APP_REPRODUCIBLE_BUILD=y", defaults)
 
 
 if __name__ == "__main__":

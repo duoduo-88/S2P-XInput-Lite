@@ -20,6 +20,7 @@ from bleak import (
     BleakScanner,
 )
 from winrt.windows.devices.bluetooth import (
+    BluetoothAdapter,
     BluetoothLEPreferredConnectionParameters,
     BluetoothLEPreferredConnectionParametersRequestStatus,
 )
@@ -447,9 +448,7 @@ class BluetoothController:
         self
     ):
         try:
-            self.host_mac_value = (
-                self._get_local_mac_value()
-            )
+            self.host_mac_value = await self._get_local_mac_value()
 
             print(
                 "正在搜尋 Switch 2 Pro Controller..."
@@ -733,37 +732,35 @@ class BluetoothController:
     # =========================
 
     @staticmethod
-    def _get_local_mac_value():
+    async def _get_local_mac_value():
         try:
-            import bluetooth
-
-            addresses = (
-                bluetooth.read_local_bdaddr()
-            )
-
-            if not addresses:
+            # PyBluez reaches a legacy Windows API through a native extension.
+            # Some adapters trigger an access violation there, terminating the
+            # process before a Python exception can be caught. Use the same
+            # WinRT stack as the BLE transport instead.
+            adapter = await BluetoothAdapter.get_default_async()
+            if adapter is None:
                 raise RuntimeError(tr(
                     "找不到本機藍牙介面卡，或藍牙未開啟。",
                     "No local Bluetooth adapter was found, or Bluetooth "
                     "is turned off.",
                 ))
 
-            mac_text = (
-                addresses[0]
-                .replace(":", "")
-                .replace("-", "")
-                .strip()
-                .upper()
-            )
-
-            mac_value = int(
-                mac_text,
-                16
+            mac_value = int(adapter.bluetooth_address)
+            if not 0 <= mac_value <= 0xFFFFFFFFFFFF:
+                raise RuntimeError(tr(
+                    "Windows 回傳了無效的本機藍牙 MAC。",
+                    "Windows returned an invalid local Bluetooth MAC.",
+                ))
+            mac_hex = f"{mac_value:012X}"
+            mac_text = ":".join(
+                mac_hex[index:index + 2]
+                for index in range(0, len(mac_hex), 2)
             )
 
             print(
                 "本機藍牙 MAC：",
-                addresses[0]
+                mac_text
             )
 
             return mac_value

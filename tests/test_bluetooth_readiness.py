@@ -40,6 +40,31 @@ class BluetoothReadinessTests(unittest.IsolatedAsyncioTestCase):
         controller._rumble_write_lock = asyncio.Lock()
         return controller
 
+    async def test_local_mac_uses_winrt_adapter_without_pybluez(self):
+        class Adapter:
+            bluetooth_address = 0xF8CF52717928
+
+        class AdapterApi:
+            @staticmethod
+            async def get_default_async():
+                return Adapter()
+
+        with patch("bluetooth_controller.BluetoothAdapter", AdapterApi):
+            value = await BluetoothController._get_local_mac_value()
+
+        self.assertEqual(value, 0xF8CF52717928)
+
+    async def test_missing_winrt_adapter_is_a_recoverable_result(self):
+        class AdapterApi:
+            @staticmethod
+            async def get_default_async():
+                return None
+
+        with patch("bluetooth_controller.BluetoothAdapter", AdapterApi):
+            value = await BluetoothController._get_local_mac_value()
+
+        self.assertIsNone(value)
+
     async def test_wrong_subcommand_ack_is_ignored(self):
         controller = self.make_controller()
         future = controller._loop.create_future()

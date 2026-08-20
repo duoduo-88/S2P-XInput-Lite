@@ -24,7 +24,7 @@ class SettingsSchemaTests(unittest.TestCase):
         self.assertTrue(default_config.read(SRC_DIR / "profiles" / "System Default.ini", encoding="utf-8"))
         validated = validate_config_sections(default_config, strict=True)
         self.assertIn("gyro_mapping", validated)
-        self.assertEqual(validated["rumble"]["max_amplitude"], 800)
+        self.assertEqual(validated["rumble"]["max_amplitude"], 500)
 
         for path in sorted(PROFILE_DIR.glob("*.ini")):
             if path.stem == "System Default":

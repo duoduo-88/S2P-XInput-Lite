@@ -12,6 +12,7 @@ S2P_STANDALONE_VID = 0xCAFE
 S2P_STANDALONE_PIDS = frozenset((0x4020, 0x4021))
 COMMON_USB_SERIAL_VIDS = frozenset((0x0403, 0x10C4, 0x1A86))
 S2P_FIRMWARE_PRODUCT = "S2P-FW"
+S2P_FIRMWARE_VERSION = "1.0.2"
 S2P_PROTOCOL = "s2p_bridge"
 S2P_PROTOCOL_VERSION = "1.0.0"
 S2P_FIRMWARE_PROFILE = "s2p_usb_bridge"
@@ -66,8 +67,9 @@ def _is_bridge_status(data):
     return current or legacy
 
 
-def find_esp32_port(baudrate=2_000_000, port_infos=None):
-    """Return the first compatible bridge; avoid a one-second wait on COM1."""
+def find_esp32_firmware(baudrate=2_000_000, port_infos=None):
+    """Return identity for the first compatible bridge, including its port."""
+
     ordered = ordered_serial_ports(port_infos)
     standalone_fallback = None
     for port_info in ordered:
@@ -106,7 +108,22 @@ def find_esp32_port(baudrate=2_000_000, port_infos=None):
                     except (ValueError, TypeError, json.JSONDecodeError):
                         continue
                     if _is_bridge_status(data):
-                        return port
+                        result = dict(data)
+                        result["port"] = port
+                        return result
         except (serial.SerialException, OSError):
             continue
-    return standalone_fallback
+    if standalone_fallback is not None:
+        return {
+            "port": standalone_fallback,
+            "product": S2P_FIRMWARE_PRODUCT,
+            "version": None,
+        }
+    return None
+
+
+def find_esp32_port(baudrate=2_000_000, port_infos=None):
+    """Return the first compatible bridge; avoid a one-second wait on COM1."""
+
+    firmware = find_esp32_firmware(baudrate, port_infos)
+    return firmware.get("port") if firmware else None

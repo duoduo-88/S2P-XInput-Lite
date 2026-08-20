@@ -27,6 +27,9 @@ CMAKE_SOURCE = (
 
 
 class StandaloneFirmwareContractTests(unittest.TestCase):
+    def test_standalone_rumble_default_is_500(self):
+        self.assertIn(".max_amplitude = 500,", XINPUT_SOURCE)
+
     def test_boot_tries_alternate_slot_after_active_failure(self):
         first = STORE_SOURCE.index("loaded = apply_slot(nvs, active_slot)")
         alternate = STORE_SOURCE.index("active_slot ^= 1u", first)

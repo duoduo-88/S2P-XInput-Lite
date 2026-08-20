@@ -48,8 +48,8 @@ check. The exact upstream revision is linked above for comparison.
 
 | Current file | SHA-256 |
 |---|---|
-| `esp32s3_bluedroid_bridge.bin` | `4B6A8CE62D7AA909CEDB56F8A685A291EE113183EE362821B71825469BF00557` |
-| `bootloader.bin` | `6C8D58E019BA2B3C3B5D1FA5E736971F46E296DF85E578AD2CB9A40E37696FF5` |
+| `esp32s3_bluedroid_bridge.bin` | `3A5623604D865D3E7D3233B5CD8C9477FCA54F31548341A54A83BF7C58EAF71F` |
+| `bootloader.bin` | `0674EE7D6721269BFF482811B4441F6A85D6F590AFDE9F7F71F6E7DB39C68E94` |
 | `partition-table.bin` | `7F00B6C042A89B15B0CAC534F82ED988CAF29278FF5700B0C511EB1B5BB7C820` |
 
 Real-controller A/B testing improved the normal host arrival interval from

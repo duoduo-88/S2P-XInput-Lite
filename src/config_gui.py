@@ -37,7 +37,12 @@ from pathlib import Path
 import serial.tools.list_ports
 import winreg
 from version import APP_TITLE, VERSION
-from esp32_detection import find_esp32_port
+from esp32_detection import (
+    S2P_FIRMWARE_PRODUCT,
+    S2P_FIRMWARE_VERSION,
+    find_esp32_firmware,
+    find_esp32_port,
+)
 from standalone_profile import (
     StandaloneTransferError,
     compile_standalone_profile,
@@ -446,6 +451,9 @@ APP_FIRMWARE_PATH = (
     FIRMWARE_DIR
     / "esp32s3_bluedroid_bridge.bin"
 )
+
+ESPRESSIF_USB_VID = 0x303A
+ESP32S3_USB_SERIAL_JTAG_PID = 0x1001
 
 def estimate_shape_circularity_error(shape_steps):
     """Estimate a 32-sector RMS circularity error."""
@@ -2110,8 +2118,110 @@ class ConfigGUI:
 
         return {
             port.device
-            for port in serial.tools.list_ports.comports()
+            for port in self.get_serial_port_infos()
         }
+
+    def get_serial_port_infos(self):
+        """Return current COM-port metadata for firmware flash detection."""
+
+        return tuple(serial.tools.list_ports.comports())
+
+    def find_firmware_flash_port(self, ports_before_flash):
+        """Find an ESP32-S3 ROM port, including one already present."""
+
+        port_infos = self.get_serial_port_infos()
+        bootloader_ports = sorted(
+            port.device
+            for port in port_infos
+            if (
+                getattr(port, "vid", None) == ESPRESSIF_USB_VID
+                and getattr(port, "pid", None)
+                == ESP32S3_USB_SERIAL_JTAG_PID
+            )
+        )
+        if bootloader_ports:
+            return bootloader_ports[0]
+
+        current_ports = {port.device for port in port_infos}
+        new_ports = sorted(current_ports - set(ports_before_flash))
+        return new_ports[0] if new_ports else None
+
+    def _cached_esp32_firmware_info(self):
+        """Read a fresh firmware identity already published by the connector."""
+
+        try:
+            status = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
+            age = time.time() - float(status.get("updated_at", 0.0))
+            diagnostics = status.get("firmware_diagnostics") or {}
+            capabilities = diagnostics.get("capabilities") or {}
+            if (
+                age <= 3.0
+                and status.get("mode") == "esp32"
+                and capabilities.get("product") == S2P_FIRMWARE_PRODUCT
+            ):
+                return dict(capabilities)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            pass
+        return None
+
+    def inspect_esp32_firmware(self):
+        """Return firmware identity and whether a stopped connector needs resume."""
+
+        cached = self._cached_esp32_firmware_info()
+        if cached is not None:
+            return cached, False
+
+        connector_was_running = (
+            self.main_process is not None
+            and self.main_process.poll() is None
+        )
+        if connector_was_running:
+            self.stop_main_process()
+        try:
+            return find_esp32_firmware(), connector_was_running
+        except Exception as exc:
+            LOGGER.warning("Could not inspect ESP32 firmware: %s", exc)
+            return None, connector_was_running
+
+    def _resume_connector_after_firmware_check(self):
+        main_path = Path(__file__).with_name("main.py")
+        if main_path.exists():
+            self._schedule_main_start(main_path, 500)
+
+    def confirm_firmware_flash(self, firmware_info):
+        """Show detected and bundled versions, then return the user's choice."""
+
+        target = f"{S2P_FIRMWARE_PRODUCT} v{S2P_FIRMWARE_VERSION}"
+        if firmware_info:
+            product = str(
+                firmware_info.get("product") or S2P_FIRMWARE_PRODUCT
+            )
+            version = firmware_info.get("version")
+            current = (
+                f"{product} v{version}"
+                if version
+                else f"{product} ({self.tr('版本未知')})"
+            )
+            message = (
+                self.tr("目前韌體：") + current + "\n"
+                + self.tr("內建韌體：") + target + "\n\n"
+            )
+            if version == S2P_FIRMWARE_VERSION:
+                message += self.tr(
+                    "目前已是相同版本。是否仍要重新刷入？"
+                )
+            else:
+                message += self.tr("是否刷入內建韌體？")
+        else:
+            message = (
+                self.tr("未偵測到可讀取版本的相容韌體。") + "\n"
+                + self.tr("內建韌體：") + target + "\n\n"
+                + self.tr("是否仍要進入刷機流程？")
+            )
+        return messagebox.askyesno(
+            self.tr("確認韌體版本"),
+            message,
+        )
 
     def flash_firmware(self):
         """自動偵測 ESP32-S3 刷機連接埠並刷入相容韌體。"""
@@ -2151,19 +2261,17 @@ class ConfigGUI:
             )
             return
 
-        confirmed = messagebox.askyesno(
-            "刷入相容韌體",
-            "即將刷入相容的 ESP32-S3 韌體。\n\n"
-            "程式將自動偵測 ESP32-S3 的刷機連接埠。\n\n"
-            "是否繼續？"
-        )
+        firmware_info, resume_connector = self.inspect_esp32_firmware()
+        confirmed = self.confirm_firmware_flash(firmware_info)
 
         if not confirmed:
+            if resume_connector:
+                self._resume_connector_after_firmware_check()
             return
 
         self._flash_operation_active = True
         try:
-            # 關閉主連接程式，釋放正常模式的 COM Port
+            # 查詢版本時可能已關閉主連接程式；若使用快取則在此釋放 COM Port。
             self.stop_main_process()
 
             # 記錄目前存在的 COM Port
@@ -2209,15 +2317,11 @@ class ConfigGUI:
         if not getattr(self, "_flash_operation_active", False):
             return
 
-        current_ports = self.get_serial_ports()
-
-        new_ports = (
-            current_ports
-            - self.ports_before_flash
+        flash_port = self.find_firmware_flash_port(
+            self.ports_before_flash
         )
 
-        if new_ports:
-            flash_port = sorted(new_ports)[0]
+        if flash_port is not None:
 
             messagebox.showinfo(
                 self.tr("偵測到刷機連接埠"),
@@ -2328,11 +2432,15 @@ class ConfigGUI:
             messagebox.showinfo(
                 self.tr("韌體刷寫完成"),
                 self.tr(
-                    "ESP32-S3 韌體已刷寫完成。\n\n"
-                    "請按一下 RESET / EN 按鈕，或拔除後重新插入 "
-                    "ESP32-S3，再重新開啟本軟體。"
+                    "ESP32-S3 韌體已刷寫完成並切回橋接模式。\n\n"
+                    "程式將自動啟動連接並重新搜尋手把。"
+                    "若數秒後橋接裝置仍未出現，請按一下 RESET / EN，"
+                    "或拔除後重新插入 ESP32-S3。"
                 ),
             )
+            main_path = Path(__file__).with_name("main.py")
+            if main_path.exists():
+                self._schedule_main_start(main_path, 1800)
         else:
             messagebox.showerror(
                 self.tr("韌體刷寫失敗"),
@@ -2600,7 +2708,7 @@ class ConfigGUI:
             value=self.config.get(
                 "rumble",
                 "max_amplitude",
-                fallback="800"
+                fallback="500"
             )
         )
 
@@ -10922,7 +11030,7 @@ class ConfigGUI:
                 )
                 return
             message = self.tr(
-                "ESP32 已切回橋接模式。"
+                "ESP32 已切回橋接模式。程式將自動啟動連接並重新搜尋手把。"
             )
             if result.get("restart_required", False):
                 message += self.tr(
@@ -10935,7 +11043,7 @@ class ConfigGUI:
                 lambda: self._finish_esp32_profile_write(
                     True,
                     message,
-                    was_running,
+                    True,
                 ),
             )
 

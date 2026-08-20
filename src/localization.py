@@ -537,6 +537,8 @@ EN_TEXT = {
     "即將切回 ESP32 橋接模式。\n\nESP32 會自動重新啟動，USB 裝置將短暫斷線並重新連接。若橋接裝置沒有重新出現，請拔除後重新插入 ESP32。\n\n是否繼續？":
         "ESP32 will return to bridge mode.\n\nESP32 will restart automatically and the USB device will disconnect briefly before reconnecting. If the bridge device does not reappear, unplug and reconnect the ESP32.\n\nContinue?",
     "ESP32 已切回橋接模式。": "ESP32 returned to bridge mode.",
+    "ESP32 已切回橋接模式。程式將自動啟動連接並重新搜尋手把。":
+        "ESP32 returned to bridge mode. The connector will start automatically and search for the controller again.",
     "\n\nESP32 已自動重新啟動，USB 裝置會短暫消失。請等待橋接裝置重新出現；若數秒後仍未出現，請拔除後重新插入 ESP32。":
         "\n\nESP32 restarted automatically and the USB device will disappear briefly. Wait for the bridge device to reappear; if it is still missing after a few seconds, unplug and reconnect the ESP32.",
     "無法建立 ESP32 設定": "Cannot build ESP32 profile",
@@ -851,6 +853,16 @@ EN_TEXT = {
     "還原": "Reset",
     "校正搖桿": "Calibrate",
     "刷入相容韌體": "Flash FW",
+    "確認韌體版本": "Confirm Firmware Version",
+    "目前韌體：": "Current firmware: ",
+    "內建韌體：": "Bundled firmware: ",
+    "版本未知": "version unknown",
+    "目前已是相同版本。是否仍要重新刷入？":
+        "The same firmware version is already installed. Reflash it anyway?",
+    "是否刷入內建韌體？": "Flash the bundled firmware?",
+    "未偵測到可讀取版本的相容韌體。":
+        "No compatible firmware with a readable version was detected.",
+    "是否仍要進入刷機流程？": "Continue to firmware flashing anyway?",
     "儲存設定": "Save",
     "重新啟動連接程式": "Restart",
     "重啟連線": "Restart",
@@ -1111,8 +1123,8 @@ EN_TEXT = {
         "Sets the LF rumble component frequency. This 9-bit value can be interpreted approximately in Hz; for example, 215 is about 215 Hz.\n\nRange: 0–511\nSuggested: 205–220 for general use; 190–205 for a softer feel.\nActual feel also depends on controller firmware, the actuator, and enclosure resonance; on some controllers, differences below about 180 may be difficult to feel.",
     "設定高頻震動成分的頻率；此 9-bit 數值可近似以 Hz 理解，例如 330 約代表 330 Hz。\n\n設定範圍：0 ～ 511\n建議：一般用途 315 ～ 325；較銳利可用 325 ～ 335。\n實際觸感仍會受控制器韌體、致動器與外殼共振影響；高於約 350 時較容易出現尖銳感、異音或不自然共振。":
         "Sets the HF rumble component frequency. This 9-bit value can be interpreted approximately in Hz; for example, 330 is about 330 Hz.\n\nRange: 0–511\nSuggested: 315–325 for general use; 325–335 for a sharper feel.\nActual feel also depends on controller firmware, the actuator, and enclosure resonance; above about 350, sharpness, audible noise, or unnatural resonance becomes more likely.",
-    "限制低頻與高頻最多能震多強，相當於整體震動的安全上限。\n\n設定範圍：0 ～ 1023\n目前內建方案以 800 為上限；若偶爾出現撞擊聲，可降至 650 ～ 750。\n數值越高，最強震動越大；接近 1023 時可能增加異音、共振與硬體負擔。":
-        "Limits how strong LF and HF rumble can become, acting as the overall output ceiling.\n\nRange: 0–1023\nBundled profiles currently use 800; reduce it to 650–750 if occasional impact noise occurs.\nHigher values allow stronger peaks; values near 1023 may increase noise, resonance, and hardware load.",
+    "限制低頻與高頻最多能震多強，相當於整體震動的安全上限。\n\n設定範圍：0 ～ 1023\n目前內建方案以 500 為上限；需要更強回饋時可逐步提高。\n數值越高，最強震動越大；接近 1023 時可能增加異音、共振與硬體負擔。":
+        "Limits how strong LF and HF rumble can become, acting as the overall output ceiling.\n\nRange: 0–1023\nBundled profiles currently use 500; increase it gradually if stronger feedback is needed.\nHigher values allow stronger peaks; values near 1023 may increase noise, resonance, and hardware load.",
     "即將刷入相容的 ESP32-S3 韌體。\n\n程式將自動偵測 ESP32-S3 的刷機連接埠。\n\n是否繼續？":
         "Compatible ESP32-S3 firmware will be flashed.\n\nThe flash port will be detected automatically.\n\nContinue?",
     "請讓 ESP32-S3 進入刷機模式：\n\n1. 連接 ESP32-S3 的 OTG 接口\n2. 按住 BOOT 按鈕\n3. 按一下 RESET / EN 按鈕\n4. 放開 RESET / EN\n5. 再放開 BOOT\n\n完成後不需要做其他操作。\n程式會自動偵測刷機連接埠。":
@@ -1125,8 +1137,11 @@ EN_TEXT = {
     "韌體刷寫完成前無法關閉設定視窗。":
         "The settings window cannot close until firmware flashing finishes.",
     "韌體刷寫完成": "Firmware flashing completed",
-    "ESP32-S3 韌體已刷寫完成。\n\n請按一下 RESET / EN 按鈕，或拔除後重新插入 ESP32-S3，再重新開啟本軟體。":
-        "ESP32-S3 firmware was flashed successfully.\n\nPress RESET / EN, or unplug and reconnect the ESP32-S3, then restart this application.",
+    "ESP32-S3 韌體已刷寫完成並切回橋接模式。\n\n程式將自動啟動連接並重新搜尋手把。若數秒後橋接裝置仍未出現，請按一下 RESET / EN，或拔除後重新插入 ESP32-S3。":
+        "ESP32-S3 firmware was flashed successfully and returned to bridge mode.\n\n"
+        "The connector will start automatically and search for the controller again. "
+        "If the bridge device does not appear after a few seconds, press RESET / EN, "
+        "or unplug and reconnect the ESP32-S3.",
     "韌體刷寫失敗": "Firmware flashing failed",
     "esptool 刷寫失敗，結束代碼：":
         "esptool flashing failed. Exit code: ",
