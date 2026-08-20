@@ -1,4 +1,4 @@
 APP_NAME = "S2P-XInput-Lite"
-VERSION = "0.7.6"
+VERSION = "0.7.7"
 
 APP_TITLE = f"{APP_NAME} v{VERSION}"

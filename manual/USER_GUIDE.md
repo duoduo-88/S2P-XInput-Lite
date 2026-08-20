@@ -1,11 +1,11 @@
-# S2P-XInput-Lite v0.7.6 User Guide
+# S2P-XInput-Lite v0.7.7 User Guide
 
 [繁體中文](USER_GUIDE_zh-TW.md)
 
 This guide covers installation, connections, profiles, stick tuning, mapping,
 gyro controls, rumble, HidHide, ESP32-S3 bridge and standalone operation, and
 the Gamepad Test, report-rate, diagnostics, and About pages in
-S2P-XInput-Lite v0.7.6.
+S2P-XInput-Lite v0.7.7.
 
 The screenshots use the English interface. Select **中 / En** in the lower-left corner of the main window to switch languages without changing the layout.
 
@@ -68,7 +68,7 @@ Connect the controller directly to the PC with USB-C. This normally provides low
 
 The controller connects to the ESP32-S3 over BLE. The bridge then sends controller data to the PC over USB.
 
-v0.7.6 provides two standalone outputs that do not require the Windows
+v0.7.7 provides two standalone outputs that do not require the Windows
 application to remain open:
 
 - **PC XInput Standalone Mode** — The ESP32 provides XInput-compatible output directly to Windows.
@@ -284,11 +284,11 @@ The common layout swaps A/B and X/Y to match Xbox button positions. CAPT, C, GR,
 
 ### 7.2 Max Amp and mechanical noise
 
-The amplitude field has a protocol range of `0–1023`. The default is `800`, approximately 78% of the field maximum, commonly described as about 80%.
+The amplitude field has a protocol range of `0–1023`. The default is `500`, approximately 49% of the field maximum.
 
 Testing across multiple bridge implementations and controllers indicates that stronger output makes a linear actuator more likely to produce a light mechanical impact during rapid changes. The effect is usually minor during normal use.
 
-The default of `800` is a practical balance between rumble strength and reducing excessive-output noise. It is not a certified continuous hardware safety limit.
+The default of `500` retains clear feedback while reducing excessive-output noise. It is not a certified continuous hardware safety limit.
 
 > [!CAUTION]
 > The `0–1023` field range does not mean every controller should run continuously at the maximum. Reduce Max Amp, LF/HF Strength, or the affected audio bands if you hear impacts, sharp buzzing, or unnatural vibration.
@@ -376,13 +376,18 @@ If you dismiss an automatic reminder, it will not appear on every launch. Select
 ### 8.2 Flashing ESP32-S3 firmware
 
 1. Select **Flash FW**.
-2. Connect the ESP32-S3 OTG port.
-3. Hold **BOOT**.
-4. Press **RESET / EN** once.
-5. Release **RESET / EN**, then release **BOOT**.
-6. The application detects the new COM port and flashes the firmware.
-7. When complete, press **RESET / EN** or reconnect the board.
-8. Restart S2P-XInput-Lite.
+2. The application reads the connected firmware version and compares it with
+   the bundled `S2P-FW 1.0.2`.
+3. Review the installed and bundled versions, then choose whether to flash or
+   cancel. Cancelling resumes the connector if it was paused for detection.
+4. After confirming, connect the ESP32-S3 OTG port and hold **BOOT**.
+5. Press **RESET / EN** once, release **RESET / EN**, then release **BOOT**.
+6. The application identifies the ESP32-S3 ROM port by its USB identity even
+   when that COM port was already present, then flashes the firmware.
+7. After a successful flash, the ESP32 returns to bridge mode and the desktop
+   connector starts automatically after USB re-enumeration.
+8. If the bridge does not reappear after several seconds, press **RESET / EN**
+   or reconnect the board.
 
 > [!CAUTION]
 > Do not disconnect the ESP32-S3 or close the application while firmware is being written.
@@ -412,7 +417,7 @@ on the ESP32. Features that require Windows are not executed.
 1. Select the profile to write.
 2. Finish editing and select **Save/Apply**.
 3. Confirm that the ESP32 is connected and running the bundled
-   `S2P-FW 1.0.1` firmware.
+   `S2P-FW 1.0.2` firmware.
 4. Select **ESP32 ▼** at the bottom of the window.
 5. Select **Write and enable PC XInput standalone** or
    **Write and enable Mobile USB HID**.
@@ -438,8 +443,10 @@ to be saved first instead of silently writing the previously saved values.
 2. Select **ESP32 ▼**.
 3. Select **Return to ESP32 bridge mode**.
 4. Confirm the warning. The ESP32 restarts and re-enumerates its USB device.
-5. If it is not detected again, reconnect the ESP32 and select
-   **Restart Connection**.
+5. The desktop connector starts automatically and searches for the controller
+   again, even when it was not running before the mode change.
+6. If the bridge does not reappear after several seconds, reconnect the ESP32;
+   **Restart Connection** remains available as a manual fallback.
 
 **Restart Connection** only restarts the desktop connection. It does not
 overwrite the profile stored on the ESP32.
@@ -597,7 +604,7 @@ text.
 
 Bridge mode temporarily uses the application's active serial connection.
 Standalone modes open the ESP32 diagnostic channel directly. The complete
-diagnostic command set requires the bundled `S2P-FW 1.0.1`.
+diagnostic command set requires the bundled `S2P-FW 1.0.2`.
 
 ### 9.8 About
 
@@ -665,7 +672,7 @@ Hover over the six-band description to display a question-mark cursor and the co
 | Controller not found | Use a data-capable cable, reconnect the controller, or remove and repeat Windows BLE pairing. |
 | ESP32 remains Searching | Check the OTG port, firmware, USB connection, and controller pairing state. |
 | ESP32 received old settings | Select Save/Apply first. Modified System Default settings must be saved with Save New. |
-| Device is missing after a mode change | Wait for USB re-enumeration, reconnect the ESP32, then use Restart Connection after returning to bridge mode. |
+| Device is missing after a mode change | Wait for automatic USB re-enumeration and reconnection. If the bridge still does not appear, reconnect the ESP32; use Restart Connection only as a manual fallback. |
 | Phone detects the controller but a game ignores triggers | Use Mobile USB HID firmware from v0.6.0; it exposes both analog trigger axes and digital L2/R2 buttons. |
 | Audio rumble does not react | Confirm WASAPI is Ready, select Audio or Mix, and check the Windows default output device. |
 | Quiet audio still vibrates | Raise Gate, lower Lvl, and reduce High/Ultra. |
@@ -711,4 +718,4 @@ Gate → Lvl → six bands → LF/HF Balance → Tail/Decay.
 Keep one verified stable profile and use **Save New** for experimental settings.
 
 > [!NOTE]
-> This guide applies to S2P-XInput-Lite v0.7.6. For later releases, follow the in-app question-mark help and the latest release notes.
+> This guide applies to S2P-XInput-Lite v0.7.7. For later releases, follow the in-app question-mark help and the latest release notes.

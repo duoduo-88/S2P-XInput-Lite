@@ -5,6 +5,7 @@ from unittest.mock import patch
 from esp32_detection import (
     _is_bridge_status,
     _port_priority,
+    find_esp32_firmware,
     find_esp32_port,
 )
 
@@ -50,6 +51,14 @@ class ESP32DetectionTests(unittest.TestCase):
         port = SimpleNamespace(device="COM8", vid=0xCAFE, pid=0x4021)
         with patch("esp32_detection.serial.Serial", _UnavailableSerial):
             self.assertEqual(find_esp32_port(port_infos=[port]), "COM8")
+
+    def test_standalone_fallback_reports_unknown_firmware_version(self):
+        port = SimpleNamespace(device="COM8", vid=0xCAFE, pid=0x4021)
+        with patch("esp32_detection.serial.Serial", _UnavailableSerial):
+            firmware = find_esp32_firmware(port_infos=[port])
+        self.assertEqual(firmware["port"], "COM8")
+        self.assertEqual(firmware["product"], "S2P-FW")
+        self.assertIsNone(firmware["version"])
 
     def test_unrelated_unresponsive_port_is_not_accepted(self):
         port = SimpleNamespace(device="COM9", vid=0x1234, pid=0x5678)

@@ -63,7 +63,7 @@ The bundled ESP32-S3 Bluedroid bridge and standalone firmware began as a
 modified build based on Switch2Connect commit
 `d63b044e66cfb93f8377a3596e3f00c82715b029`. Its complete corresponding source
 is distributed under `esp32s3/source/esp32s3_usb_bridge_bluedroid`. The current
-release reports `S2P-FW 1.0.1` and uses the independent `s2p_bridge 1.0.0`
+release reports `S2P-FW 1.0.2` and uses the independent `s2p_bridge 1.0.0`
 protocol. It does not claim runtime or command compatibility with upstream
 Switch2Connect firmware.
 

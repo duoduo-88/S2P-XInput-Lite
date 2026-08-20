@@ -61,14 +61,14 @@ class ProfileTests(unittest.TestCase):
             "Rhythm": ("AUDIO", "OFF"),
         }
         expected_amplitudes = {
-            "System Default": 800,
-            "General": 800,
-            "Action": 800,
-            "Audio": 800,
-            "FPS-COMP": 800,
-            "FPS-IMM": 800,
-            "Racing": 800,
-            "Rhythm": 800,
+            "System Default": 500,
+            "General": 500,
+            "Action": 500,
+            "Audio": 500,
+            "FPS-COMP": 500,
+            "FPS-IMM": 500,
+            "Racing": 500,
+            "Rhythm": 500,
         }
         expected_audio_routing = {
             "System Default": (0.00, 0.15),

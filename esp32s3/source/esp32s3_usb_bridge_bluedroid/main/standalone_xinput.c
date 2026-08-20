@@ -532,7 +532,7 @@ static standalone_runtime_config_t s_runtime = {
     },
     .lf_frequency = 215,
     .hf_frequency = 320,
-    .max_amplitude = 800,
+    .max_amplitude = 500,
     .lf_strength = 0.90f,
     .hf_strength = 0.42f,
     .lf_curve = 1.0f,

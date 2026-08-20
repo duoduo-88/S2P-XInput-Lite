@@ -97,6 +97,9 @@ development devices that use the same value.
 
 ## Build
 
+Release builds enable ESP-IDF's reproducible-build option, so rebuilding the
+same source with ESP-IDF 5.5.4 produces firmware images with stable hashes.
+
 From an ESP-IDF command prompt:
 
 ```console

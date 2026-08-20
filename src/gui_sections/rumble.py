@@ -111,7 +111,7 @@ def build_rumble_section(gui, left_frame):
         rumble_content, 8, "最大振幅", gui.max_amplitude_var,
         "限制低頻與高頻最多能震多強，相當於整體震動的安全上限。\n\n"
         "設定範圍：0 ～ 1023\n"
-        "目前內建方案以 800 為上限；若偶爾出現撞擊聲，可降至 650 ～ 750。\n"
+        "目前內建方案以 500 為上限；需要更強回饋時可逐步提高。\n"
         "數值越高，最強震動越大；接近 1023 時可能增加異音、共振與硬體負擔。",
         minimum=0, maximum=1023, step=10, number_format=".0f",
     )
