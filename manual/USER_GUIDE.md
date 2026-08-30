@@ -1,11 +1,11 @@
-# S2P-XInput-Lite v0.7.7 User Guide
+# S2P-XInput-Lite v0.7.8 User Guide
 
 [繁體中文](USER_GUIDE_zh-TW.md)
 
 This guide covers installation, connections, profiles, stick tuning, mapping,
 gyro controls, rumble, HidHide, ESP32-S3 bridge and standalone operation, and
 the Gamepad Test, report-rate, diagnostics, and About pages in
-S2P-XInput-Lite v0.7.7.
+S2P-XInput-Lite v0.7.8.
 
 The screenshots use the English interface. Select **中 / En** in the lower-left corner of the main window to switch languages without changing the layout.
 
@@ -68,16 +68,17 @@ Connect the controller directly to the PC with USB-C. This normally provides low
 
 The controller connects to the ESP32-S3 over BLE. The bridge then sends controller data to the PC over USB.
 
-v0.7.7 provides two standalone outputs that do not require the Windows
+v0.7.8 provides three standalone outputs that do not require the Windows
 application to remain open:
 
 - **PC XInput Standalone Mode** — The ESP32 provides XInput-compatible output directly to Windows.
 - **Mobile USB HID Mode** — The ESP32 connects to a phone or other compatible host as a standard USB HID Gamepad.
+- **Auto-detect Standalone Mode (Experimental)** — The ESP32 starts as USB HID, remains HID on Android, and briefly restarts into XInput after Windows performs the Microsoft descriptor probe.
 
 The controller's four player LEDs show the measured battery level
 cumulatively: one LED for low, two for medium-low, three for medium-high, and
 four for high. This display also works in standalone mode with bundled
-S2P-FW 1.0.2, without keeping the Windows application open.
+S2P-FW 1.0.4, without keeping the Windows application open.
 
 #### Windows BLE
 
@@ -377,7 +378,7 @@ If you dismiss an automatic reminder, it will not appear on every launch. Select
 
 1. Select **Flash FW**.
 2. The application reads the connected firmware version and compares it with
-   the bundled `S2P-FW 1.0.2`.
+   the bundled `S2P-FW 1.0.4`.
 3. Review the installed and bundled versions, then choose whether to flash or
    cancel. Cancelling resumes the connector if it was paused for detection.
 4. After confirming, connect the ESP32-S3 OTG port and hold **BOOT**.
@@ -400,13 +401,32 @@ If you dismiss an automatic reminder, it will not appear on every launch. Select
 4. The application detects the SYNC connection and writes the ESP32 pairing data.
 5. Confirm that the Pad/ESP32 status changes to connected.
 
-### 8.4 Three ESP32 operating modes
+### 8.4 Four ESP32 operating modes
 
 | Mode | Keep application open | Output host | Main use |
 |---|---:|---|---|
 | ESP32 bridge mode | Yes | Windows virtual XInput | Full desktop feature set |
 | PC XInput Standalone Mode | No | XInput-compatible Windows USB | Play directly from the stored profile |
 | Mobile USB HID Mode | No | Standard USB HID Gamepad | USB connection to Android or another compatible host |
+| Auto-detect Standalone Mode (Experimental) | No | HID probe, then HID or XInput | Automatically select Android HID or Windows XInput |
+
+Auto mode initially enumerates with its own HID probe identity. Android keeps that HID
+personality. When Windows asks for the Microsoft OS descriptor, the ESP32 performs one
+software restart and re-enumerates with the XInput personality. Windows descriptor
+caching and host-specific USB behavior mean this mode cannot be guaranteed on every
+computer, hub, or Android device; use a fixed mode when reliability is more important.
+
+On some Windows hosts the HID probe can remain selected instead of switching to
+XInput. Unplug and reconnect the ESP32, or hold **HOME+X** for 3 seconds and
+release to save and restart in fixed PC XInput mode.
+
+Controller recovery chords are available while a controller is connected:
+
+- Hold **HOME+X** for 3 seconds, then release, to save and restart in PC XInput mode.
+- Hold **HOME+A** for 3 seconds, then release, to save and restart in Mobile USB HID mode.
+- Hold **HOME+Y** for 5 seconds, then release, to save Auto mode and probe again.
+
+The chord buttons are withheld from USB output while the chord is being recognized.
 
 Standalone mode runs compatible calibration, stick curves, deadzones, output
 shape, button mappings, Mapping Layers, gyro-to-stick, and game-rumble settings
@@ -417,10 +437,10 @@ on the ESP32. Features that require Windows are not executed.
 1. Select the profile to write.
 2. Finish editing and select **Save/Apply**.
 3. Confirm that the ESP32 is connected and running the bundled
-   `S2P-FW 1.0.2` firmware.
+   `S2P-FW 1.0.4` firmware.
 4. Select **ESP32 ▼** at the bottom of the window.
-5. Select **Write and enable PC XInput standalone** or
-   **Write and enable Mobile USB HID**.
+5. Select **Write and enable PC XInput standalone**, **Write and enable Mobile USB HID**,
+   or **Write and enable Auto-detect standalone (Experimental)**.
 6. Review the compatibility report. Cancel and correct Windows-only outputs,
    or explicitly confirm that unsupported items should be omitted.
 7. Wait for profile transfer, CRC verification, and runtime application.
@@ -604,7 +624,7 @@ text.
 
 Bridge mode temporarily uses the application's active serial connection.
 Standalone modes open the ESP32 diagnostic channel directly. The complete
-diagnostic command set requires the bundled `S2P-FW 1.0.2`.
+diagnostic command set requires the bundled `S2P-FW 1.0.4`.
 
 ### 9.8 About
 
@@ -718,4 +738,4 @@ Gate → Lvl → six bands → LF/HF Balance → Tail/Decay.
 Keep one verified stable profile and use **Save New** for experimental settings.
 
 > [!NOTE]
-> This guide applies to S2P-XInput-Lite v0.7.7. For later releases, follow the in-app question-mark help and the latest release notes.
+> This guide applies to S2P-XInput-Lite v0.7.8. For later releases, follow the in-app question-mark help and the latest release notes.

@@ -501,6 +501,35 @@ class StandaloneFirmwareContractTests(unittest.TestCase):
         self.assertIn("legacy_hid", XINPUT_SOURCE)
         self.assertNotIn("standalone_mode_store", XINPUT_HEADER)
 
+    def test_auto_host_probe_and_controller_recovery_contract(self):
+        self.assertIn("STANDALONE_OUTPUT_AUTO = 3", XINPUT_HEADER)
+        self.assertIn("standalone_output_mode_resolve", XINPUT_HEADER)
+        self.assertIn("AUTO_XINPUT_RTC_MAGIC", XINPUT_SOURCE)
+        self.assertIn("AUTO_XINPUT_RTC_MAGIC_INV", XINPUT_SOURCE)
+        self.assertIn("RTC_NOINIT_ATTR", XINPUT_SOURCE)
+        self.assertIn("s_auto_device_descriptor", XINPUT_SOURCE)
+        self.assertIn(".idProduct = 0x4022", XINPUT_SOURCE)
+        self.assertIn("s_usb_auto_probe", XINPUT_SOURCE)
+        self.assertIn("s_auto_windows_detected = true", XINPUT_SOURCE)
+        self.assertIn(
+            "s_configured_output_mode == STANDALONE_OUTPUT_AUTO",
+            XINPUT_SOURCE,
+        )
+        self.assertIn("MODE_CHORD_XINPUT", XINPUT_SOURCE)
+        self.assertIn("MODE_CHORD_HID", XINPUT_SOURCE)
+        self.assertIn("MODE_CHORD_AUTO", XINPUT_SOURCE)
+        self.assertIn("MODE_CHORD_HOLD_US", XINPUT_SOURCE)
+        self.assertIn("MODE_CHORD_AUTO_HOLD_US", XINPUT_SOURCE)
+        self.assertIn("source = filter_mode_chord(source);", XINPUT_SOURCE)
+        self.assertIn(
+            "standalone_output_mode_store(pending_mode)", XINPUT_SOURCE
+        )
+        self.assertIn("standalone_usb_auto", MAIN_SOURCE)
+        self.assertIn('strcmp(mode, "standalone_auto") == 0', MAIN_SOURCE)
+        self.assertIn(
+            "standalone_output_mode_resolve(", MAIN_SOURCE
+        )
+
     @unittest.skipUnless(
         os.environ.get("S2P_RUN_IDF_BUILD") == "1",
         "set S2P_RUN_IDF_BUILD=1 to run the full ESP-IDF build",

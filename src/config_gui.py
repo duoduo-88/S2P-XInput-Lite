@@ -10747,13 +10747,16 @@ class ConfigGUI:
 
     def _confirm_esp32_usb_mode_change(self, target_mode):
         """Explain USB re-enumeration before changing standalone personality."""
-        if target_mode not in ("standalone", "standalone_hid"):
+        if target_mode not in (
+            "standalone", "standalone_hid", "standalone_auto"
+        ):
             return True
-        mode_name = self.tr(
-            "PC XInput 獨立模式"
-            if target_mode == "standalone"
-            else "手機 USB HID 模式"
-        )
+        mode_labels = {
+            "standalone": "PC XInput 獨立模式",
+            "standalone_hid": "手機 USB HID 模式",
+            "standalone_auto": "自動辨識獨立模式（實驗性）",
+        }
+        mode_name = self.tr(mode_labels[target_mode])
         return messagebox.askokcancel(
             self.tr("切換 ESP32 模式"),
             self.tr(
@@ -10963,6 +10966,13 @@ class ConfigGUI:
                 "此模式不提供手機遊戲震動；是否支援 Home／Capture "
                 "等額外按鍵取決於手機系統與遊戲。"
             )
+        elif target_mode == "standalone_auto":
+            summary += self.tr(
+                "\n\n已啟用實驗性自動辨識：Android 保持標準 HID；"
+                "Windows 被辨識後會再重新列舉為 XInput。\n"
+                "長按 HOME+X 3 秒可強制 XInput，HOME+A 3 秒可強制 HID，"
+                "HOME+Y 5 秒可恢復 Auto；按滿指定時間後放開按鍵即可切換。"
+            )
         if result.get("restart_required", False):
             summary += self.tr(
                 "\n\nESP32 已自動重新啟動，USB 裝置會短暫消失。"
@@ -10974,7 +10984,7 @@ class ConfigGUI:
                 True,
                 summary,
                 restart_after and target_mode not in (
-                    "standalone", "standalone_hid"
+                    "standalone", "standalone_hid", "standalone_auto"
                 ),
             ),
         )

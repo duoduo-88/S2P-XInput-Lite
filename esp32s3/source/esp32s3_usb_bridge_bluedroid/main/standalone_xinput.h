@@ -11,6 +11,7 @@ typedef enum {
     STANDALONE_OUTPUT_BRIDGE = 0,
     STANDALONE_OUTPUT_XINPUT = 1,
     STANDALONE_OUTPUT_HID = 2,
+    STANDALONE_OUTPUT_AUTO = 3,
 } standalone_output_mode_t;
 
 typedef void (*standalone_xinput_wakeup_cb_t)(void);
@@ -25,8 +26,14 @@ typedef struct {
 
 standalone_output_mode_t standalone_output_mode_load(void);
 esp_err_t standalone_output_mode_store(standalone_output_mode_t mode);
+standalone_output_mode_t standalone_output_mode_resolve(
+    standalone_output_mode_t configured_mode, bool *auto_probe
+);
 void standalone_xinput_configure(
-    tinyusb_config_t *config, bool enabled, bool usb_hid_mode
+    tinyusb_config_t *config,
+    standalone_output_mode_t configured_mode,
+    standalone_output_mode_t active_mode,
+    bool auto_probe
 );
 void standalone_xinput_set_wakeup_cb(
     standalone_xinput_wakeup_cb_t callback

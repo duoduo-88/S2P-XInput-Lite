@@ -13,9 +13,9 @@ FIRMWARE_ROOT = (
 
 
 class ReleaseBaselineTests(unittest.TestCase):
-    def test_desktop_release_version_is_077(self):
+    def test_desktop_release_version_is_078(self):
         source = (ROOT / "src" / "version.py").read_text(encoding="utf-8")
-        self.assertRegex(source, r'VERSION\s*=\s*"0\.7\.7"')
+        self.assertRegex(source, r'VERSION\s*=\s*"0\.7\.8"')
 
     def test_release_manifest_requires_exact_payload_coverage(self):
         source = (ROOT / "scripts" / "verify_release.ps1").read_text(
@@ -84,9 +84,9 @@ class ReleaseBaselineTests(unittest.TestCase):
             'sys.executable, "-m", "esptool", "--chip", "esp32s3"',
             source,
         )
-        self.assertIn('for marker in (b"S2P-FW", b"1.0.2")', source)
+        self.assertIn('for marker in (b"S2P-FW", b"1.0.4")', source)
 
-    def test_bundled_firmware_is_s2p_102(self):
+    def test_bundled_firmware_is_s2p_104(self):
         main_source = (
             FIRMWARE_ROOT / "main" / "main.c"
         ).read_text(encoding="utf-8")
@@ -99,7 +99,7 @@ class ReleaseBaselineTests(unittest.TestCase):
         )
         self.assertRegex(
             main_source,
-            r'APP_FIRMWARE_VERSION\s+"1\.0\.2"',
+            r'APP_FIRMWARE_VERSION\s+"1\.0\.4"',
         )
         self.assertRegex(
             main_source,
@@ -109,10 +109,10 @@ class ReleaseBaselineTests(unittest.TestCase):
             main_source,
             r'APP_PROTOCOL_VERSION\s+"1\.0\.0"',
         )
-        self.assertNotIn("1.0.2-dev", main_source)
+        self.assertNotIn("1.0.4-dev", main_source)
         self.assertRegex(
             cmake_source,
-            r'set\(PROJECT_VER\s+"1\.0\.2"\)',
+            r'set\(PROJECT_VER\s+"1\.0\.4"\)',
         )
 
     def test_bundled_firmware_hashes_match_current_release(self):
@@ -124,7 +124,7 @@ class ReleaseBaselineTests(unittest.TestCase):
                 "7f00b6c042a89b15b0cac534f82ed988caf29278ff5700b0c511eb1b5bb7c820"
             ),
             "esp32s3_bluedroid_bridge.bin": (
-                "3a5623604d865d3e7d3233b5cd8c9477fca54f31548341a54a83bf7c58eaf71f"
+                "6743465ab0ad67af42cf36146a24e601fb804e36e1fe02b14bef55ebd3086ee1"
             ),
         }
         firmware_dir = ROOT / "esp32s3" / "firmware"

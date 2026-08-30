@@ -521,11 +521,15 @@ EN_TEXT = {
         "Write and enable PC XInput standalone",
     "寫入並啟用手機 USB HID 模式":
         "Write and enable mobile USB HID",
+    "寫入並啟用自動辨識獨立模式（實驗性）":
+        "Write and enable auto-detect standalone (experimental)",
     "僅寫入設定": "Write profile only",
     "切回 ESP32 橋接模式": "Return to ESP32 bridge mode",
     "切換 ESP32 模式": "Change ESP32 Mode",
     "PC XInput 獨立模式": "PC XInput Standalone Mode",
     "手機 USB HID 模式": "Mobile USB HID Mode",
+    "自動辨識獨立模式（實驗性）":
+        "Auto-detect Standalone Mode (Experimental)",
     "目前畫面有尚未儲存的變更。\n\n為避免 ESP32 寫入內容與畫面不一致，必須先將目前方案儲存並套用。\n\n是否現在儲存並套用後繼續？":
         "The current screen contains unsaved changes.\n\nTo prevent the ESP32 profile from differing from the visible settings, the current profile must be saved and applied first.\n\nSave and apply now, then continue?",
     "仍偵測到尚未儲存的變更，已取消 ESP32 操作。":
@@ -558,6 +562,8 @@ EN_TEXT = {
         "ESP32 returned to bridge mode and restarted.",
     "\n\n已啟用手機 USB HID 模式。重新插入手機後，ESP32 會顯示為「S2P Mobile Gamepad」。\n此模式不提供手機遊戲震動；是否支援 Home／Capture 等額外按鍵取決於手機系統與遊戲。":
         "\n\nMobile USB HID mode is enabled. Reconnect it to the phone and the ESP32 will appear as “S2P Mobile Gamepad”.\nThis mode does not provide mobile-game rumble. Home, Capture, and other extra-button support depends on the phone OS and game.",
+    "\n\n已啟用實驗性自動辨識：Android 保持標準 HID；Windows 被辨識後會再重新列舉為 XInput。\n長按 HOME+X 3 秒可強制 XInput，HOME+A 3 秒可強制 HID，HOME+Y 5 秒可恢復 Auto；按滿指定時間後放開按鍵即可切換。":
+        "\n\nExperimental auto-detection is enabled: Android remains standard HID; after Windows is detected, the ESP32 re-enumerates as XInput.\nHold HOME+X for 3 seconds to force XInput, HOME+A for 3 seconds to force HID, or HOME+Y for 5 seconds to restore Auto; release the buttons after the specified hold time to switch modes.",
     "寫入完成": "Write complete",
     "ESP32 寫入失敗": "ESP32 write failed",
     "？": "?",

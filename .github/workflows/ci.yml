@@ -92,14 +92,14 @@ jobs:
               )
           for image in applications:
               data = image.read_bytes()
-              for marker in (b"S2P-FW", b"1.0.2"):
+              for marker in (b"S2P-FW", b"1.0.4"):
                   if marker not in data:
                       raise SystemExit(f"{image.name} is missing {marker!r}")
           generated_partition = build / "partition_table/partition-table.bin"
           released_partition = bundled / "partition-table.bin"
           if generated_partition.read_bytes() != released_partition.read_bytes():
               raise SystemExit("bundled partition table does not match the clean build")
-          print("Built and bundled firmware images are valid for S2P firmware 1.0.2.")
+          print("Built and bundled firmware images are valid for S2P firmware 1.0.4.")
           PY
 
       - name: Upload firmware build

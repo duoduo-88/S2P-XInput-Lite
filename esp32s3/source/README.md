@@ -4,7 +4,7 @@
 ESP32-S3 bridge firmware.
 
 - Product: `S2P-FW`
-- Firmware version: `1.0.2`
+- Firmware version: `1.0.4`
 - S2P bridge protocol: `1.0.0`
 - Firmware profile: `s2p_usb_bridge`
 - Build: `standalone_diagnostics`
@@ -36,19 +36,24 @@ The S2P bridge protocol uses a latency-focused CDC schedule:
   only the latest state is retried after the stack becomes writable;
 - standalone XInput OUT rumble wakes the output task immediately instead of
   waiting for the 2 ms maintenance timeout.
+- experimental standalone Auto mode starts with a dedicated HID probe identity,
+  remains HID on Android, and uses a one-boot RTC marker to restart as XInput
+  after a Windows Microsoft OS descriptor request;
+- HOME+X (3 s), HOME+A (3 s), and HOME+Y (5 s) controller chords persist
+  fixed XInput, fixed HID, or Auto mode after the buttons are released;
 - standalone mode derives the same four battery levels as the desktop client
   from controller voltage reports and shows them on the four player LEDs;
   hysteresis prevents motor-load voltage sag from making the LEDs flicker.
 
 The current images in `../firmware/` were built from this source. The existing
 transport and reconnect baseline was verified on real hardware; the
-`S2P-FW 1.0.2` battery-LED build has passed compilation and automated contract
-tests, but its new standalone LED behavior still requires a post-flash hardware
-check. The exact upstream revision is linked above for comparison.
+`S2P-FW 1.0.4` Auto-host and controller-chord build has passed compilation and
+automated contract tests, but host detection and chord-triggered reboot still require
+post-flash checks on Windows and Android hardware. The exact upstream revision is linked above for comparison.
 
 | Current file | SHA-256 |
 |---|---|
-| `esp32s3_bluedroid_bridge.bin` | `3A5623604D865D3E7D3233B5CD8C9477FCA54F31548341A54A83BF7C58EAF71F` |
+| `esp32s3_bluedroid_bridge.bin` | `6743465AB0AD67AF42CF36146A24E601FB804E36E1FE02B14BEF55EBD3086EE1` |
 | `bootloader.bin` | `0674EE7D6721269BFF482811B4441F6A85D6F590AFDE9F7F71F6E7DB39C68E94` |
 | `partition-table.bin` | `7F00B6C042A89B15B0CAC534F82ED988CAF29278FF5700B0C511EB1B5BB7C820` |
 
