@@ -157,6 +157,15 @@ class XInputController:
     IMPACT_ACCEL_RECOVERY_SECONDS = 0.20
     MAGNETOMETER_TIMEOUT_SECONDS = 0.50
     MAGNETOMETER_RECOVERY_SECONDS = 0.75
+    # A reference is only replaced after the old field has timed out and a
+    # different field stays coherent for a complete recovery-sized window.
+    # 0.75 s is long enough to reject brief nearby magnets at the controller's
+    # nominal 125 Hz report rate without requiring the player to hold still.
+    MAG_REFERENCE_CANDIDATE_SECONDS = 0.75
+    MAG_REFERENCE_CANDIDATE_MIN_SAMPLES = 24
+    MAG_REFERENCE_CANDIDATE_MAGNITUDE_RATIO = 0.08
+    MAG_REFERENCE_CANDIDATE_DIRECTION_DEGREES = 8.0
+    MAG_REFERENCE_MAX_ANGULAR_SPEED_DPS = 180.0
     AIM_POSE_SETTLE_SECONDS = 0.08
     AIM_BLEND_SECONDS = 0.25
     ACCEL_MIN_ORIENTATION_BINS = 14
@@ -562,6 +571,7 @@ class XInputController:
         self._mag_last_valid_time = None
         self._mag_recovery_started = None
         self._mag_recovery_accumulator = 0.0
+        self._reset_adaptive_magnetic_reference()
         self._gyro_calibration_lock = threading.Lock()
         self._gyro_calibration_state = "idle"
         self._gyro_calibration_message = ""
@@ -2189,9 +2199,26 @@ class XInputController:
         self._mag_recovery_started = None
         self._mag_recovery_accumulator = 0.0
         self._nine_axis_has_magnetometer = False
+        self._reset_adaptive_magnetic_reference()
         self._aim_gravity_sign = None
         self._aim_pose_ready_since = None
         self._aim_player_space_blend = 0.0
+
+    def _reset_adaptive_magnetic_reference(self):
+        """Forget only runtime heading-reference state, never calibration."""
+        self._mag_reference_state = "NORMAL"
+        self._mag_heading_offset_degrees = 0.0
+        self._mag_heading_transform_valid = False
+        self._reset_magnetic_reference_candidate()
+
+    def _reset_magnetic_reference_candidate(self):
+        self._mag_candidate_started = None
+        self._mag_candidate_samples = 0
+        self._mag_candidate_magnitude = None
+        self._mag_candidate_direction = None
+        self._mag_candidate_max_magnitude_ratio = 0.0
+        self._mag_candidate_max_direction_delta = 0.0
+
     def set_accelerometer_calibration(self, bias, matrix=None):
         """Apply a validated per-controller multi-pose ellipsoid calibration."""
         if bias is None or matrix is None:
@@ -3068,42 +3095,165 @@ class XInputController:
             self._mag_field_reference += (magnitude - reference) * 0.001
         return stable
 
+    @classmethod
+    def _magnetic_heading_from_corrected(cls, accelerometer, corrected_mag):
+        """Return tilt-compensated magnetic yaw in the AHRS sensor frame."""
+        accel_x, accel_y, accel_z = (
+            float(value) for value in accelerometer
+        )
+        mag_x, mag_y, mag_z = (
+            float(corrected_mag[0]),
+            float(corrected_mag[2]),
+            float(corrected_mag[1]),
+        )
+        roll = math.atan2(accel_y, accel_z)
+        pitch = math.atan2(-accel_x, math.hypot(accel_y, accel_z))
+        horizontal_x = mag_x * math.cos(pitch) + mag_z * math.sin(pitch)
+        horizontal_y = (
+            mag_x * math.sin(roll) * math.sin(pitch)
+            + mag_y * math.cos(roll)
+            - mag_z * math.sin(roll) * math.cos(pitch)
+        )
+        if not math.isfinite(horizontal_x) or not math.isfinite(horizontal_y):
+            return None
+        if math.hypot(horizontal_x, horizontal_y) < 1e-6:
+            return None
+        return cls._wrap_degrees(math.degrees(math.atan2(-horizontal_y, horizontal_x)))
+
+    @staticmethod
+    def _rotate_vector_around_axis(vector, axis, angle_degrees, output):
+        """Apply a world-yaw-equivalent 3D rotation around current gravity."""
+        axis_x, axis_y, axis_z = (float(value) for value in axis)
+        axis_magnitude = math.sqrt(
+            axis_x * axis_x + axis_y * axis_y + axis_z * axis_z
+        )
+        if not math.isfinite(axis_magnitude) or axis_magnitude <= 1e-9:
+            return False
+        axis_x /= axis_magnitude
+        axis_y /= axis_magnitude
+        axis_z /= axis_magnitude
+        value_x, value_y, value_z = (float(value) for value in vector)
+        radians = math.radians(float(angle_degrees))
+        cosine = math.cos(radians)
+        sine = math.sin(radians)
+        dot = axis_x * value_x + axis_y * value_y + axis_z * value_z
+        output[0] = (
+            value_x * cosine
+            + (axis_y * value_z - axis_z * value_y) * sine
+            + axis_x * dot * (1.0 - cosine)
+        )
+        output[1] = (
+            value_y * cosine
+            + (axis_z * value_x - axis_x * value_z) * sine
+            + axis_y * dot * (1.0 - cosine)
+        )
+        output[2] = (
+            value_z * cosine
+            + (axis_x * value_y - axis_y * value_x) * sine
+            + axis_z * dot * (1.0 - cosine)
+        )
+        return all(math.isfinite(float(value)) for value in output)
+
+    def _current_fusion_heading(self):
+        try:
+            euler = self._ahrs.quaternion.to_euler()
+            heading = float(euler[2])
+        except (IndexError, TypeError, ValueError, RuntimeError):
+            return None
+        return self._wrap_degrees(heading) if math.isfinite(heading) else None
+
+    def _update_magnetic_reference_candidate(
+        self, corrected_mag, accelerometer, angular_speed, now
+    ):
+        """Accept a replacement field only after stable world-relative yaw."""
+        magnetic_heading = self._magnetic_heading_from_corrected(
+            accelerometer, corrected_mag
+        )
+        gyro_heading = self._current_fusion_heading()
+        magnitude = math.sqrt(sum(value * value for value in corrected_mag))
+        direction = (
+            None if magnetic_heading is None or gyro_heading is None
+            else self._wrap_degrees(magnetic_heading - gyro_heading)
+        )
+        if (
+            not math.isfinite(magnitude)
+            or magnitude <= 1e-9
+            or direction is None
+            or angular_speed > self.MAG_REFERENCE_MAX_ANGULAR_SPEED_DPS
+        ):
+            self._reset_magnetic_reference_candidate()
+            return False
+
+        candidate_magnitude = self._mag_candidate_magnitude
+        candidate_direction = self._mag_candidate_direction
+        if candidate_magnitude is None or candidate_direction is None:
+            self._mag_candidate_started = now
+            self._mag_candidate_samples = 1
+            self._mag_candidate_magnitude = magnitude
+            self._mag_candidate_direction = direction
+            self._mag_candidate_max_magnitude_ratio = 0.0
+            self._mag_candidate_max_direction_delta = 0.0
+            self._mag_reference_state = "CANDIDATE"
+            return False
+
+        magnitude_ratio = abs(magnitude - candidate_magnitude) / candidate_magnitude
+        direction_delta = abs(self._wrap_degrees(direction - candidate_direction))
+        if (
+            magnitude_ratio > self.MAG_REFERENCE_CANDIDATE_MAGNITUDE_RATIO
+            or direction_delta > self.MAG_REFERENCE_CANDIDATE_DIRECTION_DEGREES
+        ):
+            self._reset_magnetic_reference_candidate()
+            return self._update_magnetic_reference_candidate(
+                corrected_mag, accelerometer, angular_speed, now
+            )
+        self._mag_candidate_samples += 1
+        self._mag_candidate_max_magnitude_ratio = max(
+            self._mag_candidate_max_magnitude_ratio, magnitude_ratio
+        )
+        self._mag_candidate_max_direction_delta = max(
+            self._mag_candidate_max_direction_delta, direction_delta
+        )
+        # Low-pass only the candidate; the accepted magnetic reference remains
+        # immutable until a later reject/timeout.
+        self._mag_candidate_magnitude += (
+            magnitude - self._mag_candidate_magnitude
+        ) * 0.05
+        self._mag_candidate_direction = self._wrap_degrees(
+            self._mag_candidate_direction
+            + self._wrap_degrees(direction - self._mag_candidate_direction) * 0.05
+        )
+        if (
+            now - self._mag_candidate_started
+            < self.MAG_REFERENCE_CANDIDATE_SECONDS
+            or self._mag_candidate_samples
+            < self.MAG_REFERENCE_CANDIDATE_MIN_SAMPLES
+        ):
+            return False
+
+        self._mag_heading_offset_degrees = self._wrap_degrees(
+            gyro_heading - magnetic_heading
+        )
+        self._mag_heading_transform_valid = True
+        self._mag_field_reference = self._mag_candidate_magnitude
+        self._mag_field_valid = True
+        self._reset_magnetic_reference_candidate()
+        self._mag_reference_state = "RECOVERING"
+        return True
+
     def _absolute_steering_orientation(self, accelerometer, magnetometer):
         """Return direct calibrated (magnetic yaw, gravity pitch)."""
         corrected_accel = self._correct_accelerometer(accelerometer)
         if corrected_accel is None or not self._magnetometer_is_plausible(magnetometer):
             return None
 
-        accel_x, accel_y, accel_z = (
-            float(value) for value in corrected_accel
-        )
         raw_mag = self._correct_magnetometer(magnetometer)
         if raw_mag is None:
             return None
-        # Empirically verified Switch 2 Pro magnetic frame:
-        # controller (X, Y, Z) = report (m0, m2, m1).
-        mag_x, mag_y, mag_z = raw_mag[0], raw_mag[2], raw_mag[1]
-        roll = math.atan2(accel_y, accel_z)
-        pitch = math.atan2(
-            -accel_x, math.hypot(accel_y, accel_z)
-        )
-
-        cos_roll = math.cos(roll)
-        sin_roll = math.sin(roll)
-        cos_pitch = math.cos(pitch)
-        sin_pitch = math.sin(pitch)
-        horizontal_x = mag_x * cos_pitch + mag_z * sin_pitch
-        horizontal_y = (
-            mag_x * sin_roll * sin_pitch
-            + mag_y * cos_roll
-            - mag_z * sin_roll * cos_pitch
-        )
-        if math.hypot(horizontal_x, horizontal_y) < 1e-6:
+        heading = self._magnetic_heading_from_corrected(corrected_accel, raw_mag)
+        if heading is None:
             return None
-        heading = math.degrees(math.atan2(-horizontal_y, horizontal_x))
-        return self._wrap_degrees(heading), self._wrap_degrees(
-            -math.degrees(roll)
-        )
+        roll = math.atan2(float(corrected_accel[1]), float(corrected_accel[2]))
+        return heading, self._wrap_degrees(-math.degrees(roll))
 
     def _update_nine_axis_orientation(
         self, gyroscope, accelerometer, magnetometer, dt
@@ -3136,6 +3286,7 @@ class XInputController:
             + float(accel[1]) * float(accel[1])
             + float(accel[2]) * float(accel[2])
         )
+        angular_speed = None
         blend = 0.0
         accel_suppression = getattr(self, "gyro_accel_suppression", 0.0)
         if (
@@ -3178,7 +3329,30 @@ class XInputController:
             and self._magnetic_field_is_stable(corrected_mag)
         )
         use_magnetometer = False
-        if magnetometer_valid:
+        reference_state = self._mag_reference_state
+        if reference_state in ("REJECTED", "CANDIDATE"):
+            if corrected_mag is None:
+                self._reset_magnetic_reference_candidate()
+                self._mag_reference_state = "REJECTED"
+            else:
+                if angular_speed is None:
+                    angular_speed = math.sqrt(
+                        float(gyro[0]) * float(gyro[0])
+                        + float(gyro[1]) * float(gyro[1])
+                        + float(gyro[2]) * float(gyro[2])
+                    )
+                promoted = self._update_magnetic_reference_candidate(
+                    corrected_mag, accel, angular_speed, now
+                )
+                if promoted:
+                    # Promotion atomically replaces only the field-strength
+                    # reference.  The calibration and AHRS keep their existing
+                    # instances, so the following recovery remains gradual.
+                    self._mag_last_valid_time = now
+                    self._mag_recovery_started = now
+                    self._mag_recovery_accumulator = 0.0
+                    self._nine_axis_has_magnetometer = False
+        elif magnetometer_valid:
             previous_valid = self._mag_last_valid_time
             if (
                 previous_valid is None
@@ -3204,6 +3378,11 @@ class XInputController:
                 if self._mag_recovery_accumulator >= 1.0:
                     self._mag_recovery_accumulator -= 1.0
                     use_magnetometer = True
+            if (
+                self._mag_reference_state == "RECOVERING"
+                and recovery_weight >= 1.0
+            ):
+                self._mag_reference_state = "NORMAL"
         elif (
             self._mag_last_valid_time is None
             or now - self._mag_last_valid_time
@@ -3212,15 +3391,23 @@ class XInputController:
             self._mag_recovery_started = None
             self._mag_recovery_accumulator = 0.0
             self._nine_axis_has_magnetometer = False
+            self._reset_magnetic_reference_candidate()
+            self._mag_reference_state = "REJECTED"
 
         try:
             if use_magnetometer:
                 # Align the magnetic package frame with the controller's
-                # accelerometer/gyro frame before 9-axis fusion.
+                # accelerometer/gyro frame before 9-axis fusion.  A promoted
+                # local magnetic environment is rotated around gravity here,
+                # before AHRS feedback, never as an Euler-output workaround.
                 mag = self._fusion_mag
                 mag[0] = corrected_mag[0]
                 mag[1] = corrected_mag[2]
                 mag[2] = corrected_mag[1]
+                if self._mag_heading_transform_valid:
+                    self._rotate_vector_around_axis(
+                        mag, gravity, -self._mag_heading_offset_degrees, mag
+                    )
                 self._ahrs.update(gyro, accel, mag, float(min(dt, 0.05)))
                 self._nine_axis_has_magnetometer = True
             else:

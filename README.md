@@ -11,9 +11,9 @@
 
 S2P-XInput-Lite provides XInput-compatible controller output for a Switch 2 Pro Controller on Windows. It supports wired USB, an ESP32-S3 USB bridge, and native Windows BLE.
 
-Current version: **v0.7.7**
+Current version: **v0.7.8**
 
-[v0.7.7 release notes](RELEASE_NOTES_v0.7.7.md) ·
+[v0.7.8 release notes](RELEASE_NOTES_v0.7.8.md) ·
 [Source](https://github.com/duoduo-88/S2P-XInput-Lite/tree/main) ·
 [Latest published release](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 
@@ -31,8 +31,9 @@ Current version: **v0.7.7**
 - Per-controller stick calibration and connection-time gyro zero-bias initialization
 - Stick curves, deadzones, smoothing, stabilization, and output-shape adjustment
 - Consistent XInput-to-HD Rumble 2 conversion across USB, ESP32, and native BLE, with latest-only pacing, priority stop frames, and audio-reactive vibration
-- ESP32 standalone profile writing for PC XInput-compatible output or
-  standards-based mobile USB HID without keeping the Windows application open
+- ESP32 standalone profile writing for fixed PC XInput, fixed mobile USB HID,
+  or experimental automatic Windows/Android host selection without keeping the
+  Windows application open; controller chords provide a recovery path
 - Gyroscope mapping to an XInput stick or mouse
 - Independently launchable gamepad tester designed primarily for a Switch 2
   Pro Controller connected and processed by S2P-XInput-Lite, where it can show
@@ -106,7 +107,7 @@ Reusable hardware probes and automated tests are maintained in the development r
 - Testing with multiple bridge implementations and controllers found that higher vibration amplitudes make a light mechanical tapping sound more likely when the output changes rapidly. The effect is usually minor during normal use.
 - The configurable amplitude range of `0` to `1023` is the protocol field range, not a published, certified safe limit for continuous hardware output. The system default maximum amplitude is `500`, about 49% of the field maximum, to reduce excessive-output noise while retaining clear feedback. Adjust it for the individual controller and personal preference, and lower it if tapping or other unusual sounds occur.
 - Set both LF and HF amplitudes to zero to stop vibration. Connection and PIN feedback use the same two short pulses as v0.5.1 (LF `225`, HF `481`, amplitude `800`) on every transport. HF `481` is retained only for this established cue and is not a recommended general-game frequency.
-- Before flashing, the application reads the connected ESP32 firmware version and compares it with the bundled `S2P-FW 1.0.2`. After a successful flash it waits for USB re-enumeration, starts the desktop connector automatically, and searches for the controller again.
+- Before flashing, the application reads the connected ESP32 firmware version and compares it with the bundled `S2P-FW 1.0.4`. After a successful flash it waits for USB re-enumeration, starts the desktop connector automatically, and searches for the controller again.
 - The status line reports 9-axis when sustained magnetometer data is available, or 6-axis when only gyro and accelerometer data are active.
 - If HidHide setup reports an error, close HidHide Configuration Client and retry. Restart Steam or the game after changing hiding, and reconnect USB if the physical controller remains visible.
 
@@ -127,9 +128,10 @@ Reusable hardware probes and automated tests are maintained in the development r
 - ESP32 standalone mode does not support Windows keyboard/mouse output, audio
   haptics, process-based profile switching, phone rumble, or BLE HID output
 - Motion is mapped to a stick or mouse; XInput does not expose raw motion sensors
+- Auto-detect standalone mode is experimental. On some Windows hosts the USB HID probe can remain selected instead of switching to XInput; unplug and reconnect the ESP32, or hold **HOME+X** for 3 seconds and release to save and restart in fixed PC XInput mode.
 - The ESP32 connection requires compatible firmware. Standalone profile
   writing, direct USB controller output, and the diagnostic page require the
-  bundled `S2P-FW 1.0.2`; older S2P builds and upstream firmware cannot provide
+  bundled `S2P-FW 1.0.4`; older S2P builds and upstream firmware cannot provide
   the complete `s2p_bridge 1.0.0` feature set.
 - The GitHub source release includes the complete ESP32 source. Packaged
   releases include the flashing tool and firmware images under `esp32s3`, plus

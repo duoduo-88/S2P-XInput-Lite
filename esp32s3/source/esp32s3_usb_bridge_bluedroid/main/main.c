@@ -63,7 +63,7 @@
 static const char *TAG = "S3_BLUEDROID";
 
 #define APP_FIRMWARE_PRODUCT      "S2P-FW"
-#define APP_FIRMWARE_VERSION      "1.0.2"
+#define APP_FIRMWARE_VERSION      "1.0.4"
 #define APP_PROTOCOL_NAME         "s2p_bridge"
 #define APP_PROTOCOL_VERSION      "1.0.0"
 #define EXPECTED_FIRMWARE_PROFILE "s2p_usb_bridge"
@@ -84,6 +84,9 @@ static const char *TAG = "S3_BLUEDROID";
 #define PRO_CONTROLLER2_PID       0x2069
 static bool s_standalone_mode;
 static bool s_standalone_usb_hid;
+static bool s_standalone_auto_probe;
+static standalone_output_mode_t s_output_mode;
+static standalone_output_mode_t s_active_output_mode;
 static bool s_standalone_auto_conn_pending;
 static bool s_standalone_auto_conn_pair_required;
 static char s_standalone_auto_conn[32];
@@ -989,6 +992,12 @@ static bool request_scan_stop(void) {
     return false;
 }
 static size_t parse_hex(const char *s, uint8_t *out, size_t max);
+static const char *output_mode_name(standalone_output_mode_t mode) {
+    if (mode == STANDALONE_OUTPUT_XINPUT) return "standalone";
+    if (mode == STANDALONE_OUTPUT_HID) return "standalone_hid";
+    if (mode == STANDALONE_OUTPUT_AUTO) return "standalone_auto";
+    return "bridge";
+}
 static void send_status_response(void) {
     char b[512];
     snprintf(b, sizeof(b),
@@ -1002,6 +1011,7 @@ static void send_status_response(void) {
         "\"standalone_profile_write\":1,\"standalone_profile_runtime\":1,"
         "\"standalone_usb_xinput\":1,"
         "\"standalone_usb_hid\":1,"
+        "\"standalone_usb_auto\":1,"
         "\"standalone_ble_hid\":0},\"profile_schemas\":[1]}\n",
         APP_FIRMWARE_PRODUCT, APP_FIRMWARE_VERSION,
         APP_PROTOCOL_NAME, APP_PROTOCOL_VERSION,
@@ -1014,48 +1024,43 @@ static void send_status_response(void) {
 }
 
 static void send_capabilities_response(void) {
-    char b[512];
+    char b[560];
     snprintf(b, sizeof(b),
         "{\"cmd\":\"capabilities\",\"ok\":1,\"product\":\"%s\","
         "\"version\":\"%s\",\"protocol\":\"%s\","
         "\"protocol_version\":\"%s\","
-        "\"mode\":\"%s\",\"features\":{\"bridge\":1,"
+        "\"mode\":\"%s\",\"active_mode\":\"%s\","
+        "\"features\":{\"bridge\":1,"
         "\"diagnostics\":1,\"rumble_diagnostics\":1,"
         "\"standalone_profile_write\":1,\"standalone_profile_runtime\":1,"
         "\"standalone_usb_xinput\":1,"
         "\"standalone_usb_hid\":1,"
+        "\"standalone_usb_auto\":1,"
         "\"standalone_ble_hid\":0},\"profile_schemas\":[%u],"
         "\"profile_max_bytes\":%u}\n",
         APP_FIRMWARE_PRODUCT, APP_FIRMWARE_VERSION,
         APP_PROTOCOL_NAME, APP_PROTOCOL_VERSION,
-        !s_standalone_mode ? "bridge" :
-            (s_standalone_usb_hid ? "standalone_hid" : "standalone"),
+        output_mode_name(s_output_mode),
+        output_mode_name(s_active_output_mode),
         (unsigned)STANDALONE_PROFILE_SCHEMA,
         (unsigned)STANDALONE_PROFILE_MAX);
     send_json(b);
 }
 
 static void do_mode_command(const char *mode) {
-    bool enabled;
-    bool usb_hid;
-    if (strcmp(mode, "standalone") == 0) {
-        enabled = true;
-        usb_hid = false;
-    } else if (strcmp(mode, "standalone_hid") == 0) {
-        enabled = true;
-        usb_hid = true;
-    } else if (strcmp(mode, "bridge") == 0) {
-        enabled = false;
-        usb_hid = false;
-    }
+    standalone_output_mode_t output_mode;
+    if (strcmp(mode, "standalone") == 0)
+        output_mode = STANDALONE_OUTPUT_XINPUT;
+    else if (strcmp(mode, "standalone_hid") == 0)
+        output_mode = STANDALONE_OUTPUT_HID;
+    else if (strcmp(mode, "standalone_auto") == 0)
+        output_mode = STANDALONE_OUTPUT_AUTO;
+    else if (strcmp(mode, "bridge") == 0)
+        output_mode = STANDALONE_OUTPUT_BRIDGE;
     else {
         send_json("{\"cmd\":\"mode\",\"ok\":0,\"error\":\"value\"}\n");
         return;
     }
-    standalone_output_mode_t output_mode =
-        !enabled ? STANDALONE_OUTPUT_BRIDGE :
-        (usb_hid ? STANDALONE_OUTPUT_HID :
-                   STANDALONE_OUTPUT_XINPUT);
     esp_err_t err = standalone_output_mode_store(output_mode);
     if (err != ESP_OK) {
         char b[112];
@@ -1065,13 +1070,12 @@ static void do_mode_command(const char *mode) {
         send_json(b);
         return;
     }
-    char b[128];
+    char b[144];
     snprintf(b, sizeof(b),
         "{\"cmd\":\"mode\",\"ok\":1,\"mode\":\"%s\","
         "\"restart_required\":%d}\n",
-        !enabled ? "bridge" : (usb_hid ? "standalone_hid" : "standalone"),
-        (enabled != s_standalone_mode ||
-         usb_hid != s_standalone_usb_hid) ? 1 : 0);
+        output_mode_name(output_mode),
+        output_mode != s_output_mode ? 1 : 0);
     send_json(b);
 }
 
@@ -3278,10 +3282,14 @@ void app_main(void) {
         ESP_ERROR_CHECK(nvs_flash_erase()); ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
-    standalone_output_mode_t output_mode =
-        standalone_output_mode_load();
-    s_standalone_mode = output_mode != STANDALONE_OUTPUT_BRIDGE;
-    s_standalone_usb_hid = output_mode == STANDALONE_OUTPUT_HID;
+    s_output_mode = standalone_output_mode_load();
+    s_active_output_mode = standalone_output_mode_resolve(
+        s_output_mode, &s_standalone_auto_probe
+    );
+    s_standalone_mode =
+        s_active_output_mode != STANDALONE_OUTPUT_BRIDGE;
+    s_standalone_usb_hid =
+        s_active_output_mode == STANDALONE_OUTPUT_HID;
     bool standalone_profile_loaded = standalone_profile_load_runtime();
 
     s_control_queue = xQueueCreate(16, sizeof(line_t));
@@ -3299,7 +3307,8 @@ void app_main(void) {
 
     tinyusb_config_t tusb_cfg = { 0 };
     standalone_xinput_configure(
-        &tusb_cfg, s_standalone_mode, s_standalone_usb_hid
+        &tusb_cfg, s_output_mode, s_active_output_mode,
+        s_standalone_auto_probe
     );
     ESP_ERROR_CHECK(tinyusb_driver_install(&tusb_cfg));
     tinyusb_config_cdcacm_t acm = {
@@ -3365,8 +3374,7 @@ void app_main(void) {
     ESP_LOGI(
         TAG, "Bluedroid up, MAC=%s, %d GATTC apps. Mode=%s, profile=%s.",
         s_own_mac, MAX_CH,
-        !s_standalone_mode ? "bridge" :
-            (s_standalone_usb_hid ? "standalone_hid" : "standalone")
-        , standalone_profile_loaded ? "loaded" : "defaults"
+        output_mode_name(s_active_output_mode),
+        standalone_profile_loaded ? "loaded" : "defaults"
     );
 }

@@ -222,6 +222,12 @@ def build_status_and_footer(gui, right_frame):
             ),
         )
         menu.add_command(
+            label=gui.tr("寫入並啟用自動辨識獨立模式（實驗性）"),
+            command=lambda: gui.write_current_profile_to_esp32(
+                "standalone_auto"
+            ),
+        )
+        menu.add_command(
             label=gui.tr("僅寫入設定"),
             command=lambda: gui.write_current_profile_to_esp32(None),
         )

@@ -1,10 +1,10 @@
 # S2P-XInput-Lite ESP32-S3 BLE Bridge
 
-This directory contains the stable bridge and standalone `S2P-FW 1.0.2`
+This directory contains the stable bridge and standalone `S2P-FW 1.0.4`
 source. It targets an ESP32-S3. Bridge mode keeps
-the existing USB CDC transport. Standalone mode can expose either a CDC +
-XInput-compatible composite device for PCs or a CDC + standards-based
-USB HID Gamepad for direct connection to phones.
+the existing USB CDC transport. Standalone mode can expose a CDC + XInput-compatible composite device for
+PCs, a CDC + standards-based USB HID Gamepad for direct connection to phones,
+or an experimental Auto probe that selects Android HID or Windows XInput.
 
 ## Bridge and standalone status
 
@@ -15,8 +15,10 @@ The firmware uses the independent `s2p_bridge 1.0.0` protocol and includes:
 - standalone profile schema version negotiation;
 - chunked profile transfer with CRC32 validation;
 - A/B NVS slots, read-back verification, and atomic active-slot switching;
-- persisted `bridge` / `standalone` / `standalone_hid` mode selection with
-  controlled reboot;
+- persisted `bridge` / `standalone` / `standalone_hid` / `standalone_auto` mode
+  selection with controlled reboot;
+- controller recovery chords: HOME+X for 3 seconds selects XInput, HOME+A for 3
+  seconds selects HID, and HOME+Y for 5 seconds restores Auto after release;
 - a development XInput USB interface alongside the CDC configuration channel;
 - profile-driven Switch input to XInput buttons, calibrated sticks, direction
   mappings, linear triggers, compatible mapping layers, and gyro-to-stick;
@@ -34,6 +36,15 @@ The firmware uses the independent `s2p_bridge 1.0.0` protocol and includes:
   sequence after a first-time SYNC connection so later wakeups and ESP32
   restarts reconnect without pressing SYNC again.
 
+Auto mode initially enumerates as `S2P Auto Gamepad` (VID/PID `CAFE:4022`).
+Android keeps the standards-based HID personality. A Windows Microsoft OS
+descriptor request sets a guarded RTC marker and causes one software restart into the
+XInput personality without writing flash during normal probing. Descriptor caching and
+host USB-stack differences make Auto experimental; the fixed personalities remain the
+reliable fallback. On some Windows hosts the HID probe remains selected instead of
+switching to XInput; reconnect the ESP32 or hold HOME+X for three seconds and release
+to save and restart in fixed PC XInput mode.
+
 The XInput path compiles and links successfully and has passed Windows
 enumeration and 130+ Hz input tests. The mobile HID personality enumerates as
 `S2P Mobile Gamepad` (VID/PID `CAFE:4021`) and produced 131 Hz hardware input
@@ -43,7 +54,7 @@ profile switching, phone rumble, and BLE HID output remain desktop-only or
 unimplemented.
 The standalone runtime has completed automated and full ESP-IDF build testing.
 Its existing reconnect path has a real-controller regression baseline; the new
-1.0.2 battery LED behavior still requires a post-flash hardware check.
+1.0.4 automatic-host and controller-chord behavior still requires a post-flash hardware check.
 
 The Windows client uses these CDC commands:
 
@@ -63,6 +74,7 @@ rumble status
 rumble reset
 mode standalone
 mode standalone_hid
+mode standalone_auto
 mode bridge
 restart
 ```
@@ -132,4 +144,4 @@ flash frequency, and a 16 MB flash size. Upstream Switch2Connect firmware is
 not treated as protocol-compatible. The previous bundled S2P `0.14.3` build is
 recognized only so the desktop application can guide an upgrade; standalone
 profile storage, diagnostics, and direct USB controller output require the
-current `S2P-FW 1.0.2` firmware.
+current `S2P-FW 1.0.4` firmware.

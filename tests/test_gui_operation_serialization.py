@@ -96,7 +96,7 @@ class GuiOperationSerializationTests(unittest.TestCase):
         gui.get_serial_ports = Mock(return_value=set())
         gui.get_serial_port_infos = Mock(return_value=())
         gui.inspect_esp32_firmware = Mock(return_value=(
-            {"product": "S2P-FW", "version": "1.0.2"},
+            {"product": "S2P-FW", "version": "1.0.4"},
             False,
         ))
 
@@ -115,7 +115,7 @@ class GuiOperationSerializationTests(unittest.TestCase):
     def test_matching_firmware_version_can_cancel_without_flash_prompt(self):
         gui = self.make_gui()
         gui.inspect_esp32_firmware = Mock(return_value=(
-            {"product": "S2P-FW", "version": "1.0.2"},
+            {"product": "S2P-FW", "version": "1.0.4"},
             False,
         ))
         gui.stop_main_process = Mock()
@@ -127,7 +127,7 @@ class GuiOperationSerializationTests(unittest.TestCase):
             gui.flash_firmware()
 
         message = confirm.call_args.args[1]
-        self.assertIn("S2P-FW v1.0.2", message)
+        self.assertIn("S2P-FW v1.0.4", message)
         self.assertIn("目前已是相同版本", message)
         gui.stop_main_process.assert_not_called()
         gui.detect_flash_port.assert_not_called()

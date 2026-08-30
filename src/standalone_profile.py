@@ -429,7 +429,8 @@ def write_standalone_profile(
             f"{details}"
         )
     if target_mode not in (
-        None, "bridge", "standalone", "standalone_hid"
+        None, "bridge", "standalone", "standalone_hid",
+        "standalone_auto"
     ):
         raise ValueError(f"Unsupported ESP32 mode: {target_mode}")
     with serial.Serial(
@@ -457,6 +458,13 @@ def write_standalone_profile(
         ):
             raise StandaloneTransferError(
                 "目前 ESP32 韌體不支援手機 USB HID 模式，請先更新韌體。"
+            )
+        if (
+            target_mode == "standalone_auto"
+            and not features.get("standalone_usb_auto")
+        ):
+            raise StandaloneTransferError(
+                "目前 ESP32 韌體不支援自動辨識模式，請先更新韌體。"
             )
         schemas = capabilities.get("profile_schemas", [])
         if STANDALONE_PROFILE_SCHEMA not in schemas:
@@ -545,7 +553,9 @@ def set_esp32_mode(
     mode: str,
 ) -> Mapping[str, Any]:
     """Change the persisted firmware mode and reboot when USB must re-enumerate."""
-    if mode not in ("bridge", "standalone", "standalone_hid"):
+    if mode not in (
+        "bridge", "standalone", "standalone_hid", "standalone_auto"
+    ):
         raise ValueError(f"Unsupported ESP32 mode: {mode}")
     with serial.Serial(
         port_name,
@@ -571,6 +581,13 @@ def set_esp32_mode(
         ):
             raise StandaloneTransferError(
                 "目前 ESP32 韌體不支援手機 USB HID 模式，請先更新韌體。"
+            )
+        if (
+            mode == "standalone_auto"
+            and not features.get("standalone_usb_auto")
+        ):
+            raise StandaloneTransferError(
+                "目前 ESP32 韌體不支援自動辨識模式，請先更新韌體。"
             )
         result = _send_and_expect(port, f"mode {mode}", "mode")
         if result.get("restart_required", 0):

@@ -281,6 +281,61 @@ class StandaloneProfileTests(unittest.TestCase):
         ):
             set_esp32_mode("COM5", 2_000_000, "standalone_hid")
 
+    @patch("standalone_profile._send_and_expect")
+    @patch("standalone_profile.serial.Serial")
+    def test_auto_mode_is_sent_to_capable_firmware(
+        self, serial_factory, send_and_expect
+    ):
+        send_and_expect.side_effect = (
+            {
+                "cmd": "capabilities",
+                "ok": 1,
+                "features": {
+                    "standalone_usb_xinput": 1,
+                    "standalone_usb_hid": 1,
+                    "standalone_usb_auto": 1,
+                },
+            },
+            {
+                "cmd": "mode",
+                "ok": 1,
+                "mode": "standalone_auto",
+                "restart_required": 0,
+            },
+        )
+
+        result = set_esp32_mode(
+            "COM5", 2_000_000, "standalone_auto"
+        )
+
+        port = serial_factory.return_value.__enter__.return_value
+        self.assertEqual(result["mode"], "standalone_auto")
+        self.assertEqual(
+            send_and_expect.call_args_list[1].args,
+            (port, "mode standalone_auto", "mode"),
+        )
+
+    @patch("standalone_profile._send_and_expect")
+    @patch("standalone_profile.serial.Serial")
+    def test_auto_mode_rejects_old_firmware(
+        self, _serial_factory, send_and_expect
+    ):
+        send_and_expect.return_value = {
+            "cmd": "capabilities",
+            "ok": 1,
+            "features": {
+                "standalone_usb_xinput": 1,
+                "standalone_usb_hid": 1,
+                "standalone_usb_auto": 0,
+            },
+        }
+
+        with self.assertRaisesRegex(
+            StandaloneTransferError, "自動辨識"
+        ):
+            set_esp32_mode(
+                "COM5", 2_000_000, "standalone_auto"
+            )
 
 if __name__ == "__main__":
     unittest.main()

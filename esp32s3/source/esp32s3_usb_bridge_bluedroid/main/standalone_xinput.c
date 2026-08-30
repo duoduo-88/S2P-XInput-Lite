@@ -19,6 +19,8 @@
 
 #include "cJSON.h"
 #include "device/usbd_pvt.h"
+#include "esp_attr.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "FusionAhrs.h"
 #include "freertos/FreeRTOS.h"
@@ -30,6 +32,14 @@
 #define STANDALONE_MODE_KEY      "standalone"
 #define STANDALONE_USB_MODE_KEY  "usb_hid"
 #define STANDALONE_OUTPUT_MODE_KEY "output_mode"
+#define AUTO_XINPUT_RTC_MAGIC       0x53325058u
+#define AUTO_XINPUT_RTC_MAGIC_INV   (~AUTO_XINPUT_RTC_MAGIC)
+#define MODE_CHORD_XINPUT           (0x00001000u | 0x00000002u)
+#define MODE_CHORD_HID              (0x00001000u | 0x00000008u)
+#define MODE_CHORD_AUTO             (0x00001000u | 0x00000001u)
+#define MODE_CHORD_RELEVANT         (0x00001000u | 0x0000000bu)
+#define MODE_CHORD_HOLD_US          3000000LL
+#define MODE_CHORD_AUTO_HOLD_US     5000000LL
 
 #define XINPUT_INTERFACE         2
 #define XINPUT_EP_OUT            0x03
@@ -100,6 +110,28 @@ static const tusb_desc_device_t s_hid_device_descriptor = {
     .bNumConfigurations = 0x01,
 };
 
+/*
+ * Auto mode starts as standards-based HID, but advertises the Microsoft OS
+ * platform capability. Windows reveals itself by requesting that descriptor;
+ * Android normally ignores it and keeps using this HID interface.
+ */
+static const tusb_desc_device_t s_auto_device_descriptor = {
+    .bLength = sizeof(tusb_desc_device_t),
+    .bDescriptorType = TUSB_DESC_DEVICE,
+    .bcdUSB = 0x0210,
+    .bDeviceClass = TUSB_CLASS_MISC,
+    .bDeviceSubClass = MISC_SUBCLASS_COMMON,
+    .bDeviceProtocol = MISC_PROTOCOL_IAD,
+    .bMaxPacketSize0 = CFG_TUD_ENDPOINT0_SIZE,
+    .idVendor = 0xCAFE,
+    .idProduct = 0x4022,
+    .bcdDevice = 0x0100,
+    .iManufacturer = 0x01,
+    .iProduct = 0x02,
+    .iSerialNumber = 0x03,
+    .bNumConfigurations = 0x01,
+};
+
 static const tusb_desc_device_t s_bridge_device_descriptor = {
     .bLength = sizeof(tusb_desc_device_t),
     .bDescriptorType = TUSB_DESC_DEVICE,
@@ -129,6 +161,13 @@ static const char *s_hid_string_descriptors[] = {
     "S2P-XInput-Lite",
     "S2P Mobile Gamepad",
     "S2P-HID-DEV1",
+};
+
+static const char *s_auto_string_descriptors[] = {
+    (const char[]){0x09, 0x04},
+    "S2P-XInput-Lite",
+    "S2P Auto Gamepad",
+    "S2P-AUTO-DEV1",
 };
 
 static const char *s_bridge_string_descriptors[] = {
@@ -294,6 +333,16 @@ static bool s_report_dirty;
 static bool s_hid_report_dirty;
 static bool s_usb_hid_mode;
 static bool s_usb_xinput_mode;
+static bool s_usb_auto_probe;
+static standalone_output_mode_t s_configured_output_mode;
+static bool s_auto_windows_detected;
+static standalone_output_mode_t s_mode_chord_candidate;
+static int64_t s_mode_chord_started_us;
+static standalone_output_mode_t s_mode_chord_armed;
+static uint32_t s_mode_chord_release_mask;
+static standalone_output_mode_t s_mode_switch_pending;
+RTC_NOINIT_ATTR static uint32_t s_auto_xinput_rtc_magic;
+RTC_NOINIT_ATTR static uint32_t s_auto_xinput_rtc_magic_inv;
 static standalone_xinput_wakeup_cb_t s_wakeup_cb;
 static standalone_usb_latency_metrics_t s_usb_latency_metrics;
 static bool s_usb_wait_active;
@@ -375,6 +424,13 @@ typedef struct {
     stick_direction_runtime_t directions[2];
 } mapping_layer_runtime_t;
 
+typedef enum {
+    MAG_REFERENCE_NORMAL,
+    MAG_REFERENCE_REJECTED,
+    MAG_REFERENCE_CANDIDATE,
+    MAG_REFERENCE_RECOVERING,
+} magnetic_reference_state_t;
+
 typedef struct {
     uint8_t activation_mode;
     bool activation_match_all;
@@ -426,6 +482,16 @@ typedef struct {
     bool mag_recovery_started_valid;
     uint32_t mag_recovery_started_time;
     float mag_recovery_accumulator;
+    magnetic_reference_state_t mag_reference_state;
+    bool mag_heading_transform_valid;
+    float mag_heading_offset_degrees;
+    bool mag_candidate_started_valid;
+    uint32_t mag_candidate_started_time;
+    unsigned int mag_candidate_samples;
+    float mag_candidate_magnitude;
+    float mag_candidate_direction;
+    float mag_candidate_max_magnitude_ratio;
+    float mag_candidate_max_direction_delta;
     bool aim_gravity_sign_valid;
     float aim_gravity_sign;
     bool aim_pose_ready_valid;
@@ -832,6 +898,16 @@ static void reset_gyro_runtime_state(gyro_runtime_t *config) {
     config->mag_recovery_started_valid = false;
     config->mag_recovery_started_time = 0;
     config->mag_recovery_accumulator = 0.0f;
+    config->mag_reference_state = MAG_REFERENCE_NORMAL;
+    config->mag_heading_transform_valid = false;
+    config->mag_heading_offset_degrees = 0.0f;
+    config->mag_candidate_started_valid = false;
+    config->mag_candidate_started_time = 0;
+    config->mag_candidate_samples = 0;
+    config->mag_candidate_magnitude = 0.0f;
+    config->mag_candidate_direction = 0.0f;
+    config->mag_candidate_max_magnitude_ratio = 0.0f;
+    config->mag_candidate_max_direction_delta = 0.0f;
     config->aim_gravity_sign_valid = false;
     config->aim_gravity_sign = 1.0f;
     config->aim_pose_ready_valid = false;
@@ -1941,6 +2017,14 @@ static bool deadline_pending(uint32_t now, uint32_t deadline) {
 #define GYRO_SCALE (1.0f / 14.285714f)
 #define GYRO_USABLE_SAMPLES 16u
 #define GYRO_FINAL_SAMPLES 64u
+#define MAGNETOMETER_TIMEOUT_MS 500u
+#define MAGNETOMETER_RECOVERY_MS 750.0f
+/* Keep a replacement field stable for one recovery window at 125 Hz. */
+#define MAG_REFERENCE_CANDIDATE_MS 750u
+#define MAG_REFERENCE_CANDIDATE_MIN_SAMPLES 24u
+#define MAG_REFERENCE_CANDIDATE_MAGNITUDE_RATIO 0.08f
+#define MAG_REFERENCE_CANDIDATE_DIRECTION_DEGREES 8.0f
+#define MAG_REFERENCE_MAX_ANGULAR_SPEED_DPS 180.0f
 
 static float vector_norm3(const float value[3]) {
     return sqrtf(
@@ -2022,6 +2106,151 @@ static bool magnetic_field_is_stable(
             (magnitude - gyro->mag_field_reference) * 0.001f;
     }
     return stable;
+}
+
+static void reset_magnetic_reference_candidate(gyro_runtime_t *gyro) {
+    gyro->mag_candidate_started_valid = false;
+    gyro->mag_candidate_started_time = 0;
+    gyro->mag_candidate_samples = 0;
+    gyro->mag_candidate_magnitude = 0.0f;
+    gyro->mag_candidate_direction = 0.0f;
+    gyro->mag_candidate_max_magnitude_ratio = 0.0f;
+    gyro->mag_candidate_max_direction_delta = 0.0f;
+}
+
+static bool magnetic_heading_from_corrected(
+    const float accelerometer[3], const float corrected_mag[3], float *heading
+) {
+    float roll = atan2f(accelerometer[1], accelerometer[2]);
+    float pitch = atan2f(
+        -accelerometer[0], hypotf(accelerometer[1], accelerometer[2])
+    );
+    /* Switch 2 report magnetic frame: controller = (m0, m2, m1). */
+    float mag_x = corrected_mag[0];
+    float mag_y = corrected_mag[2];
+    float mag_z = corrected_mag[1];
+    float horizontal_x = mag_x * cosf(pitch) + mag_z * sinf(pitch);
+    float horizontal_y =
+        mag_x * sinf(roll) * sinf(pitch) +
+        mag_y * cosf(roll) - mag_z * sinf(roll) * cosf(pitch);
+    if (
+        !isfinite(horizontal_x) || !isfinite(horizontal_y) ||
+        hypotf(horizontal_x, horizontal_y) < 1e-6f
+    ) return false;
+    *heading = wrapped_degrees(
+        FusionRadiansToDegrees(atan2f(-horizontal_y, horizontal_x))
+    );
+    return true;
+}
+
+static bool rotate_vector_around_axis(
+    float value[3], FusionVector axis, float angle_degrees
+) {
+    float normalised_axis[3];
+    if (!unit_vector3(axis.array, normalised_axis)) return false;
+    float radians = FusionDegreesToRadians(angle_degrees);
+    float cosine = cosf(radians);
+    float sine = sinf(radians);
+    float dot = normalised_axis[0] * value[0] +
+        normalised_axis[1] * value[1] + normalised_axis[2] * value[2];
+    float rotated[3] = {
+        value[0] * cosine +
+            (normalised_axis[1] * value[2] - normalised_axis[2] * value[1]) * sine +
+            normalised_axis[0] * dot * (1.0f - cosine),
+        value[1] * cosine +
+            (normalised_axis[2] * value[0] - normalised_axis[0] * value[2]) * sine +
+            normalised_axis[1] * dot * (1.0f - cosine),
+        value[2] * cosine +
+            (normalised_axis[0] * value[1] - normalised_axis[1] * value[0]) * sine +
+            normalised_axis[2] * dot * (1.0f - cosine),
+    };
+    if (!isfinite(rotated[0]) || !isfinite(rotated[1]) || !isfinite(rotated[2]))
+        return false;
+    memcpy(value, rotated, sizeof(rotated));
+    return true;
+}
+
+static bool current_fusion_heading(
+    const gyro_runtime_t *gyro, float *heading
+) {
+    FusionEuler euler = FusionEulerFrom(FusionAhrsGetQuaternion(&gyro->ahrs));
+    if (!isfinite(euler.angle.yaw)) return false;
+    *heading = wrapped_degrees(euler.angle.yaw);
+    return true;
+}
+
+static bool update_magnetic_reference_candidate(
+    gyro_runtime_t *gyro, const float corrected_mag[3],
+    const float accelerometer[3], float angular_speed, uint32_t now
+) {
+    float magnetic_heading;
+    float gyro_heading;
+    float magnitude = vector_norm3(corrected_mag);
+    if (
+        !isfinite(magnitude) || magnitude <= 1e-9f ||
+        angular_speed > MAG_REFERENCE_MAX_ANGULAR_SPEED_DPS ||
+        !magnetic_heading_from_corrected(
+            accelerometer, corrected_mag, &magnetic_heading
+        ) || !current_fusion_heading(gyro, &gyro_heading)
+    ) {
+        reset_magnetic_reference_candidate(gyro);
+        return false;
+    }
+    float direction = wrapped_degrees(magnetic_heading - gyro_heading);
+    if (!gyro->mag_candidate_started_valid) {
+        gyro->mag_candidate_started_valid = true;
+        gyro->mag_candidate_started_time = now;
+        gyro->mag_candidate_samples = 1;
+        gyro->mag_candidate_magnitude = magnitude;
+        gyro->mag_candidate_direction = direction;
+        gyro->mag_reference_state = MAG_REFERENCE_CANDIDATE;
+        return false;
+    }
+    float magnitude_ratio = fabsf(magnitude - gyro->mag_candidate_magnitude) /
+        gyro->mag_candidate_magnitude;
+    float direction_delta = fabsf(wrapped_degrees(
+        direction - gyro->mag_candidate_direction
+    ));
+    if (
+        magnitude_ratio > MAG_REFERENCE_CANDIDATE_MAGNITUDE_RATIO ||
+        direction_delta > MAG_REFERENCE_CANDIDATE_DIRECTION_DEGREES
+    ) {
+        reset_magnetic_reference_candidate(gyro);
+        gyro->mag_candidate_started_valid = true;
+        gyro->mag_candidate_started_time = now;
+        gyro->mag_candidate_samples = 1;
+        gyro->mag_candidate_magnitude = magnitude;
+        gyro->mag_candidate_direction = direction;
+        gyro->mag_reference_state = MAG_REFERENCE_CANDIDATE;
+        return false;
+    }
+    gyro->mag_candidate_samples++;
+    gyro->mag_candidate_max_magnitude_ratio = fmaxf(
+        gyro->mag_candidate_max_magnitude_ratio, magnitude_ratio
+    );
+    gyro->mag_candidate_max_direction_delta = fmaxf(
+        gyro->mag_candidate_max_direction_delta, direction_delta
+    );
+    gyro->mag_candidate_magnitude +=
+        (magnitude - gyro->mag_candidate_magnitude) * 0.05f;
+    gyro->mag_candidate_direction = wrapped_degrees(
+        gyro->mag_candidate_direction +
+        wrapped_degrees(direction - gyro->mag_candidate_direction) * 0.05f
+    );
+    if (
+        (uint32_t)(now - gyro->mag_candidate_started_time) <
+            MAG_REFERENCE_CANDIDATE_MS ||
+        gyro->mag_candidate_samples < MAG_REFERENCE_CANDIDATE_MIN_SAMPLES
+    ) return false;
+    gyro->mag_heading_offset_degrees = wrapped_degrees(
+        gyro_heading - magnetic_heading
+    );
+    gyro->mag_heading_transform_valid = true;
+    gyro->mag_field_reference = gyro->mag_candidate_magnitude;
+    gyro->mag_field_reference_valid = true;
+    reset_magnetic_reference_candidate(gyro);
+    gyro->mag_reference_state = MAG_REFERENCE_RECOVERING;
+    return true;
 }
 
 static bool update_impact_state(
@@ -2308,14 +2537,34 @@ static void update_fusion(
     }
 
     float corrected_mag[3];
-    bool magnetometer_valid =
-        correct_magnetometer(gyro, raw_mag, corrected_mag) &&
+    bool corrected_mag_valid =
+        correct_magnetometer(gyro, raw_mag, corrected_mag);
+    bool magnetometer_valid = corrected_mag_valid &&
         magnetic_field_is_stable(gyro, corrected_mag);
     bool use_magnetometer = false;
-    if (magnetometer_valid) {
+    if (
+        gyro->mag_reference_state == MAG_REFERENCE_REJECTED ||
+        gyro->mag_reference_state == MAG_REFERENCE_CANDIDATE
+    ) {
+        if (!corrected_mag_valid) {
+            reset_magnetic_reference_candidate(gyro);
+            gyro->mag_reference_state = MAG_REFERENCE_REJECTED;
+        } else if (update_magnetic_reference_candidate(
+            gyro, corrected_mag, accelerometer.array,
+            vector_norm3(gyroscope.array), now
+        )) {
+            gyro->mag_last_valid = true;
+            gyro->mag_last_valid_time = now;
+            gyro->mag_recovery_started_time = now;
+            gyro->mag_recovery_started_valid = true;
+            gyro->mag_recovery_accumulator = 0.0f;
+            gyro->nine_axis_has_magnetometer = false;
+        }
+    } else if (magnetometer_valid) {
         if (
             !gyro->mag_last_valid ||
-            (uint32_t)(now - gyro->mag_last_valid_time) > 500
+            (uint32_t)(now - gyro->mag_last_valid_time) >
+                MAGNETOMETER_TIMEOUT_MS
         ) {
             gyro->mag_recovery_started_time = now;
             gyro->mag_recovery_started_valid = true;
@@ -2330,7 +2579,8 @@ static void update_fusion(
         }
         float recovery_weight = fminf(
             1.0f,
-            (uint32_t)(now - gyro->mag_recovery_started_time) / 750.0f
+            (uint32_t)(now - gyro->mag_recovery_started_time) /
+                MAGNETOMETER_RECOVERY_MS
         );
         if (recovery_weight >= 1.0f) {
             use_magnetometer = true;
@@ -2341,19 +2591,32 @@ static void update_fusion(
                 use_magnetometer = true;
             }
         }
+        if (
+            gyro->mag_reference_state == MAG_REFERENCE_RECOVERING &&
+            recovery_weight >= 1.0f
+        ) gyro->mag_reference_state = MAG_REFERENCE_NORMAL;
     } else if (
         !gyro->mag_last_valid ||
-        (uint32_t)(now - gyro->mag_last_valid_time) > 500
+        (uint32_t)(now - gyro->mag_last_valid_time) >
+            MAGNETOMETER_TIMEOUT_MS
     ) {
         gyro->mag_recovery_started_valid = false;
         gyro->mag_recovery_accumulator = 0.0f;
         gyro->nine_axis_has_magnetometer = false;
+        reset_magnetic_reference_candidate(gyro);
+        gyro->mag_reference_state = MAG_REFERENCE_REJECTED;
     }
     float bounded_dt = fminf(dt, 0.05f);
     if (use_magnetometer) {
         FusionVector magnetometer = {.array = {
             corrected_mag[0], corrected_mag[2], corrected_mag[1]
         }};
+        if (gyro->mag_heading_transform_valid) {
+            rotate_vector_around_axis(
+                magnetometer.array, gravity,
+                -gyro->mag_heading_offset_degrees
+            );
+        }
         FusionAhrsUpdate(
             &gyro->ahrs, gyroscope, accelerometer,
             magnetometer, bounded_dt
@@ -3035,13 +3298,13 @@ standalone_output_mode_t standalone_output_mode_load(void) {
         if (err == ESP_OK) nvs_commit(nvs);
     }
     nvs_close(nvs);
-    if (stored_mode > STANDALONE_OUTPUT_HID)
+    if (stored_mode > STANDALONE_OUTPUT_AUTO)
         return STANDALONE_OUTPUT_BRIDGE;
     return (standalone_output_mode_t)stored_mode;
 }
 
 esp_err_t standalone_output_mode_store(standalone_output_mode_t mode) {
-    if (mode < STANDALONE_OUTPUT_BRIDGE || mode > STANDALONE_OUTPUT_HID)
+    if (mode < STANDALONE_OUTPUT_BRIDGE || mode > STANDALONE_OUTPUT_AUTO)
         return ESP_ERR_INVALID_ARG;
     nvs_handle_t nvs;
     esp_err_t err = nvs_open(
@@ -3054,20 +3317,49 @@ esp_err_t standalone_output_mode_store(standalone_output_mode_t mode) {
     return err;
 }
 
+standalone_output_mode_t standalone_output_mode_resolve(
+    standalone_output_mode_t configured_mode, bool *auto_probe
+) {
+    if (auto_probe) *auto_probe = false;
+    bool resume_xinput =
+        s_auto_xinput_rtc_magic == AUTO_XINPUT_RTC_MAGIC &&
+        s_auto_xinput_rtc_magic_inv == AUTO_XINPUT_RTC_MAGIC_INV;
+    s_auto_xinput_rtc_magic = 0;
+    s_auto_xinput_rtc_magic_inv = 0;
+    if (configured_mode != STANDALONE_OUTPUT_AUTO)
+        return configured_mode;
+    if (resume_xinput) return STANDALONE_OUTPUT_XINPUT;
+    if (auto_probe) *auto_probe = true;
+    return STANDALONE_OUTPUT_HID;
+}
+
 void standalone_xinput_configure(
-    tinyusb_config_t *config, bool enabled, bool usb_hid_mode
+    tinyusb_config_t *config,
+    standalone_output_mode_t configured_mode,
+    standalone_output_mode_t active_mode,
+    bool auto_probe
 ) {
     if (!config) return;
     cancel_usb_wait();
-    s_usb_hid_mode = enabled && usb_hid_mode;
-    s_usb_xinput_mode = enabled && !usb_hid_mode;
+    s_configured_output_mode = configured_mode;
+    s_usb_auto_probe = auto_probe;
+    s_usb_hid_mode = active_mode == STANDALONE_OUTPUT_HID;
+    s_usb_xinput_mode = active_mode == STANDALONE_OUTPUT_XINPUT;
+    s_auto_windows_detected = false;
+    s_mode_chord_candidate = STANDALONE_OUTPUT_BRIDGE;
+    s_mode_chord_armed = STANDALONE_OUTPUT_BRIDGE;
+    s_mode_switch_pending = STANDALONE_OUTPUT_BRIDGE;
     if (s_usb_hid_mode) {
-        config->device_descriptor = &s_hid_device_descriptor;
+        config->device_descriptor = auto_probe
+            ? &s_auto_device_descriptor : &s_hid_device_descriptor;
         config->configuration_descriptor = s_hid_configuration_descriptor;
-        config->string_descriptor = s_hid_string_descriptors;
-        config->string_descriptor_count =
-            sizeof(s_hid_string_descriptors) /
-            sizeof(s_hid_string_descriptors[0]);
+        config->string_descriptor = auto_probe
+            ? s_auto_string_descriptors : s_hid_string_descriptors;
+        config->string_descriptor_count = auto_probe
+            ? sizeof(s_auto_string_descriptors) /
+                sizeof(s_auto_string_descriptors[0])
+            : sizeof(s_hid_string_descriptors) /
+                sizeof(s_hid_string_descriptors[0]);
     } else if (s_usb_xinput_mode) {
         config->device_descriptor = &s_xinput_device_descriptor;
         config->configuration_descriptor =
@@ -3086,7 +3378,6 @@ void standalone_xinput_configure(
             sizeof(s_bridge_string_descriptors[0]);
     }
 }
-
 void standalone_xinput_set_wakeup_cb(
     standalone_xinput_wakeup_cb_t callback
 ) {
@@ -3110,6 +3401,63 @@ void standalone_xinput_reset_latency_metrics(void) {
     portEXIT_CRITICAL(&s_state_mux);
 }
 
+static standalone_output_mode_t mode_chord_target(uint32_t source) {
+    uint32_t relevant = source & MODE_CHORD_RELEVANT;
+    if (relevant == MODE_CHORD_XINPUT) return STANDALONE_OUTPUT_XINPUT;
+    if (relevant == MODE_CHORD_HID) return STANDALONE_OUTPUT_HID;
+    if (relevant == MODE_CHORD_AUTO) return STANDALONE_OUTPUT_AUTO;
+    return STANDALONE_OUTPUT_BRIDGE;
+}
+
+static uint32_t mode_chord_mask(standalone_output_mode_t target) {
+    if (target == STANDALONE_OUTPUT_XINPUT) return MODE_CHORD_XINPUT;
+    if (target == STANDALONE_OUTPUT_HID) return MODE_CHORD_HID;
+    if (target == STANDALONE_OUTPUT_AUTO) return MODE_CHORD_AUTO;
+    return 0;
+}
+
+static uint32_t filter_mode_chord(uint32_t source) {
+    uint32_t raw_source = source;
+    if (s_mode_chord_armed != STANDALONE_OUTPUT_BRIDGE) {
+        source &= ~s_mode_chord_release_mask;
+        if ((raw_source & s_mode_chord_release_mask) == 0) {
+            portENTER_CRITICAL(&s_state_mux);
+            s_mode_switch_pending = s_mode_chord_armed;
+            portEXIT_CRITICAL(&s_state_mux);
+            s_mode_chord_armed = STANDALONE_OUTPUT_BRIDGE;
+            s_mode_chord_release_mask = 0;
+            if (s_wakeup_cb) s_wakeup_cb();
+        }
+        return source;
+    }
+
+    standalone_output_mode_t target = mode_chord_target(source);
+    if (target == STANDALONE_OUTPUT_BRIDGE) {
+        s_mode_chord_candidate = STANDALONE_OUTPUT_BRIDGE;
+        s_mode_chord_started_us = 0;
+        return source;
+    }
+
+    uint32_t chord_mask = mode_chord_mask(target);
+    source &= ~chord_mask;
+    int64_t now_us = esp_timer_get_time();
+    if (target != s_mode_chord_candidate) {
+        s_mode_chord_candidate = target;
+        s_mode_chord_started_us = now_us;
+        return source;
+    }
+    int64_t required_us = target == STANDALONE_OUTPUT_AUTO
+        ? MODE_CHORD_AUTO_HOLD_US : MODE_CHORD_HOLD_US;
+    bool should_switch = target != s_configured_output_mode ||
+        target == STANDALONE_OUTPUT_AUTO;
+    if (should_switch && now_us - s_mode_chord_started_us >= required_us) {
+        s_mode_chord_armed = target;
+        s_mode_chord_release_mask = chord_mask;
+        s_mode_chord_candidate = STANDALONE_OUTPUT_BRIDGE;
+        s_mode_chord_started_us = 0;
+    }
+    return source;
+}
 void standalone_xinput_accept_switch_report(
     int channel, const uint8_t *payload, size_t length
 ) {
@@ -3130,6 +3478,7 @@ void standalone_xinput_accept_switch_report(
     if (accepted) {
         uint32_t report_time = read_u32_le(payload);
         uint32_t source = read_u32_le(payload + 4);
+        source = filter_mode_chord(source);
         xinput_report_t report = {.report_size = 20};
         int layer_index = select_mapping_layer(source);
         const uint32_t *button_targets = s_runtime.button_targets;
@@ -3352,7 +3701,36 @@ static void finish_usb_wait(void) {
     portEXIT_CRITICAL(&s_state_mux);
 }
 
+static void process_mode_switch_requests(void) {
+    standalone_output_mode_t pending_mode;
+    bool windows_detected;
+    portENTER_CRITICAL(&s_state_mux);
+    pending_mode = s_mode_switch_pending;
+    s_mode_switch_pending = STANDALONE_OUTPUT_BRIDGE;
+    windows_detected = s_auto_windows_detected;
+    s_auto_windows_detected = false;
+    portEXIT_CRITICAL(&s_state_mux);
+
+    if (pending_mode != STANDALONE_OUTPUT_BRIDGE) {
+        s_auto_xinput_rtc_magic = 0;
+        s_auto_xinput_rtc_magic_inv = 0;
+        if (standalone_output_mode_store(pending_mode) == ESP_OK) {
+            vTaskDelay(pdMS_TO_TICKS(120));
+            esp_restart();
+        }
+        return;
+    }
+    if (windows_detected &&
+        s_configured_output_mode == STANDALONE_OUTPUT_AUTO &&
+        s_usb_auto_probe) {
+        s_auto_xinput_rtc_magic = AUTO_XINPUT_RTC_MAGIC;
+        s_auto_xinput_rtc_magic_inv = AUTO_XINPUT_RTC_MAGIC_INV;
+        vTaskDelay(pdMS_TO_TICKS(120));
+        esp_restart();
+    }
+}
 void standalone_xinput_pump(void) {
+    process_mode_switch_requests();
     if (s_usb_hid_mode) {
         if (!tud_ready()) {
             cancel_usb_wait();
@@ -3598,17 +3976,26 @@ const usbd_class_driver_t *usbd_app_driver_get_cb(uint8_t *driver_count) {
 }
 
 const uint8_t *tud_descriptor_bos_cb(void) {
-    return s_usb_xinput_mode ? s_bos_descriptor : NULL;
+    return (s_usb_xinput_mode || s_usb_auto_probe)
+        ? s_bos_descriptor : NULL;
 }
 
 bool tud_vendor_control_xfer_cb(
     uint8_t rhport, uint8_t stage, const tusb_control_request_t *request
 ) {
-    if (!s_usb_xinput_mode) return false;
+    if (!s_usb_xinput_mode && !s_usb_auto_probe) return false;
     if (stage != CONTROL_STAGE_SETUP) return true;
     if (request->bmRequestType_bit.type == TUSB_REQ_TYPE_VENDOR &&
         request->bRequest == MS_VENDOR_REQUEST &&
         request->wIndex == 7) {
+        if (s_usb_auto_probe) {
+            portENTER_CRITICAL(&s_state_mux);
+            s_auto_windows_detected = true;
+            portEXIT_CRITICAL(&s_state_mux);
+            if (s_wakeup_cb) s_wakeup_cb();
+            /* Stall this probe request; the device re-enumerates as XInput. */
+            return false;
+        }
         return tud_control_xfer(
             rhport, request, (void *)s_ms_os_20_descriptor,
             sizeof(s_ms_os_20_descriptor)
