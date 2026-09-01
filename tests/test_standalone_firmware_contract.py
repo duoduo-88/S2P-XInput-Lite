@@ -76,6 +76,34 @@ class StandaloneFirmwareContractTests(unittest.TestCase):
         )
         self.assertIn("xTaskNotifyGive", callback)
 
+    def test_all_modes_preserve_edges_and_keep_motion_latest_only(self):
+        notify_start = MAIN_SOURCE.index("case ESP_GATTC_NOTIFY_EVT:")
+        notify_end = MAIN_SOURCE.index(
+            "case ESP_GATTC_WRITE_CHAR_EVT", notify_start
+        )
+        callback = MAIN_SOURCE[notify_start:notify_end]
+        self.assertGreaterEqual(callback.count("queue_input_state("), 2)
+        self.assertIn("static bool input_digital_signature(", MAIN_SOURCE)
+        self.assertIn("static void queue_input_state(", MAIN_SOURCE)
+        self.assertIn("s_input_edge_queue", MAIN_SOURCE)
+        self.assertIn("s_in_shadow[channel] = report", MAIN_SOURCE)
+        self.assertIn("s_input_latency_metrics.notify_queue_drops++", MAIN_SOURCE)
+
+        task_start = MAIN_SOURCE.index("static void cdc_task")
+        task_end = MAIN_SOURCE.index("static void gap_cb", task_start)
+        task = MAIN_SOURCE[task_start:task_end]
+        capacity = task.index("standalone_xinput_can_accept_input()")
+        edge = task.index("take_input_edge(&edge)", capacity)
+        latest = task.index("take_latest_input_if_no_edges(i, &r)", edge)
+        self.assertLess(capacity, edge)
+        self.assertLess(edge, latest)
+        self.assertIn(
+            "bool standalone_xinput_can_accept_input(void)", XINPUT_SOURCE
+        )
+        self.assertIn(
+            "bool standalone_xinput_can_accept_input(void);", XINPUT_HEADER
+        )
+
     def test_ble_timing_reports_max_p95_and_p99(self):
         self.assertIn('"ble timing"', MAIN_SOURCE)
         self.assertIn("max_us", METRICS_SOURCE)

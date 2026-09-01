@@ -4,7 +4,7 @@
 ESP32-S3 bridge firmware.
 
 - Product: `S2P-FW`
-- Firmware version: `1.0.4`
+- Firmware version: `1.0.5`
 - S2P bridge protocol: `1.0.0`
 - Firmware profile: `s2p_usb_bridge`
 - Build: `standalone_diagnostics`
@@ -19,7 +19,11 @@ and commit above are retained for attribution and code provenance.
 
 The S2P bridge protocol uses a latency-focused CDC schedule:
 
-- newest BLE input shadow is forwarded before command and diagnostic queues;
+- bridge and standalone modes send button and trigger transitions through a
+  bounded edge FIFO, while stick and IMU samples use a newest-state shadow so
+  stale motion is never replayed; standalone FIFO consumption pauses whenever
+  the USB pending slot is occupied, preserving transitions through both the BLE
+  and USB scheduling stages;
 - BLE callbacks wake the CDC task immediately instead of waiting for its 2 ms
   maintenance timeout;
 - BLE connection setup has a watchdog, checked scan transitions and complete
@@ -47,13 +51,13 @@ The S2P bridge protocol uses a latency-focused CDC schedule:
 
 The current images in `../firmware/` were built from this source. The existing
 transport and reconnect baseline was verified on real hardware; the
-`S2P-FW 1.0.4` Auto-host and controller-chord build has passed compilation and
+`S2P-FW 1.0.5` hybrid-input build has passed compilation and
 automated contract tests, but host detection and chord-triggered reboot still require
 post-flash checks on Windows and Android hardware. The exact upstream revision is linked above for comparison.
 
 | Current file | SHA-256 |
 |---|---|
-| `esp32s3_bluedroid_bridge.bin` | `6743465AB0AD67AF42CF36146A24E601FB804E36E1FE02B14BEF55EBD3086EE1` |
+| `esp32s3_bluedroid_bridge.bin` | `AFEDEF8736F6B861F654175538207377B8234DF37569BB3A4DC4CA3241BB4A66` |
 | `bootloader.bin` | `0674EE7D6721269BFF482811B4441F6A85D6F590AFDE9F7F71F6E7DB39C68E94` |
 | `partition-table.bin` | `7F00B6C042A89B15B0CAC534F82ED988CAF29278FF5700B0C511EB1B5BB7C820` |
 
