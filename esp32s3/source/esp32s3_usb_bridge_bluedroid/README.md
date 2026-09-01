@@ -1,6 +1,6 @@
 # S2P-XInput-Lite ESP32-S3 BLE Bridge
 
-This directory contains the stable bridge and standalone `S2P-FW 1.0.4`
+This directory contains the stable bridge and standalone `S2P-FW 1.0.5`
 source. It targets an ESP32-S3. Bridge mode keeps
 the existing USB CDC transport. Standalone mode can expose a CDC + XInput-compatible composite device for
 PCs, a CDC + standards-based USB HID Gamepad for direct connection to phones,
@@ -54,7 +54,7 @@ profile switching, phone rumble, and BLE HID output remain desktop-only or
 unimplemented.
 The standalone runtime has completed automated and full ESP-IDF build testing.
 Its existing reconnect path has a real-controller regression baseline; the new
-1.0.4 automatic-host and controller-chord behavior still requires a post-flash hardware check.
+1.0.5 hybrid-input behavior still requires a post-flash hardware check.
 
 The Windows client uses these CDC commands:
 
@@ -83,13 +83,17 @@ An interrupted or rejected transfer leaves the previous active slot unchanged.
 The current profile size limit is 8192 bytes.
 
 `latency reset` clears the transport counters before a controlled run.
-`latency status` reports received BLE input, source timestamp gaps, input
-shadow overwrites, notify-queue drops, USB endpoint busy episodes, pending USB
-state overwrites, and completed USB wait average/maximum time. A source gap
-with zero shadow, queue, and USB counters indicates that the skipped interval
-already existed before the standalone output path. Source-gap detection scales
-with each channel's configured 7.5 or 15 ms BLE interval, and USB disconnect or
-re-enumeration time is excluded from endpoint-wait measurements.
+`latency status` reports received BLE input, source timestamp gaps, intentional
+newest-state shadow coalescing, input edge-FIFO drops, USB endpoint busy
+episodes, pending USB state overwrites, and completed USB wait average/maximum
+time. Bridge and standalone modes both preserve button and trigger transitions
+in the FIFO while coalescing continuous stick and IMU samples. Standalone mode
+also applies USB pending-slot backpressure so the edge FIFO is not drained
+faster than those transitions can be submitted. A source gap with zero queue
+and USB counters indicates that the skipped interval already existed before
+the output path. Source-gap detection scales with each channel's configured
+7.5 or 15 ms BLE interval, and USB disconnect or re-enumeration time is
+excluded from endpoint-wait measurements.
 
 The development XInput interface uses a non-retail development VID/PID plus a
 Microsoft OS 2.0 `XUSB20` compatible-ID descriptor. It does not copy the
@@ -144,4 +148,4 @@ flash frequency, and a 16 MB flash size. Upstream Switch2Connect firmware is
 not treated as protocol-compatible. The previous bundled S2P `0.14.3` build is
 recognized only so the desktop application can guide an upgrade; standalone
 profile storage, diagnostics, and direct USB controller output require the
-current `S2P-FW 1.0.4` firmware.
+current `S2P-FW 1.0.5` firmware.

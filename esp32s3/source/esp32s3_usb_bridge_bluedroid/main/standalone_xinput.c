@@ -3599,6 +3599,20 @@ void standalone_xinput_accept_switch_report(
     }
 }
 
+bool standalone_xinput_can_accept_input(void) {
+    bool ready;
+    portENTER_CRITICAL(&s_state_mux);
+    /*
+     * One USB report may be in flight and one newer report may wait in
+     * s_pending_report.  Do not consume another FIFO item until that pending
+     * slot has been submitted, otherwise a press can still be replaced by its
+     * release after it was correctly preserved on the BLE side.
+     */
+    ready = s_usb_hid_mode ? !s_hid_report_dirty : !s_report_dirty;
+    portEXIT_CRITICAL(&s_state_mux);
+    return ready;
+}
+
 void standalone_xinput_forget_channel(int channel) {
     portENTER_CRITICAL(&s_state_mux);
     if (channel == s_active_channel) {

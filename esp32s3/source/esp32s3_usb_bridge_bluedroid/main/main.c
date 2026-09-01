@@ -63,7 +63,7 @@
 static const char *TAG = "S3_BLUEDROID";
 
 #define APP_FIRMWARE_PRODUCT      "S2P-FW"
-#define APP_FIRMWARE_VERSION      "1.0.4"
+#define APP_FIRMWARE_VERSION      "1.0.5"
 #define APP_PROTOCOL_NAME         "s2p_bridge"
 #define APP_PROTOCOL_VERSION      "1.0.0"
 #define EXPECTED_FIRMWARE_PROFILE "s2p_usb_bridge"
@@ -72,6 +72,7 @@ static const char *TAG = "S3_BLUEDROID";
 #define CDC_TX_BUFFER_SIZE        512
 #define CDC_TX_PHASE_BUDGET_US    5000
 #define CDC_QUEUE_BUDGET_PER_LOOP 4
+#define INPUT_EDGE_QUEUE_SIZE     32
 #define NINTENDO_COMPANY_ID       0x0553
 #define MAX_CH                    8     // one GATTC app per channel
 #define REPORT_SIZE               64
@@ -316,7 +317,7 @@ static void ch_count(int *used, int *ready) {
 static QueueHandle_t s_control_queue; // inbound commands that never write CDC
 static QueueHandle_t s_query_queue; // inbound commands that produce CDC output
 static QueueHandle_t s_ack_queue;   // ack/cmd notifications (P0)
-static QueueHandle_t s_notify_queue; // handle-routed notifications for GCN/WinRT parity
+static QueueHandle_t s_notify_queue; // non-input handle routing for GCN parity
 static QueueHandle_t s_event_queue; // connection lifecycle JSON (P1)
 static QueueHandle_t s_out_queue;   // scan/debug JSON (low priority)
 static TaskHandle_t s_cdc_task_h;
@@ -340,6 +341,12 @@ static char s_rx_buf[512];
 static int  s_rx_len = 0;
 static in_report_t s_in_shadow[MAX_CH];
 static volatile bool s_in_dirty[MAX_CH];
+static in_report_t s_input_edge_queue[INPUT_EDGE_QUEUE_SIZE];
+static uint8_t s_input_edge_head;
+static uint8_t s_input_edge_tail;
+static uint8_t s_input_edge_count;
+static uint32_t s_last_input_digital[MAX_CH];
+static bool s_last_input_digital_valid[MAX_CH];
 static portMUX_TYPE s_in_mux = portMUX_INITIALIZER_UNLOCKED;
 typedef struct {
     uint32_t generation;
@@ -379,6 +386,118 @@ typedef struct {
 static input_latency_metrics_t s_input_latency_metrics;
 static uint32_t s_last_input_report_time[MAX_CH];
 static bool s_last_input_report_time_valid[MAX_CH];
+
+static bool input_digital_signature(
+    int channel, const uint8_t *data, uint8_t length, uint32_t *signature
+) {
+    if (
+        channel < 0 || channel >= MAX_CH || !data || !signature
+    ) return false;
+    if (s_ch[channel].prefer_legacy) {
+        if (length < 5) return false;
+        uint32_t value =
+            (uint32_t)data[2] |
+            ((uint32_t)data[3] << 8) |
+            ((uint32_t)data[4] << 16);
+        if (length > 12 && data[12] >= 32u) value |= 1u << 24;
+        if (length > 13 && data[13] >= 32u) value |= 1u << 25;
+        *signature = value;
+        return true;
+    }
+    if (length < 8) return false;
+    *signature =
+        (uint32_t)data[4] |
+        ((uint32_t)data[5] << 8) |
+        ((uint32_t)data[6] << 16) |
+        ((uint32_t)data[7] << 24);
+    return true;
+}
+
+static void queue_input_state(
+    int channel, uint16_t handle, const uint8_t *data, uint8_t length
+) {
+    if (
+        channel < 0 || channel >= MAX_CH || !data ||
+        length > REPORT_SIZE
+    ) return;
+    in_report_t report = {
+        .ch = (uint8_t)channel,
+        .len = length,
+        .handle = handle,
+        .generation = s_ch[channel].generation,
+    };
+    memcpy(report.data, data, length);
+    uint32_t signature = 0;
+    bool signature_valid = input_digital_signature(
+        channel, data, length, &signature
+    );
+    portENTER_CRITICAL(&s_in_mux);
+    bool digital_edge = signature_valid && (
+        !s_last_input_digital_valid[channel] ||
+        signature != s_last_input_digital[channel]
+    );
+    if (signature_valid) {
+        s_last_input_digital[channel] = signature;
+        s_last_input_digital_valid[channel] = true;
+    }
+    if (digital_edge) {
+        if (s_input_edge_count < INPUT_EDGE_QUEUE_SIZE) {
+            s_input_edge_queue[s_input_edge_tail] = report;
+            s_input_edge_tail = (uint8_t)(
+                (s_input_edge_tail + 1u) % INPUT_EDGE_QUEUE_SIZE
+            );
+            s_input_edge_count++;
+        } else {
+            s_input_latency_metrics.notify_queue_drops++;
+        }
+    }
+    if (s_in_dirty[channel])
+        s_input_latency_metrics.shadow_overwrites++;
+    s_in_shadow[channel] = report;
+    s_in_dirty[channel] = true;
+    portEXIT_CRITICAL(&s_in_mux);
+    if (s_cdc_task_h) xTaskNotifyGive(s_cdc_task_h);
+}
+
+static bool take_input_edge(in_report_t *report) {
+    if (!report) return false;
+    bool available = false;
+    portENTER_CRITICAL(&s_in_mux);
+    if (s_input_edge_count) {
+        *report = s_input_edge_queue[s_input_edge_head];
+        s_input_edge_head = (uint8_t)(
+            (s_input_edge_head + 1u) % INPUT_EDGE_QUEUE_SIZE
+        );
+        s_input_edge_count--;
+        if (
+            report->ch < MAX_CH && s_in_dirty[report->ch] &&
+            s_in_shadow[report->ch].generation == report->generation &&
+            s_in_shadow[report->ch].len == report->len &&
+            memcmp(
+                s_in_shadow[report->ch].data,
+                report->data, report->len
+            ) == 0
+        ) s_in_dirty[report->ch] = false;
+        available = true;
+    }
+    portEXIT_CRITICAL(&s_in_mux);
+    return available;
+}
+
+static bool take_latest_input_if_no_edges(
+    int channel, in_report_t *report
+) {
+    if (channel < 0 || channel >= MAX_CH || !report) return false;
+    bool available = false;
+    portENTER_CRITICAL(&s_in_mux);
+    if (s_input_edge_count == 0 && s_in_dirty[channel]) {
+        *report = s_in_shadow[channel];
+        s_in_dirty[channel] = false;
+        available = true;
+    }
+    portEXIT_CRITICAL(&s_in_mux);
+    return available;
+}
 
 static void note_ble_input_report(
     int channel, const uint8_t *data, uint8_t length
@@ -932,6 +1051,8 @@ static void clear_channel_state(int ch) {
     portENTER_CRITICAL(&s_in_mux);
     s_in_dirty[ch] = false;
     memset(&s_in_shadow[ch], 0, sizeof(s_in_shadow[ch]));
+    s_last_input_digital[ch] = 0;
+    s_last_input_digital_valid[ch] = false;
     s_last_input_report_time[ch] = 0;
     s_last_input_report_time_valid[ch] = false;
     portEXIT_CRITICAL(&s_in_mux);
@@ -2473,18 +2594,66 @@ static void cdc_task(void *arg) {
         int64_t cdc_deadline_us =
             esp_timer_get_time() + CDC_TX_PHASE_BUDGET_US;
         cdc_tx_pump_until(cdc_deadline_us);
-        // Input shadows are P0: forward the newest controller state before
-        // diagnostics or command traffic.  BLE callbacks wake this task
-        // immediately, removing the old command-queue polling delay (<=2 ms).
+        /*
+         * Input is P0. Digital transitions leave the callback through a
+         * compact edge FIFO; continuous stick/IMU state stays latest-only.
+         * Drain edges first, with USB pending-slot backpressure in standalone
+         * mode, then forward a newest-state shadow only after the edge FIFO is
+         * empty. This preserves button order without replaying stale motion.
+         */
+        int input_edge_processed = 0;
+        while (
+            input_edge_processed < CDC_QUEUE_BUDGET_PER_LOOP &&
+            (
+                s_standalone_mode ||
+                cdc_tx_can_submit(cdc_deadline_us)
+            ) &&
+            (
+                !s_standalone_mode ||
+                standalone_xinput_can_accept_input()
+            )
+        ) {
+            in_report_t edge;
+            if (!take_input_edge(&edge)) break;
+            input_edge_processed++;
+            if (
+                edge.ch >= MAX_CH || !s_ch[edge.ch].used ||
+                edge.generation != s_ch[edge.ch].generation
+            ) continue;
+            if (s_standalone_mode) {
+                note_standalone_battery_report(
+                    edge.ch, edge.data, edge.len
+                );
+                standalone_xinput_accept_switch_report(
+                    edge.ch, edge.data, edge.len
+                );
+                standalone_xinput_pump();
+            } else {
+                if (edge.handle) {
+                    send_notify_handle_frame(
+                        edge.ch, edge.handle, edge.data, edge.len
+                    );
+                } else {
+                    send_report_frame(
+                        edge.ch, edge.data, edge.len, false
+                    );
+                }
+                cdc_tx_pump_until(cdc_deadline_us);
+            }
+        }
+        // BLE callbacks wake this task immediately instead of waiting for the
+        // 2 ms maintenance timeout.
         for (int i = 0; i < MAX_CH; i++) {
             if (
                 !s_standalone_mode &&
                 !cdc_tx_can_submit(cdc_deadline_us)
             ) break;
-            in_report_t r; bool dirty = false;
-            portENTER_CRITICAL(&s_in_mux);
-            if (s_in_dirty[i]) { r = s_in_shadow[i]; s_in_dirty[i] = false; dirty = true; }
-            portEXIT_CRITICAL(&s_in_mux);
+            if (
+                s_standalone_mode &&
+                !standalone_xinput_can_accept_input()
+            ) break;
+            in_report_t r;
+            bool dirty = take_latest_input_if_no_edges(i, &r);
             if (
                 dirty && r.ch < MAX_CH && s_ch[r.ch].used &&
                 r.generation == s_ch[r.ch].generation
@@ -2496,6 +2665,7 @@ static void cdc_task(void *arg) {
                     standalone_xinput_accept_switch_report(
                         r.ch, r.data, r.len
                     );
+                    standalone_xinput_pump();
                 } else {
                     if (r.handle) send_notify_handle_frame(r.ch, r.handle, r.data, r.len);
                     else send_report_frame(r.ch, r.data, r.len, false);
@@ -2549,17 +2719,7 @@ static void cdc_task(void *arg) {
                 ntf.ch >= MAX_CH || !s_ch[ntf.ch].used ||
                 ntf.generation != s_ch[ntf.ch].generation
             ) continue;
-            if (
-                s_standalone_mode &&
-                ntf.handle == s_ch[ntf.ch].input_handle
-            ) {
-                note_standalone_battery_report(
-                    ntf.ch, ntf.data, ntf.len
-                );
-                standalone_xinput_accept_switch_report(
-                    ntf.ch, ntf.data, ntf.len
-                );
-            } else if (!s_standalone_mode) {
+            if (!s_standalone_mode) {
                 send_notify_handle_frame(ntf.ch, ntf.handle, ntf.data, ntf.len);
                 cdc_tx_pump_until(cdc_deadline_us);
             }
@@ -2993,33 +3153,28 @@ static void gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
         if (ch_uses_notify_all(ch)) {
             bool is_input =
                 param->notify.handle == s_ch[ch].input_handle;
-            if (is_input)
+            if (is_input) {
                 note_ble_input_report(ch, param->notify.value, len);
-            in_report_t n;
-            n.ch = ch; n.len = len; n.handle = param->notify.handle;
-            n.generation = s_ch[ch].generation;
-            memcpy(n.data, param->notify.value, len);
-            if (s_notify_queue) {
-                if (xQueueSend(s_notify_queue, &n, 0) == pdTRUE) {
+                queue_input_state(
+                    ch, param->notify.handle,
+                    param->notify.value, len
+                );
+            } else {
+                in_report_t n;
+                n.ch = ch; n.len = len;
+                n.handle = param->notify.handle;
+                n.generation = s_ch[ch].generation;
+                memcpy(n.data, param->notify.value, len);
+                if (
+                    s_notify_queue &&
+                    xQueueSend(s_notify_queue, &n, 0) == pdTRUE
+                ) {
                     if (s_cdc_task_h) xTaskNotifyGive(s_cdc_task_h);
-                } else if (is_input) {
-                    portENTER_CRITICAL(&s_in_mux);
-                    s_input_latency_metrics.notify_queue_drops++;
-                    portEXIT_CRITICAL(&s_in_mux);
                 }
             }
         } else if (param->notify.handle == s_ch[ch].input_handle) {
             note_ble_input_report(ch, param->notify.value, len);
-            portENTER_CRITICAL(&s_in_mux);
-            if (s_in_dirty[ch])
-                s_input_latency_metrics.shadow_overwrites++;
-            s_in_shadow[ch].ch = ch; s_in_shadow[ch].len = len;
-            s_in_shadow[ch].handle = 0;
-            s_in_shadow[ch].generation = s_ch[ch].generation;
-            memcpy(s_in_shadow[ch].data, param->notify.value, len);
-            s_in_dirty[ch] = true;
-            portEXIT_CRITICAL(&s_in_mux);
-            if (s_cdc_task_h) xTaskNotifyGive(s_cdc_task_h);
+            queue_input_state(ch, 0, param->notify.value, len);
         } else if (param->notify.handle == s_ch[ch].ack_handle && s_ack_queue) {
             in_report_t a;
             a.ch = ch;

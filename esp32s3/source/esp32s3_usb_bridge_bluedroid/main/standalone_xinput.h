@@ -45,6 +45,7 @@ void standalone_xinput_reset_latency_metrics(void);
 void standalone_xinput_accept_switch_report(
     int channel, const uint8_t *payload, size_t length
 );
+bool standalone_xinput_can_accept_input(void);
 void standalone_xinput_forget_channel(int channel);
 void standalone_xinput_pump(void);
 bool standalone_xinput_idle_disconnect_due(void);
