@@ -39,7 +39,7 @@ The automated suite covers:
 - multi-controller calibration selection.
 
 The v0.7.9 release baseline contains 561 automated tests. v0.7.10 contains
-572 automated tests; one optional full ESP-IDF rebuild test is skipped unless
+583 automated tests; one optional full ESP-IDF rebuild test is skipped unless
 `S2P_RUN_IDF_BUILD=1` is set.
 
 Desktop-output tests use a fake Windows backend. They do not connect to a
