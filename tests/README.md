@@ -16,6 +16,12 @@ The automated suite covers:
 - mapping-layer HOLD/TOGGLE priority and precompiled runtimes;
 - keyboard modifiers, mouse-button source counting, mouse movement, and wheel integration;
 - input-dispatch edge preservation and callback serialization;
+- bounded asynchronous runtime logging, listener shutdown, support-log export,
+  and high-frequency producer backpressure;
+- Legacy / Shadow / V2 validation mode isolation and bounded comparison
+  telemetry;
+- magnetometer calibration direction octants, robust field reference, and
+  outlier-safe metadata;
 - Windows taskbar and notification-area minimize/restore behavior;
 - global single-instance activation for Settings and Gamepad Tester;
 - source compilation and module-boundary checks;
@@ -32,8 +38,9 @@ The automated suite covers:
   fast-path contracts;
 - multi-controller calibration selection.
 
-The v0.7.9 release baseline contains 561 automated tests. One optional full
-ESP-IDF rebuild test is skipped unless `S2P_RUN_IDF_BUILD=1` is set.
+The v0.7.9 release baseline contains 561 automated tests. v0.7.10 contains
+572 automated tests; one optional full ESP-IDF rebuild test is skipped unless
+`S2P_RUN_IDF_BUILD=1` is set.
 
 Desktop-output tests use a fake Windows backend. They do not connect to a
 controller, create a ViGEm target, or send real keyboard or mouse input.

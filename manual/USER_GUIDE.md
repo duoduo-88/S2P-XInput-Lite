@@ -1,11 +1,11 @@
-# S2P-XInput-Lite v0.7.9 User Guide
+# S2P-XInput-Lite v0.7.10 User Guide
 
 [繁體中文](USER_GUIDE_zh-TW.md)
 
 This guide covers installation, connections, profiles, stick tuning, mapping,
 gyro controls, rumble, HidHide, ESP32-S3 bridge and standalone operation, and
 the Gamepad Test, report-rate, diagnostics, and About pages in
-S2P-XInput-Lite v0.7.9.
+S2P-XInput-Lite v0.7.10.
 
 The screenshots use the English interface. Select **中 / En** in the lower-left corner of the main window to switch languages without changing the layout.
 
@@ -68,7 +68,7 @@ Connect the controller directly to the PC with USB-C. This normally provides low
 
 The controller connects to the ESP32-S3 over BLE. The bridge then sends controller data to the PC over USB.
 
-v0.7.9 provides three standalone outputs that do not require the Windows
+v0.7.10 provides three standalone outputs that do not require the Windows
 application to remain open:
 
 - **PC XInput Standalone Mode** — The ESP32 provides XInput-compatible output directly to Windows.
@@ -451,6 +451,39 @@ If the current controls contain unsaved changes, the application requires them
 to be saved first instead of silently writing the previously saved values.
 **System Default** is read-only; use **Save New** after modifying it.
 
+#### Example: enabling PC XInput standalone mode on Windows
+
+1. Connect the ESP32 by USB to the Windows PC that will run the game, and make
+   sure the bottom status area reports that the ESP32 is available.
+2. Select the profile to store on the ESP32, choose **Save/Apply**, then select
+   **ESP32 ▼**.
+3. Choose **Write and enable PC XInput standalone**, review the compatibility
+   notice, and confirm.
+4. Wait for the successful-write message. The ESP32 briefly disappears and
+   re-enumerates on USB; this is expected. Do not use **Restart Connection**
+   while that is happening.
+5. Once USB reappears, the settings window can be closed without stopping
+   standalone mode. Windows should identify an XInput-compatible controller;
+   press a controller button to connect using the saved ESP32 profile.
+
+Choose **Write and enable mobile USB HID** for Android hosts with USB OTG, or
+**Write and enable auto-detect standalone (experimental)** when the host should
+choose HID or XInput. For the most reliable Windows result, prefer fixed PC
+XInput mode.
+
+> [!WARNING]
+> - After the change, the ESP32 is no longer the desktop bridge COM device, so
+>   the desktop connector does not process input while standalone mode runs.
+> - Do not unplug the ESP32, close the application, or interrupt USB power
+>   during writing or re-enumeration. A/B slots retain the previous verified
+>   profile, but the new change will not finish after an interruption.
+> - Standalone mode stores the current profile and compatible calibration.
+>   Windows keyboard/mouse output, Audio/Mix haptics, process switching, and
+>   gyro-to-mouse are neither stored nor run.
+> - On some Windows hosts Auto mode remains in its HID probe identity. If a
+>   reconnect does not help, hold **HOME+X** for 3 seconds and release to use
+>   fixed PC XInput mode.
+
 > [!NOTE]
 > Profile storage uses A/B slots. The active profile remains in one slot while
 > the new profile is written to the other. The ESP32 switches slots only after
@@ -470,6 +503,21 @@ to be saved first instead of silently writing the previously saved values.
 
 **Restart Connection** only restarts the desktop connection. It does not
 overwrite the profile stored on the ESP32.
+
+#### Notes for returning to bridge mode
+
+- Perform this operation on a Windows PC. A mobile USB HID host cannot provide
+  the desktop serial channel needed to restore bridge mode.
+- After selecting **Return to ESP32 bridge mode**, wait for USB to re-enumerate
+  and for the desktop connector to start searching automatically. Do not press
+  **Restart Connection** repeatedly straight away.
+- Returning to bridge mode does not erase the last standalone profile stored on
+  the ESP32. A later standalone write always uses the currently selected
+  desktop profile.
+- The controller's HOME+X / HOME+A / HOME+Y recovery chords switch among
+  standalone modes only; they cannot restore bridge mode. If the menu is not
+  immediately available, reconnect the ESP32, open S2P-XInput-Lite, then use
+  **Return to ESP32 bridge mode**.
 
 ### 8.7 Standalone support
 
@@ -738,4 +786,4 @@ Gate → Lvl → six bands → LF/HF Balance → Tail/Decay.
 Keep one verified stable profile and use **Save New** for experimental settings.
 
 > [!NOTE]
-> This guide applies to S2P-XInput-Lite v0.7.9. For later releases, follow the in-app question-mark help and the latest release notes.
+> This guide applies to S2P-XInput-Lite v0.7.10. For later releases, follow the in-app question-mark help and the latest release notes.
