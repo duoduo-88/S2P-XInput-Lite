@@ -1,4 +1,5 @@
 import sys
+import math
 import unittest
 from pathlib import Path
 
@@ -53,6 +54,58 @@ class ShadowValidationTests(unittest.TestCase):
         )
         self.assertEqual(validator.evaluate(3), 3)
         self.assertEqual(calls, [])
+
+    def test_incomparable_then_finite_error_keeps_snapshot_finite(self):
+        validator = ShadowValidator(
+            lambda value: value,
+            lambda value: "different" if value == "legacy" else value + 2,
+            mode="shadow",
+        )
+        self.assertEqual(validator.evaluate("legacy"), "legacy")
+        self.assertEqual(validator.evaluate(3), 3)
+        snapshot = validator.snapshot()
+        self.assertEqual(snapshot["comparison_count"], 2)
+        self.assertEqual(snapshot["comparison_mismatch_count"], 1)
+        self.assertEqual(snapshot["finite_error_count"], 1)
+        self.assertEqual(snapshot["mean_error"], 2.0)
+        self.assertTrue(math.isfinite(snapshot["mean_error"]))
+
+    def test_finite_incomparable_finite_and_tuple_length_mismatch(self):
+        legacy_responses = iter((1.0, (1,), 1.0))
+        candidate_responses = iter((2.0, (1, 2), 5.0))
+        validator = ShadowValidator(
+            lambda _value: next(legacy_responses),
+            lambda _value: next(candidate_responses),
+            mode="shadow",
+        )
+        validator.evaluate(None)
+        validator.evaluate(None)
+        validator.evaluate(None)
+        snapshot = validator.snapshot()
+        self.assertEqual(snapshot["finite_error_count"], 2)
+        self.assertEqual(snapshot["comparison_mismatch_count"], 1)
+        self.assertEqual(snapshot["mean_error"], 2.5)
+        self.assertTrue(all(
+            not isinstance(value, float) or math.isfinite(value)
+            for value in snapshot.values()
+        ))
+
+    def test_shadow_candidate_with_private_state_cannot_touch_legacy_state(self):
+        production_state = {"calls": 0}
+        candidate_state = {"calls": 0}
+
+        def legacy(value):
+            production_state["calls"] += 1
+            return value
+
+        def candidate(value):
+            candidate_state["calls"] += 1
+            return value
+
+        validator = ShadowValidator(legacy, candidate, mode="shadow")
+        self.assertEqual(validator.evaluate(7), 7)
+        self.assertEqual(production_state, {"calls": 1})
+        self.assertEqual(candidate_state, {"calls": 1})
 
 
 if __name__ == "__main__":

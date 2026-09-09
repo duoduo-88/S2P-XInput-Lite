@@ -35,7 +35,7 @@ from config_utils import (
 from runtime_commands import ControllerCommandInbox
 from runtime_status import ControllerStatusPublisher
 from test_telemetry import SharedTestTelemetry
-from console_i18n import current_language
+from console_i18n import current_language, set_language_from_config
 from console_i18n import localized_print as print
 from console_i18n import localized_input as input
 from hidhide_manager import reconcile_active_hidhide
@@ -162,6 +162,7 @@ def main():
     publish_status()
 
     config = load_config(CONFIG_PATH)
+    set_language_from_config(config)
 
     print("========================================")
     print(f"         {APP_TITLE}")
@@ -603,6 +604,7 @@ def main():
                 raise
 
             config = new_config
+            set_language_from_config(new_config)
             idle_tracker.configure(
                 load_idle_disconnect_minutes(new_config)
             )

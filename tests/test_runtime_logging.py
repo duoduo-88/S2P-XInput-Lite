@@ -12,7 +12,11 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from runtime_logging import AsyncLogRuntime
+from runtime_logging import (
+    AsyncLogRuntime,
+    install_async_stdio,
+    shutdown_async_stdio,
+)
 from support_log import STARTUP_LOG_PATH_ENV, format_support_log
 
 
@@ -30,6 +34,18 @@ class _SlowStream(io.StringIO):
 class _FailingStream(io.StringIO):
     def write(self, _text):
         raise OSError("injected write failure")
+
+
+class _BlockingStream(io.StringIO):
+    def __init__(self):
+        super().__init__()
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def write(self, text):
+        self.entered.set()
+        self.release.wait()
+        return super().write(text)
 
 
 class RuntimeLoggingTests(unittest.TestCase):
@@ -79,6 +95,45 @@ class RuntimeLoggingTests(unittest.TestCase):
             )
             self.assertIn("STARTUP=READY", exported)
             self.assertIn("S2P_XINPUT_LITE_DIAGNOSTIC_LOG", exported)
+
+    def test_interactive_prompt_is_prioritized_and_bounded(self):
+        stream = _SlowStream()
+        runtime = AsyncLogRuntime(stdout=stream, stderr=stream, queue_size=4).start()
+        try:
+            for _ in range(20):
+                runtime.stdout.write("ordinary log\n")
+            started = time.perf_counter()
+            self.assertTrue(runtime.write_interactive_prompt("Press Enter: ", timeout=0.5))
+            self.assertLess(time.perf_counter() - started, 0.5)
+            self.assertIn("Press Enter: ", stream.getvalue())
+        finally:
+            runtime.stop(timeout=1.0)
+
+    def test_stuck_listener_shutdown_is_bounded_and_reports_timeout(self):
+        stream = _BlockingStream()
+        runtime = AsyncLogRuntime(stdout=stream, stderr=stream).start()
+        runtime.stdout.write("blocked output\n")
+        self.assertTrue(stream.entered.wait(0.5))
+        started = time.perf_counter()
+        self.assertFalse(runtime.stop(timeout=0.05))
+        self.assertLess(time.perf_counter() - started, 0.2)
+        self.assertTrue(runtime.metrics()["shutdown_timed_out"])
+        self.assertFalse(runtime.metrics()["enabled"])
+        stream.release.set()
+        runtime._listener.join(0.5)
+
+    def test_install_shutdown_install_does_not_reuse_old_listener(self):
+        original_stdout, original_stderr = sys.stdout, sys.stderr
+        first = second = None
+        try:
+            first = install_async_stdio(stdout=io.StringIO(), stderr=io.StringIO())
+            self.assertTrue(shutdown_async_stdio(timeout=1.0))
+            self.assertIs(sys.stdout, original_stdout)
+            second = install_async_stdio(stdout=io.StringIO(), stderr=io.StringIO())
+            self.assertIsNot(first, second)
+        finally:
+            shutdown_async_stdio(timeout=1.0)
+            sys.stdout, sys.stderr = original_stdout, original_stderr
 
 
 if __name__ == "__main__":

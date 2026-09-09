@@ -86,7 +86,7 @@ from idle_disconnect import (
 )
 from localization import translate_text
 from tooltip_layout import wrap_tooltip_text
-from console_i18n import localized_print as print
+from console_i18n import localized_print as print, set_current_language
 from mapping_layers import (
     LAYER_DIR,
     import_layers_file,
@@ -2061,6 +2061,7 @@ class ConfigGUI:
         )
         global _GUI_LANGUAGE
         _GUI_LANGUAGE = self.language
+        set_current_language(self.language)
 
         self.initialize_profiles()
         pulse_startup_overlay(self.root)
@@ -7190,6 +7191,7 @@ class ConfigGUI:
         self.language = "en" if self.language == "zh" else "zh"
         global _GUI_LANGUAGE
         _GUI_LANGUAGE = self.language
+        set_current_language(self.language)
 
         if not self.config.has_section("gui"):
             self.config.add_section("gui")
@@ -11526,6 +11528,10 @@ def show_startup_window(root):
         pass
     if language not in ("zh", "en"):
         language = "zh"
+    # The overlay runs before ConfigGUI has loaded its own config. Keep the
+    # console cache aligned so any early GUI diagnostics use the same language
+    # without making a second filesystem read.
+    set_current_language(language)
 
     return StartupOverlay(
         root,

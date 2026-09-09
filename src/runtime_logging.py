@@ -9,6 +9,7 @@ with non-blocking producers and performs writes on one dedicated listener.
 from __future__ import annotations
 
 import atexit
+import itertools
 import queue
 import sys
 import threading
@@ -17,6 +18,9 @@ import time
 
 DEFAULT_QUEUE_SIZE = 2048
 _STOP = object()
+_STOP_PRIORITY = -1
+_PROMPT_PRIORITY = 0
+_NORMAL_PRIORITY = 1
 
 
 class AsyncTextStream:
@@ -59,7 +63,9 @@ class AsyncLogRuntime:
     def __init__(self, stdout=None, stderr=None, queue_size=DEFAULT_QUEUE_SIZE):
         self._stdout = stdout if stdout is not None else sys.stdout
         self._stderr = stderr if stderr is not None else sys.stderr
-        self._queue = queue.Queue(maxsize=max(1, int(queue_size)))
+        self._queue_size = max(2, int(queue_size))
+        self._queue = queue.PriorityQueue(maxsize=self._queue_size)
+        self._sequence = itertools.count()
         self._running = threading.Event()
         self._stopped = threading.Event()
         self._listener = None
@@ -68,6 +74,9 @@ class AsyncLogRuntime:
         self._dropped_count = 0
         self._write_failures = 0
         self._shutdown_flushed = False
+        self._shutdown_timed_out = False
+        self._interactive_prompt_count = 0
+        self._interactive_prompt_timeouts = 0
         self.stdout = AsyncTextStream(self, "stdout")
         self.stderr = AsyncTextStream(self, "stderr")
 
@@ -91,8 +100,18 @@ class AsyncLogRuntime:
         if not self._running.is_set():
             self._write_direct(stream_name, text)
             return
+        # Keep one bounded slot for a non-realtime interactive prompt. A log
+        # flood may lose diagnostics, but it must not hide "Press Enter".
+        if self._queue.qsize() >= self._queue_size - 1:
+            with self._metrics_lock:
+                self._dropped_count += 1
+            return
         try:
-            self._queue.put_nowait((stream_name, text))
+            self._queue.put_nowait((
+                _NORMAL_PRIORITY,
+                next(self._sequence),
+                (stream_name, text, None),
+            ))
         except queue.Full:
             with self._metrics_lock:
                 self._dropped_count += 1
@@ -112,12 +131,14 @@ class AsyncLogRuntime:
     def _listen(self):
         try:
             while True:
-                item = self._queue.get()
+                _priority, _sequence, item = self._queue.get()
                 try:
                     if item is _STOP:
                         return
-                    stream_name, text = item
+                    stream_name, text, completed = item
                     self._write_direct(stream_name, text)
+                    if completed is not None:
+                        completed.set()
                 finally:
                     self._queue.task_done()
         finally:
@@ -133,34 +154,84 @@ class AsyncLogRuntime:
                 "dropped_count": self._dropped_count,
                 "write_failures": self._write_failures,
                 "shutdown_flushed": self._shutdown_flushed,
+                "shutdown_timed_out": self._shutdown_timed_out,
+                "interactive_prompt_count": self._interactive_prompt_count,
+                "interactive_prompt_timeouts": self._interactive_prompt_timeouts,
             }
+
+    def flush_non_realtime(self, timeout=1.0):
+        """Boundedly wait for queued output from a safe caller context."""
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        while self._queue.unfinished_tasks and time.monotonic() < deadline:
+            time.sleep(0.005)
+        return not self._queue.unfinished_tasks
+
+    def write_interactive_prompt(self, text, timeout=1.0):
+        """Prioritize one prompt without ever changing realtime flush rules."""
+        if not text:
+            return True
+        if not self._running.is_set():
+            self._write_direct("stdout", text)
+            return True
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        # Give already queued startup/error output a chance to reach the user.
+        self.flush_non_realtime(timeout=max(0.0, (deadline - time.monotonic()) * 0.5))
+        completed = threading.Event()
+        try:
+            self._queue.put_nowait((
+                _PROMPT_PRIORITY,
+                next(self._sequence),
+                ("stdout", str(text), completed),
+            ))
+        except queue.Full:
+            # The reserved prompt slot can only be occupied by another prompt,
+            # which cannot normally happen while input is serial. Do not block
+            # a shutdown or startup failure if an external caller violates it.
+            with self._metrics_lock:
+                self._interactive_prompt_timeouts += 1
+            return False
+        with self._metrics_lock:
+            self._interactive_prompt_count += 1
+        delivered = completed.wait(max(0.0, deadline - time.monotonic()))
+        if not delivered:
+            with self._metrics_lock:
+                self._interactive_prompt_timeouts += 1
+        return delivered
 
     def stop(self, timeout=2.0):
         """Drain pending output from a safe shutdown thread without deadlock."""
         if not self._running.is_set():
             return True
         deadline = time.monotonic() + max(0.0, float(timeout))
-        while self._queue.unfinished_tasks and time.monotonic() < deadline:
-            time.sleep(0.005)
-        flushed = not self._queue.unfinished_tasks
+        flushed = self.flush_non_realtime(
+            timeout=max(0.0, deadline - time.monotonic())
+        )
+        sentinel_enqueued = False
         try:
-            self._queue.put_nowait(_STOP)
+            self._queue.put_nowait((
+                _STOP_PRIORITY, next(self._sequence), _STOP,
+            ))
+            sentinel_enqueued = True
         except queue.Full:
             # A full queue is still being consumed; short bounded retry keeps
             # shutdown ownership outside all realtime callbacks.
             while time.monotonic() < deadline:
                 try:
-                    self._queue.put_nowait(_STOP)
+                    self._queue.put_nowait((
+                        _STOP_PRIORITY, next(self._sequence), _STOP,
+                    ))
+                    sentinel_enqueued = True
                     break
                 except queue.Full:
                     time.sleep(0.005)
-            else:
-                return False
         listener = self._listener
         if listener is not None:
             listener.join(max(0.0, deadline - time.monotonic()))
         self._running.clear()
-        self._shutdown_flushed = flushed and self._stopped.is_set()
+        self._shutdown_flushed = (
+            flushed and sentinel_enqueued and self._stopped.is_set()
+        )
+        self._shutdown_timed_out = not self._shutdown_flushed
         return self._shutdown_flushed
 
 
@@ -172,7 +243,12 @@ def install_async_stdio(stdout=None, stderr=None, queue_size=DEFAULT_QUEUE_SIZE)
     global _runtime
     if _runtime is not None and _runtime._running.is_set():
         return _runtime
+    previous_stdout, previous_stderr = sys.stdout, sys.stderr
     runtime = AsyncLogRuntime(stdout=stdout, stderr=stderr, queue_size=queue_size)
+    # ``stdout``/``stderr`` are delivery targets (for example the startup-log
+    # file), not necessarily the streams that were replaced process-wide.
+    runtime._restore_stdout = previous_stdout
+    runtime._restore_stderr = previous_stderr
     runtime.start()
     sys.stdout = runtime.stdout
     sys.stderr = runtime.stderr
@@ -191,6 +267,9 @@ def get_async_log_metrics():
             "dropped_count": 0,
             "write_failures": 0,
             "shutdown_flushed": False,
+            "shutdown_timed_out": False,
+            "interactive_prompt_count": 0,
+            "interactive_prompt_timeouts": 0,
         }
     return _runtime.metrics()
 
@@ -201,7 +280,24 @@ def shutdown_async_stdio(timeout=2.0):
     if runtime is None:
         return True
     result = runtime.stop(timeout)
-    sys.stdout = runtime._stdout
-    sys.stderr = runtime._stderr
+    sys.stdout = getattr(runtime, "_restore_stdout", runtime._stdout)
+    sys.stderr = getattr(runtime, "_restore_stderr", runtime._stderr)
     _runtime = None
     return result
+
+
+def flush_async_stdio(timeout=1.0):
+    """Boundedly drain runtime output from an explicitly non-realtime path."""
+    return True if _runtime is None else _runtime.flush_non_realtime(timeout)
+
+
+def write_interactive_prompt(text, timeout=1.0):
+    """Deliver a prompt without allowing it to be dropped behind normal logs."""
+    if _runtime is None:
+        try:
+            sys.stdout.write(str(text))
+            sys.stdout.flush()
+            return True
+        except Exception:
+            return False
+    return _runtime.write_interactive_prompt(text, timeout)

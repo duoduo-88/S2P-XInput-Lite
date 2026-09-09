@@ -24,16 +24,24 @@ def normalize_mode(mode):
 def _error_magnitude(left, right):
     if isinstance(left, (tuple, list)) and isinstance(right, (tuple, list)):
         if len(left) != len(right):
-            return math.inf
-        return max((_error_magnitude(a, b) for a, b in zip(left, right)), default=0.0)
+            return None
+        errors = tuple(_error_magnitude(a, b) for a, b in zip(left, right))
+        return None if any(error is None for error in errors) else max(errors, default=0.0)
     try:
-        return abs(float(left) - float(right))
+        error = abs(float(left) - float(right))
     except (TypeError, ValueError):
-        return 0.0 if left == right else math.inf
+        return 0.0 if left == right else None
+    return error if math.isfinite(error) else None
 
 
 class ShadowValidator:
-    """Keep production output independent from a bounded candidate observer."""
+    """Keep production output independent from a bounded candidate observer.
+
+    A Shadow candidate must be pure or keep all mutable state private and
+    isolated from the production legacy evaluator. This class deliberately
+    does not deepcopy arguments: doing so would add allocations and latency to
+    a future realtime path, and cannot safely protect every external object.
+    """
 
     def __init__(self, legacy, candidate=None, mode=ValidationMode.LEGACY, threshold=0.0):
         if not callable(legacy):
@@ -46,6 +54,8 @@ class ShadowValidator:
 
     def reset(self):
         self.count = 0
+        self.finite_error_count = 0
+        self.comparison_mismatch_count = 0
         self.mean_error = 0.0
         self.max_error = 0.0
         self.threshold_exceeded_count = 0
@@ -67,15 +77,25 @@ class ShadowValidator:
             return legacy_output
         error = _error_magnitude(legacy_output, candidate_output)
         self.count += 1
-        self.mean_error += (error - self.mean_error) / self.count
-        self.max_error = max(self.max_error, error)
-        if error > self.threshold:
-            self.threshold_exceeded_count += 1
+        if error is None:
+            self.comparison_mismatch_count += 1
+        else:
+            self.finite_error_count += 1
+            self.mean_error += (
+                error - self.mean_error
+            ) / self.finite_error_count
+            self.max_error = max(self.max_error, error)
+            if error > self.threshold:
+                self.threshold_exceeded_count += 1
         return candidate_output if self.mode is ValidationMode.V2 else legacy_output
 
     def snapshot(self):
         return {
             "mode": self.mode.value,
+            "comparison_count": self.count,
+            "finite_error_count": self.finite_error_count,
+            "comparison_mismatch_count": self.comparison_mismatch_count,
+            # Keep count as a compatibility alias for early consumers.
             "count": self.count,
             "mean_error": self.mean_error,
             "max_error": self.max_error,

@@ -65,6 +65,9 @@ def initial_controller_status(updated_at):
             "dropped_count": 0,
             "write_failures": 0,
             "shutdown_flushed": False,
+            "shutdown_timed_out": False,
+            "interactive_prompt_count": 0,
+            "interactive_prompt_timeouts": 0,
         },
         "updated_at": updated_at,
     }

@@ -14,13 +14,14 @@ from config_utils import (
     load_config,
     store_stick_calibration,
 )
-from console_i18n import current_language
+from console_i18n import current_language, set_language_from_config
 from console_i18n import localized_print as print
 from console_i18n import localized_input as input
 
 
 CONFIG_FILE = CONFIG_PATH
 config = load_config(CONFIG_FILE)
+set_language_from_config(config)
 def tr(zh, en):
     return en if current_language() == "en" else zh
 
