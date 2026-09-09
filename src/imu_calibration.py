@@ -133,6 +133,24 @@ def fit_magnetometer_ellipsoid(samples):
         np.min(covariance_eigenvalues) / np.max(covariance_eigenvalues)
     )
 
+    # These values explain whether a user really explored the field in 3D.
+    # They intentionally use the final inlier set: rejected magnetic spikes
+    # must not improve the reported coverage.  Raw centered magnitudes keep
+    # their sensor unit explicit instead of implying normalized field units.
+    centered = filtered - center
+    octant_mask = 0
+    for vector in centered:
+        if not np.all(np.isfinite(vector)) or np.linalg.norm(vector) <= 1e-9:
+            continue
+        octant_index = (
+            (1 if vector[0] >= 0.0 else 0)
+            | (2 if vector[1] >= 0.0 else 0)
+            | (4 if vector[2] >= 0.0 else 0)
+        )
+        octant_mask |= 1 << octant_index
+    octant_count = int(octant_mask.bit_count())
+    reference_magnitude_lsb = float(np.median(np.linalg.norm(centered, axis=1)))
+
     if condition > 25.0:
         raise ValueError("excessive_soft_iron_distortion")
     if coverage < 0.08:
@@ -149,6 +167,9 @@ def fit_magnetometer_ellipsoid(samples):
         "p95_residual": p95,
         "condition": condition,
         "coverage": coverage,
+        "octant_count": octant_count,
+        "octant_mask": octant_mask,
+        "reference_magnitude_lsb": reference_magnitude_lsb,
     }
     return (
         tuple(float(item) for item in center),

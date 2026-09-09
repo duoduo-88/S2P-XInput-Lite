@@ -5122,6 +5122,16 @@ class ConfigGUI:
                                 "磁力三維覆蓋："
                                 f"{float(mag_quality['coverage']) * 100.0:.1f}%"
                             )
+                        if "octant_count" in mag_quality:
+                            quality_lines.append(
+                                "磁力方向："
+                                f"{int(mag_quality['octant_count'])} / 8"
+                            )
+                        if "reference_magnitude_lsb" in mag_quality:
+                            quality_lines.append(
+                                "磁場參考強度："
+                                f"{float(mag_quality['reference_magnitude_lsb']):.1f} LSB"
+                            )
                         quality_summary = (
                             "\n\n品質結果：\n" + "\n".join(quality_lines)
                             if quality_lines else ""

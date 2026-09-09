@@ -48,6 +48,11 @@ from runtime_cleanup import (
     close_xinput_after_dispatcher,
     controller_application_ready,
 )
+from runtime_logging import (
+    get_async_log_metrics,
+    install_async_stdio,
+    shutdown_async_stdio,
+)
 
 HIDHIDE_APPLICATION_PATHS = (
     Path(sys.executable),
@@ -147,6 +152,7 @@ def _finish_orientation_coverage():
     _COVERAGE_BLOCK_LINES = 0
 
 def main():
+    install_async_stdio()
     process_started_at = time.time()
     command_inbox = ControllerCommandInbox()
     command_inbox.reset(process_started_at)
@@ -959,6 +965,7 @@ def main():
                 publish_status(
                     rumble=rumble_status,
                     firmware_diagnostics=firmware_diagnostics,
+                    async_logging=get_async_log_metrics(),
                 )
                 if not controller_is_connected():
                     last_battery_led_mask = None
@@ -1410,7 +1417,10 @@ def main():
         print(tr("\n正在關閉程式...", "\nClosing program..."))
 
     finally:
-        cleanup()
+        try:
+            cleanup()
+        finally:
+            shutdown_async_stdio()
 
 
 if __name__ == "__main__":

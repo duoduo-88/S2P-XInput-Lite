@@ -128,8 +128,12 @@ def attach_gui_startup_capture(gui_path, environment=None):
         if environment is os.environ:
             os.environ[STARTUP_LOG_PATH_ENV] = str(current)
 
-    sys.stdout = stream
-    sys.stderr = stream
+    # GUI import can start background helpers long before Tk is ready.  Their
+    # diagnostics still belong in the startup log, but no worker may block on
+    # file I/O to get there.
+    from runtime_logging import install_async_stdio
+
+    install_async_stdio(stdout=stream, stderr=stream)
     try:
         faulthandler.enable(file=stream, all_threads=True)
     except (OSError, RuntimeError):

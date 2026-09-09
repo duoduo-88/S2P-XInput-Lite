@@ -57,6 +57,15 @@ def initial_controller_status(updated_at):
         "settings_reload_updated_at": 0.0,
         "rumble": {},
         "firmware_diagnostics": {},
+        "async_logging": {
+            "enabled": False,
+            "listener_alive": False,
+            "queued_count": 0,
+            "pending_count": 0,
+            "dropped_count": 0,
+            "write_failures": 0,
+            "shutdown_flushed": False,
+        },
         "updated_at": updated_at,
     }
 
