@@ -47,6 +47,108 @@ def _route_band_levels(band_levels, lf_hf_balance=0.0):
     )
 
 
+def _follow_feature_envelope(current, target, block_seconds, time_constant):
+    """One-pole follower used only by the audio feature detector."""
+    duration = max(1e-6, float(time_constant), float(block_seconds))
+    coefficient = 1.0 - math.exp(-float(block_seconds) / duration)
+    return current + (target - current) * coefficient
+
+
+def _dynamic_audio_targets(
+    band_levels,
+    previous_band_levels,
+    lf_hf_balance,
+    fast_envelope,
+    slow_envelope,
+    block_seconds,
+    analysis_seconds,
+):
+    """Add transient-aware contrast without changing the six-band controls.
+
+    The normal routed level remains the sustained body. Positive six-band
+    spectral flux and a fast-vs-slow energy envelope identify new attacks and
+    use only the remaining 0..1 headroom for a short pre-emphasis. Once the
+    sound becomes steady, the result naturally converges back to the original
+    six-band routing.
+    """
+    current = tuple(
+        max(0.0, min(1.0, float(level))) for level in band_levels
+    )
+    if len(previous_band_levels) != len(current):
+        previous = (0.0,) * len(current)
+    else:
+        previous = tuple(
+            max(0.0, min(1.0, float(level)))
+            for level in previous_band_levels
+        )
+
+    positive_delta = tuple(
+        max(0.0, level - old)
+        for level, old in zip(current, previous)
+    )
+    overall_level = max(current, default=0.0)
+
+    # The fast follower tracks roughly one audio hop.  The slow follower spans
+    # several rolling FFT windows, so it represents the sustained body without
+    # adding another user-facing timing control.
+    fast_envelope = _follow_feature_envelope(
+        fast_envelope,
+        overall_level,
+        block_seconds,
+        block_seconds,
+    )
+    slow_envelope = _follow_feature_envelope(
+        slow_envelope,
+        overall_level,
+        block_seconds,
+        max(block_seconds, analysis_seconds * 4.0),
+    )
+
+    if overall_level <= 1e-9 or not current:
+        transient_score = 0.0
+    else:
+        flux_rms = math.sqrt(
+            sum(delta * delta for delta in positive_delta) / len(current)
+        )
+        spectral_flux = min(1.0, flux_rms / overall_level)
+        envelope_contrast = min(
+            1.0,
+            max(0.0, fast_envelope - slow_envelope)
+            / max(1e-6, fast_envelope),
+        )
+        # Soft union: either a new spectral component or a sudden broadband
+        # rise may identify an onset, while two agreeing cues reinforce it.
+        transient_score = 1.0 - (
+            (1.0 - spectral_flux) * (1.0 - envelope_contrast)
+        )
+
+    base_lf, base_hf = _route_band_levels(current, lf_hf_balance)
+    transient_lf, transient_hf = _route_band_levels(
+        positive_delta, lf_hf_balance
+    )
+
+    # Preserve the existing output as the floor and spend only unused headroom
+    # on short attacks.  This avoids lowering steady music or requiring a new
+    # GUI strength parameter.
+    lf_target = min(
+        1.0,
+        base_lf
+        + (1.0 - base_lf) * transient_lf * transient_score,
+    )
+    hf_target = min(
+        1.0,
+        base_hf
+        + (1.0 - base_hf) * transient_hf * transient_score,
+    )
+    return (
+        lf_target,
+        hf_target,
+        fast_envelope,
+        slow_envelope,
+        transient_score,
+    )
+
+
 def _spectral_band_rms(samples, sample_rate):
     """Return low-latency, window-corrected RMS for the six bands."""
     mono = np.asarray(samples, dtype=np.float32)
@@ -310,6 +412,9 @@ class AudioHaptics:
         stop_event = self._stop_event if stop_event is None else stop_event
         lf_envelope = 0.0
         hf_envelope = 0.0
+        fast_feature_envelope = 0.0
+        slow_feature_envelope = 0.0
+        previous_band_levels = (0.0,) * len(AUDIO_BANDS_HZ)
         if analysis_frames is None:
             analysis_frames = max(hop_frames, sample_rate // 50)
         analysis_frames = max(hop_frames, int(analysis_frames))
@@ -346,6 +451,9 @@ class AudioHaptics:
                 rolling_audio.fill(0.0)
                 lf_envelope = 0.0
                 hf_envelope = 0.0
+                fast_feature_envelope = 0.0
+                slow_feature_envelope = 0.0
+                previous_band_levels = (0.0,) * len(AUDIO_BANDS_HZ)
                 continue
             mono = np.mean(samples, axis=1)
             if frame_count >= analysis_frames:
@@ -358,10 +466,23 @@ class AudioHaptics:
                 self._level_from_rms(rms, gain)
                 for rms, gain in zip(band_rms, self.band_gains)
             )
-            lf_target, hf_target = _route_band_levels(
-                band_levels, self.lf_hf_balance
-            )
             block_seconds = frame_count / sample_rate
+            (
+                lf_target,
+                hf_target,
+                fast_feature_envelope,
+                slow_feature_envelope,
+                _transient_score,
+            ) = _dynamic_audio_targets(
+                band_levels,
+                previous_band_levels,
+                self.lf_hf_balance,
+                fast_feature_envelope,
+                slow_feature_envelope,
+                block_seconds,
+                analysis_frames / sample_rate,
+            )
+            previous_band_levels = band_levels
             lf_envelope = self._smooth_envelope(
                 lf_envelope, lf_target, block_seconds
             )
