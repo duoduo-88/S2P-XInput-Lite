@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from audio_haptics import (
     AUDIO_BANDS_HZ,
     AudioHaptics,
+    _dynamic_audio_targets,
     _route_band_levels,
     _spectral_band_rms,
 )
@@ -76,6 +77,81 @@ class AudioHapticsBandTests(unittest.TestCase):
 
         self.assertEqual(len(audio.band_gains), 6)
         self.assertEqual(audio.lf_hf_balance, 0.0)
+
+
+    def test_dynamic_targets_emphasize_new_bass_attack(self):
+        bands = (0.60, 0.10, 0.0, 0.0, 0.0, 0.0)
+        base_lf, base_hf = _route_band_levels(bands)
+
+        lf, hf, _fast, _slow, transient = _dynamic_audio_targets(
+            bands,
+            (0.0,) * 6,
+            0.0,
+            0.0,
+            0.0,
+            0.005,
+            0.020,
+        )
+
+        self.assertGreater(transient, 0.5)
+        self.assertGreater(lf, base_lf)
+        self.assertGreaterEqual(hf, base_hf)
+        self.assertGreater(lf - base_lf, hf - base_hf)
+
+    def test_dynamic_targets_emphasize_new_high_frequency_attack(self):
+        bands = (0.0, 0.0, 0.0, 0.10, 0.40, 0.60)
+        base_lf, base_hf = _route_band_levels(bands)
+
+        lf, hf, _fast, _slow, transient = _dynamic_audio_targets(
+            bands,
+            (0.0,) * 6,
+            0.0,
+            0.0,
+            0.0,
+            0.005,
+            0.020,
+        )
+
+        self.assertGreater(transient, 0.5)
+        self.assertGreaterEqual(lf, base_lf)
+        self.assertGreater(hf, base_hf)
+        self.assertGreater(hf - base_hf, lf - base_lf)
+
+    def test_dynamic_targets_converge_back_to_sustained_body(self):
+        bands = (0.60, 0.10, 0.0, 0.0, 0.0, 0.0)
+        base_lf, base_hf = _route_band_levels(bands)
+        previous = (0.0,) * 6
+        fast = slow = 0.0
+
+        for _ in range(100):
+            lf, hf, fast, slow, transient = _dynamic_audio_targets(
+                bands,
+                previous,
+                0.0,
+                fast,
+                slow,
+                0.005,
+                0.020,
+            )
+            previous = bands
+
+        self.assertLess(transient, 0.01)
+        self.assertAlmostEqual(lf, base_lf, places=6)
+        self.assertAlmostEqual(hf, base_hf, places=6)
+
+    def test_dynamic_targets_keep_silence_at_zero(self):
+        result = _dynamic_audio_targets(
+            (0.0,) * 6,
+            (0.0,) * 6,
+            0.0,
+            0.0,
+            0.0,
+            0.005,
+            0.020,
+        )
+
+        self.assertEqual(result[0:2], (0.0, 0.0))
+        self.assertEqual(result[-1], 0.0)
 
     def test_close_wakes_capture_before_a_blocking_read(self):
         class EmptyStream:
