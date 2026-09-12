@@ -151,6 +151,27 @@ class SettingsImportTests(unittest.TestCase):
                 "General",
             )
 
+    def test_legacy_in_config_mapping_layers_use_existing_normalization(self):
+        temporary, source, destination = self.make_installations()
+        with temporary:
+            self.write_source_config(source)
+            source_config = configparser.ConfigParser()
+            source_config.read(source / "src" / "config.ini")
+            source_config.add_section("mapping_layers")
+            source_config.set(
+                "mapping_layers",
+                "layers",
+                '[{"id":"legacy-layer","name":"Legacy Layer",'
+                '"activation_buttons":["GL"],"mode":"HOLD",'
+                '"buttons":{},"stick_left":{},"stick_right":{}}]',
+            )
+            atomic_write_config(source_config, source / "src" / "config.ini")
+            result = self.apply(self.scan(source, destination), destination)
+            self.assertEqual(result.layers_imported, ("Legacy Layer",))
+            self.assertTrue(
+                (destination / "src" / "layers" / "Legacy Layer.json").is_file()
+            )
+
     def test_invalid_sources_do_not_change_destination(self):
         temporary, source, destination = self.make_installations()
         with temporary:

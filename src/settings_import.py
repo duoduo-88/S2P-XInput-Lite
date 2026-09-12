@@ -34,8 +34,11 @@ from config_utils import (
 )
 from mapping_layers import (
     LAYER_DIR,
+    LAYER_OPTION,
+    LAYER_SECTION,
     apply_layer_state,
     load_managed_layer_directory,
+    normalize_layers,
     save_layers,
     store_layer_state,
 )
@@ -177,6 +180,22 @@ def _read_source_profiles(directory: Path):
     return profiles, ignored_system_default
 
 
+def _read_source_layers(source_config, base_buttons, base_sticks, layer_dir):
+    """Read managed files or the previous in-config S2P layer format."""
+    layers, _managed_paths = load_managed_layer_directory(
+        base_buttons, base_sticks, SWITCH_BUTTONS, layer_dir
+    )
+    if layers or not source_config.has_option(LAYER_SECTION, LAYER_OPTION):
+        return layers
+    try:
+        raw_layers = json.loads(source_config.get(LAYER_SECTION, LAYER_OPTION))
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise SettingsImportError("舊版映射層資料無法驗證。") from exc
+    if not isinstance(raw_layers, list):
+        raise SettingsImportError("舊版映射層資料無法驗證。")
+    return normalize_layers(raw_layers, base_buttons, base_sticks, SWITCH_BUTTONS)
+
+
 def scan_settings_import(source_root, *, config_path=CONFIG_PATH, profile_dir=PROFILE_DIR,
                          layer_dir=LAYER_DIR):
     """Validate an installation and return a no-write migration preview."""
@@ -198,8 +217,8 @@ def scan_settings_import(source_root, *, config_path=CONFIG_PATH, profile_dir=PR
 
     base_buttons, base_sticks = _base_layer_defaults(current)
     try:
-        source_layers, _source_paths_ignored = load_managed_layer_directory(
-            base_buttons, base_sticks, SWITCH_BUTTONS, source_layers_dir
+        source_layers = _read_source_layers(
+            source_config, base_buttons, base_sticks, source_layers_dir
         )
         destination_layers, _destination_paths = load_managed_layer_directory(
             base_buttons, base_sticks, SWITCH_BUTTONS, layer_dir
