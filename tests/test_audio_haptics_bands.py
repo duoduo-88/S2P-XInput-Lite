@@ -15,7 +15,10 @@ sys.path.insert(0, str(ROOT / "src"))
 from audio_haptics import (
     AUDIO_BANDS_HZ,
     AudioHaptics,
+    _dsp_v2_targets,
     _dynamic_audio_targets,
+    _empty_feature_state,
+    _extract_audio_features,
     _route_band_levels,
     _spectral_band_rms,
 )
@@ -29,6 +32,46 @@ class AudioHapticsBandTests(unittest.TestCase):
             encoding="utf-8",
         ))
         return AudioHaptics(config, callback)
+
+    def _run_synthetic(self, waveform, sample_rate=48000, hop_frames=240):
+        """Run real waveforms through rolling FFT, feature, and target DSP."""
+        analysis_frames = sample_rate // 50
+        rolling = np.zeros(analysis_frames, dtype=np.float32)
+        previous = (0.0,) * len(AUDIO_BANDS_HZ)
+        state = _empty_feature_state()
+        records = []
+        waveform = np.asarray(waveform, dtype=np.float32)
+        for start in range(0, len(waveform), hop_frames):
+            mono = waveform[start:start + hop_frames]
+            if len(mono) != hop_frames:
+                mono = np.pad(mono, (0, hop_frames - len(mono)))
+            rolling[:-hop_frames] = rolling[hop_frames:]
+            rolling[-hop_frames:] = mono
+            band_rms = _spectral_band_rms(rolling, sample_rate)
+            # Mirrors System Default's gate, unity gains, and strength.
+            energies = tuple(
+                max(0.0, (rms - 0.04) / 0.96) for rms in band_rms
+            )
+            levels = tuple(min(1.0, energy * 4.0 * 0.32) for energy in energies)
+            lf, hf, state, features, tactile = _dsp_v2_targets(
+                levels,
+                previous,
+                0.0,
+                state,
+                hop_frames / sample_rate,
+                analysis_frames / sample_rate,
+                band_energies=energies,
+                hop_rms=float(np.sqrt(np.mean(mono * mono))),
+                peak_level=float(np.max(np.abs(mono))),
+            )
+            records.append((lf, hf, features, tactile, levels))
+            previous = levels
+        return records
+
+    @staticmethod
+    def _sine(frequency, seconds, amplitude=0.65, sample_rate=48000):
+        axis = np.arange(int(seconds * sample_rate), dtype=np.float32) / sample_rate
+        return amplitude * np.sin(2.0 * np.pi * frequency * axis)
 
     def test_six_bands_split_the_high_range_at_4000_hz(self):
         self.assertEqual(
@@ -77,6 +120,31 @@ class AudioHapticsBandTests(unittest.TestCase):
 
         self.assertEqual(len(audio.band_gains), 6)
         self.assertEqual(audio.lf_hf_balance, 0.0)
+
+    def test_band_gain_influences_ratios_without_linearly_dominating_them(self):
+        audio = self._default_audio()
+        raw_rms = (0.40,) * 6
+        unity = tuple(audio._usable_band_energy(rms, 1.0) for rms in raw_rms)
+        low_boost = tuple(
+            audio._usable_band_energy(rms, 2.0 if index < 2 else 1.0)
+            for index, rms in enumerate(raw_rms)
+        )
+        levels = tuple(min(1.0, energy * 4.0 * audio.strength) for energy in unity)
+        unity_features, _ = _extract_audio_features(
+            levels, (0.0,) * 6, _empty_feature_state(), 0.005, 0.020,
+            band_energies=unity,
+        )
+        boosted_features, _ = _extract_audio_features(
+            levels, (0.0,) * 6, _empty_feature_state(), 0.005, 0.020,
+            band_energies=low_boost,
+        )
+
+        self.assertAlmostEqual(
+            unity_features.low_ratio + unity_features.mid_ratio + unity_features.high_ratio,
+            1.0,
+        )
+        self.assertGreater(boosted_features.low_ratio, unity_features.low_ratio)
+        self.assertLess(boosted_features.low_ratio, 0.5)
 
 
     def test_dynamic_targets_emphasize_new_bass_attack(self):
@@ -152,6 +220,134 @@ class AudioHapticsBandTests(unittest.TestCase):
 
         self.assertEqual(result[0:2], (0.0, 0.0))
         self.assertEqual(result[-1], 0.0)
+
+    def test_sustained_bass_builds_weight_and_sustain_after_its_onset(self):
+        records = self._run_synthetic(self._sine(80.0, 0.45))
+        first = records[0]
+        stable = records[-1]
+
+        self.assertGreater(first[3].punch, stable[3].punch)
+        self.assertGreater(stable[3].weight, first[3].weight)
+        self.assertGreater(stable[3].sustain, first[3].sustain)
+        self.assertGreater(stable[0], stable[1])
+        self.assertLess(stable[3].sharpness, stable[3].weight)
+        self.assertLess(stable[3].punch, 0.08)
+
+    def test_bass_impact_has_more_punch_and_lf_attack_than_stable_bass(self):
+        stable_bass = self._run_synthetic(self._sine(80.0, 0.45))[-1]
+        burst = self._sine(80.0, 0.015)
+        impact_records = self._run_synthetic(burst)
+        impact = max(impact_records, key=lambda record: record[3].punch)
+        impact_base_lf, _ = _route_band_levels(impact[4])
+
+        self.assertGreater(impact[3].punch, stable_bass[3].punch)
+        self.assertGreater(impact[0], impact_base_lf)
+        self.assertGreater(impact[0] - impact_base_lf, impact[1])
+
+    def test_equal_rms_high_crest_pulse_has_more_crest_and_punch(self):
+        sample_rate = 48000
+        duration = 0.12
+        sine = self._sine(500.0, duration, amplitude=0.25)
+        # A 1/16-duty pulse needs four times the sine RMS to match hop RMS.
+        # That makes its peak ~0.71 here: high crest, but below full scale.
+        pulse = np.zeros_like(sine)
+        hop = sample_rate // 200
+        for start in range(0, len(pulse), hop):
+            pulse[start:start + max(1, hop // 16)] = 4.0 * np.sqrt(np.mean(sine * sine))
+        sine_record = self._run_synthetic(sine)[-1]
+        pulse_record = self._run_synthetic(pulse)[0]
+
+        self.assertAlmostEqual(
+            sine_record[2].rms_level, pulse_record[2].rms_level, places=4
+        )
+        self.assertGreater(pulse_record[2].crest, sine_record[2].crest)
+        self.assertGreater(pulse_record[3].punch, sine_record[3].punch)
+
+    def test_high_click_routes_sharp_attack_to_hf(self):
+        click = self._sine(6000.0, 0.010)
+        record = max(
+            self._run_synthetic(click), key=lambda item: item[3].sharpness
+        )
+
+        self.assertGreater(record[2].high_ratio, record[2].low_ratio)
+        self.assertGreater(record[3].sharpness, record[3].weight)
+        self.assertGreater(record[1], record[0])
+
+    def test_sustained_high_tone_keeps_hf_body_without_continuous_sharpness(self):
+        records = self._run_synthetic(self._sine(6000.0, 0.45))
+        onset = records[0]
+        stable = records[-1]
+
+        self.assertGreater(onset[3].punch, stable[3].punch)
+        self.assertGreater(onset[3].sharpness, stable[3].sharpness)
+        self.assertGreater(stable[1], stable[0])
+        self.assertLess(stable[3].sharpness, 0.05)
+
+    def test_mid_body_has_mid_ratio_without_weight_or_sharpness(self):
+        stable = self._run_synthetic(self._sine(800.0, 0.45))[-1]
+
+        self.assertGreater(stable[2].mid_ratio, stable[2].low_ratio)
+        self.assertGreater(stable[2].mid_ratio, stable[2].high_ratio)
+        self.assertLess(stable[3].weight, 0.1)
+        self.assertLess(stable[3].sharpness, 0.05)
+
+    def test_broadband_impact_has_bounded_lf_and_hf_attack(self):
+        rng = np.random.default_rng(20260912)
+        noise = rng.normal(0.0, 0.55, 480).astype(np.float32)
+        record = max(self._run_synthetic(noise), key=lambda item: item[3].punch)
+
+        self.assertGreater(record[3].punch, 0.2)
+        self.assertGreater(record[0], 0.0)
+        self.assertGreater(record[1], 0.0)
+        self.assertLessEqual(record[0], 1.0)
+        self.assertLessEqual(record[1], 1.0)
+
+    def test_stable_loud_compressed_audio_is_sustain_not_impact(self):
+        # Multi-tone constant-amplitude signal: high RMS, low variation,
+        # moderate crest, and no recurring spectral onset after settling.
+        signal = (
+            self._sine(80.0, 0.50, 0.38)
+            + self._sine(800.0, 0.50, 0.22)
+            + self._sine(6000.0, 0.50, 0.16)
+        )
+        stable = self._run_synthetic(signal)[-1]
+
+        self.assertGreater(stable[2].overall_level, 0.05)
+        self.assertLess(stable[2].positive_flux, 0.08)
+        self.assertLess(stable[3].punch, 0.08)
+        self.assertGreater(stable[3].sustain, 0.5)
+
+    def test_stable_bass_does_not_hide_a_new_high_event(self):
+        silence = np.zeros(48000 // 100, dtype=np.float32)
+        bass = self._sine(80.0, 0.25)
+        high_burst = self._sine(6000.0, 0.015)
+        records = self._run_synthetic(np.concatenate((silence, bass, high_burst, bass)))
+        event = max(records, key=lambda item: item[3].sharpness)
+
+        self.assertGreater(event[3].sharpness, 0.1)
+        self.assertGreater(event[1], 0.04)
+
+    def test_stable_high_body_does_not_hide_a_new_low_event(self):
+        high = self._sine(6000.0, 0.25)
+        low_burst = self._sine(80.0, 0.015)
+        records = self._run_synthetic(np.concatenate((high, low_burst, high)))
+        before = records[49]
+        event = max(records[50:53], key=lambda item: item[2].positive_flux)
+
+        self.assertGreater(event[3].punch, 0.2)
+        self.assertGreater(event[0], before[0] + 0.3)
+        self.assertGreater(event[0], event[1])
+
+    def test_silence_resets_feature_state_before_the_next_attack(self):
+        burst = self._sine(80.0, 0.015)
+        silence = np.zeros(48000 // 2, dtype=np.float32)
+        records = self._run_synthetic(np.concatenate((burst, silence, burst)))
+        first = max(records[:3], key=lambda item: item[3].punch)
+        second = max(records[-3:], key=lambda item: item[3].punch)
+
+        self.assertGreater(first[3].punch, 0.1)
+        self.assertGreater(second[3].punch, first[3].punch * 0.7)
+        self.assertEqual(records[-4][2].sustain_evidence, 0.0)
 
     def test_close_wakes_capture_before_a_blocking_read(self):
         class EmptyStream:

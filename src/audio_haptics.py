@@ -2,6 +2,7 @@
 
 import math
 import threading
+from collections import namedtuple
 from functools import lru_cache
 
 import numpy as np
@@ -25,6 +26,42 @@ AUDIO_BANDS_HZ = (
 AUDIO_ROUTE_STRENGTH = (1.00, 0.88, 0.60, 0.65, 0.70, 0.75)
 AUDIO_BASE_HF_SHARE = (0.00, 0.05, 0.30, 0.65, 0.85, 1.00)
 AUDIO_BALANCE_INFLUENCE = (0.00, 0.12, 0.30, 0.30, 0.12, 0.00)
+
+
+# These compact records are deliberately kept scalar-only.  They make the
+# causal DSP stages inspectable in tests without adding a per-hop ndarray or a
+# framework around the existing capture loop.
+AudioFeatures = namedtuple(
+    "AudioFeatures",
+    (
+        "overall_level max_band_level low_energy mid_energy high_energy "
+        "low_ratio mid_ratio high_ratio positive_flux negative_flux "
+        "fast_envelope slow_envelope envelope_contrast peak_level rms_level "
+        "crest energy_stability sustain_evidence valid"
+    ),
+)
+TactileFeatures = namedtuple(
+    "TactileFeatures", "punch weight sharpness sustain texture"
+)
+FeatureState = namedtuple(
+    "FeatureState", "fast_envelope slow_envelope stability previous_overall"
+)
+
+
+def _empty_feature_state():
+    return FeatureState(0.0, 0.0, 0.0, 0.0)
+
+
+def _clamp01(value):
+    return min(1.0, max(0.0, float(value)))
+
+
+def _soft_union(*cues):
+    """Combine independent 0..1 cues without treating them as amplitudes."""
+    remaining = 1.0
+    for cue in cues:
+        remaining *= 1.0 - _clamp01(cue)
+    return 1.0 - remaining
 
 
 def _route_band_levels(band_levels, lf_hf_balance=0.0):
@@ -52,6 +89,213 @@ def _follow_feature_envelope(current, target, block_seconds, time_constant):
     duration = max(1e-6, float(time_constant), float(block_seconds))
     coefficient = 1.0 - math.exp(-float(block_seconds) / duration)
     return current + (target - current) * coefficient
+
+
+def _extract_audio_features(
+    band_levels,
+    previous_band_levels,
+    feature_state,
+    block_seconds,
+    analysis_seconds,
+    *,
+    band_energies=None,
+    hop_rms=None,
+    peak_level=None,
+):
+    """Layer A: derive causal, normalized audio structure from one hop.
+
+    ``band_levels`` remain the user-facing six-band levels used for routing.
+    ``band_energies`` are optional gate-and-gain-adjusted, pre-clamp energies
+    used only for spectral ratios.  Keeping those two inputs separate avoids
+    treating a saturated control level as an accurate energy measurement.
+    """
+    current = tuple(_clamp01(level) for level in band_levels)
+    previous = tuple(_clamp01(level) for level in previous_band_levels)
+    if len(previous) != len(current):
+        previous = (0.0,) * len(current)
+    if band_energies is None or len(band_energies) != len(current):
+        energies = current
+    else:
+        energies = tuple(max(0.0, float(value)) for value in band_energies)
+
+    overall = math.sqrt(
+        sum(level * level for level in current) / max(1, len(current))
+    )
+    max_band = max(current, default=0.0)
+    # A level below this floor is either gated production input or synthetic
+    # floating noise.  It must not acquire ratios or a huge normalized flux.
+    valid = overall >= 0.004 and max_band >= 0.006
+    if not valid:
+        zeros = (0.0,) * 3
+        return (
+            AudioFeatures(
+                0.0, 0.0, *zeros, *zeros, 0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, False,
+            ),
+            _empty_feature_state(),
+        )
+
+    low_energy = energies[0] + energies[1] if len(energies) >= 2 else 0.0
+    mid_energy = energies[2] + energies[3] if len(energies) >= 4 else 0.0
+    high_energy = energies[4] + energies[5] if len(energies) >= 6 else 0.0
+    energy_total = low_energy + mid_energy + high_energy
+    if energy_total <= 1e-9:
+        low_ratio = mid_ratio = high_ratio = 0.0
+    else:
+        low_ratio = low_energy / energy_total
+        mid_ratio = mid_energy / energy_total
+        high_ratio = high_energy / energy_total
+
+    positive_delta = tuple(
+        max(0.0, level - old) for level, old in zip(current, previous)
+    )
+    negative_delta = tuple(
+        max(0.0, old - level) for level, old in zip(current, previous)
+    )
+    # The 0.06 denominator floor prevents a tiny gated-near signal from
+    # becoming a full-scale onset purely through division.  A 0.60 band rise
+    # is still near full-scale, as verified by the synthetic attack tests.
+    flux_denominator = max(0.06, overall)
+    positive_flux = min(
+        1.0,
+        math.sqrt(sum(delta * delta for delta in positive_delta) / len(current))
+        / flux_denominator,
+    )
+    negative_flux = min(
+        1.0,
+        math.sqrt(sum(delta * delta for delta in negative_delta) / len(current))
+        / flux_denominator,
+    )
+
+    fast = _follow_feature_envelope(
+        feature_state.fast_envelope,
+        overall,
+        block_seconds,
+        max(0.005, block_seconds),
+    )
+    # Four 20 ms analysis windows gives an 80 ms sustained-body follower.
+    slow = _follow_feature_envelope(
+        feature_state.slow_envelope,
+        overall,
+        block_seconds,
+        max(0.060, min(0.120, analysis_seconds * 4.0)),
+    )
+    envelope_contrast = max(0.0, fast - slow) / max(1e-6, fast)
+
+    variation = abs(overall - feature_state.previous_overall) / max(
+        0.05, overall, feature_state.previous_overall
+    )
+    instant_stability = 1.0 - min(1.0, variation / 0.35)
+    stability = _follow_feature_envelope(
+        feature_state.stability,
+        instant_stability,
+        block_seconds,
+        0.020,
+    )
+
+    rms_level = overall if hop_rms is None else max(0.0, float(hop_rms))
+    peak = rms_level if peak_level is None else max(0.0, float(peak_level))
+    crest_linear = peak / max(1e-5, rms_level)
+    # A continuous sine is ~1.41 and maps near zero.  A pulse occupying at
+    # most 1/16 of a hop is >=4 and maps to one; both anchor cases are tested.
+    crest = _clamp01((crest_linear - 1.2) / (4.0 - 1.2))
+
+    onset = _soft_union(positive_flux, envelope_contrast)
+    slow_body = _clamp01(slow / 0.12)
+    sustain_evidence = slow_body * stability * (1.0 - onset)
+    state = FeatureState(fast, slow, stability, overall)
+    return (
+        AudioFeatures(
+            overall, max_band, low_energy, mid_energy, high_energy,
+            low_ratio, mid_ratio, high_ratio, positive_flux, negative_flux,
+            fast, slow, envelope_contrast, peak, rms_level, crest, stability,
+            sustain_evidence, True,
+        ),
+        state,
+    )
+
+
+def _derive_tactile_features(features):
+    """Layer B: turn audio structure into bounded tactile responsibilities."""
+    if not features.valid:
+        return TactileFeatures(0.0, 0.0, 0.0, 0.0, 0.0)
+
+    level_presence = _clamp01(features.overall_level / 0.08)
+    onset = _soft_union(features.positive_flux, features.envelope_contrast)
+    # Crest is evidence only when a real onset and meaningful level agree.
+    crest_onset = features.crest * level_presence * onset
+    punch = _soft_union(
+        features.positive_flux,
+        features.envelope_contrast,
+        crest_onset,
+    ) * level_presence
+
+    low_presence = _clamp01(features.low_energy / 0.12)
+    # Impacts get a little body evidence; sustained energy earns most weight.
+    body_factor = _soft_union(0.24 * punch, features.sustain_evidence)
+    weight = low_presence * features.low_ratio * body_factor
+
+    high_presence = _clamp01(features.high_energy / 0.12)
+    sharpness = high_presence * features.high_ratio * onset
+    # Texture is diagnostic only: rapid bidirectional high-band variation.
+    texture = _clamp01(
+        (features.positive_flux + features.negative_flux)
+        * features.high_ratio
+        * level_presence
+    )
+    return TactileFeatures(
+        punch, weight, sharpness, features.sustain_evidence, texture
+    )
+
+
+def _dsp_v2_targets(
+    band_levels,
+    previous_band_levels,
+    lf_hf_balance,
+    feature_state,
+    block_seconds,
+    analysis_seconds,
+    *,
+    band_energies=None,
+    hop_rms=None,
+    peak_level=None,
+):
+    """Layer C: preserve baseline routing and add bounded onset contrast."""
+    features, next_state = _extract_audio_features(
+        band_levels,
+        previous_band_levels,
+        feature_state,
+        block_seconds,
+        analysis_seconds,
+        band_energies=band_energies,
+        hop_rms=hop_rms,
+        peak_level=peak_level,
+    )
+    if not features.valid:
+        return 0.0, 0.0, next_state, features, _derive_tactile_features(features)
+
+    current = tuple(_clamp01(level) for level in band_levels)
+    previous = tuple(_clamp01(level) for level in previous_band_levels)
+    if len(previous) != len(current):
+        previous = (0.0,) * len(current)
+    positive_delta = tuple(
+        max(0.0, level - old) for level, old in zip(current, previous)
+    )
+    tactile = _derive_tactile_features(features)
+    base_lf, base_hf = _route_band_levels(current, lf_hf_balance)
+    impact_lf, impact_hf = _route_band_levels(positive_delta, lf_hf_balance)
+
+    # Weight only makes the already-routed LF body slightly more resilient;
+    # Punch/Sharpness govern transient contrast, so features do not add as
+    # independent output amplitudes.
+    lf_body = min(1.0, base_lf * (1.0 + 0.08 * tactile.weight * (1.0 - base_lf)))
+    lf_attack = impact_lf * tactile.punch * (0.65 + 0.35 * tactile.weight)
+    hf_attack = impact_hf * tactile.punch * (0.55 + 0.45 * tactile.sharpness)
+    # Strategy A: transient contrast consumes only unused headroom.  The
+    # sustained baseline never pumps downward during an attack.
+    lf_target = min(1.0, lf_body + (1.0 - lf_body) * lf_attack)
+    hf_target = min(1.0, base_hf + (1.0 - base_hf) * hf_attack)
+    return lf_target, hf_target, next_state, features, tactile
 
 
 def _dynamic_audio_targets(
@@ -412,8 +656,7 @@ class AudioHaptics:
         stop_event = self._stop_event if stop_event is None else stop_event
         lf_envelope = 0.0
         hf_envelope = 0.0
-        fast_feature_envelope = 0.0
-        slow_feature_envelope = 0.0
+        feature_state = _empty_feature_state()
         previous_band_levels = (0.0,) * len(AUDIO_BANDS_HZ)
         if analysis_frames is None:
             analysis_frames = max(hop_frames, sample_rate // 50)
@@ -451,8 +694,7 @@ class AudioHaptics:
                 rolling_audio.fill(0.0)
                 lf_envelope = 0.0
                 hf_envelope = 0.0
-                fast_feature_envelope = 0.0
-                slow_feature_envelope = 0.0
+                feature_state = _empty_feature_state()
                 previous_band_levels = (0.0,) * len(AUDIO_BANDS_HZ)
                 continue
             mono = np.mean(samples, axis=1)
@@ -462,25 +704,31 @@ class AudioHaptics:
                 rolling_audio[:-frame_count] = rolling_audio[frame_count:]
                 rolling_audio[-frame_count:] = mono
             band_rms = _spectral_band_rms(rolling_audio, sample_rate)
-            band_levels = tuple(
-                self._level_from_rms(rms, gain)
+            band_energies = tuple(
+                self._usable_band_energy(rms, gain)
                 for rms, gain in zip(band_rms, self.band_gains)
+            )
+            band_levels = tuple(
+                min(1.0, energy * 4.0 * self.strength)
+                for energy in band_energies
             )
             block_seconds = frame_count / sample_rate
             (
                 lf_target,
                 hf_target,
-                fast_feature_envelope,
-                slow_feature_envelope,
-                _transient_score,
-            ) = _dynamic_audio_targets(
+                feature_state,
+                _features,
+                _tactile,
+            ) = _dsp_v2_targets(
                 band_levels,
                 previous_band_levels,
                 self.lf_hf_balance,
-                fast_feature_envelope,
-                slow_feature_envelope,
+                feature_state,
                 block_seconds,
                 analysis_frames / sample_rate,
+                band_energies=band_energies,
+                hop_rms=math.sqrt(float(np.mean(mono * mono))),
+                peak_level=float(np.max(np.abs(mono))),
             )
             previous_band_levels = band_levels
             lf_envelope = self._smooth_envelope(
@@ -492,10 +740,21 @@ class AudioHaptics:
             self._level_callback(lf_envelope, hf_envelope)
 
     def _level_from_rms(self, rms, gain):
+        usable = self._usable_band_energy(rms, gain)
+        return min(1.0, usable * 4.0 * self.strength)
+
+    def _usable_band_energy(self, rms, gain):
+        """Gate-and-gain-adjusted energy before level saturation.
+
+        The square-root gain law intentionally lets per-band gain alter
+        tactile spectral emphasis without allowing a 2.0 gain to linearly
+        dominate all Low/Mid/High ratios.  Master strength stays out of this
+        value because it is an output preference, not source timbre.
+        """
         if rms <= self.noise_gate:
             return 0.0
         usable = (rms - self.noise_gate) / max(1e-6, 1.0 - self.noise_gate)
-        return min(1.0, usable * 4.0 * gain * self.strength)
+        return usable * math.sqrt(max(0.0, float(gain)))
 
     def _smooth_envelope(self, current, target, block_seconds):
         duration_ms = self.attack_ms if target > current else self.release_ms
