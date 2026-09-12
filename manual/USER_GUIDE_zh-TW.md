@@ -84,14 +84,14 @@ Windows 程式。
 
 ![主介面總覽](assets/annotated/01-main-buttons.png)
 
-1. **搖桿曲線**：拖曳控制點，調整輸入與輸出的對應。`Left` 與 `Right` 分別設定左右搖桿。
-2. **輸出與防抖**：`Shape` 調整輸出形狀；`Stab.` 抑制曲線放大區域的小幅抖動。
-3. **基本震動**：設定 LF/HF 強度、曲線、混合、頻率與最大振幅。
-4. **功能頁籤**：Buttons、Stick Map、Layers、Advanced Rumble、Gyro Map。
-5. **目前頁面內容**：圖中為實體按鍵對應 Xbox 按鍵。
-6. **狀態列**：顯示 ViGEm、WASAPI、HidHide 與控制器／ESP32 狀態。
-7. **方案工具**：切換、儲存、另存、匯入單一方案，或從另一個安裝資料夾匯入設定。
-8. **全域工具**：切換語言、還原、校正、刷入韌體、重啟連線與 Pin。
+1. **搖桿設定**：調整曲線控制點、輸出、防抖與基本震動選項。
+2. **功能頁籤**：切換 Buttons、Stick Map、Layers、Advanced Rumble 與 Gyro Map；圖中為 Xbox 按鍵對應。
+3. **狀態列**：查看 ViGEm、WASAPI、HidHide、控制器與 ESP32 狀態。
+4. **方案選擇器**：選取要編輯或套用的方案。
+5. **匯入設定**：從另一個 S2P-XInput-Lite 安裝資料夾遷移相容設定。
+
+底部其餘控制項可儲存或新增方案、匯入單一方案、切換語言、還原預設、校正、
+刷入韌體、重啟連線與 Pin。
 
 ### 2.1 狀態列
 
@@ -113,6 +113,9 @@ Windows 程式。
 ### 2.3 匯入設定
 
 ![Import Settings 衝突預覽](assets/annotated/15-import-settings-conflicts.png)
+
+圖中編號分別表示：**1** 來源安裝資料夾、**2** 找到的相容資料、**3** 明確略過的
+資料、**4** 方案或 Mapping Layer 衝突、**5** 套用到所有衝突的選擇。
 
 1. 點選 **匯入設定**。
 2. 選擇舊版或同版本 S2P-XInput-Lite 的**程式根目錄**，不要選 `src`。
@@ -492,6 +495,8 @@ Mapping Layers、陀螺儀轉搖桿及遊戲震動設定。它不會執行需要
 ### 8.5 寫入設定並啟用獨立模式
 
 ![ESP32 自動辨識獨立模式選單](assets/annotated/14-standalone-auto-detect.png)
+
+編號 **1** 標示 **寫入並啟用自動辨識獨立模式（實驗性）**。
 
 1. 選擇要寫入的方案。
 2. 完成參數調整後先按 **Save/Apply**。

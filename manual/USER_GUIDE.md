@@ -90,14 +90,14 @@ Pair the controller directly with Windows. This is convenient, but update rate a
 
 ![Main window overview](assets/annotated/01-main-buttons.png)
 
-1. **Stick curve** — Drag control points to change the input-to-output response. Left and Right configure the two sticks independently.
-2. **Output and stabilizer** — Shape changes the response shape; Stab. suppresses small movements in amplified curve regions.
-3. **Basic rumble** — LF/HF strength, curves, cross-mixing, frequencies, and maximum amplitude.
-4. **Feature tabs** — Buttons, Stick Map, Layers, Advanced Rumble, and Gyro Map.
-5. **Current tab** — The screenshot shows physical controller buttons mapped to Xbox outputs.
-6. **Status row** — ViGEm, WASAPI, HidHide, controller, and ESP32 status.
-7. **Profile tools** — Switch, save, create, import one profile, or import settings from another installation.
-8. **Global tools** — Language, defaults, calibration, firmware flashing, restart, and Pin.
+1. **Stick settings** — Drag curve control points and adjust output, stabilizer, and basic rumble options.
+2. **Feature tabs** — Switch between Buttons, Stick Map, Layers, Advanced Rumble, and Gyro Map. The screenshot shows Xbox button mapping.
+3. **Status row** — Check ViGEm, WASAPI, HidHide, controller, and ESP32 status.
+4. **Profile selector** — Choose the profile to edit or apply.
+5. **Import Settings** — Migrate compatible settings from another S2P-XInput-Lite installation.
+
+The remaining footer controls save or create profiles, import one profile, change
+language, restore defaults, calibrate, flash firmware, restart, and Pin.
 
 ### 2.1 Status indicators
 
@@ -119,6 +119,10 @@ Pair the controller directly with Windows. This is convenient, but update rate a
 ### 2.3 Import Settings
 
 ![Import Settings conflict preview](assets/annotated/15-import-settings-conflicts.png)
+
+The numbered preview identifies: **1** source installation, **2** compatible data
+found, **3** items deliberately ignored, **4** profile or Mapping Layer conflicts,
+and **5** the choice applied to all conflicts.
 
 1. Select **Import Settings**.
 2. Choose the previous or same-version S2P-XInput-Lite **application root**; do not choose its `src` folder.
@@ -451,6 +455,8 @@ on the ESP32. Features that require Windows are not executed.
 ### 8.5 Writing a profile and enabling standalone mode
 
 ![ESP32 Auto-detect standalone menu](assets/annotated/14-standalone-auto-detect.png)
+
+Callout **1** marks **Write and enable Auto-detect standalone (Experimental)**.
 
 1. Select the profile to write.
 2. Finish editing and select **Save/Apply**.
