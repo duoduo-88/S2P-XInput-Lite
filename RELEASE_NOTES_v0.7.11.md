@@ -5,6 +5,11 @@
 ### Import Settings
 
 - The main-window **Manage Profiles** action is now **Import Settings**.
+
+![Import Settings button in the v0.7.11 main window](manual/assets/annotated/16-import-settings-button.png)
+
+- This new main-window action starts the installation-to-installation settings
+  migration flow introduced in v0.7.11.
 - Select an older or same-version S2P-XInput-Lite installation root to migrate
   application settings, persistent controller calibration/identity data, user
   Profiles, and managed Mapping Layers.
@@ -28,6 +33,10 @@
 ### 匯入設定
 
 - 主視窗的 **管理方案** 已改為 **匯入設定**。
+
+![v0.7.11 主視窗中的匯入設定按鈕](manual/assets/annotated/16-import-settings-button.png)
+
+- 此主視窗新入口用來啟動 v0.7.11 新增的安裝資料夾之間設定遷移流程。
 - 選取舊版或同版本 S2P-XInput-Lite 程式根目錄，可遷移應用程式設定、手把
   持久化校正／識別資料、使用者方案與 managed Mapping Layer。
 - 目前版本的 schema 與預設值仍具權威性：新版缺少的 key 使用目前預設，
