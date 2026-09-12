@@ -633,6 +633,24 @@ def _read_layer_directory(layer_dir):
     return layers, managed_paths, scan_complete
 
 
+def load_managed_layer_directory(
+    base_buttons, base_sticks, valid_buttons, layer_dir=LAYER_DIR,
+):
+    """Read only validated, application-owned layer files without migrating.
+
+    Installation-to-installation import uses this pure scan so a preview never
+    writes to either installation.  Non-S2P JSON remains unmanaged and is
+    deliberately ignored, as it is during normal directory loading.
+    """
+    raw_layers, managed_paths, scan_complete = _read_layer_directory(layer_dir)
+    if not scan_complete:
+        raise ValueError("映射層資料夾包含無法驗證的 S2P JSON 檔案。")
+    return (
+        normalize_layers(raw_layers, base_buttons, base_sticks, valid_buttons),
+        managed_paths,
+    )
+
+
 def load_layers(
     config, base_buttons, base_sticks, valid_buttons, layer_dir=LAYER_DIR,
     config_path=None, return_metadata=False,

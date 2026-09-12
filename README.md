@@ -11,9 +11,9 @@
 
 S2P-XInput-Lite provides XInput-compatible controller output for a Switch 2 Pro Controller on Windows. It supports wired USB, an ESP32-S3 USB bridge, and native Windows BLE.
 
-Current version: **v0.7.10**
+Current version: **v0.7.11**
 
-[v0.7.10 release notes](RELEASE_NOTES_v0.7.10.md) ·
+[v0.7.11 release notes](RELEASE_NOTES_v0.7.11.md) ·
 [Source](https://github.com/duoduo-88/S2P-XInput-Lite/tree/main) ·
 [Latest published release](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 
@@ -50,6 +50,8 @@ Current version: **v0.7.10**
   runs, or replaces files automatically.
 - About page with project links, the software license, and third-party notices
 - Full game profiles for switching stick, gyro, rumble, audio-haptics, and mapping settings together, with automatic UI refresh
+- Import Settings migrates compatible user settings from an older or same-version S2P-XInput-Lite installation with a preview, conflict choice, and rollback protection
+- Transient-aware Audio Reactive Haptics retains six-band routing while using fast/slow feature envelopes to emphasize LF/HF transients; sustained audio returns to the base routing
 - Traditional Chinese and English interface
 - Live connection, battery, ESP32, ViGEmBus, WASAPI, and HidHide status
 - Battery percentage estimated from a full measured discharge curve, with a
@@ -85,6 +87,19 @@ If HidHide is missing, the application offers to open its official download page
 For first-time native BLE pairing, start the connection program and hold the controller's **SYNC** button. A previously paired controller can normally be woken with any button.
 
 Settings and per-controller stick calibration are stored in `src/config.ini`. Gyro zero-bias is initialized again after every controller connection and is not stored as permanent calibration. A missing file is created automatically from `src/profiles/System Default.ini`, and missing keys in an older file are added without overwriting existing values. Default and restore operations also use `System Default.ini` as their baseline. Keep this file in every release package; `config.ini` may be omitted from a clean distribution.
+
+### Import Settings
+
+Choose **Import Settings** in the main window and select the *application root*
+of an older or same-version S2P-XInput-Lite installation, not its `src` folder.
+The preview identifies compatible application preferences, persisted controller
+calibration/identity data, user profiles, and managed Mapping Layers. The
+current version supplies the schema and defaults, so missing newer keys keep
+their current defaults rather than disappearing. **System Default** is never
+imported or overwritten. Profile and Layer name/ID conflicts require an
+explicit overwrite-all or skip-all choice, and the whole import rolls back if
+any validated write fails. Runtime files, logs, firmware, executables, and
+other build artifacts are not copied.
 
 The first launch provides General, Audio, FPS-COMP, FPS-IMM, Racing, Action, and Rhythm profiles. Selecting a profile refreshes the GUI. When the connection program is running, it is stopped and reconnected automatically so the newly selected profile is loaded completely. Built-in profiles start from canonical button and stick-direction mappings. Custom profiles can be saved, renamed, or deleted. **System Default** is a protected read-only baseline and always appears at the bottom of the list. **Restore Defaults** resets the current controls without deleting saved profiles or calibration.
 

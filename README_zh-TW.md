@@ -11,9 +11,9 @@
 
 S2P-XInput-Lite 可在 Windows 為 Switch 2 Pro Controller 提供 XInput 相容控制器輸出，支援 USB 有線、ESP32-S3 USB 橋接器及 Windows 原生 BLE。
 
-目前版本：**v0.7.10**
+目前版本：**v0.7.11**
 
-[v0.7.10 發佈說明](RELEASE_NOTES_v0.7.10.md) ·
+[v0.7.11 發佈說明](RELEASE_NOTES_v0.7.11.md) ·
 [原始碼](https://github.com/duoduo-88/S2P-XInput-Lite/tree/main) ·
 [最新正式版本](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 
@@ -55,11 +55,22 @@ Release 頁面供手動下載；程式不會自動下載、執行或覆蓋任何
 - 內建 ESP32 診斷頁：支援定時測試、通過／警告／失敗判定及匯出文字報告
 - 關於頁：提供專案與贊助連結、軟體許可協議及第三方程式聲明
 - 完整遊戲設定檔，可一起切換搖桿、陀螺儀、震動、音訊觸覺與映射設定
+- 「匯入設定」可從舊版或同版本 S2P-XInput-Lite 安裝資料夾遷移相容的使用者資料，提供預覽、衝突選擇與 rollback 保護
+- transient-aware Audio Reactive Haptics 保留六頻段路由，以快／慢特徵包絡加強 LF/HF 瞬態；持續音訊會回到原有路由
 - 繁體中文與英文介面
 - 即時顯示連線、電量、ESP32、ViGEmBus、WASAPI 及 HidHide 狀態
 - 依完整實測放電曲線估算電量百分比，並在介面及控制器玩家燈共用四級電量顯示
 
 應用程式內各設定旁的 `?` 按鈕提供詳細說明。
+
+## 匯入設定
+
+在主視窗點選「**匯入設定**」，選擇舊版或同版本 S2P-XInput-Lite 的**程式根目錄**，
+不要選 `src`。預覽會辨識相容的應用程式設定、手把持久化校正／識別資料、使用者
+方案與 managed Mapping Layer。新版會提供 schema 與預設值，舊版沒有的新 key 會保留
+新版預設。`System Default` 永遠不會被匯入或覆蓋。方案與 Layer 名稱／ID 衝突必須明確
+選擇全部覆蓋或全部略過；任一已驗證寫入失敗時，整個匯入會 rollback。執行期檔案、
+log、firmware、exe 與其他建置產物不會搬移。
 
 ## 系統需求
 

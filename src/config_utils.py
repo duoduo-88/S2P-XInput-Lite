@@ -887,8 +887,13 @@ def apply_profile(config, profile):
     return config
 
 
-def load_config(path=CONFIG_PATH):
-    """Load configuration, creating it and filling new keys from the template."""
+def load_config(path=CONFIG_PATH, *, persist=True):
+    """Load configuration, creating it and filling new keys from the template.
+
+    ``persist=False`` is for transactional callers which need the same current
+    schema and normalization rules without changing a destination before their
+    complete operation has been validated.
+    """
     path = Path(path)
     defaults = configparser.ConfigParser()
     if not defaults.read(DEFAULT_CONFIG_PATH, encoding="utf-8"):
@@ -911,6 +916,6 @@ def load_config(path=CONFIG_PATH):
     # Repair known malformed or legacy values through the same schema used by
     # the GUI and runtime. Calibration and unknown extension keys are untouched.
     changed = normalize_config_in_place(config) or changed
-    if changed:
+    if changed and persist:
         atomic_write_config(config, path)
     return config

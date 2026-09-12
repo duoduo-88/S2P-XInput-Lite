@@ -95,6 +95,11 @@ from mapping_layers import (
     store_layer_state,
     validate_layer_name,
 )
+from settings_import import (
+    SettingsImportError,
+    apply_settings_import,
+    scan_settings_import,
+)
 from mapping_targets import (
     button_source_error,
     button_target_error,
@@ -6219,6 +6224,120 @@ class ConfigGUI:
             messagebox.showerror(
                 self.tr("無法開啟方案資料夾"),
                 self.tr("無法開啟存放方案的資料夾：") + f"\n{exc}",
+            )
+
+    def import_settings_folder(self):
+        """Migrate reviewed user settings from another S2P installation."""
+        if self.has_unsaved_changes():
+            choice = messagebox.askyesnocancel(
+                self.tr("尚未儲存設定"),
+                self.tr(
+                    "目前畫面有尚未儲存的變更。匯入會以選取安裝的設定"
+                    "重新載入畫面。\n\n是：先儲存目前變更\n否：放棄目前變更並匯入\n"
+                    "取消：返回設定畫面"
+                ),
+                parent=self.root,
+            )
+            if choice is None:
+                return
+            if choice and not self.save_current_profile(show_message=False):
+                return
+
+        selected = filedialog.askdirectory(
+            parent=self.root,
+            title=self.tr("選擇 S2P-XInput-Lite 程式根目錄"),
+        )
+        if not selected:
+            return
+        try:
+            plan = scan_settings_import(selected)
+            profile_count = len(plan.profiles)
+            layer_count = len(plan.layers)
+            preview = self.tr(
+                "來源：\n{source}\n\n找到：\n應用程式設定\n"
+                "手把校正：{calibrations}\n方案：{profiles}\n映射層：{layers}\n\n"
+                "略過：\n{system_default}"
+            ).format(
+                source=plan.source_root.name,
+                calibrations=plan.calibration_count,
+                profiles=profile_count,
+                layers=layer_count,
+                system_default=(
+                    self.tr("System Default（系統預設）")
+                    if plan.ignored_system_default else self.tr("無")
+                ),
+            )
+            profile_policy = layer_policy = "skip"
+            if plan.profile_conflicts or plan.layer_conflicts:
+                conflicts = []
+                if plan.profile_conflicts:
+                    conflicts.append(
+                        self.tr("同名方案：") + ", ".join(plan.profile_conflicts)
+                    )
+                if plan.layer_conflicts:
+                    conflicts.append(
+                        self.tr("同名或同 ID 映射層：") + ", ".join(plan.layer_conflicts)
+                    )
+                choice = messagebox.askyesnocancel(
+                    self.tr("匯入設定衝突"),
+                    preview + "\n\n" + "\n".join(conflicts) + "\n\n" + self.tr(
+                        "是：覆蓋所有衝突\n否：略過所有衝突\n取消：不匯入"
+                    ),
+                    parent=self.root,
+                )
+                if choice is None:
+                    return
+                if choice:
+                    profile_policy = layer_policy = "overwrite"
+            if not messagebox.askokcancel(
+                self.tr("匯入設定"),
+                preview + "\n\n" + self.tr("確認後會以交易方式匯入，失敗時會還原目前設定。"),
+                parent=self.root,
+            ):
+                return
+
+            result = apply_settings_import(
+                plan,
+                profile_conflict=profile_policy,
+                layer_conflict=layer_policy,
+            )
+            self.config = load_config(CONFIG_PATH)
+            self.active_profile = result.active_profile
+            self.refresh_profile_list(self.active_profile)
+            self.profile_name_var.set(self.active_profile)
+            self.reload_profile_variables()
+            self.refresh_saved_settings_baseline()
+            self._active_profile_content_baseline = self.profile_file_fingerprint(
+                self.active_profile
+            )
+            self._external_active_profile_changed = False
+            self.request_adaptive_window_update()
+            reload_request = self.request_live_settings_reload()
+            completed = self.tr(
+                "來源：{source}\n\n已匯入：\n應用程式設定\n手把校正：{calibrations}\n"
+                "方案：{profiles}\n映射層：{layers}\n\n略過：\nSystem Default：{system_default}"
+            ).format(
+                source=result.source_root.name,
+                calibrations=result.calibration_count,
+                profiles=len(result.profiles_imported),
+                layers=len(result.layers_imported),
+                system_default=(self.tr("是") if result.ignored_system_default else self.tr("否")),
+            )
+            if result.profiles_skipped or result.layers_skipped:
+                completed += "\n" + self.tr("衝突略過：") + ", ".join(
+                    (*result.profiles_skipped, *result.layers_skipped)
+                )
+            completed += "\n\n" + self.tr(
+                "已重新整理 GUI、方案與映射層。"
+                if reload_request else
+                "已重新整理 GUI、方案與映射層；設定將於下次連線時生效。"
+            )
+            messagebox.showinfo(self.tr("設定匯入完成"), completed, parent=self.root)
+        except (OSError, ValueError, configparser.Error, SettingsImportError) as exc:
+            messagebox.showerror(
+                self.tr("設定匯入失敗"),
+                self.tr("無法匯入選取安裝的設定：") + f"\n{self.tr(str(exc))}",
+                parent=self.root,
             )
 
     def _capture_layer_folder_snapshot(self):
