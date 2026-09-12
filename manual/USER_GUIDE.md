@@ -1,11 +1,11 @@
-# S2P-XInput-Lite v0.7.10 User Guide
+# S2P-XInput-Lite v0.7.11 User Guide
 
 [繁體中文](USER_GUIDE_zh-TW.md)
 
 This guide covers installation, connections, profiles, stick tuning, mapping,
 gyro controls, rumble, HidHide, ESP32-S3 bridge and standalone operation, and
 the Gamepad Test, report-rate, diagnostics, and About pages in
-S2P-XInput-Lite v0.7.10.
+S2P-XInput-Lite v0.7.11.
 
 The screenshots use the English interface. Select **中 / En** in the lower-left corner of the main window to switch languages without changing the layout.
 
@@ -68,7 +68,7 @@ Connect the controller directly to the PC with USB-C. This normally provides low
 
 The controller connects to the ESP32-S3 over BLE. The bridge then sends controller data to the PC over USB.
 
-v0.7.10 provides three standalone outputs that do not require the Windows
+v0.7.11 provides three standalone outputs that do not require the Windows
 application to remain open:
 
 - **PC XInput Standalone Mode** — The ESP32 provides XInput-compatible output directly to Windows.
@@ -96,7 +96,7 @@ Pair the controller directly with Windows. This is convenient, but update rate a
 4. **Feature tabs** — Buttons, Stick Map, Layers, Advanced Rumble, and Gyro Map.
 5. **Current tab** — The screenshot shows physical controller buttons mapped to Xbox outputs.
 6. **Status row** — ViGEm, WASAPI, HidHide, controller, and ESP32 status.
-7. **Profile tools** — Switch, save, create, import, or manage profiles.
+7. **Profile tools** — Switch, save, create, import one profile, or import settings from another installation.
 8. **Global tools** — Language, defaults, calibration, firmware flashing, restart, and Pin.
 
 ### 2.1 Status indicators
@@ -114,7 +114,23 @@ Pair the controller directly with Windows. This is convenient, but update rate a
 - **Save/Apply** — Save the current profile and apply it immediately.
 - **Save New** — Create a new profile from the values currently shown.
 - **Import Profile** — Import an external `.ini` profile.
-- **Profile Mgr.** — Rename or delete personal profiles.
+- **Import Settings** — Migrate settings from an older or same-version S2P-XInput-Lite installation.
+
+### 2.3 Import Settings
+
+![Import Settings conflict preview](assets/annotated/15-import-settings-conflicts.png)
+
+1. Select **Import Settings**.
+2. Choose the previous or same-version S2P-XInput-Lite **application root**; do not choose its `src` folder.
+3. Review the preview of application settings, persistent controller calibration, user profiles, and managed Mapping Layers.
+4. If names or Layer IDs conflict, explicitly choose **Overwrite all** or **Skip all**.
+5. Confirm the import. The GUI, profile list, and Layer list refresh when it completes.
+
+The current version supplies the schema and defaults, so this is not a downgrade
+or a raw folder copy. Missing newer keys keep current defaults. **System
+Default** is never overwritten; runtime caches, logs, firmware, executables,
+and build output are not imported. A failed validated write rolls back
+`config.ini`, user profiles, and managed Layers together.
 
 > [!WARNING]
 > **System Default** is read-only. Use **Save New** to create an editable profile from it.
@@ -433,6 +449,8 @@ shape, button mappings, Mapping Layers, gyro-to-stick, and game-rumble settings
 on the ESP32. Features that require Windows are not executed.
 
 ### 8.5 Writing a profile and enabling standalone mode
+
+![ESP32 Auto-detect standalone menu](assets/annotated/14-standalone-auto-detect.png)
 
 1. Select the profile to write.
 2. Finish editing and select **Save/Apply**.
@@ -786,4 +804,4 @@ Gate → Lvl → six bands → LF/HF Balance → Tail/Decay.
 Keep one verified stable profile and use **Save New** for experimental settings.
 
 > [!NOTE]
-> This guide applies to S2P-XInput-Lite v0.7.10. For later releases, follow the in-app question-mark help and the latest release notes.
+> This guide applies to S2P-XInput-Lite v0.7.11. For later releases, follow the in-app question-mark help and the latest release notes.

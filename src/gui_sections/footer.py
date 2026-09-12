@@ -145,8 +145,8 @@ def build_status_and_footer(gui, right_frame):
     ).grid(row=0, column=4, sticky="nsew", padx=3, ipady=5)
     ttk.Button(
         profile_row,
-        text="管理方案",
-        command=gui.open_profile_folder,
+        text="匯入設定",
+        command=gui.import_settings_folder,
     ).grid(row=0, column=5, sticky="nsew", padx=3, ipady=5)
     gui.gamepad_test_button = ttk.Button(
         profile_row,

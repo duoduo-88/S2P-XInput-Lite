@@ -882,7 +882,35 @@ EN_TEXT = {
         "Adjustable settings were restored to defaults.\n\nThe profile list and saved profiles were preserved.\nChoose Save/Apply to save the profile and apply it to the connection.\nHidHide can be configured again.",
     "另存新方案": "Save New",
     "匯入方案": "Import Profile",
-    "管理方案": "Profile Mgr.",
+    "匯入設定": "Import Settings",
+    "目前畫面有尚未儲存的變更。匯入會以選取安裝的設定重新載入畫面。\n\n是：先儲存目前變更\n否：放棄目前變更並匯入\n取消：返回設定畫面": (
+        "The current screen has unsaved changes. Importing reloads settings from "
+        "the selected installation.\n\nYes: save current changes first\n"
+        "No: discard current changes and import\nCancel: return to Settings"
+    ),
+    "來源：\n{source}\n\n找到：\n應用程式設定\n手把校正：{calibrations}\n方案：{profiles}\n映射層：{layers}\n\n略過：\n{system_default}": (
+        "Source:\n{source}\n\nFound:\nApplication settings\n"
+        "Controller calibration: {calibrations}\nProfiles: {profiles}\n"
+        "Mapping Layers: {layers}\n\nIgnored:\n{system_default}"
+    ),
+    "來源：{source}\n\n已匯入：\n應用程式設定\n手把校正：{calibrations}\n方案：{profiles}\n映射層：{layers}\n\n略過：\nSystem Default：{system_default}": (
+        "Source: {source}\n\nImported:\nApplication settings\n"
+        "Controller calibration: {calibrations}\nProfiles: {profiles}\n"
+        "Mapping Layers: {layers}\n\nIgnored:\nSystem Default: {system_default}"
+    ),
+    "選擇 S2P-XInput-Lite 程式根目錄": "Choose S2P-XInput-Lite Installation Root",
+    "設定匯入完成": "Settings Import Complete",
+    "設定匯入失敗": "Settings Import Failed",
+    "無法匯入選取安裝的設定：": "Could not import settings from the selected installation:",
+    "匯入設定衝突": "Import Settings Conflicts",
+    "同名方案：": "Profile name conflicts: ",
+    "同名或同 ID 映射層：": "Mapping Layer name or ID conflicts: ",
+    "是：覆蓋所有衝突\n否：略過所有衝突\n取消：不匯入": "Yes: overwrite all conflicts\nNo: skip all conflicts\nCancel: do not import",
+    "確認後會以交易方式匯入，失敗時會還原目前設定。": "After confirmation, settings are imported transactionally. A failure restores the current settings.",
+    "衝突略過：": "Skipped conflicts: ",
+    "已重新整理 GUI、方案與映射層。": "The GUI, profiles, and mapping layers were refreshed.",
+    "已重新整理 GUI、方案與映射層；設定將於下次連線時生效。": "The GUI, profiles, and mapping layers were refreshed; settings take effect on the next connection.",
+    "System Default（系統預設）": "System Default",
     "無法開啟方案資料夾": "Could Not Open Profile Folder",
     "無法開啟存放方案的資料夾：": "Could not open the profile folder:",
     "刪除方案": "Delete Profile",

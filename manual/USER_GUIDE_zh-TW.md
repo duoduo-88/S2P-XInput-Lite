@@ -1,6 +1,6 @@
-# S2P-XInput-Lite v0.7.10 使用手冊
+# S2P-XInput-Lite v0.7.11 使用手冊
 
-本手冊介紹 v0.7.10 的安裝、連線、方案、搖桿、按鍵映射、陀螺儀、震動、
+本手冊介紹 v0.7.11 的安裝、連線、方案、搖桿、按鍵映射、陀螺儀、震動、
 HidHide、ESP32-S3 橋接／獨立模式，以及手把測試、回報率、診斷與關於頁。
 
 截圖採英文介面；按主視窗左下角的「中 / En」即可切換語言，功能位置不變。
@@ -64,7 +64,7 @@ HidHide、ESP32-S3 橋接／獨立模式，以及手把測試、回報率、診�
 
 控制器以 BLE 連接 ESP32-S3，再由 ESP32-S3 透過 USB 將資料傳給電腦。
 
-v0.7.10 提供三種不需要持續開啟 Windows 程式的獨立輸出：
+v0.7.11 提供三種不需要持續開啟 Windows 程式的獨立輸出：
 
 - **PC XInput 獨立模式**：ESP32 直接向 Windows 提供 XInput 相容輸出。
 - **手機 USB HID 模式**：ESP32 以標準 USB HID Gamepad 連接手機或其他相容主機。
@@ -90,7 +90,7 @@ Windows 程式。
 4. **功能頁籤**：Buttons、Stick Map、Layers、Advanced Rumble、Gyro Map。
 5. **目前頁面內容**：圖中為實體按鍵對應 Xbox 按鍵。
 6. **狀態列**：顯示 ViGEm、WASAPI、HidHide 與控制器／ESP32 狀態。
-7. **方案工具**：切換、儲存、另存、匯入及管理方案。
+7. **方案工具**：切換、儲存、另存、匯入單一方案，或從另一個安裝資料夾匯入設定。
 8. **全域工具**：切換語言、還原、校正、刷入韌體、重啟連線與 Pin。
 
 ### 2.1 狀態列
@@ -108,7 +108,22 @@ Windows 程式。
 - **儲存/套用（Save/Apply）**：儲存目前方案並立即套用。
 - **另存新方案（Save New）**：使用目前畫面數值建立新方案。
 - **匯入方案（Import Profile）**：匯入外部 `.ini` 方案。
-- **管理方案（Profile Mgr.）**：重新命名或刪除個人方案。
+- **匯入設定（Import Settings）**：從舊版或同版本 S2P-XInput-Lite 安裝資料夾遷移設定。
+
+### 2.3 匯入設定
+
+![Import Settings 衝突預覽](assets/annotated/15-import-settings-conflicts.png)
+
+1. 點選 **匯入設定**。
+2. 選擇舊版或同版本 S2P-XInput-Lite 的**程式根目錄**，不要選 `src`。
+3. 檢查 Preview 中的應用程式設定、持久化手把校正、使用者方案與 managed Mapping Layer。
+4. 若方案名稱或 Layer ID 衝突，明確選擇「全部覆蓋」或「全部略過」。
+5. 確認匯入；完成後 GUI、方案清單及 Layer 清單會重新整理。
+
+目前版本會提供 schema 與預設值，因此這不是降版或直接複製資料夾；新版新增 key
+會使用目前預設。`System Default` 永遠不會被覆蓋；runtime cache、log、firmware、
+exe 與建置產物不會匯入。任一已驗證寫入失敗時，`config.ini`、使用者方案與 managed
+Layer 會一起 rollback。
 
 > [!WARNING]
 > `System Default` 為唯讀方案。需要修改時，請使用「另存新方案」。
@@ -475,6 +490,8 @@ Mapping Layers、陀螺儀轉搖桿及遊戲震動設定。它不會執行需要
 環境的功能。
 
 ### 8.5 寫入設定並啟用獨立模式
+
+![ESP32 自動辨識獨立模式選單](assets/annotated/14-standalone-auto-detect.png)
 
 1. 選擇要寫入的方案。
 2. 完成參數調整後先按 **Save/Apply**。
@@ -862,4 +879,4 @@ Gate → Lvl → 六頻段 → LF/HF Balance → Tail／Decay。
 保留一個已驗證的穩定方案，實驗性設定使用 `Save New` 另存。
 
 > [!NOTE]
-> 本手冊適用於 S2P-XInput-Lite v0.7.10；後續版本請以程式內的問號說明與最新發佈說明為準。
+> 本手冊適用於 S2P-XInput-Lite v0.7.11；後續版本請以程式內的問號說明與最新發佈說明為準。
