@@ -92,8 +92,8 @@ def _follow_feature_envelope(current, target, block_seconds, time_constant):
 
 
 def _extract_audio_features(
-    band_levels,
-    previous_band_levels,
+    feature_levels,
+    previous_feature_levels,
     feature_state,
     block_seconds,
     analysis_seconds,
@@ -104,13 +104,13 @@ def _extract_audio_features(
 ):
     """Layer A: derive causal, normalized audio structure from one hop.
 
-    ``band_levels`` remain the user-facing six-band levels used for routing.
-    ``band_energies`` are optional gate-and-gain-adjusted, pre-clamp energies
-    used only for spectral ratios.  Keeping those two inputs separate avoids
-    treating a saturated control level as an accurate energy measurement.
+    ``feature_levels`` are independent of master Strength; production routing
+    remains on its own user-facing band-level path.  ``band_energies`` are
+    optional gate-and-gain-adjusted, pre-clamp energies used only for spectral
+    ratios, avoiding saturated levels as a false energy measurement.
     """
-    current = tuple(_clamp01(level) for level in band_levels)
-    previous = tuple(_clamp01(level) for level in previous_band_levels)
+    current = tuple(_clamp01(level) for level in feature_levels)
+    previous = tuple(_clamp01(level) for level in previous_feature_levels)
     if len(previous) != len(current):
         previous = (0.0,) * len(current)
     if band_energies is None or len(band_energies) != len(current):
@@ -256,14 +256,22 @@ def _dsp_v2_targets(
     block_seconds,
     analysis_seconds,
     *,
+    feature_levels=None,
+    previous_feature_levels=None,
     band_energies=None,
     hop_rms=None,
     peak_level=None,
 ):
     """Layer C: preserve baseline routing and add bounded onset contrast."""
+    analysis_levels = band_levels if feature_levels is None else feature_levels
+    analysis_previous = (
+        previous_band_levels
+        if previous_feature_levels is None
+        else previous_feature_levels
+    )
     features, next_state = _extract_audio_features(
-        band_levels,
-        previous_band_levels,
+        analysis_levels,
+        analysis_previous,
         feature_state,
         block_seconds,
         analysis_seconds,
@@ -658,6 +666,7 @@ class AudioHaptics:
         hf_envelope = 0.0
         feature_state = _empty_feature_state()
         previous_band_levels = (0.0,) * len(AUDIO_BANDS_HZ)
+        previous_feature_levels = (0.0,) * len(AUDIO_BANDS_HZ)
         if analysis_frames is None:
             analysis_frames = max(hop_frames, sample_rate // 50)
         analysis_frames = max(hop_frames, int(analysis_frames))
@@ -696,6 +705,7 @@ class AudioHaptics:
                 hf_envelope = 0.0
                 feature_state = _empty_feature_state()
                 previous_band_levels = (0.0,) * len(AUDIO_BANDS_HZ)
+                previous_feature_levels = (0.0,) * len(AUDIO_BANDS_HZ)
                 continue
             mono = np.mean(samples, axis=1)
             if frame_count >= analysis_frames:
@@ -704,13 +714,16 @@ class AudioHaptics:
                 rolling_audio[:-frame_count] = rolling_audio[frame_count:]
                 rolling_audio[-frame_count:] = mono
             band_rms = _spectral_band_rms(rolling_audio, sample_rate)
-            band_energies = tuple(
-                self._usable_band_energy(rms, gain)
+            feature_energies = tuple(
+                self._feature_energy_from_rms(rms, gain)
                 for rms, gain in zip(band_rms, self.band_gains)
             )
             band_levels = tuple(
-                min(1.0, energy * 4.0 * self.strength)
-                for energy in band_energies
+                self._level_from_rms(rms, gain)
+                for rms, gain in zip(band_rms, self.band_gains)
+            )
+            feature_levels = tuple(
+                min(1.0, energy) for energy in feature_energies
             )
             block_seconds = frame_count / sample_rate
             (
@@ -726,11 +739,14 @@ class AudioHaptics:
                 feature_state,
                 block_seconds,
                 analysis_frames / sample_rate,
-                band_energies=band_energies,
+                feature_levels=feature_levels,
+                previous_feature_levels=previous_feature_levels,
+                band_energies=feature_energies,
                 hop_rms=math.sqrt(float(np.mean(mono * mono))),
                 peak_level=float(np.max(np.abs(mono))),
             )
             previous_band_levels = band_levels
+            previous_feature_levels = feature_levels
             lf_envelope = self._smooth_envelope(
                 lf_envelope, lf_target, block_seconds
             )
@@ -740,20 +756,23 @@ class AudioHaptics:
             self._level_callback(lf_envelope, hf_envelope)
 
     def _level_from_rms(self, rms, gain):
-        usable = self._usable_band_energy(rms, gain)
-        return min(1.0, usable * 4.0 * self.strength)
+        """Original user-facing linear Band Gain and Strength curve."""
+        usable = self._usable_rms(rms)
+        return min(1.0, usable * 4.0 * gain * self.strength)
 
-    def _usable_band_energy(self, rms, gain):
-        """Gate-and-gain-adjusted energy before level saturation.
+    def _usable_rms(self, rms):
+        if rms <= self.noise_gate:
+            return 0.0
+        return (rms - self.noise_gate) / max(1e-6, 1.0 - self.noise_gate)
+
+    def _feature_energy_from_rms(self, rms, gain):
+        """Strength-independent energy used only by tactile analysis.
 
         The square-root gain law intentionally lets per-band gain alter
         tactile spectral emphasis without allowing a 2.0 gain to linearly
-        dominate all Low/Mid/High ratios.  Master strength stays out of this
-        value because it is an output preference, not source timbre.
+        dominate Low/Mid/High ratios.  It never feeds baseline routing.
         """
-        if rms <= self.noise_gate:
-            return 0.0
-        usable = (rms - self.noise_gate) / max(1e-6, 1.0 - self.noise_gate)
+        usable = self._usable_rms(rms)
         return usable * math.sqrt(max(0.0, float(gain)))
 
     def _smooth_envelope(self, current, target, block_seconds):

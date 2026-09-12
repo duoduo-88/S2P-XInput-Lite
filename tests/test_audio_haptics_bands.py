@@ -33,11 +33,19 @@ class AudioHapticsBandTests(unittest.TestCase):
         ))
         return AudioHaptics(config, callback)
 
-    def _run_synthetic(self, waveform, sample_rate=48000, hop_frames=240):
+    def _run_synthetic(
+        self,
+        waveform,
+        sample_rate=48000,
+        hop_frames=240,
+        strength=0.32,
+        band_gains=(1.0,) * 6,
+    ):
         """Run real waveforms through rolling FFT, feature, and target DSP."""
         analysis_frames = sample_rate // 50
         rolling = np.zeros(analysis_frames, dtype=np.float32)
         previous = (0.0,) * len(AUDIO_BANDS_HZ)
+        previous_feature_levels = (0.0,) * len(AUDIO_BANDS_HZ)
         state = _empty_feature_state()
         records = []
         waveform = np.asarray(waveform, dtype=np.float32)
@@ -48,11 +56,16 @@ class AudioHapticsBandTests(unittest.TestCase):
             rolling[:-hop_frames] = rolling[hop_frames:]
             rolling[-hop_frames:] = mono
             band_rms = _spectral_band_rms(rolling, sample_rate)
-            # Mirrors System Default's gate, unity gains, and strength.
-            energies = tuple(
-                max(0.0, (rms - 0.04) / 0.96) for rms in band_rms
+            usable = tuple(max(0.0, (rms - 0.04) / 0.96) for rms in band_rms)
+            feature_energies = tuple(
+                energy * np.sqrt(gain)
+                for energy, gain in zip(usable, band_gains)
             )
-            levels = tuple(min(1.0, energy * 4.0 * 0.32) for energy in energies)
+            levels = tuple(
+                min(1.0, energy * 4.0 * gain * strength)
+                for energy, gain in zip(usable, band_gains)
+            )
+            feature_levels = tuple(min(1.0, energy) for energy in feature_energies)
             lf, hf, state, features, tactile = _dsp_v2_targets(
                 levels,
                 previous,
@@ -60,12 +73,15 @@ class AudioHapticsBandTests(unittest.TestCase):
                 state,
                 hop_frames / sample_rate,
                 analysis_frames / sample_rate,
-                band_energies=energies,
+                feature_levels=feature_levels,
+                previous_feature_levels=previous_feature_levels,
+                band_energies=feature_energies,
                 hop_rms=float(np.sqrt(np.mean(mono * mono))),
                 peak_level=float(np.max(np.abs(mono))),
             )
             records.append((lf, hf, features, tactile, levels))
             previous = levels
+            previous_feature_levels = feature_levels
         return records
 
     @staticmethod
@@ -124,12 +140,14 @@ class AudioHapticsBandTests(unittest.TestCase):
     def test_band_gain_influences_ratios_without_linearly_dominating_them(self):
         audio = self._default_audio()
         raw_rms = (0.40,) * 6
-        unity = tuple(audio._usable_band_energy(rms, 1.0) for rms in raw_rms)
+        unity = tuple(
+            audio._feature_energy_from_rms(rms, 1.0) for rms in raw_rms
+        )
         low_boost = tuple(
-            audio._usable_band_energy(rms, 2.0 if index < 2 else 1.0)
+            audio._feature_energy_from_rms(rms, 2.0 if index < 2 else 1.0)
             for index, rms in enumerate(raw_rms)
         )
-        levels = tuple(min(1.0, energy * 4.0 * audio.strength) for energy in unity)
+        levels = tuple(min(1.0, energy) for energy in unity)
         unity_features, _ = _extract_audio_features(
             levels, (0.0,) * 6, _empty_feature_state(), 0.005, 0.020,
             band_energies=unity,
@@ -145,6 +163,31 @@ class AudioHapticsBandTests(unittest.TestCase):
         )
         self.assertGreater(boosted_features.low_ratio, unity_features.low_ratio)
         self.assertLess(boosted_features.low_ratio, 0.5)
+
+    def test_band_gain_keeps_the_original_linear_production_curve(self):
+        audio = self._default_audio()
+        rms = 0.40
+        usable = (rms - audio.noise_gate) / (1.0 - audio.noise_gate)
+        for gain in (0.0, 0.5, 1.0, 1.5, 2.0):
+            expected = min(1.0, usable * 4.0 * gain * audio.strength)
+            self.assertAlmostEqual(audio._level_from_rms(rms, gain), expected)
+
+    def test_strength_scales_targets_without_changing_tactile_classification(self):
+        waveform = self._sine(6000.0, 0.015)
+        low_strength = self._run_synthetic(waveform, strength=0.16)
+        high_strength = self._run_synthetic(waveform, strength=0.64)
+        low = max(low_strength, key=lambda item: item[3].sharpness)
+        high = max(high_strength, key=lambda item: item[3].sharpness)
+
+        for field in (
+            "overall_level", "low_ratio", "mid_ratio", "high_ratio",
+            "positive_flux", "negative_flux", "crest", "energy_stability",
+            "sustain_evidence",
+        ):
+            self.assertAlmostEqual(getattr(low[2], field), getattr(high[2], field))
+        for field in ("punch", "weight", "sharpness", "sustain", "texture"):
+            self.assertAlmostEqual(getattr(low[3], field), getattr(high[3], field))
+        self.assertGreater(high[1], low[1])
 
 
     def test_dynamic_targets_emphasize_new_bass_attack(self):
