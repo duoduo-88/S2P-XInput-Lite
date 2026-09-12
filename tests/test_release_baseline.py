@@ -51,6 +51,13 @@ class ReleaseBaselineTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn('"image\\icon.ico"', launcher_source)
 
+        gamepad_tester_launcher_source = (
+            ROOT / "native" / "build_gamepad_tester_launcher.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            '"image\\gamepad_tester.ico"', gamepad_tester_launcher_source
+        )
+
         runtime_source = (
             ROOT / "scripts" / "build_runtime.ps1"
         ).read_text(encoding="utf-8")

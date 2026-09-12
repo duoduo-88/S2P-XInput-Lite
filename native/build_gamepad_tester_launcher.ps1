@@ -26,6 +26,7 @@ New-Item -ItemType Directory -Force -Path $specRoot | Out-Null
     --onefile `
     --windowed `
     --name GamepadTester `
+    --icon (Join-Path $repoRoot "image\gamepad_tester.ico") `
     --distpath $distRoot `
     --workpath $workRoot `
     --specpath $specRoot `
