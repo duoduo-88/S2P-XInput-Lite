@@ -90,6 +90,12 @@ Settings and per-controller stick calibration are stored in `src/config.ini`. Gy
 
 ### Import Settings
 
+New in v0.7.11: **Import Settings** replaces the former **Manage Profiles**
+action in the main-window footer. Use it to begin a full installation-to-
+installation settings migration.
+
+![Import Settings button in the main window](manual/assets/annotated/16-import-settings-button.png)
+
 Choose **Import Settings** in the main window and select the *application root*
 of an older or same-version S2P-XInput-Lite installation, not its `src` folder.
 The preview identifies compatible application preferences, persisted controller
