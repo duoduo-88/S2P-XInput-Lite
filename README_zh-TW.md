@@ -56,7 +56,7 @@ Release 頁面供手動下載；程式不會自動下載、執行或覆蓋任何
 - 關於頁：提供專案與贊助連結、軟體許可協議及第三方程式聲明
 - 完整遊戲設定檔，可一起切換搖桿、陀螺儀、震動、音訊觸覺與映射設定
 - 「匯入設定」可從舊版或同版本 S2P-XInput-Lite 安裝資料夾遷移相容的使用者資料，提供預覽、衝突選擇與 rollback 保護
-- transient-aware Audio Reactive Haptics 保留六頻段路由，以快／慢特徵包絡加強 LF/HF 瞬態；持續音訊會回到原有路由
+- Audio Reactive Haptics 以六頻段分析辨識音訊瞬態與持續音訊，調整 LF/HF 震動；特徵分類不受 Master Strength 影響，MIX 模式也會保留遊戲震動成分
 - 繁體中文與英文介面
 - 即時顯示連線、電量、ESP32、ViGEmBus、WASAPI 及 HidHide 狀態
 - 依完整實測放電曲線估算電量百分比，並在介面及控制器玩家燈共用四級電量顯示

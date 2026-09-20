@@ -51,7 +51,7 @@ Current version: **v0.7.11**
 - About page with project links, the software license, and third-party notices
 - Full game profiles for switching stick, gyro, rumble, audio-haptics, and mapping settings together, with automatic UI refresh
 - Import Settings migrates compatible user settings from an older or same-version S2P-XInput-Lite installation with a preview, conflict choice, and rollback protection
-- Transient-aware Audio Reactive Haptics retains six-band routing while using fast/slow feature envelopes to emphasize LF/HF transients; sustained audio returns to the base routing
+- Audio Reactive Haptics analyzes six frequency bands to distinguish transient attacks from sustained audio and shape LF/HF rumble. Feature classification is independent of Master Strength, and MIX preserves the game's rumble component
 - Traditional Chinese and English interface
 - Live connection, battery, ESP32, ViGEmBus, WASAPI, and HidHide status
 - Battery percentage estimated from a full measured discharge curve, with a

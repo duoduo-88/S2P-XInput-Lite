@@ -4,55 +4,57 @@
 
 ### Import Settings
 
-- In the main window, **Manage Profiles** is now called **Import Settings**.
+- In the main window, **Manage Profiles** has been renamed to **Import Settings**.
 
 ![Import Settings button in the v0.7.11 main window](manual/assets/annotated/16-import-settings-button.png)
 
-- Use **Import Settings** to bring settings over from another S2P-XInput-Lite
-  installation. You can choose an older or same-version installation.
-- It can bring over your app settings, saved controller calibration and
-  identity, personal Profiles, and managed Mapping Layers.
-- The current version stays in control of its settings: anything new that is
-  missing from the imported settings uses its current default. The built-in
-  **System Default** Profile is never imported or replaced.
-- Before anything is imported, you can review what was found. If a Profile or
-  Layer has the same name or ID as one you already have, choose to overwrite
-  all conflicts or skip them all.
-- If the selected data is invalid or incompatible, the import stops without
-  partly changing `config.ini`, your Profiles, or managed Layer files.
+- **Import Settings** transfers compatible data from another S2P-XInput-Lite
+  installation, including older and same-version installations.
+- Transferable data includes application settings, saved controller calibration
+  and identity data, user Profiles, and managed Mapping Layers.
+- The current version retains authority over the imported configuration. Keys
+  introduced in the current version use their current defaults when absent from
+  the source. The built-in **System Default** Profile is never imported or
+  replaced.
+- The import preview lists the detected data before any changes are applied. If
+  a Profile or Layer has a matching name or ID, the operation requires a choice
+  to overwrite all conflicts or skip all conflicts.
+- Invalid or incompatible data aborts the operation without partially modifying
+  `config.ini`, Profiles, or managed Layer files.
 
 ### Audio-Reactive Haptics
 
-- The existing six-band vibration settings are unchanged.
-- The app now compares short-term and longer-term sound levels to catch sudden
-  changes.
-- A sudden bass or high-pitched sound gets a stronger response in the matching
-  vibration range. When the sound settles, vibration returns to its usual mix.
-- Game vibration signals and data-sending intervals are unchanged.
+- The existing six-band vibration settings remain available and unchanged.
+- Audio analysis compares short-term and long-term sound levels to identify
+  transient events.
+- Bass and high-frequency transients produce an increased response in the
+  corresponding LF/HF vibration range. After the signal stabilizes, output
+  returns to the baseline routing.
+- Game rumble signals and transport intervals remain unchanged.
 
 ## 繁體中文
 
 ### 匯入設定
 
-- 主視窗裡的 **管理方案** 按鈕，現在改名為 **匯入設定**。
+- 主視窗中的 **管理方案** 按鈕已更名為 **匯入設定**。
 
 ![v0.7.11 主視窗中的匯入設定按鈕](manual/assets/annotated/16-import-settings-button.png)
 
-- 想把另一個 S2P-XInput-Lite 資料夾裡的設定帶過來，就按 **匯入設定**。舊版和
-  同版本都可以匯入。
-- 可以帶過來的內容包括程式設定、手把校正與識別資料、自己的設定方案，以及
+- **匯入設定**可從其他 S2P-XInput-Lite 安裝環境移轉相容資料，支援舊版及
+  同版本安裝環境。
+- 可移轉資料包括程式設定、已保存的手把校正與識別資料、使用者設定方案，以及
   程式管理的 Mapping Layer。
-- 匯入後仍以目前版本的設定為準；舊設定裡沒有的新項目會使用目前的預設值。
-  內建的 **System Default** 方案不會被匯入，也不會被取代。
-- 匯入前會先列出找到的內容。如果設定方案或 Layer 和現有項目撞名或撞 ID，
-  可以選擇全部覆蓋，或全部略過。
-- 如果資料有問題或和目前版本不相容，匯入就會停止，不會只改到一半，也不會
-  部分覆蓋 `config.ini`、你的設定方案或 Mapping Layer 檔案。
+- 匯入後仍以目前版本的設定結構為準；來源資料缺少目前版本新增的項目時，會採用
+  目前版本的預設值。內建的 **System Default** 方案不會被匯入或取代。
+- 套用任何變更前，預覽會列出偵測到的資料。若設定方案或 Layer 的名稱或 ID 與
+  現有項目相同，必須選擇全部覆蓋或全部略過。
+- 若資料無效或不相容，匯入作業會中止，不會部分修改 `config.ini`、設定方案或
+  程式管理的 Layer 檔案。
 
 ### 音訊震動反應
 
-- 原本的六頻段震動設定維持不變。
-- 程式會比較短時間和較長時間內的音量變化，抓出突然變強的聲音。
-- 低音突然變強時會加強低頻震動；高音突然變強時會加強高頻震動。聲音穩定後，
-  就回到原本的震動分配。
-- 遊戲本身的震動訊號和資料傳送間隔都沒有改變。
+- 原有六頻段震動設定維持不變。
+- 音訊分析會比較短期與長期音量特徵，以辨識瞬態事件。
+- 低頻或高頻瞬態會在相應 LF/HF 頻段提高震動回饋；訊號穩定後，輸出會恢復至
+  基準路由。
+- 遊戲震動訊號及傳輸間隔維持不變。
