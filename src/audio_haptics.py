@@ -766,6 +766,14 @@ class AudioHaptics:
             )
             self._emit_capture_levels(lf_envelope, hf_envelope, stop_event)
 
+        # A capture stream can end without close() having been called.
+        # Clear the final envelope once, but never emit after close() sets
+        # stop_event (including a native read that finished late).
+        if not stop_event.is_set() and self.mode != "GAME":
+            with self._lifecycle_lock:
+                if not stop_event.is_set() and not self._running and self.mode != "GAME":
+                    self._level_callback(0.0, 0.0)
+
     def _level_from_rms(self, rms, gain):
         """Original user-facing linear Band Gain and Strength curve."""
         usable = self._usable_rms(rms)
