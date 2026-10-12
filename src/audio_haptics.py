@@ -494,14 +494,17 @@ class AudioHaptics:
 
     def reconfigure(self, config):
         """Apply a profile while preserving any live PyAudio/WASAPI stream."""
-        self._apply_config(config)
-        if self.mode in ("AUDIO", "MIX"):
+        # Keep an open native stream across profile changes; repeatedly closing
+        # and reopening PortAudio can crash in ntdll on some Windows systems.
+        with self._lifecycle_lock:
+            self._apply_config(config)
+            mode = self.mode
+            if mode == "GAME":
+                # Serialize the handoff clear after any in-flight capture
+                # callback so audio cannot re-enable rumble after GAME starts.
+                self._level_callback(0.0, 0.0)
+        if mode in ("AUDIO", "MIX"):
             self.start()
-        else:
-            # Keep an already-open native stream alive across profile changes;
-            # repeated PortAudio close/terminate/reopen cycles can crash in
-            # ntdll.  GAME ignores this value in XInputController.
-            self._level_callback(0.0, 0.0)
 
     def start(self):
         if self.mode == "GAME":
@@ -535,6 +538,8 @@ class AudioHaptics:
             self._restart_after_exit = False
             self._running = False
             self._stop_event.set()
+            # Synchronize with any in-flight capture callback before returning.
+            self._level_callback(0.0, 0.0)
             thread = self._thread
         if (
             thread is not None
@@ -547,8 +552,15 @@ class AudioHaptics:
             with self._lifecycle_lock:
                 if self._thread is thread:
                     self._thread = None
-        self._level_callback(0.0, 0.0)
         return stopped
+
+    def _emit_capture_levels(self, lf, hf, stop_event):
+        """Serialize native-capture output with shutdown, even after late reads."""
+        with self._lifecycle_lock:
+            if not self._running or stop_event.is_set() or self.mode == "GAME":
+                return False
+            self._level_callback(lf, hf)
+            return True
 
     def _capture_loop(self, generation, stop_event):
         audio = None
@@ -597,9 +609,11 @@ class AudioHaptics:
                     generation == self._generation
                     and self._thread is current_thread
                 ):
+                    if self._running and not stop_event.is_set():
+                        # Unexpected native-capture termination still clears rumble.
+                        self._level_callback(0.0, 0.0)
                     self._running = False
                     stop_event.set()
-            self._level_callback(0.0, 0.0)
             if stream is not None:
                 try:
                     stream.stop_stream()
@@ -753,7 +767,15 @@ class AudioHaptics:
             hf_envelope = self._smooth_envelope(
                 hf_envelope, hf_target, block_seconds
             )
-            self._level_callback(lf_envelope, hf_envelope)
+            self._emit_capture_levels(lf_envelope, hf_envelope, stop_event)
+
+        # A capture stream can end without close() having been called.
+        # Clear the final envelope once, but never emit after close() sets
+        # stop_event (including a native read that finished late).
+        if not stop_event.is_set() and self.mode != "GAME":
+            with self._lifecycle_lock:
+                if not stop_event.is_set() and not self._running and self.mode != "GAME":
+                    self._level_callback(0.0, 0.0)
 
     def _level_from_rms(self, rms, gain):
         """Original user-facing linear Band Gain and Strength curve."""

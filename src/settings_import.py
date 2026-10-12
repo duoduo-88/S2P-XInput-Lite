@@ -12,6 +12,9 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from idle_disconnect import IDLE_DISCONNECT_OPTIONS
+from update_manager import parse_version
+
 from config_utils import (
     CONFIG_PATH,
     PROFILE_DIR,
@@ -134,6 +137,43 @@ def _copy_known_global_settings(target, source):
             target.set(section, key, value)
 
 
+_IMPORTED_BOOL_OPTIONS = frozenset((
+    "hidhide_missing_prompt_dismissed",
+    "hidhide_setup_prompt_dismissed",
+    "close_mode_warning_suppressed",
+    "automatic_update_checks",
+))
+
+
+def _validate_imported_global_settings(target, source):
+    """Validate supplied known options without changing current-version defaults."""
+    for section in ("serial", "gui"):
+        if not source.has_section(section):
+            continue
+        for key, value in source.items(section):
+            if key == "active_profile" or not target.has_option(section, key):
+                continue
+            try:
+                if section == "serial" and key == "baudrate":
+                    if int(value) <= 0:
+                        raise ValueError("baudrate must be positive")
+                elif section == "gui":
+                    if key == "language" and value.strip() not in ("zh", "en"):
+                        raise ValueError("unsupported UI language")
+                    if key == "idle_disconnect_minutes":
+                        if int(value) not in IDLE_DISCONNECT_OPTIONS:
+                            raise ValueError("unsupported idle-disconnect interval")
+                    if key in _IMPORTED_BOOL_OPTIONS:
+                        if value.strip().lower() not in configparser.ConfigParser.BOOLEAN_STATES:
+                            raise ValueError("invalid boolean")
+                    if key == "ignored_update_version" and value.strip():
+                        parse_version(value.strip())
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise SettingsImportError(
+                    f"匯入設定無效：[{section}] {key} = {value!r}"
+                ) from exc
+
+
 def _validate_source_calibrations(source):
     controller_ids = set()
     for section in source.sections():
@@ -206,6 +246,7 @@ def scan_settings_import(source_root, *, config_path=CONFIG_PATH, profile_dir=PR
     # This is load_config's normal schema/migration path, explicitly in
     # no-persist mode so a rejected source never changes the destination.
     current = load_config(config_path, persist=False)
+    _validate_imported_global_settings(current, source_config)
     _copy_known_global_settings(current, source_config)
 
     profiles, ignored_system_default = _read_source_profiles(source_profiles_dir)
@@ -264,66 +305,79 @@ def apply_settings_import(plan: ImportPlan, *, profile_conflict="skip", layer_co
     if profile_conflict not in ("overwrite", "skip") or layer_conflict not in ("overwrite", "skip"):
         raise ValueError("conflict policy must be 'overwrite' or 'skip'")
 
-    destination_names = {name.casefold(): name for name in list_profiles(profile_dir)}
-    profiles_to_write = {}
-    profiles_skipped = []
-    for name, profile in plan.profiles.items():
-        if name.casefold() in destination_names and profile_conflict == "skip":
-            profiles_skipped.append(name)
-        else:
-            profiles_to_write[name] = profile
+    # Destination reads, snapshot, writes and rollback share the same
+    # cross-process lock so a concurrent migration cannot leave a stale plan
+    # or rollback snapshot between the layer/profile scans and file changes.
+    with config_file_lock():
+        destination_names = {
+            name.casefold(): name for name in list_profiles(profile_dir)
+        }
+        profiles_to_write = {}
+        profiles_skipped = []
+        for name, profile in plan.profiles.items():
+            if name.casefold() in destination_names and profile_conflict == "skip":
+                profiles_skipped.append(name)
+            else:
+                profiles_to_write[name] = profile
 
-    base_buttons, base_sticks = _base_layer_defaults(plan.config)
-    destination_layers, managed_paths = load_managed_layer_directory(
-        base_buttons, base_sticks, SWITCH_BUTTONS, layer_dir
-    )
-    desired_layers = list(destination_layers)
-    layers_imported, layers_skipped = [], []
-    for source_layer in plan.layers:
-        name = str(source_layer["name"])
-        conflicts = [
-            layer for layer in desired_layers
-            if str(layer["name"]).casefold() == name.casefold()
-            or str(layer["id"]) == str(source_layer["id"])
-        ]
-        if conflicts and layer_conflict == "skip":
-            layers_skipped.append(name)
-            continue
-        if conflicts:
-            desired_layers = [layer for layer in desired_layers if layer not in conflicts]
-        desired_layers.append(source_layer)
-        layers_imported.append(name)
+        base_buttons, base_sticks = _base_layer_defaults(plan.config)
+        destination_layers, managed_paths = load_managed_layer_directory(
+            base_buttons, base_sticks, SWITCH_BUTTONS, layer_dir
+        )
+        desired_layers = list(destination_layers)
+        layers_imported, layers_skipped = [], []
+        for source_layer in plan.layers:
+            name = str(source_layer["name"])
+            conflicts = [
+                layer for layer in desired_layers
+                if str(layer["name"]).casefold() == name.casefold()
+                or str(layer["id"]) == str(source_layer["id"])
+            ]
+            if conflicts and layer_conflict == "skip":
+                layers_skipped.append(name)
+                continue
+            if conflicts:
+                desired_layers = [
+                    layer for layer in desired_layers if layer not in conflicts
+                ]
+            desired_layers.append(source_layer)
+            layers_imported.append(name)
 
-    accepted_profiles = {name.casefold(): name for name in profiles_to_write}
-    active = _fallback_active(plan.current_active_profile, profile_dir)
-    source_active = plan.source_active_profile
-    if source_active.casefold() in accepted_profiles:
-        active = accepted_profiles[source_active.casefold()]
+        accepted_profiles = {name.casefold(): name for name in profiles_to_write}
+        active = _fallback_active(plan.current_active_profile, profile_dir)
+        source_active = plan.source_active_profile
+        if source_active.casefold() in accepted_profiles:
+            active = accepted_profiles[source_active.casefold()]
 
-    candidate = plan.config
-    if active.casefold() in accepted_profiles:
-        apply_profile(candidate, profiles_to_write[active])
-    if not candidate.has_section("gui"):
-        candidate.add_section("gui")
-    candidate.set("gui", "active_profile", active)
-    # Current config owns the active runtime state; profile files retain their
-    # individual imported state.  This ensures new layer IDs are consistent.
-    state_layers, _stale = apply_layer_state(candidate, desired_layers)
-    store_layer_state(candidate, state_layers)
+        candidate = plan.config
+        if active.casefold() in accepted_profiles:
+            apply_profile(candidate, profiles_to_write[active])
+        if not candidate.has_section("gui"):
+            candidate.add_section("gui")
+        candidate.set("gui", "active_profile", active)
+        # Current config owns the active runtime state; profile files retain
+        # their individual imported state.  This keeps imported layer IDs in
+        # sync with the newly written global layer files.
+        state_layers, _stale = apply_layer_state(candidate, desired_layers)
+        store_layer_state(candidate, state_layers)
 
-    paths = {Path(config_path), *[profile_path(name, profile_dir) for name in profiles_to_write]}
-    paths.update(Path(path) for path in managed_paths)
-    paths.update(Path(layer_dir) / f"{layer['name']}.json" for layer in desired_layers)
-    snapshot = _snapshot(paths)
-    try:
-        with config_file_lock():
+        paths = {
+            Path(config_path),
+            *[profile_path(name, profile_dir) for name in profiles_to_write],
+        }
+        paths.update(Path(path) for path in managed_paths)
+        paths.update(
+            Path(layer_dir) / f"{layer['name']}.json" for layer in desired_layers
+        )
+        snapshot = _snapshot(paths)
+        try:
             for name, profile in profiles_to_write.items():
                 atomic_write_config(profile, profile_path(name, profile_dir))
             save_layers(candidate, desired_layers, layer_dir, deletable_paths=managed_paths)
             atomic_write_config(candidate, config_path)
-    except Exception:
-        _restore(snapshot)
-        raise
+        except Exception:
+            _restore(snapshot)
+            raise
     return ImportResult(
         plan.source_root, active, tuple(profiles_to_write), tuple(profiles_skipped),
         tuple(layers_imported), tuple(layers_skipped), plan.calibration_count,

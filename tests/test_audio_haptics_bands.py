@@ -392,6 +392,63 @@ class AudioHapticsBandTests(unittest.TestCase):
         self.assertGreater(second[3].punch, first[3].punch * 0.7)
         self.assertEqual(records[-4][2].sustain_evidence, 0.0)
 
+    def test_capture_callback_is_suppressed_after_close(self):
+        events = []
+        audio = self._default_audio(lambda lf, hf: events.append((lf, hf)))
+        audio.mode = "AUDIO"
+        audio._running = True
+        self.assertTrue(audio._emit_capture_levels(0.7, 0.3, audio._stop_event))
+        self.assertTrue(audio.close())
+        self.assertFalse(audio._emit_capture_levels(0.9, 0.9, audio._stop_event))
+        self.assertEqual(events, [(0.7, 0.3), (0.0, 0.0)])
+
+    def test_switching_to_game_serializes_zero_with_inflight_capture(self):
+        callback_entered = threading.Event()
+        callback_resume = threading.Event()
+        reconfigure_started = threading.Event()
+        reconfigure_done = threading.Event()
+        events = []
+
+        def callback(lf, hf):
+            if lf or hf:
+                callback_entered.set()
+                self.assertTrue(callback_resume.wait(1.0))
+            events.append((lf, hf))
+
+        audio = self._default_audio(callback)
+        audio.mode = "AUDIO"
+        audio._running = True
+        capture = threading.Thread(
+            target=audio._emit_capture_levels,
+            args=(0.8, 0.4, audio._stop_event),
+        )
+        capture.start()
+        self.assertTrue(callback_entered.wait(1.0))
+
+        config = configparser.ConfigParser()
+        self.assertTrue(config.read(
+            ROOT / "src" / "profiles" / "System Default.ini",
+            encoding="utf-8",
+        ))
+        config.set("audio_haptics", "mode", "GAME")
+
+        def reconfigure():
+            reconfigure_started.set()
+            audio.reconfigure(config)
+            reconfigure_done.set()
+
+        transition = threading.Thread(target=reconfigure)
+        transition.start()
+        self.assertTrue(reconfigure_started.wait(1.0))
+        reconfigure_done.wait(0.05)
+        callback_resume.set()
+        capture.join(1.0)
+        transition.join(1.0)
+
+        self.assertFalse(capture.is_alive())
+        self.assertFalse(transition.is_alive())
+        self.assertEqual(events, [(0.8, 0.4), (0.0, 0.0)])
+
     def test_close_wakes_capture_before_a_blocking_read(self):
         class EmptyStream:
             read_calls = 0

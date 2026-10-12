@@ -1,4 +1,5 @@
 import configparser
+from contextlib import contextmanager
 import shutil
 import sys
 import tempfile
@@ -204,6 +205,118 @@ class SettingsImportTests(unittest.TestCase):
             )
             with self.assertRaises(SettingsImportError):
                 self.scan(source, destination)
+
+    def test_invalid_global_settings_rejected_without_changing_destination(self):
+        cases = (
+            ("serial", "baudrate", "not-a-number"),
+            ("serial", "baudrate", "0"),
+            ("gui", "language", "unexpected"),
+            ("gui", "idle_disconnect_minutes", "abc"),
+            ("gui", "idle_disconnect_minutes", "7"),
+            ("gui", "automatic_update_checks", "maybe"),
+            ("gui", "ignored_update_version", "nonsense"),
+        )
+        for section, option, value in cases:
+            with self.subTest(section=section, option=option, value=value):
+                temporary, source, destination = self.make_installations()
+                with temporary:
+                    self.write_source_config(source)
+                    source_config_path = source / "src" / "config.ini"
+                    source_config = configparser.ConfigParser()
+                    source_config.read(source_config_path, encoding="utf-8")
+                    if not source_config.has_section(section):
+                        source_config.add_section(section)
+                    source_config.set(section, option, value)
+                    atomic_write_config(source_config, source_config_path)
+                    destination_config = destination / "src" / "config.ini"
+                    before = destination_config.read_bytes()
+                    with self.assertRaises(SettingsImportError):
+                        self.scan(source, destination)
+                    self.assertEqual(destination_config.read_bytes(), before)
+
+    def test_rollback_stays_inside_cross_process_lock(self):
+        temporary, source, destination = self.make_installations()
+        with temporary:
+            self.write_source_config(source)
+            self.write_profile(source / "src" / "profiles", "Imported", "0.77")
+            plan = self.scan(source, destination)
+            destination_config = destination / "src" / "config.ini"
+            locked = {"value": False}
+            original_snapshot = settings_import_module._snapshot
+            original_restore = settings_import_module._restore
+            original_writer = settings_import_module.atomic_write_config
+            events = []
+
+            @contextmanager
+            def observed_lock():
+                self.assertFalse(locked["value"])
+                locked["value"] = True
+                try:
+                    yield
+                finally:
+                    locked["value"] = False
+
+            def observed_snapshot(paths):
+                self.assertTrue(locked["value"])
+                events.append("snapshot")
+                return original_snapshot(paths)
+
+            def observed_restore(snapshot):
+                self.assertTrue(locked["value"])
+                events.append("restore")
+                return original_restore(snapshot)
+
+            def fail_final_config(config, path):
+                self.assertTrue(locked["value"])
+                if Path(path) == destination_config:
+                    raise OSError("simulated final config failure")
+                return original_writer(config, path)
+
+            with (
+                patch.object(settings_import_module, "config_file_lock", observed_lock),
+                patch.object(settings_import_module, "_snapshot", observed_snapshot),
+                patch.object(settings_import_module, "_restore", observed_restore),
+                patch.object(settings_import_module, "atomic_write_config", fail_final_config),
+            ):
+                with self.assertRaises(OSError):
+                    self.apply(plan, destination)
+            self.assertEqual(events, ["snapshot", "restore"])
+            self.assertFalse(locked["value"])
+
+    def test_destination_snapshot_is_built_after_acquiring_lock(self):
+        temporary, source, destination = self.make_installations()
+        with temporary:
+            self.write_source_config(source)
+            plan = self.scan(source, destination)
+            locked = {"value": False}
+            original_list_profiles = settings_import_module.list_profiles
+            original_load_layers = settings_import_module.load_managed_layer_directory
+
+            @contextmanager
+            def observed_lock():
+                self.assertFalse(locked["value"])
+                locked["value"] = True
+                try:
+                    yield
+                finally:
+                    locked["value"] = False
+
+            def observed_list_profiles(*args, **kwargs):
+                self.assertTrue(locked["value"])
+                return original_list_profiles(*args, **kwargs)
+
+            def observed_load_layers(*args, **kwargs):
+                self.assertTrue(locked["value"])
+                return original_load_layers(*args, **kwargs)
+
+            with (
+                patch.object(settings_import_module, "config_file_lock", observed_lock),
+                patch.object(settings_import_module, "list_profiles", observed_list_profiles),
+                patch.object(settings_import_module, "load_managed_layer_directory", observed_load_layers),
+            ):
+                self.apply(plan, destination)
+
+            self.assertFalse(locked["value"])
 
     def test_rollback_restores_config_profiles_and_layers_after_write_failure(self):
         temporary, source, destination = self.make_installations()
