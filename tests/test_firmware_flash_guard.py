@@ -1,5 +1,6 @@
 """Fail-closed, read-only flash preflight before ESP32-S3 write_flash."""
 import sys
+import subprocess
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,6 +29,7 @@ class FirmwareFlashGuardTests(unittest.TestCase):
         self.assertEqual(size, 16 * 1024 * 1024)
         self.assertEqual(commands[0][-1], "flash_id")
         self.assertNotIn("write_flash", commands[0])
+        self.assertEqual(commands[0][commands[0].index("--after") + 1], "no_reset")
 
     def test_reports_8mb_flash_for_caller_to_reject(self):
         size = probe_esp32_flash_size(
@@ -48,3 +50,10 @@ class FirmwareFlashGuardTests(unittest.TestCase):
                             returncode=returncode, stdout=stdout, stderr="error",
                         ),
                     )
+
+    def test_esptool_timeout_fails_closed(self):
+        def timed_out(*_args, **_kwargs):
+            raise subprocess.TimeoutExpired("esptool", 20)
+
+        with self.assertRaises(FlashProbeError):
+            probe_esp32_flash_size("esptool.exe", "COM4", runner=timed_out)

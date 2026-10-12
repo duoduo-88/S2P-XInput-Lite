@@ -494,14 +494,17 @@ class AudioHaptics:
 
     def reconfigure(self, config):
         """Apply a profile while preserving any live PyAudio/WASAPI stream."""
-        self._apply_config(config)
-        if self.mode in ("AUDIO", "MIX"):
+        # Keep an open native stream across profile changes; repeatedly closing
+        # and reopening PortAudio can crash in ntdll on some Windows systems.
+        with self._lifecycle_lock:
+            self._apply_config(config)
+            mode = self.mode
+            if mode == "GAME":
+                # Serialize the handoff clear after any in-flight capture
+                # callback so audio cannot re-enable rumble after GAME starts.
+                self._level_callback(0.0, 0.0)
+        if mode in ("AUDIO", "MIX"):
             self.start()
-        else:
-            # Keep an already-open native stream alive across profile changes;
-            # repeated PortAudio close/terminate/reopen cycles can crash in
-            # ntdll.  GAME ignores this value in XInputController.
-            self._level_callback(0.0, 0.0)
 
     def start(self):
         if self.mode == "GAME":

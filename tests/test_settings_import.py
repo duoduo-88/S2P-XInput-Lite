@@ -283,6 +283,41 @@ class SettingsImportTests(unittest.TestCase):
             self.assertEqual(events, ["snapshot", "restore"])
             self.assertFalse(locked["value"])
 
+    def test_destination_snapshot_is_built_after_acquiring_lock(self):
+        temporary, source, destination = self.make_installations()
+        with temporary:
+            self.write_source_config(source)
+            plan = self.scan(source, destination)
+            locked = {"value": False}
+            original_list_profiles = settings_import_module.list_profiles
+            original_load_layers = settings_import_module.load_managed_layer_directory
+
+            @contextmanager
+            def observed_lock():
+                self.assertFalse(locked["value"])
+                locked["value"] = True
+                try:
+                    yield
+                finally:
+                    locked["value"] = False
+
+            def observed_list_profiles(*args, **kwargs):
+                self.assertTrue(locked["value"])
+                return original_list_profiles(*args, **kwargs)
+
+            def observed_load_layers(*args, **kwargs):
+                self.assertTrue(locked["value"])
+                return original_load_layers(*args, **kwargs)
+
+            with (
+                patch.object(settings_import_module, "config_file_lock", observed_lock),
+                patch.object(settings_import_module, "list_profiles", observed_list_profiles),
+                patch.object(settings_import_module, "load_managed_layer_directory", observed_load_layers),
+            ):
+                self.apply(plan, destination)
+
+            self.assertFalse(locked["value"])
+
     def test_rollback_restores_config_profiles_and_layers_after_write_failure(self):
         temporary, source, destination = self.make_installations()
         with temporary:

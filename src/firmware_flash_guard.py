@@ -33,6 +33,9 @@ def probe_esp32_flash_size(esptool_path, port, *, runner=subprocess.run):
         "--chip", "esp32s3",
         "--port", str(port),
         "--baud", "921600",
+        # Keep the board in ROM download mode so the verified port remains
+        # associated with this chip until write_flash starts.
+        "--after", "no_reset",
         "flash_id",
     ]
     try:

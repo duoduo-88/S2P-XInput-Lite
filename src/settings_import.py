@@ -305,58 +305,70 @@ def apply_settings_import(plan: ImportPlan, *, profile_conflict="skip", layer_co
     if profile_conflict not in ("overwrite", "skip") or layer_conflict not in ("overwrite", "skip"):
         raise ValueError("conflict policy must be 'overwrite' or 'skip'")
 
-    destination_names = {name.casefold(): name for name in list_profiles(profile_dir)}
-    profiles_to_write = {}
-    profiles_skipped = []
-    for name, profile in plan.profiles.items():
-        if name.casefold() in destination_names and profile_conflict == "skip":
-            profiles_skipped.append(name)
-        else:
-            profiles_to_write[name] = profile
-
-    base_buttons, base_sticks = _base_layer_defaults(plan.config)
-    destination_layers, managed_paths = load_managed_layer_directory(
-        base_buttons, base_sticks, SWITCH_BUTTONS, layer_dir
-    )
-    desired_layers = list(destination_layers)
-    layers_imported, layers_skipped = [], []
-    for source_layer in plan.layers:
-        name = str(source_layer["name"])
-        conflicts = [
-            layer for layer in desired_layers
-            if str(layer["name"]).casefold() == name.casefold()
-            or str(layer["id"]) == str(source_layer["id"])
-        ]
-        if conflicts and layer_conflict == "skip":
-            layers_skipped.append(name)
-            continue
-        if conflicts:
-            desired_layers = [layer for layer in desired_layers if layer not in conflicts]
-        desired_layers.append(source_layer)
-        layers_imported.append(name)
-
-    accepted_profiles = {name.casefold(): name for name in profiles_to_write}
-    active = _fallback_active(plan.current_active_profile, profile_dir)
-    source_active = plan.source_active_profile
-    if source_active.casefold() in accepted_profiles:
-        active = accepted_profiles[source_active.casefold()]
-
-    candidate = plan.config
-    if active.casefold() in accepted_profiles:
-        apply_profile(candidate, profiles_to_write[active])
-    if not candidate.has_section("gui"):
-        candidate.add_section("gui")
-    candidate.set("gui", "active_profile", active)
-    # Current config owns the active runtime state; profile files retain their
-    # individual imported state.  This ensures new layer IDs are consistent.
-    state_layers, _stale = apply_layer_state(candidate, desired_layers)
-    store_layer_state(candidate, state_layers)
-
-    paths = {Path(config_path), *[profile_path(name, profile_dir) for name in profiles_to_write]}
-    paths.update(Path(path) for path in managed_paths)
-    paths.update(Path(layer_dir) / f"{layer['name']}.json" for layer in desired_layers)
-    # Snapshot, writes and rollback must share the same cross-process lock.
+    # Destination reads, snapshot, writes and rollback share the same
+    # cross-process lock so a concurrent migration cannot leave a stale plan
+    # or rollback snapshot between the layer/profile scans and file changes.
     with config_file_lock():
+        destination_names = {
+            name.casefold(): name for name in list_profiles(profile_dir)
+        }
+        profiles_to_write = {}
+        profiles_skipped = []
+        for name, profile in plan.profiles.items():
+            if name.casefold() in destination_names and profile_conflict == "skip":
+                profiles_skipped.append(name)
+            else:
+                profiles_to_write[name] = profile
+
+        base_buttons, base_sticks = _base_layer_defaults(plan.config)
+        destination_layers, managed_paths = load_managed_layer_directory(
+            base_buttons, base_sticks, SWITCH_BUTTONS, layer_dir
+        )
+        desired_layers = list(destination_layers)
+        layers_imported, layers_skipped = [], []
+        for source_layer in plan.layers:
+            name = str(source_layer["name"])
+            conflicts = [
+                layer for layer in desired_layers
+                if str(layer["name"]).casefold() == name.casefold()
+                or str(layer["id"]) == str(source_layer["id"])
+            ]
+            if conflicts and layer_conflict == "skip":
+                layers_skipped.append(name)
+                continue
+            if conflicts:
+                desired_layers = [
+                    layer for layer in desired_layers if layer not in conflicts
+                ]
+            desired_layers.append(source_layer)
+            layers_imported.append(name)
+
+        accepted_profiles = {name.casefold(): name for name in profiles_to_write}
+        active = _fallback_active(plan.current_active_profile, profile_dir)
+        source_active = plan.source_active_profile
+        if source_active.casefold() in accepted_profiles:
+            active = accepted_profiles[source_active.casefold()]
+
+        candidate = plan.config
+        if active.casefold() in accepted_profiles:
+            apply_profile(candidate, profiles_to_write[active])
+        if not candidate.has_section("gui"):
+            candidate.add_section("gui")
+        candidate.set("gui", "active_profile", active)
+        # Current config owns the active runtime state; profile files retain
+        # their individual imported state.  This keeps imported layer IDs in
+        # sync with the newly written global layer files.
+        state_layers, _stale = apply_layer_state(candidate, desired_layers)
+        store_layer_state(candidate, state_layers)
+
+        paths = {
+            Path(config_path),
+            *[profile_path(name, profile_dir) for name in profiles_to_write],
+        }
+        paths.update(Path(path) for path in managed_paths)
+        paths.update(
+            Path(layer_dir) / f"{layer['name']}.json" for layer in desired_layers
+        )
         snapshot = _snapshot(paths)
         try:
             for name, profile in profiles_to_write.items():

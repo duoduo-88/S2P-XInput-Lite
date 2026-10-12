@@ -18,6 +18,14 @@ class _ImmediateThread:
         self._target()
 
 
+class _DeferredThread:
+    def __init__(self, target, **_kwargs):
+        self._target = target
+
+    def start(self):
+        pass
+
+
 class _ScheduledRoot:
     def __init__(self):
         self._next_id = 0
@@ -51,6 +59,8 @@ class GuiOperationSerializationTests(unittest.TestCase):
         gui._calibration_start_job = None
         gui._flash_detection_job = None
         gui._flash_operation_active = False
+        gui._flash_operation_generation = 0
+        gui.get_serial_port_infos = Mock(return_value=())
         gui.main_process = None
         gui.calibration_process = None
         gui.flash_process = None
@@ -230,6 +240,9 @@ class GuiOperationSerializationTests(unittest.TestCase):
             with self.subTest(size=size):
                 gui = self.make_gui()
                 gui._flash_operation_active = True
+                gui.get_serial_port_infos = Mock(return_value=(
+                    SimpleNamespace(device="COM4", vid=0x303A, pid=0x1001),
+                ))
                 gui.start_firmware_flash = Mock()
                 with (
                     patch.object(config_gui.threading, "Thread", _ImmediateThread),
@@ -244,6 +257,47 @@ class GuiOperationSerializationTests(unittest.TestCase):
                     gui.start_firmware_flash.assert_not_called()
                     error.assert_called_once()
                     self.assertFalse(gui._flash_operation_active)
+
+    def test_removed_preflight_port_cannot_start_write(self):
+        gui = self.make_gui()
+        gui._flash_operation_active = True
+        gui.get_serial_port_infos = Mock(return_value=())
+        gui.start_firmware_flash = Mock()
+
+        with (
+            patch.object(config_gui.threading, "Thread", _ImmediateThread),
+            patch.object(
+                config_gui, "probe_esp32_flash_size",
+                return_value=16 * 1024 * 1024,
+            ),
+            patch.object(config_gui.messagebox, "showerror") as error,
+        ):
+            gui.preflight_firmware_flash("COM4")
+
+        gui.start_firmware_flash.assert_not_called()
+        error.assert_called_once()
+        self.assertFalse(gui._flash_operation_active)
+
+    def test_stale_preflight_callback_cannot_use_a_new_ports_result(self):
+        gui = self.make_gui()
+        gui._flash_operation_active = True
+        gui.start_firmware_flash = Mock()
+        gui.get_serial_port_infos = Mock(side_effect=(
+            (SimpleNamespace(device="COM4", vid=0x303A, pid=0x1001),),
+            (SimpleNamespace(device="COM5", vid=0x303A, pid=0x1001),),
+        ))
+        with patch.object(config_gui.threading, "Thread", _DeferredThread):
+            gui.preflight_firmware_flash("COM4")
+            old_job = gui._flash_preflight_poll_job
+            old_callback = gui.root._jobs[old_job]
+            gui._finish_flash_operation()
+
+            gui._flash_operation_active = True
+            gui.preflight_firmware_flash("COM5")
+            gui._flash_preflight_queue.put((16 * 1024 * 1024, None))
+            old_callback()
+
+        gui.start_firmware_flash.assert_not_called()
 
     def test_unverified_flash_entrypoint_rejects_direct_write(self):
         gui = self.make_gui()
@@ -269,6 +323,25 @@ class GuiOperationSerializationTests(unittest.TestCase):
 
         gui.start_firmware_flash.assert_not_called()
         self.assertEqual(gui.root.active_job_count, 1)
+
+    def test_flash_detection_timeout_error_is_localized(self):
+        for language, expected in (
+            ("zh", "30 秒內未偵測到新的 COM Port"),
+            ("en", "No new COM port was found within 30 seconds"),
+        ):
+            with self.subTest(language=language):
+                gui = self.make_gui()
+                gui.language = language
+                gui.tr = lambda text: config_gui.translate_text(text, language)
+                gui._flash_operation_active = True
+                gui.flash_detect_attempts = 59
+                gui.ports_before_flash = set()
+                gui.get_serial_port_infos = Mock(return_value=())
+
+                with patch.object(config_gui.messagebox, "showerror") as error:
+                    gui.detect_flash_port()
+
+                self.assertIn(expected, error.call_args.args[1])
 
     def test_live_connector_blocks_direct_duplicate_start(self):
         gui = self.make_gui()
