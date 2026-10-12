@@ -43,6 +43,7 @@ from esp32_detection import (
     find_esp32_firmware,
     find_esp32_port,
 )
+from firmware_flash_guard import FlashProbeError, probe_esp32_flash_size
 from standalone_profile import (
     StandaloneTransferError,
     compile_standalone_profile,
@@ -2315,6 +2316,8 @@ class ConfigGUI:
 
     def _finish_flash_operation(self):
         self._cancel_scheduled_job("_flash_detection_job")
+        self._cancel_scheduled_job("_flash_preflight_poll_job")
+        self._flash_preflight_verified_port = None
         self._flash_operation_active = False
 
     def detect_flash_port(self):
@@ -2333,12 +2336,14 @@ class ConfigGUI:
                 self.tr("偵測到刷機連接埠"),
                 self.tr("已偵測到刷機連接埠：")
                 + str(flash_port)
-                + self.tr("\n\n即將開始刷入韌體。")
+                + (
+                    "\n\nThe program will verify the chip and flash capacity before flashing."
+                    if getattr(self, "language", "zh") == "en"
+                    else "\n\n程式將先確認晶片與 Flash 容量，符合 16 MB 規格後才會刷寫。"
+                )
             )
 
-            self.start_firmware_flash(
-                flash_port
-            )
+            self.preflight_firmware_flash(flash_port)
             return
 
         self.flash_detect_attempts += 1
@@ -2359,7 +2364,69 @@ class ConfigGUI:
 
         self._flash_detection_job = self.root.after(500, poll_again)
 
+    def preflight_firmware_flash(self, port):
+        """Verify actual 16 MB flash in a worker, without blocking the Tk UI."""
+        if not getattr(self, "_flash_operation_active", False):
+            return
+        if getattr(self, "_flash_preflight_poll_job", None) is not None:
+            return
+        result_queue = queue.Queue(maxsize=1)
+        self._flash_preflight_queue = result_queue
+
+        def probe():
+            try:
+                size_bytes = probe_esp32_flash_size(ESPTOOL_PATH, port)
+                result_queue.put((size_bytes, None))
+            except (FlashProbeError, OSError, subprocess.SubprocessError) as exc:
+                result_queue.put((None, str(exc)))
+
+        threading.Thread(
+            target=probe,
+            daemon=True,
+            name="ESP32FlashCapacityProbe",
+        ).start()
+        self._poll_firmware_flash_preflight(port)
+
+    def _poll_firmware_flash_preflight(self, port):
+        self._flash_preflight_poll_job = None
+        if not getattr(self, "_flash_operation_active", False):
+            return
+        try:
+            size_bytes, error = self._flash_preflight_queue.get_nowait()
+        except queue.Empty:
+            self._flash_preflight_poll_job = self.root.after(
+                100, lambda: self._poll_firmware_flash_preflight(port),
+            )
+            return
+
+        if error or size_bytes != 16 * 1024 * 1024:
+            self._finish_flash_operation()
+            if error:
+                zh = "無法驗證 ESP32-S3 的 Flash 容量，已取消刷寫：\n" + error
+                en = "Cannot verify ESP32-S3 flash capacity. Flashing cancelled:\n" + error
+            else:
+                size_mb = size_bytes / (1024 * 1024)
+                zh = f"偵測到 {size_mb:g} MB Flash，僅支援 16 MB，已取消刷寫。"
+                en = f"Detected {size_mb:g} MB flash. Only 16 MB is supported; flashing cancelled."
+            messagebox.showerror(
+                self.tr("韌體刷寫已取消"),
+                en if getattr(self, "language", "zh") == "en" else zh,
+            )
+            return
+        self._flash_preflight_verified_port = port
+        self.start_firmware_flash(port)
+
     def start_firmware_flash(self, port):
+        if getattr(self, "_flash_preflight_verified_port", None) != port:
+            self._finish_flash_operation()
+            messagebox.showerror(
+                self.tr("韌體刷寫已取消"),
+                "Chip/flash validation is required before flashing."
+                if getattr(self, "language", "zh") == "en"
+                else "未通過晶片與 Flash 容量驗證，不允許刷寫。",
+            )
+            return
+        self._flash_preflight_verified_port = None
         try:
             command = [
                 str(ESPTOOL_PATH),
