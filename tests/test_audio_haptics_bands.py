@@ -392,6 +392,16 @@ class AudioHapticsBandTests(unittest.TestCase):
         self.assertGreater(second[3].punch, first[3].punch * 0.7)
         self.assertEqual(records[-4][2].sustain_evidence, 0.0)
 
+    def test_capture_callback_is_suppressed_after_close(self):
+        events = []
+        audio = self._default_audio(lambda lf, hf: events.append((lf, hf)))
+        audio.mode = "AUDIO"
+        audio._running = True
+        self.assertTrue(audio._emit_capture_levels(0.7, 0.3, audio._stop_event))
+        self.assertTrue(audio.close())
+        self.assertFalse(audio._emit_capture_levels(0.9, 0.9, audio._stop_event))
+        self.assertEqual(events, [(0.7, 0.3), (0.0, 0.0)])
+
     def test_close_wakes_capture_before_a_blocking_read(self):
         class EmptyStream:
             read_calls = 0

@@ -217,13 +217,44 @@ class GuiOperationSerializationTests(unittest.TestCase):
         gui.get_serial_port_infos = Mock(return_value=(
             SimpleNamespace(device="COM4", vid=0x303A, pid=0x1001),
         ))
-        gui.start_firmware_flash = Mock()
+        gui.preflight_firmware_flash = Mock()
 
         with patch.object(config_gui.messagebox, "showinfo"):
             gui.detect_flash_port()
 
-        gui.start_firmware_flash.assert_called_once_with("COM4")
+        gui.preflight_firmware_flash.assert_called_once_with("COM4")
         self.assertEqual(gui.root.active_job_count, 0)
+
+    def test_16mb_preflight_allows_write_and_blocks_other_sizes(self):
+        for size in (16 * 1024 * 1024, 8 * 1024 * 1024):
+            with self.subTest(size=size):
+                gui = self.make_gui()
+                gui._flash_operation_active = True
+                gui.start_firmware_flash = Mock()
+                with (
+                    patch.object(config_gui.threading, "Thread", _ImmediateThread),
+                    patch.object(config_gui, "probe_esp32_flash_size", return_value=size),
+                    patch.object(config_gui.messagebox, "showerror") as error,
+                ):
+                    gui.preflight_firmware_flash("COM4")
+                if size == 16 * 1024 * 1024:
+                    gui.start_firmware_flash.assert_called_once_with("COM4")
+                    error.assert_not_called()
+                else:
+                    gui.start_firmware_flash.assert_not_called()
+                    error.assert_called_once()
+                    self.assertFalse(gui._flash_operation_active)
+
+    def test_unverified_flash_entrypoint_rejects_direct_write(self):
+        gui = self.make_gui()
+        gui._flash_operation_active = True
+        with (
+            patch.object(config_gui.messagebox, "showerror") as error,
+            patch.object(config_gui.subprocess, "Popen") as popen,
+        ):
+            gui.start_firmware_flash("COM4")
+        popen.assert_not_called()
+        error.assert_called_once()
 
     def test_flash_detection_waits_when_only_existing_bridge_is_present(self):
         gui = self.make_gui()
