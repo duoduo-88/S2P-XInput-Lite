@@ -12,6 +12,9 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from idle_disconnect import IDLE_DISCONNECT_OPTIONS
+from update_manager import parse_version
+
 from config_utils import (
     CONFIG_PATH,
     PROFILE_DIR,
@@ -134,6 +137,43 @@ def _copy_known_global_settings(target, source):
             target.set(section, key, value)
 
 
+_IMPORTED_BOOL_OPTIONS = frozenset((
+    "hidhide_missing_prompt_dismissed",
+    "hidhide_setup_prompt_dismissed",
+    "close_mode_warning_suppressed",
+    "automatic_update_checks",
+))
+
+
+def _validate_imported_global_settings(target, source):
+    """Validate supplied known options without changing current-version defaults."""
+    for section in ("serial", "gui"):
+        if not source.has_section(section):
+            continue
+        for key, value in source.items(section):
+            if key == "active_profile" or not target.has_option(section, key):
+                continue
+            try:
+                if section == "serial" and key == "baudrate":
+                    if int(value) <= 0:
+                        raise ValueError("baudrate must be positive")
+                elif section == "gui":
+                    if key == "language" and value.strip() not in ("zh", "en"):
+                        raise ValueError("unsupported UI language")
+                    if key == "idle_disconnect_minutes":
+                        if int(value) not in IDLE_DISCONNECT_OPTIONS:
+                            raise ValueError("unsupported idle-disconnect interval")
+                    if key in _IMPORTED_BOOL_OPTIONS:
+                        if value.strip().lower() not in configparser.ConfigParser.BOOLEAN_STATES:
+                            raise ValueError("invalid boolean")
+                    if key == "ignored_update_version" and value.strip():
+                        parse_version(value.strip())
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise SettingsImportError(
+                    f"匯入設定無效：[{section}] {key} = {value!r}"
+                ) from exc
+
+
 def _validate_source_calibrations(source):
     controller_ids = set()
     for section in source.sections():
@@ -206,6 +246,7 @@ def scan_settings_import(source_root, *, config_path=CONFIG_PATH, profile_dir=PR
     # This is load_config's normal schema/migration path, explicitly in
     # no-persist mode so a rejected source never changes the destination.
     current = load_config(config_path, persist=False)
+    _validate_imported_global_settings(current, source_config)
     _copy_known_global_settings(current, source_config)
 
     profiles, ignored_system_default = _read_source_profiles(source_profiles_dir)
@@ -314,16 +355,17 @@ def apply_settings_import(plan: ImportPlan, *, profile_conflict="skip", layer_co
     paths = {Path(config_path), *[profile_path(name, profile_dir) for name in profiles_to_write]}
     paths.update(Path(path) for path in managed_paths)
     paths.update(Path(layer_dir) / f"{layer['name']}.json" for layer in desired_layers)
-    snapshot = _snapshot(paths)
-    try:
-        with config_file_lock():
+    # Snapshot, writes and rollback must share the same cross-process lock.
+    with config_file_lock():
+        snapshot = _snapshot(paths)
+        try:
             for name, profile in profiles_to_write.items():
                 atomic_write_config(profile, profile_path(name, profile_dir))
             save_layers(candidate, desired_layers, layer_dir, deletable_paths=managed_paths)
             atomic_write_config(candidate, config_path)
-    except Exception:
-        _restore(snapshot)
-        raise
+        except Exception:
+            _restore(snapshot)
+            raise
     return ImportResult(
         plan.source_root, active, tuple(profiles_to_write), tuple(profiles_skipped),
         tuple(layers_imported), tuple(layers_skipped), plan.calibration_count,

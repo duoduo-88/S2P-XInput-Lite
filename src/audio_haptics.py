@@ -535,6 +535,8 @@ class AudioHaptics:
             self._restart_after_exit = False
             self._running = False
             self._stop_event.set()
+            # Synchronize with any in-flight capture callback before returning.
+            self._level_callback(0.0, 0.0)
             thread = self._thread
         if (
             thread is not None
@@ -547,8 +549,15 @@ class AudioHaptics:
             with self._lifecycle_lock:
                 if self._thread is thread:
                     self._thread = None
-        self._level_callback(0.0, 0.0)
         return stopped
+
+    def _emit_capture_levels(self, lf, hf, stop_event):
+        """Serialize native-capture output with shutdown, even after late reads."""
+        with self._lifecycle_lock:
+            if not self._running or stop_event.is_set() or self.mode == "GAME":
+                return False
+            self._level_callback(lf, hf)
+            return True
 
     def _capture_loop(self, generation, stop_event):
         audio = None
@@ -597,9 +606,11 @@ class AudioHaptics:
                     generation == self._generation
                     and self._thread is current_thread
                 ):
+                    if self._running and not stop_event.is_set():
+                        # Unexpected native-capture termination still clears rumble.
+                        self._level_callback(0.0, 0.0)
                     self._running = False
                     stop_event.set()
-            self._level_callback(0.0, 0.0)
             if stream is not None:
                 try:
                     stream.stop_stream()
@@ -753,7 +764,7 @@ class AudioHaptics:
             hf_envelope = self._smooth_envelope(
                 hf_envelope, hf_target, block_seconds
             )
-            self._level_callback(lf_envelope, hf_envelope)
+            self._emit_capture_levels(lf_envelope, hf_envelope, stop_event)
 
     def _level_from_rms(self, rms, gain):
         """Original user-facing linear Band Gain and Strength curve."""

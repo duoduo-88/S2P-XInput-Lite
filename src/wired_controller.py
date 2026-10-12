@@ -517,7 +517,9 @@ def translate_usb_report(data):
     report_id = data[0]
     if report_id == REPORT_ID_COMMON:
         body = bytes(data[1:])
-        return body if len(body) >= 60 else body.ljust(64, b"\x00")
+        # Do not synthesize button/stick positions from missing bytes: a
+        # truncated report is invalid rather than a neutral controller state.
+        return body if len(body) >= 60 else None
     if report_id != REPORT_ID_PRO2 or len(data) < 12:
         return None
     output = bytearray(64)
