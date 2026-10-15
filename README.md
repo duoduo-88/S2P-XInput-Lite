@@ -17,10 +17,10 @@ Current version: **v0.7.13**
 [Source](https://github.com/duoduo-88/S2P-XInput-Lite/tree/main) ·
 [Latest published release](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 
-Main targets **v0.7.13** with the bridge shutdown fix and **S2P-FW 1.0.6**.
-Use the updated desktop source and firmware together. The version update does
-not create a GitHub Release or replace existing release assets; hardware
-shutdown and battery tests remain pending. See the
+**v0.7.13** includes the bridge shutdown fix and **S2P-FW 1.0.6**.
+Use the updated desktop application and firmware together. Initial post-flash
+functionality was reported by a user; comprehensive shutdown and battery
+tests remain pending. See the
 [investigation and validation steps](docs/bridge-host-shutdown.md).
 
 > This is an independent, unofficial community project. It is not affiliated with, endorsed by, sponsored by, or certified by Nintendo, Microsoft, Espressif Systems, Apple, or Google.

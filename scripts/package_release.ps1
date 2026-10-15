@@ -197,6 +197,10 @@ Copy-ReleaseFile `
     -Source $releaseNotes `
     -RelativePath (Split-Path -Leaf $releaseNotes) `
     -DestinationRoot $packageRoot
+Copy-ReleaseFile `
+    -Source (Join-Path $repoRoot "docs\bridge-host-shutdown.md") `
+    -RelativePath "docs\bridge-host-shutdown.md" `
+    -DestinationRoot $packageRoot
 
 Copy-CuratedTree `
     -SourceRoot (Join-Path $repoRoot "driver") `

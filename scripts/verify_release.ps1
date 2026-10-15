@@ -89,6 +89,7 @@ $required = @(
     "LICENSE",
     "README.md",
     "README_zh-TW.md",
+    "docs\bridge-host-shutdown.md",
     "image\icon.ico",
     "THIRD_PARTY_NOTICES.md",
     "third_party\README.md",

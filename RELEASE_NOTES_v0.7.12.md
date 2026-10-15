@@ -15,7 +15,7 @@ The published **v0.7.12** release originally bundled **S2P-FW 1.0.5** without ch
 
 ### Main branch update: v0.7.13
 
-- Main now targets desktop **v0.7.13** with **S2P-FW 1.0.6** and the matching bridge shutdown fix. See the [v0.7.13 notes](RELEASE_NOTES_v0.7.13.md). This does not create a GitHub Release or replace the existing v0.7.12 release archive.
+- Desktop **v0.7.13** includes **S2P-FW 1.0.6** and the matching bridge shutdown fix. See the [v0.7.13 notes](RELEASE_NOTES_v0.7.13.md). The existing v0.7.12 release archive remains unchanged.
 - Graceful exit waits for firmware confirmation that all BLE links are released. A GUI-only crash also requests connector shutdown.
 - Once a host session is established, 3 seconds of continuous CDC loss or 8 seconds without matching heartbeats starts BLE release. This protection applies only when both configured and active modes are bridge; standalone XInput, HID and Auto retain their existing idle/wake behavior.
 - Added shutdown, host-loss and multi-controller race coverage. All 647 tests passed locally, including the optional ESP-IDF build and bundled-image comparison; clean-build images match byte for byte.
@@ -36,7 +36,7 @@ The published **v0.7.12** release originally bundled **S2P-FW 1.0.5** without ch
 
 ### main 更新：v0.7.13
 
-- main 桌面版本已更新為 **v0.7.13**，包含 **S2P-FW 1.0.6** 與配套橋接關閉修正，詳見 [v0.7.13 發佈說明](RELEASE_NOTES_v0.7.13.md)。本次未建立 GitHub Release，也未替換既有 v0.7.12 發佈壓縮檔。
+- 桌面 **v0.7.13** 包含 **S2P-FW 1.0.6** 與配套橋接關閉修正，詳見 [v0.7.13 發佈說明](RELEASE_NOTES_v0.7.13.md)。既有 v0.7.12 發佈壓縮檔保留。
 - 正常退出會等待韌體確認全部 BLE 連線解除；只有 GUI 崩潰時，也會通知連接子程序關閉。
 - 主機工作階段建立後，CDC 連續消失 3 秒或對應心跳逾時 8 秒便開始釋放 BLE。只有設定與實際模式皆為一般橋接時啟用；獨立 XInput／HID／Auto 保留既有閒置斷線與喚醒行為。
 - 新增關閉、主機遺失與多手把競爭測試。本機 647 項測試全部通過，包含可選 ESP-IDF 建置與隨附映像比對；乾淨重建映像逐位元一致。

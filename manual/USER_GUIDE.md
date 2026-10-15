@@ -413,10 +413,10 @@ If you dismiss an automatic reminder, it will not appear on every launch. Select
 > [!CAUTION]
 > Do not disconnect the ESP32-S3 or close the application while firmware is being written.
 
-### 8.2.1 Bridge shutdown protection on main
+### 8.2.1 Bridge shutdown protection
 
-The main branch's bridge shutdown protection requires both the updated desktop
-source and S2P-FW 1.0.6; the existing v0.7.12 release archive is unchanged.
+Bridge shutdown protection in v0.7.13 requires both the updated desktop
+application and S2P-FW 1.0.6.
 In bridge mode, use **Exit** to request release and wait for confirmation that
 all BLE links are released. After session establishment, continuous CDC loss
 for 3 seconds or no host heartbeat for 8 seconds starts automatic BLE release.
