@@ -59,11 +59,12 @@
 #include "ble_callback_metrics.h"
 #include "standalone_profile_store.h"
 #include "standalone_xinput.h"
+#include "bridge_host_watchdog.h"
 
 static const char *TAG = "S3_BLUEDROID";
 
 #define APP_FIRMWARE_PRODUCT      "S2P-FW"
-#define APP_FIRMWARE_VERSION      "1.0.5"
+#define APP_FIRMWARE_VERSION      "1.0.6"
 #define APP_PROTOCOL_NAME         "s2p_bridge"
 #define APP_PROTOCOL_VERSION      "1.0.0"
 #define EXPECTED_FIRMWARE_PROFILE "s2p_usb_bridge"
@@ -91,6 +92,17 @@ static standalone_output_mode_t s_active_output_mode;
 static bool s_standalone_auto_conn_pending;
 static bool s_standalone_auto_conn_pair_required;
 static char s_standalone_auto_conn[32];
+static bridge_host_watchdog_t s_bridge_host;
+/* Callbacks only read this atomic gate; session state belongs to cdc_task. */
+static bool s_bridge_host_blocked;
+static bool bridge_host_mode(void) {
+    return s_output_mode == STANDALONE_OUTPUT_BRIDGE &&
+           s_active_output_mode == STANDALONE_OUTPUT_BRIDGE;
+}
+static bool bridge_host_blocks_connection(void) {
+    return bridge_host_mode() &&
+        __atomic_load_n(&s_bridge_host_blocked, __ATOMIC_ACQUIRE);
+}
 
 
 // --- Switch 2 GATT UUIDs (128-bit; little-endian in esp_bt_uuid_t = string reversed) ---
@@ -239,12 +251,35 @@ static inline void gap_busy(uint32_t ms) {
 static volatile uint8_t s_disc_mask      = 0;      // bitmask: channels queued for disconnect
 static volatile bool    s_disc_in_flight = false;   // true while a gap_disconnect is pending
 static portMUX_TYPE     s_disc_mux = portMUX_INITIALIZER_UNLOCKED;
+static int s_disc_channel = -1;
+static uint32_t s_disc_generation;
+static uint16_t s_disc_conn_id;
+static esp_bd_addr_t s_disc_bda;
+static uint32_t s_disc_started_ms;
+static uint32_t s_disc_queued_generation[MAX_CH];
+/* Caller holds s_disc_mux. A queued bit must never target a reused slot. */
+static void enqueue_disc_locked(int ch) {
+    if (!s_ch[ch].used) return;
+    s_disc_queued_generation[ch] = s_ch[ch].generation;
+    s_disc_mask |= (1u << ch);
+}
+
+static void finish_disc_event(const uint8_t *bda, uint16_t conn_id) {
+    portENTER_CRITICAL(&s_disc_mux);
+    if (s_disc_in_flight && s_disc_conn_id == conn_id &&
+        memcmp(s_disc_bda, bda, sizeof(s_disc_bda)) == 0) {
+        s_disc_in_flight = false;
+        s_disc_channel = -1;
+    }
+    portEXIT_CRITICAL(&s_disc_mux);
+}
 
 // Issue the next queued disconnect (if none is currently in flight).
 // Safe to call from cdc_task (core 1) AND from DISCONNECT_EVT (BTC task, core 0).
 static void kick_disc_queue(void) {
     portENTER_CRITICAL(&s_disc_mux);
-    if (s_disc_in_flight || s_disc_mask == 0) {
+    if (s_disc_in_flight || s_disc_mask == 0 ||
+        !time_reached(now_ms(), s_gap_busy_until)) {
         portEXIT_CRITICAL(&s_disc_mux);
         return;
     }
@@ -252,7 +287,12 @@ static void kick_disc_queue(void) {
     int ch = -1;
     for (int i = 0; i < MAX_CH; i++) {
         if (s_disc_mask & (1u << i)) {
-            if (s_ch[i].used) { ch = i; break; }
+            if (s_ch[i].used &&
+                s_ch[i].generation == s_disc_queued_generation[i]) {
+                /* An open still in flight must retain its slot until OPEN_EVT. */
+                if (s_ch[i].link_open) { ch = i; break; }
+                continue;
+            }
             s_disc_mask &= ~(1u << i);  // already gone, clear and skip
         }
     }
@@ -267,13 +307,23 @@ static void kick_disc_queue(void) {
     memcpy(bda, s_ch[ch].bda, sizeof(bda));
     s_disc_mask      &= ~(1u << ch);
     s_disc_in_flight  = true;
+    s_disc_channel = ch;
+    s_disc_generation = s_ch[ch].generation;
+    s_disc_conn_id = s_ch[ch].conn_id;
+    memcpy(s_disc_bda, bda, sizeof(s_disc_bda));
+    s_disc_started_ms = now_ms();
     portEXIT_CRITICAL(&s_disc_mux);
     gap_busy(400);                        // hold off scan until this disconnect settles
     esp_err_t err = esp_ble_gap_disconnect(bda);
     if (err != ESP_OK) {
         portENTER_CRITICAL(&s_disc_mux);
-        s_disc_in_flight = false;
-        if (s_ch[ch].used) s_disc_mask |= (1u << ch);
+        /* A completion may already have run on the other core. */
+        if (s_disc_in_flight && s_disc_channel == ch &&
+            s_disc_generation == s_ch[ch].generation) {
+            s_disc_in_flight = false;
+            s_disc_channel = -1;
+            enqueue_disc_locked(ch);
+        }
         portEXIT_CRITICAL(&s_disc_mux);
         gap_busy(250);
         ESP_LOGW(
@@ -1070,6 +1120,8 @@ static bool standalone_has_link(void) {
 }
 static bool request_scan_start(void) {
     if (
+        bridge_host_blocks_connection() ||
+        s_disc_in_flight || s_disc_mask ||
         !s_scan_mode || !s_scan_params_ready || s_scanning ||
         s_scan_start_pending || s_scan_stop_pending ||
         s_scan_stop_needed || standalone_has_link()
@@ -1127,7 +1179,7 @@ static void send_status_response(void) {
         "\"profile\":\"%s\",\"build\":\"%s\","
         "\"ble_channels\":%u,\"mac\":\"%s\","
         "\"event_queue_drops\":%lu,"
-        "\"features\":{\"wrpair\":1,\"shadow\":1,"
+        "\"features\":{\"host_lease\":%u,\"wrpair\":1,\"shadow\":1,"
         "\"diagnostics\":1,\"rumble_diagnostics\":1,"
         "\"standalone_profile_write\":1,\"standalone_profile_runtime\":1,"
         "\"standalone_usb_xinput\":1,"
@@ -1140,7 +1192,7 @@ static void send_status_response(void) {
         (unsigned)ch_active_mask(), s_own_mac,
         (unsigned long)__atomic_load_n(
             &s_event_queue_drops, __ATOMIC_RELAXED
-        ));
+        ), bridge_host_mode() ? 1u : 0u);
     send_json(b);
 }
 
@@ -1317,6 +1369,7 @@ static uint16_t choose_input_handle(int ch, bool prefer_legacy, uint8_t *src) {
 // --- command handlers (cdc_task context) ---
 static void open_pending_conn(void);
 static void do_conn(char *args, bool standalone_pair_required) {
+    if (bridge_host_blocks_connection()) return;
     char *save = NULL;
     char *type_s = strtok_r(args, " ", &save);
     char *mac_s  = strtok_r(NULL, " ", &save);
@@ -1490,6 +1543,7 @@ static void restore_widened_links(void);   // forward decl (defined just below)
 // from SCAN_STOP_COMPLETE_EVT (immediate, 1st/2nd link) and from cdc_task (deferred
 // 3rd-link case, after the existing links were widened to 15ms and that has settled).
 static void open_pending_conn(void) {
+    if (bridge_host_blocks_connection()) return;
     int ch = s_pending_conn;
     if (ch < 0) return;
     s_pending_conn = -1;
@@ -1540,7 +1594,7 @@ static void do_disc(char *args) {
     int ch = atoi(args);
     if (ch >= 0 && ch < MAX_CH && s_ch[ch].used) {
         portENTER_CRITICAL(&s_disc_mux);
-        s_disc_mask |= (1u << ch);
+        enqueue_disc_locked(ch);
         portEXIT_CRITICAL(&s_disc_mux);
         kick_disc_queue();
     }
@@ -1559,9 +1613,93 @@ static void do_disc_all(void) {  // "ble disconnect": drop every live link (clea
     s_resume_scan = false;  // kick_disc_queue will set this when done
     portENTER_CRITICAL(&s_disc_mux);
     for (int i = 0; i < MAX_CH; i++)
-        if (s_ch[i].used) s_disc_mask |= (1u << i);
+        enqueue_disc_locked(i);
     portEXIT_CRITICAL(&s_disc_mux);
     kick_disc_queue();  // start first disconnect; rest follow via DISCONNECT_EVT
+}
+
+static void stop_bridge_host(void) {
+    __atomic_store_n(&s_bridge_host_blocked, true, __ATOMIC_RELEASE);
+    s_scan_mode = false;
+    s_resume_scan = false;
+    request_scan_stop();
+    do_disc_all();
+    char message[112];
+    snprintf(message, sizeof(message),
+        "{\"cmd\":\"host_session\",\"session\":%lu,\"state\":\"stopping\"}\n",
+        (unsigned long)s_bridge_host.session);
+    out_event(message);  /* accepted, NOT physical-disconnect confirmation */
+}
+
+static void handle_bridge_host_command(const char *cmd) {
+    if (!bridge_host_mode()) return;
+    char action[8];
+    unsigned long session;
+    char extra;
+    if (sscanf(cmd, "host %7s %lu %c", action, &session, &extra) != 2 ||
+        session == 0 || session > UINT32_MAX) return;
+    if (strcmp(action, "begin") == 0) {
+        if (!bridge_host_begin(&s_bridge_host, true, cdc_host_ready(),
+                               (uint32_t)session, now_ms())) return;
+        __atomic_store_n(&s_bridge_host_blocked, false, __ATOMIC_RELEASE);
+        char response[112];
+        snprintf(response, sizeof(response),
+            "{\"cmd\":\"host_session\",\"session\":%lu,\"state\":\"ready\"}\n", session);
+        out_event(response);
+    } else if (strcmp(action, "ping") == 0) {
+        if (cdc_host_ready())
+            bridge_host_ping(&s_bridge_host, (uint32_t)session, now_ms());
+    } else if (strcmp(action, "end") == 0) {
+        if (bridge_host_end(&s_bridge_host, (uint32_t)session)) stop_bridge_host();
+    }
+}
+
+static void pump_bridge_host_watchdog(void) {
+    /* Never arm, stop scanning or touch BLE for XInput/HID/Auto. */
+    if (!bridge_host_mode()) return;
+    if (bridge_host_poll(&s_bridge_host, true, cdc_host_ready(), now_ms())) {
+        out_debug("bridge host lost: releasing BLE links");
+        stop_bridge_host();
+    }
+    if (!s_bridge_host.stopping) return;
+
+    /* Retry a missing completion without treating a request as disconnection.
+     * Match slot generation; unrelated/duplicate events cannot advance it. */
+    bool retry_disconnect = false;
+    esp_bd_addr_t retry_bda;
+    portENTER_CRITICAL(&s_disc_mux);
+    if (s_disc_in_flight && (uint32_t)(now_ms() - s_disc_started_ms) >= 2000u) {
+        int ch = s_disc_channel;
+        if (ch >= 0 && s_ch[ch].used &&
+            s_ch[ch].generation == s_disc_generation) {
+            /* Keep ownership while retrying THIS link. A lower slot whose
+             * OPEN_EVT arrived late must not leapfrog a live disconnect. */
+            memcpy(retry_bda, s_disc_bda, sizeof(retry_bda));
+            s_disc_started_ms = now_ms();
+            retry_disconnect = true;
+        } else {
+            s_disc_in_flight = false;
+            s_disc_channel = -1;
+        }
+    }
+    portEXIT_CRITICAL(&s_disc_mux);
+    if (retry_disconnect) {
+        gap_busy(400);
+        esp_ble_gap_disconnect(retry_bda);
+    }
+    kick_disc_queue();
+    for (int ch = 0; ch < MAX_CH; ch++) {
+        if (s_ch[ch].used) return;
+    }
+    if (s_disc_in_flight || s_disc_mask || s_pending_conn >= 0 ||
+        s_scanning || s_scan_start_pending || s_scan_stop_pending ||
+        s_scan_stop_needed) return;
+    char message[96];
+    snprintf(message, sizeof(message),
+        "{\"cmd\":\"host_released\",\"session\":%lu}\n",
+        (unsigned long)s_bridge_host.session);
+    out_event(message);
+    bridge_host_finish(&s_bridge_host);
 }
 static void do_wr(char *args) {  // wr <ch> <c|r> <hex>
     char *save = NULL;
@@ -2308,6 +2446,7 @@ static void pump_standalone_xinput_rumble(void) {
 
 static bool command_is_control(const char *cmd) {
     return
+        strncmp(cmd, "host ", 5) == 0 ||
         strncmp(cmd, "scan on", 7) == 0 ||
         strncmp(cmd, "scan off", 8) == 0 ||
         strncmp(cmd, "ble disconnect", 14) == 0 ||
@@ -2417,6 +2556,13 @@ static void handle_query_command(char *cmd) {
 }
 
 static void handle_control_command(char *cmd) {
+    if (strncmp(cmd, "host ", 5) == 0) {
+        handle_bridge_host_command(cmd);
+        return;
+    }
+    /* Preserve final zero/disc commands, reject buffered reconnection work. */
+    if (bridge_host_blocks_connection() &&
+        (strncmp(cmd, "scan on", 7) == 0 || strncmp(cmd, "conn ", 5) == 0)) return;
     if (strncmp(cmd, "scan on", 7) == 0) {
         // The host sends "scan on" right after "disc <ch>" to re-arm detection.  Never
         // start the scan synchronously here: a gap_disconnect issued by do_disc is still
@@ -2478,13 +2624,20 @@ static void pump_connection_watchdogs(void) {
             continue;
         }
         s_ch[ch].connect_deadline_ms = 0;
+        if (bridge_host_blocks_connection() && s_ch[ch].connecting &&
+            !s_ch[ch].link_open && s_pending_conn != ch) {
+            /* A submitted open still belongs to Bluedroid. Only OPEN failure
+             * or DISCONNECT can release this slot; a timer is not evidence
+             * that the physical link was cancelled. */
+            continue;
+        }
         if (s_pending_conn == ch) {
             s_pending_conn = -1;
             s_conn_open_after = 0;
         }
         if (s_ch[ch].link_open) {
             portENTER_CRITICAL(&s_disc_mux);
-            s_disc_mask |= (1u << ch);
+            enqueue_disc_locked(ch);
             portEXIT_CRITICAL(&s_disc_mux);
             kick_disc_queue();
             continue;
@@ -2538,6 +2691,7 @@ static void cdc_task(void *arg) {
         pump_standalone_connection_feedback();
         pump_standalone_xinput_rumble();
         pump_connection_watchdogs();
+        pump_bridge_host_watchdog();
         if (standalone_xinput_idle_disconnect_due()) {
             do_disc_all();
         }
@@ -2550,8 +2704,11 @@ static void cdc_task(void *arg) {
         // Deferred 3rd-link open: the existing links were widened to 15ms in do_conn;
         // open the 3rd once that has settled (scan is already stopped by then).
         if (
-            s_pending_conn >= 0 && s_conn_open_after != 0 &&
-            deadline_reached(now_ms(), s_conn_open_after)
+            s_pending_conn >= 0 &&
+            ((s_conn_open_after != 0 && deadline_reached(now_ms(), s_conn_open_after)) ||
+             (bridge_host_mode() && s_conn_open_after == 0 &&
+              !s_scanning && !s_scan_start_pending &&
+              !s_scan_stop_pending && !s_scan_stop_needed))
         )
             open_pending_conn();
         if (
@@ -2559,7 +2716,7 @@ static void cdc_task(void *arg) {
             time_reached(now_ms(), s_scan_retry_after_ms)
         ) {
             if (request_scan_stop() && !s_scan_stop_pending) {
-                if (s_pending_conn >= 0 && s_conn_open_after == 0)
+                if (!bridge_host_mode() && s_pending_conn >= 0 && s_conn_open_after == 0)
                     open_pending_conn();
             }
         }
@@ -2975,6 +3132,8 @@ static void gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
     // first controller ever disconnects.  So look the channel up by its bonded address.
     if (event == ESP_GATTC_DISCONNECT_EVT) {
         int dch = ch_by_bda(param->disconnect.remote_bda);
+        if (dch >= 0 && s_ch[dch].link_open &&
+            s_ch[dch].conn_id != param->disconnect.conn_id) return;
         {   // Diagnostic: the BLE disconnect reason is the KEY clue for a failed 3rd link.
             // Common reasons: 0x08 supervision timeout, 0x13 remote terminated,
             // 0x16 local terminated, 0x22 LL response timeout, 0x28 LL instant passed,
@@ -3020,15 +3179,19 @@ static void gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
             if (!connecting && s_pending_conn < 0) s_widened_mask = 0;
         }
         reconcile_intervals();
-        // Advance the sequential disconnect queue regardless of whether a channel
-        // matched — an unmatched event (already-cleared slot) must NOT leave the
-        // in-flight flag set, or the queue wedges.
-        portENTER_CRITICAL(&s_disc_mux);
-        s_disc_in_flight = false;
-        bool queue_empty = (s_disc_mask == 0);
-        portEXIT_CRITICAL(&s_disc_mux);
+        // Only the requested link completes the in-flight operation. A remote
+        // disconnect on another controller must not issue parallel HCI ops.
+        finish_disc_event(param->disconnect.remote_bda,
+                          param->disconnect.conn_id);
+        bool queue_empty = !s_disc_in_flight && s_disc_mask == 0;
         if (queue_empty && s_scan_mode) s_resume_scan = true;
-        kick_disc_queue();
+        if (bridge_host_mode()) {
+            /* One issuer in bridge mode: callbacks never overlap the CDC
+             * task's reserved-but-not-yet-submitted disconnect operation. */
+            if (s_cdc_task_h) xTaskNotifyGive(s_cdc_task_h);
+        } else {
+            kick_disc_queue();
+        }
         return;
     }
 
@@ -3067,6 +3230,18 @@ static void gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
             restore_widened_links();
             gap_busy(300);
             if (s_scan_mode) s_resume_scan = true;
+            break;
+        }
+        if (bridge_host_blocks_connection()) {
+            /* Host died while gattc_open was asynchronous. Retain the live
+             * slot until its real DISCONNECT_EVT and use the same serial queue. */
+            s_ch[ch].link_open = true;
+            s_ch[ch].conn_id = param->open.conn_id;
+            s_ch[ch].connect_deadline_ms = 0;
+            portENTER_CRITICAL(&s_disc_mux);
+            enqueue_disc_locked(ch);
+            portEXIT_CRITICAL(&s_disc_mux);
+            if (s_cdc_task_h) xTaskNotifyGive(s_cdc_task_h);
             break;
         }
         s_ch[ch].conn_id = param->open.conn_id;
@@ -3370,7 +3545,7 @@ static void gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) 
         // Immediate open for the 1st/2nd link.  The 3rd-link case (s_conn_open_after set)
         // is deferred: cdc_task opens it once the temporary widen of the existing links
         // has settled.
-        if (s_pending_conn >= 0 && s_conn_open_after == 0)
+        if (!bridge_host_mode() && s_pending_conn >= 0 && s_conn_open_after == 0)
             open_pending_conn();
         if (s_cdc_task_h) xTaskNotifyGive(s_cdc_task_h);
         break;

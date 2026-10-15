@@ -1,4 +1,37 @@
 """Small, dependency-free helpers for runtime readiness and safe teardown."""
+import ctypes
+from ctypes import wintypes
+import os
+import threading
+
+
+def watch_parent_process_exit(pid, callback):
+    """Wait on the GUI's Windows process object without polling or console IO."""
+    if os.name != "nt" or not pid:
+        return None
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel.WaitForSingleObject.restype = wintypes.DWORD
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    handle = kernel.OpenProcess(0x00100000, False, int(pid))  # SYNCHRONIZE only
+    if not handle:
+        if ctypes.get_last_error() == 87:  # parent exited before OpenProcess
+            callback()
+        return None
+
+    def wait():
+        try:
+            if kernel.WaitForSingleObject(handle, 0xFFFFFFFF) == 0:
+                callback()
+        finally:
+            kernel.CloseHandle(handle)
+
+    watcher = threading.Thread(target=wait, name="BridgeGuiLifetime", daemon=True)
+    watcher.start()
+    return watcher
 
 
 def controller_application_ready(controller):

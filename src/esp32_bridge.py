@@ -2,6 +2,7 @@ import json
 import ctypes
 import os
 import serial
+import secrets
 from collections import deque
 from console_i18n import current_language
 from console_i18n import localized_print as print
@@ -113,6 +114,12 @@ class ESP32Bridge:
         self._last_input_time = 0.0
         self._status_grace_until = 0.0
         self._closing = False
+        self._host_session = 0
+        self._host_session_ready = False
+        self._host_session_supported = False
+        self._host_session_event = threading.Event()
+        self._opening_cancelled = False
+        self._host_released_event = threading.Event()
         self._bridge_failure_reported = False
         self._last_foreign_pairing_notice = None
         self._diagnostic_lock = threading.Lock()
@@ -129,6 +136,8 @@ class ESP32Bridge:
             )
 
     def open(self):
+        if self._opening_cancelled:
+            raise serial.SerialException("ESP32 host session startup cancelled")
         stale_threads = (
             self._read_thread,
             self._heartbeat_thread,
@@ -145,12 +154,21 @@ class ESP32Bridge:
             write_timeout=0.5,
         )
         self._closing = False
+        self._host_session = secrets.randbits(32) or 1
+        self._host_session_ready = False
+        self._host_session_supported = False
+        self._host_session_event.clear()
+        self._host_released_event.clear()
         self._bridge_failure_reported = False
         self._status_misses = 0
         self._channel_missing_count = 0
         self._status_grace_until = 0.0
         self._last_foreign_pairing_notice = None
+        if self._opening_cancelled:
+            raise serial.SerialException("ESP32 host session startup cancelled")
         self.running = True
+        # Queue ownership before the reader can initiate any BLE connection.
+        self.send(f"host begin {self._host_session}")
         with self._rumble_condition:
             self._rumble_pending = None
             self._rumble_last_send = 0.0
@@ -184,8 +202,22 @@ class ESP32Bridge:
         self._read_thread.start()
         self._heartbeat_thread.start()
         self._rumble_thread.start()
+        # Reopening CDC after a crash must allow the old 8s lease and the
+        # sequential release of up to eight links to finish before takeover.
+        established = (not self._opening_cancelled and
+                       self._host_session_event.wait(timeout=14.0))
+        if self._opening_cancelled:
+            raise serial.SerialException("ESP32 host session startup cancelled")
+        if not established:
+            raise serial.SerialException("ESP32 host session handshake timed out")
 
-    def close(self, timeout=2.5):
+    def request_shutdown(self):
+        """Wake a pending ownership handshake when GUI exit requests cleanup."""
+        self._opening_cancelled = True
+        self._closing = True
+        self._host_session_event.set()
+
+    def close(self, timeout=6.0):
         deadline = time.perf_counter() + max(0.0, float(timeout))
         self._closing = True
 
@@ -222,19 +254,28 @@ class ESP32Bridge:
 
         # Ask the firmware to release the physical BLE link before dropping
         # USB CDC.  Otherwise the controller can remain attached to the ESP32.
-        disconnect_confirmed = not has_connection
+        managed_session = getattr(self, "_host_session_ready", False)
+        disconnect_confirmed = not has_connection and not managed_session
         if self.running:
-            self.send("auto off")
+            # Legacy firmware ignores auto off. Explicitly stop scanning, and
+            # on current firmware end the lease so buffered conn/scan commands
+            # cannot reopen a link during asynchronous teardown.
+            self.send("scan off")
             self._disconnect_event.clear()
-            disconnect_requested = self.send("ble disconnect")
-            if has_connection and disconnect_requested:
-                disconnect_confirmed = self._disconnect_event.wait(
-                    timeout=min(
-                        0.75,
-                        max(0.0, deadline - time.perf_counter()),
-                    )
+            if managed_session:
+                self._host_released_event.clear()
+                disconnect_requested = self.send(f"host end {self._host_session}")
+                confirmation = self._host_released_event
+            else:
+                disconnect_requested = self.send("ble disconnect")
+                confirmation = self._disconnect_event
+            if disconnect_requested:
+                print(_tr("已送出 ESP32 BLE 斷線要求。", "ESP32 BLE release requested."))
+            if (has_connection or managed_session) and disconnect_requested:
+                disconnect_confirmed = confirmation.wait(
+                    timeout=max(0.0, deadline - time.perf_counter())
                 )
-            if has_connection and not disconnect_confirmed:
+            if not disconnect_confirmed:
                 print(_tr(
                     "ESP32 未在關閉期限內確認 BLE 已中斷。",
                     "ESP32 did not confirm BLE disconnection before shutdown.",
@@ -284,6 +325,7 @@ class ESP32Bridge:
             heartbeat_thread if heartbeat_alive else None
         )
         self._read_thread = read_thread if read_alive else None
+        self._opening_cancelled = False
         return bool(
             not rumble_alive
             and not heartbeat_alive
@@ -852,6 +894,11 @@ class ESP32Bridge:
     def _heartbeat_loop(self):
         """Poll status lite and tolerate three consecutive missed replies."""
         while self.running:
+            # Reuse the existing low-rate status worker. Once acknowledged,
+            # only ping; a late ping can never re-arm an expired session.
+            if not self._closing:
+                action = "ping" if self._host_session_ready else "begin"
+                self.send(f"host {action} {self._host_session}")
             self._status_event.clear()
             if not self.send("status lite"):
                 self._status_misses += 1
@@ -1693,7 +1740,30 @@ class ESP32Bridge:
             cmd = obj.get("cmd")
             self._store_diagnostic_response(cmd, obj)
 
-            if cmd in ("status", "status lite"):
+            if cmd == "host_session":
+                if obj.get("session") == self._host_session:
+                    self._host_session_supported = True
+                    if obj.get("state") == "ready" and not self._closing:
+                        self._host_session_ready = True
+                        self._host_session_event.set()
+                    elif obj.get("state") == "stopping" and self._closing:
+                        print(_tr("ESP32 已接受斷線要求，正在釋放 BLE 連線。",
+                                  "ESP32 accepted release; BLE teardown is in progress."))
+            elif cmd == "host_released":
+                if obj.get("session") == self._host_session and self._closing:
+                    self._host_released_event.set()
+                    print(_tr("ESP32 已確認所有 BLE 連線解除。",
+                              "ESP32 confirmed all BLE links released."))
+            elif cmd in ("status", "status lite"):
+                if not self._closing:
+                    self._host_session_supported = bool(
+                        obj.get("features", {}).get("host_lease", False)
+                    )
+                    if not self._host_session_supported:
+                        # Legacy firmware keeps its explicit disconnect path.
+                        session_event = getattr(self, "_host_session_event", None)
+                        if session_event is not None:
+                            session_event.set()
                 self._status_event.set()
                 self._status_misses = 0
                 mac = obj.get("mac")
@@ -1763,6 +1833,8 @@ class ESP32Bridge:
                         self._restart_scan()
 
             elif cmd == "scan_result":
+                if self._closing:
+                    return
                 with self._state_lock:
                     if (
                         self.connected_channel is not None
@@ -1881,6 +1953,8 @@ class ESP32Bridge:
                 )
 
             elif cmd == "connected":
+                if self._closing:
+                    return
                 with self._state_lock:
                     self.connected_channel = int(
                         obj.get("channel", 0)
@@ -1943,6 +2017,8 @@ class ESP32Bridge:
 
             elif cmd == "disconnected":
                 with self._state_lock:
+                    if obj.get("channel", self.connected_channel) != self.connected_channel:
+                        return
                     was_ready = (
                         self.connected_channel is not None
                         and self._ready_channel == self.connected_channel

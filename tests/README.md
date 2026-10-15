@@ -10,6 +10,10 @@ Run the complete suite from the project root with the bundled Python runtime:
 
 The automated suite covers:
 
+- GUI grace/forced shutdown, GUI-only process death, bridge host-session
+  handshake and release acknowledgements; production C watchdog transitions
+  and deterministic disconnect-event schedules (requires MSVC on Windows or
+  a host C compiler elsewhere; explicitly skipped if unavailable);
 - settings schema validation and bundled profile round-trips;
 - GUI settings snapshots and GUI-section structure;
 - stick and gyro processing helpers;

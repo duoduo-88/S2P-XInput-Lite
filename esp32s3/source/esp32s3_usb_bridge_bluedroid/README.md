@@ -1,6 +1,6 @@
 # S2P-XInput-Lite ESP32-S3 BLE Bridge
 
-This directory contains the stable bridge and standalone `S2P-FW 1.0.5`
+This directory contains the bridge and standalone `S2P-FW 1.0.6`
 source. It targets an ESP32-S3. Bridge mode keeps
 the existing USB CDC transport. Standalone mode can expose a CDC + XInput-compatible composite device for
 PCs, a CDC + standards-based USB HID Gamepad for direct connection to phones,
@@ -53,8 +53,32 @@ applied at runtime. Keyboard/mouse output, Windows audio haptics, process-based
 profile switching, phone rumble, and BLE HID output remain desktop-only or
 unimplemented.
 The standalone runtime has completed automated and full ESP-IDF build testing.
-Its existing reconnect path has a real-controller regression baseline; the new
-1.0.5 hybrid-input behavior still requires a post-flash hardware check.
+Its existing reconnect path has a real-controller regression baseline. The
+1.0.6 bridge host lease and the preceding hybrid-input changes require post-flash
+hardware checks; no hardware shutdown or battery-life result is claimed here.
+
+Only configured **and** active `bridge` mode accepts `host begin <session>`.
+After `host_session` with `state=ready`, the desktop sends `host ping <session>`
+using its existing status worker. Eight seconds without a matching ping, or
+three seconds of uninterrupted CDC/DTR loss, blocks reconnects and releases
+BLE links sequentially. `host end <session>` starts the same release immediately.
+`host_session` with `state=stopping` acknowledges acceptance;
+`host_released` is emitted only after all channel slots and disconnect work
+are gone and scanning is stopped. A ready-channel status mask is not proof
+that a connecting link has disappeared.
+
+A new session must wait for the previous owner to expire/release; the desktop
+allows 14 seconds during startup and can cancel that wait on GUI exit. Pings
+or begin commands carrying the released session ID cannot re-arm it. Closing
+the GUI releases its connector through the existing signal path; a Windows
+process-handle wait also handles a GUI-only crash. Legacy desktop clients
+that never send `host begin` do not arm the watchdog. Use the updated desktop
+source together with the 1.0.6 image for crash protection.
+
+Standalone XInput, USB HID and Auto do not accept these host commands and
+retain their existing idle disconnect, button wake and reconnect behavior
+with CDC/DTR absent. Mode commands persist the next boot mode; switching
+personality takes effect on restart, as before.
 
 The Windows client uses these CDC commands:
 
@@ -148,4 +172,4 @@ flash frequency, and a 16 MB flash size. Upstream Switch2Connect firmware is
 not treated as protocol-compatible. The previous bundled S2P `0.14.3` build is
 recognized only so the desktop application can guide an upgrade; standalone
 profile storage, diagnostics, and direct USB controller output require the
-current `S2P-FW 1.0.5` firmware.
+current `S2P-FW 1.0.6` firmware.
