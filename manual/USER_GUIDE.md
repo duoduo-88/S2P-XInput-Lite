@@ -1,11 +1,11 @@
-# S2P-XInput-Lite v0.7.11 User Guide
+# S2P-XInput-Lite v0.7.12 User Guide
 
 [繁體中文](USER_GUIDE_zh-TW.md)
 
 This guide covers installation, connections, profiles, stick tuning, mapping,
 gyro controls, rumble, HidHide, ESP32-S3 bridge and standalone operation, and
 the Gamepad Test, report-rate, diagnostics, and About pages in
-S2P-XInput-Lite v0.7.11.
+S2P-XInput-Lite v0.7.12.
 
 The screenshots use the English interface. Select **中 / En** in the lower-left corner of the main window to switch languages without changing the layout.
 
@@ -68,7 +68,7 @@ Connect the controller directly to the PC with USB-C. This normally provides low
 
 The controller connects to the ESP32-S3 over BLE. The bridge then sends controller data to the PC over USB.
 
-v0.7.11 provides three standalone outputs that do not require the Windows
+v0.7.12 provides three standalone outputs that do not require the Windows
 application to remain open:
 
 - **PC XInput Standalone Mode** — The ESP32 provides XInput-compatible output directly to Windows.
@@ -78,7 +78,7 @@ application to remain open:
 The controller's four player LEDs show the measured battery level
 cumulatively: one LED for low, two for medium-low, three for medium-high, and
 four for high. This display also works in standalone mode with bundled
-S2P-FW 1.0.5, without keeping the Windows application open.
+S2P-FW 1.0.6, without keeping the Windows application open.
 
 #### Windows BLE
 
@@ -398,7 +398,7 @@ If you dismiss an automatic reminder, it will not appear on every launch. Select
 
 1. Select **Flash FW**.
 2. The application reads the connected firmware version and compares it with
-   the bundled `S2P-FW 1.0.5`.
+   the bundled `S2P-FW 1.0.6`.
 3. Review the installed and bundled versions, then choose whether to flash or
    cancel. Cancelling resumes the connector if it was paused for detection.
 4. After confirming, connect the ESP32-S3 OTG port and hold **BOOT**.
@@ -412,6 +412,18 @@ If you dismiss an automatic reminder, it will not appear on every launch. Select
 
 > [!CAUTION]
 > Do not disconnect the ESP32-S3 or close the application while firmware is being written.
+
+### 8.2.1 Bridge shutdown protection on main
+
+The main branch's bridge shutdown protection requires both the updated desktop
+source and S2P-FW 1.0.6; the existing v0.7.12 release archive is unchanged.
+In bridge mode, use **Exit** to request release and wait for confirmation that
+all BLE links are released. After session establishment, continuous CDC loss
+for 3 seconds or no host heartbeat for 8 seconds starts automatic BLE release.
+Standalone XInput, HID and Auto keep working without the desktop application
+or CDC/DTR, with their existing idle disconnect and button-wake behavior.
+Hardware sleep-current and shutdown validation for this fix is still pending;
+see the [hardware checklist](../docs/bridge-host-shutdown.md).
 
 ### 8.3 Pairing the controller
 
@@ -461,7 +473,7 @@ Callout **1** marks **Write and enable Auto-detect standalone (Experimental)**.
 1. Select the profile to write.
 2. Finish editing and select **Save/Apply**.
 3. Confirm that the ESP32 is connected and running the bundled
-   `S2P-FW 1.0.5` firmware.
+   `S2P-FW 1.0.6` firmware.
 4. Select **ESP32 ▼** at the bottom of the window.
 5. Select **Write and enable PC XInput standalone**, **Write and enable Mobile USB HID**,
    or **Write and enable Auto-detect standalone (Experimental)**.
@@ -696,7 +708,7 @@ text.
 
 Bridge mode temporarily uses the application's active serial connection.
 Standalone modes open the ESP32 diagnostic channel directly. The complete
-diagnostic command set requires the bundled `S2P-FW 1.0.5`.
+diagnostic command set requires the bundled `S2P-FW 1.0.6`.
 
 ### 9.8 About
 
@@ -810,4 +822,4 @@ Gate → Lvl → six bands → LF/HF Balance → Tail/Decay.
 Keep one verified stable profile and use **Save New** for experimental settings.
 
 > [!NOTE]
-> This guide applies to S2P-XInput-Lite v0.7.11. For later releases, follow the in-app question-mark help and the latest release notes.
+> This guide applies to S2P-XInput-Lite v0.7.12. For later releases, follow the in-app question-mark help and the latest release notes.

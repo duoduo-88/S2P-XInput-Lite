@@ -17,6 +17,11 @@ Current version: **v0.7.12**
 [Source](https://github.com/duoduo-88/S2P-XInput-Lite/tree/main) ·
 [Latest published release](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 
+Main includes a post-v0.7.12 bridge shutdown fix with **S2P-FW 1.0.6**.
+Use the updated desktop source and firmware together. This update does not
+publish a new desktop release; hardware shutdown and battery tests remain
+pending. See the [investigation and validation steps](docs/bridge-host-shutdown.md).
+
 > This is an independent, unofficial community project. It is not affiliated with, endorsed by, sponsored by, or certified by Nintendo, Microsoft, Espressif Systems, Apple, or Google.
 >
 > Nintendo Switch is a trademark of Nintendo. Windows and Xbox are trademarks of Microsoft. ESP32 is a trademark of Espressif Systems. Apple, macOS, iOS, and iPadOS are trademarks of Apple Inc. Android is a trademark of Google LLC. All other trademarks are the property of their respective owners.
@@ -122,7 +127,8 @@ Reusable hardware probes and automated tests are maintained in the development r
 - Testing with multiple bridge implementations and controllers found that higher vibration amplitudes make a light mechanical tapping sound more likely when the output changes rapidly. The effect is usually minor during normal use.
 - The configurable amplitude range of `0` to `1023` is the protocol field range, not a published, certified safe limit for continuous hardware output. The system default maximum amplitude is `500`, about 49% of the field maximum, to reduce excessive-output noise while retaining clear feedback. Adjust it for the individual controller and personal preference, and lower it if tapping or other unusual sounds occur.
 - Set both LF and HF amplitudes to zero to stop vibration. Connection and PIN feedback use the same two short pulses as v0.5.1 (LF `225`, HF `481`, amplitude `800`) on every transport. HF `481` is retained only for this established cue and is not a recommended general-game frequency.
-- Before flashing, the application reads the connected ESP32 firmware version and compares it with the bundled `S2P-FW 1.0.5`. It then verifies that the bootloader reports an actual 16 MB flash chip before writing; smaller or unknown flash sizes are rejected. After a successful flash it waits for USB re-enumeration, starts the desktop connector automatically, and searches for the controller again.
+- Before flashing, the application reads the connected ESP32 firmware version and compares it with the bundled `S2P-FW 1.0.6`. It then verifies that the bootloader reports an actual 16 MB flash chip before writing; smaller or unknown flash sizes are rejected. After a successful flash it waits for USB re-enumeration, starts the desktop connector automatically, and searches for the controller again.
+- S2P-FW 1.0.6 adds a bridge-only host lease: after session establishment, 3 seconds of continuous CDC loss or 8 seconds without host heartbeats starts BLE release. Standalone XInput/HID/Auto keep their existing connection behavior. The updated desktop source and firmware are both required; see the [shutdown investigation and pending hardware checks](docs/bridge-host-shutdown.md).
 - The status line reports 9-axis when sustained magnetometer data is available, or 6-axis when only gyro and accelerometer data are active.
 - If HidHide setup reports an error, close HidHide Configuration Client and retry. Restart Steam or the game after changing hiding, and reconnect USB if the physical controller remains visible.
 
@@ -146,7 +152,7 @@ Reusable hardware probes and automated tests are maintained in the development r
 - Auto-detect standalone mode is experimental. On some Windows hosts the USB HID probe can remain selected instead of switching to XInput; unplug and reconnect the ESP32, or hold **HOME+X** for 3 seconds and release to save and restart in fixed PC XInput mode.
 - The ESP32 connection requires compatible firmware. Standalone profile
   writing, direct USB controller output, and the diagnostic page require the
-  bundled `S2P-FW 1.0.5`; older S2P builds and upstream firmware cannot provide
+  bundled `S2P-FW 1.0.6`; older S2P builds and upstream firmware cannot provide
   the complete `s2p_bridge 1.0.0` feature set.
 - The GitHub source release includes the complete ESP32 source. Packaged
   releases include the flashing tool and firmware images under `esp32s3`, plus

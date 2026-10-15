@@ -91,9 +91,9 @@ class ReleaseBaselineTests(unittest.TestCase):
             'sys.executable, "-m", "esptool", "--chip", "esp32s3"',
             source,
         )
-        self.assertIn('for marker in (b"S2P-FW", b"1.0.5")', source)
+        self.assertIn('for marker in (b"S2P-FW", b"1.0.6")', source)
 
-    def test_bundled_firmware_is_s2p_105(self):
+    def test_bundled_firmware_is_s2p_106(self):
         main_source = (
             FIRMWARE_ROOT / "main" / "main.c"
         ).read_text(encoding="utf-8")
@@ -106,7 +106,7 @@ class ReleaseBaselineTests(unittest.TestCase):
         )
         self.assertRegex(
             main_source,
-            r'APP_FIRMWARE_VERSION\s+"1\.0\.5"',
+            r'APP_FIRMWARE_VERSION\s+"1\.0\.6"',
         )
         self.assertRegex(
             main_source,
@@ -116,10 +116,10 @@ class ReleaseBaselineTests(unittest.TestCase):
             main_source,
             r'APP_PROTOCOL_VERSION\s+"1\.0\.0"',
         )
-        self.assertNotIn("1.0.5-dev", main_source)
+        self.assertNotIn("1.0.6-dev", main_source)
         self.assertRegex(
             cmake_source,
-            r'set\(PROJECT_VER\s+"1\.0\.5"\)',
+            r'set\(PROJECT_VER\s+"1\.0\.6"\)',
         )
 
     def test_bundled_firmware_hashes_match_current_release(self):
@@ -131,7 +131,7 @@ class ReleaseBaselineTests(unittest.TestCase):
                 "7f00b6c042a89b15b0cac534f82ed988caf29278ff5700b0c511eb1b5bb7c820"
             ),
             "esp32s3_bluedroid_bridge.bin": (
-                "afedef8736f6b861f654175538207377b8234df37569bb3a4dc4ca3241bb4a66"
+                "f68c8f1df2001b51464757c80597ca49d6530f94661ee4978c2809d9e286013d"
             ),
         }
         firmware_dir = ROOT / "esp32s3" / "firmware"

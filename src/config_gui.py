@@ -10825,13 +10825,14 @@ class ConfigGUI:
                 signal.CTRL_BREAK_EVENT
             )
 
-            # 最多等待 2 秒正常退出
+            # Audio (1s), dispatcher (2s), XInput (1s), bridge (6s),
+            # plus scheduling/log flush headroom before killing the process.
             self.main_process.wait(
-                timeout=2
+                timeout=12
             )
 
         except subprocess.TimeoutExpired:
-            # 2 秒後仍未退出，才強制終止整個程序樹
+            # Firmware's bridge-only host lease covers a stuck/crashed child.
             subprocess.run(
                 [
                     "taskkill",
@@ -10888,6 +10889,7 @@ class ConfigGUI:
             child_env["PYTHONUNBUFFERED"] = "1"
             child_env["PYTHONUTF8"] = "1"
             child_env["PYTHONIOENCODING"] = "utf-8"
+            child_env["S2P_GUI_PID"] = str(os.getpid())
             # Keep the connector console visible: it is the live status view
             # for connection, pairing, input and transport diagnostics.
             self.main_process = subprocess.Popen(

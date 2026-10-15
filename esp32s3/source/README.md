@@ -4,7 +4,7 @@
 ESP32-S3 bridge firmware.
 
 - Product: `S2P-FW`
-- Firmware version: `1.0.5`
+- Firmware version: `1.0.6`
 - S2P bridge protocol: `1.0.0`
 - Firmware profile: `s2p_usb_bridge`
 - Build: `standalone_diagnostics`
@@ -49,15 +49,17 @@ The S2P bridge protocol uses a latency-focused CDC schedule:
   from controller voltage reports and shows them on the four player LEDs;
   hysteresis prevents motor-load voltage sag from making the LEDs flicker.
 
-The current images in `../firmware/` were built from this source. The existing
-transport and reconnect baseline was verified on real hardware; the
-`S2P-FW 1.0.5` hybrid-input build has passed compilation and
-automated contract tests, but host detection and chord-triggered reboot still require
-post-flash checks on Windows and Android hardware. The exact upstream revision is linked above for comparison.
+The current images in `../firmware/` were built from this source. S2P-FW 1.0.6
+adds an explicitly established host lease only in configured and active bridge
+mode: 8 seconds without a host heartbeat or 3 seconds of continuous CDC loss
+starts sequential BLE teardown. XInput, HID and Auto never arm this lease.
+The prior transport baseline has hardware results below; the new shutdown
+protection has offline regression and build validation only and still requires
+the hardware checks in [the investigation report](../../docs/bridge-host-shutdown.md).
 
 | Current file | SHA-256 |
 |---|---|
-| `esp32s3_bluedroid_bridge.bin` | `AFEDEF8736F6B861F654175538207377B8234DF37569BB3A4DC4CA3241BB4A66` |
+| `esp32s3_bluedroid_bridge.bin` | `F68C8F1DF2001B51464757C80597CA49D6530F94661EE4978C2809D9E286013D` |
 | `bootloader.bin` | `0674EE7D6721269BFF482811B4441F6A85D6F590AFDE9F7F71F6E7DB39C68E94` |
 | `partition-table.bin` | `7F00B6C042A89B15B0CAC534F82ED988CAF29278FF5700B0C511EB1B5BB7C820` |
 

@@ -1,6 +1,7 @@
 import configparser
 import ctypes
 import gc
+import os
 import sys
 import time
 import signal
@@ -45,6 +46,7 @@ from idle_disconnect import (
     perform_idle_disconnect,
 )
 from runtime_cleanup import (
+    watch_parent_process_exit,
     close_xinput_after_dispatcher,
     controller_application_ready,
 )
@@ -344,6 +346,25 @@ def main():
             return
         cleanup_complete = True
 
+        def close_transport():
+            try:
+                if controller.close() is False:
+                    print(tr(
+                        "控制器連線未能在期限內完整關閉；仍存活的 worker reference 已保留。",
+                        "The controller transport did not fully stop before its "
+                        "deadline; live worker references were retained.",
+                    ))
+            except Exception as exc:
+                print(tr(f"控制器連線清理失敗：{exc}", f"Controller connection cleanup failed: {exc}"))
+
+        bridge_transport = isinstance(controller, ESP32Bridge)
+        if bridge_transport:
+            controller.input_callback = None
+            # close() first gates every bridge output producer and orders the
+            # final zero under its send lock. Release BLE while the reader can
+            # still acknowledge it, even if later audio/input cleanup blocks.
+            close_transport()
+
         if audio_haptics is not None:
             try:
                 audio_haptics.close()
@@ -374,17 +395,9 @@ def main():
             except Exception:
                 pass
 
-        # Keep the physical transport alive until the virtual/audio rumble
-        # producers have stopped.  Its own close path then sends the final zero.
-        try:
-            if controller.close() is False:
-                print(tr(
-                    "控制器連線未能在期限內完整關閉；仍存活的 worker reference 已保留。",
-                    "The controller transport did not fully stop before its "
-                    "deadline; live worker references were retained.",
-                ))
-        except Exception as exc:
-            print(tr(f"控制器連線清理失敗：{exc}", f"Controller connection cleanup failed: {exc}"))
+        # Preserve native BLE and wired shutdown ordering.
+        if not bridge_transport:
+            close_transport()
 
         publish_status(
             state="stopped",
@@ -408,6 +421,8 @@ def main():
     def handle_shutdown_signal(signum, frame):
         nonlocal stop_requested
         stop_requested = True
+        if connection_mode == "esp32":
+            controller.request_shutdown()
 
     # Register before any transport open/scan can block.  The settings GUI
     # uses CTRL_BREAK_EVENT to request the cleanup path below.
@@ -415,6 +430,12 @@ def main():
         signal.SIGBREAK,
         handle_shutdown_signal
     )
+    if connection_mode == "esp32":
+        gui_pid = os.environ.get("S2P_GUI_PID", "")
+        if gui_pid.isdecimal():
+            watch_parent_process_exit(
+                int(gui_pid), lambda: handle_shutdown_signal(None, None),
+            )
 
     last_status_stage = 0.0
     last_input_error = 0.0
@@ -875,6 +896,8 @@ def main():
 
         except (serial.SerialException, OSError):
             cleanup()
+            if stop_requested:
+                return
             print()
             print(
                 tr(f"無法開啟 {port}。", f"Could not open {port}.")
