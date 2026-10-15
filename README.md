@@ -11,16 +11,17 @@
 
 S2P-XInput-Lite provides XInput-compatible controller output for a Switch 2 Pro Controller on Windows. It supports wired USB, an ESP32-S3 USB bridge, and native Windows BLE.
 
-Current version: **v0.7.12**
+Current version: **v0.7.13**
 
-[v0.7.12 release notes](RELEASE_NOTES_v0.7.12.md) ·
+[v0.7.13 release notes](RELEASE_NOTES_v0.7.13.md) ·
 [Source](https://github.com/duoduo-88/S2P-XInput-Lite/tree/main) ·
 [Latest published release](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 
-Main includes a post-v0.7.12 bridge shutdown fix with **S2P-FW 1.0.6**.
-Use the updated desktop source and firmware together. This update does not
-publish a new desktop release; hardware shutdown and battery tests remain
-pending. See the [investigation and validation steps](docs/bridge-host-shutdown.md).
+Main targets **v0.7.13** with the bridge shutdown fix and **S2P-FW 1.0.6**.
+Use the updated desktop source and firmware together. The version update does
+not create a GitHub Release or replace existing release assets; hardware
+shutdown and battery tests remain pending. See the
+[investigation and validation steps](docs/bridge-host-shutdown.md).
 
 > This is an independent, unofficial community project. It is not affiliated with, endorsed by, sponsored by, or certified by Nintendo, Microsoft, Espressif Systems, Apple, or Google.
 >
