@@ -17,6 +17,11 @@ Current version: **v0.7.12**
 [Source](https://github.com/duoduo-88/S2P-XInput-Lite/tree/main) ·
 [Latest published release](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 
+Main includes a post-v0.7.12 bridge shutdown fix with **S2P-FW 1.0.6**.
+Use the updated desktop source and firmware together. This update does not
+publish a new desktop release; hardware shutdown and battery tests remain
+pending. See the [investigation and validation steps](docs/bridge-host-shutdown.md).
+
 > This is an independent, unofficial community project. It is not affiliated with, endorsed by, sponsored by, or certified by Nintendo, Microsoft, Espressif Systems, Apple, or Google.
 >
 > Nintendo Switch is a trademark of Nintendo. Windows and Xbox are trademarks of Microsoft. ESP32 is a trademark of Espressif Systems. Apple, macOS, iOS, and iPadOS are trademarks of Apple Inc. Android is a trademark of Google LLC. All other trademarks are the property of their respective owners.

@@ -17,6 +17,10 @@ S2P-XInput-Lite 可在 Windows 為 Switch 2 Pro Controller 提供 XInput 相容�
 [原始碼](https://github.com/duoduo-88/S2P-XInput-Lite/tree/main) ·
 [最新正式版本](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 
+main 已加入 v0.7.12 發佈後的一般橋接關閉修正，隨附 **S2P-FW 1.0.6**，
+須搭配更新後的桌面程式碼使用。本次未建立新的桌面正式版本；實機斷線、休眠與
+耗電測試仍待完成，詳見[調查報告及驗證步驟](docs/bridge-host-shutdown.md)。
+
 程式可在啟動時檢查新版本，也可在手把測試程式的「關於」頁手動檢查、
 開關自動檢查，或選擇不再提醒特定版本。更新通知只會開啟官方 GitHub
 Release 頁面供手動下載；程式不會自動下載、執行或覆蓋任何檔案。

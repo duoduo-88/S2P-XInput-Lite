@@ -5,7 +5,9 @@
 2026-10-15（Asia/Taipei）以 `git ls-remote`、`git fetch origin main --no-tags`
 核對遠端 main：`c36d1eb7d9c1072c146f1dfc88b1a6e1485a6986`。
 桌面版本確為 **v0.7.12**，韌體確為 **S2P-FW 1.0.5**。
-本次在 `codex/bridge-host-disconnect` 修正；桌面版本保留 v0.7.12，尚未發行新桌面版本。
+修正提交為 `0b3731ed65e64a02de902c53edc779f4c04830b4`，來源分支為
+`codex/bridge-host-disconnect`；依後續指示整合至 main 並推送 origin。
+桌面版本保留 v0.7.12，尚未發行新桌面版本，也未替換既有 Release 附件。
 韌體更新為 **1.0.6**，原始碼、偵測版本、映像及 SHA-256 同步更新。
 
 **已確認的是連線管理缺口與可重現的軟體競爭，不是實測的電池耗盡。**
@@ -160,5 +162,12 @@ USB 枚舉、實際震動、手把睡眠與耗電都尚未實測。
   queue ownership、未完成 open 與快速重開問題已修正並加測試；最後覆查無新增重要問題。
 - 本機測試記錄在忽略的 `build/bridge-all-tests.log`、`build/bridge-optional-idf-test.log`、
   `build/bridge-idf-final.log`；可用上述指令重跑。
-- 未刷寫 ESP32、未執行硬體 probe、未量測睡眠電流、未建立／觸發 GitHub Actions、未推送或建立 PR。
-  保留修正分支供審查。本機原有未追蹤 `LAUNCHER_BUILD.json` 不納入提交。
+- 未刷寫 ESP32、未執行硬體 probe、未量測睡眠電流、未建立 PR 或新 Release。
+  本機原有未追蹤 `LAUNCHER_BUILD.json` 不納入提交。
+
+## 整合紀錄
+
+依使用者後續指示，將修正與 Markdown 更新合併至 main 並推送 origin；保留來源修正分支。
+文件提交與合併提交加入 `[skip ci]`，以略過現有 push／pull_request 工作流程，
+維持「不自動執行 GitHub Actions」限制。未修改 Actions 的觸發條件或手動啟動工作流程。
+這次整合不代表硬體驗證或正式版本發佈已完成；實機項目仍以本文件的待驗證清單為準。
