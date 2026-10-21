@@ -1,0 +1,11 @@
+# Packages with binary distributions are kept separate so the portable
+# runtime builder can reject unexpected source builds.
+-r requirements-binary.txt
+
+# PyPI publishes vgamepad 0.1.0 as an sdist only. build_runtime.ps1 verifies
+# the archive and extracts only runtime files without executing setup.py.
+vgamepad==0.1.0
+
+# PyPI has no CPython 3.11 build of PyBluez. This is the exact source commit
+# used by the bundled runtime; build_runtime.ps1 also verifies its archive.
+PyBluez @ git+https://github.com/pybluez/pybluez.git@82cbba8a1ebd4c1e3442dfafd8581d58c50fa39e

@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - development
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  desktop-tests:
+    name: Windows desktop tests
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      PYTHONUTF8: "1"
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11.9"
+          cache: pip
+          cache-dependency-path: |
+            src/requirements*.txt
+            requirements-build.txt
+
+      - name: Build verified portable runtime
+        shell: powershell
+        run: .\scripts\build_runtime.ps1 -Python python
+
+      - name: Compile Python sources
+        run: python -m compileall -q src tests
+
+      - name: Run correctness lint
+        run: .\build\build-tools\Scripts\python.exe -m ruff check src tests
+
+      - name: Run automated tests
+        run: .\build\runtime\python.exe tests\run_tests.py
+
+  firmware:
+    name: ESP-IDF 5.5.4 firmware
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    container:
+      image: espressif/idf:v5.5.4
+
+    defaults:
+      run:
+        working-directory: esp32s3/source/esp32s3_usb_bridge_bluedroid
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Build firmware
+        run: |
+          . "$IDF_PATH/export.sh"
+          idf.py build
+
+      - name: Validate built and bundled firmware images
+        working-directory: .
+        run: |
+          . "$IDF_PATH/export.sh"
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          root = Path.cwd()
+          build = root / "esp32s3/source/esp32s3_usb_bridge_bluedroid/build"
+          bundled = root / "esp32s3/firmware"
+          bootloaders = (build / "bootloader/bootloader.bin", bundled / "bootloader.bin")
+          applications = (
+              build / "esp32s3_bluedroid_bridge.bin",
+              bundled / "esp32s3_bluedroid_bridge.bin",
+          )
+          for image in bootloaders + applications:
+              subprocess.run(
+                  [
+                      sys.executable, "-m", "esptool", "--chip", "esp32s3",
+                      "image_info", str(image),
+                  ],
+                  check=True,
+              )
+          for image in applications:
+              data = image.read_bytes()
+              for marker in (b"S2P-FW", b"1.0.7"):
+                  if marker not in data:
+                      raise SystemExit(f"{image.name} is missing {marker!r}")
+          generated_partition = build / "partition_table/partition-table.bin"
+          released_partition = bundled / "partition-table.bin"
+          if generated_partition.read_bytes() != released_partition.read_bytes():
+              raise SystemExit("bundled partition table does not match the clean build")
+          print("Built and bundled firmware images are valid for S2P firmware 1.0.7.")
+          PY
+          python scripts/inspect_usb_descriptors.py \
+            esp32s3/source/esp32s3_usb_bridge_bluedroid/build/esp32s3_bluedroid_bridge.elf \
+            esp32s3/source/esp32s3_usb_bridge_bluedroid/build/esp32s3_bluedroid_bridge.bin \
+            --output esp32s3/source/esp32s3_usb_bridge_bluedroid/build/usb-descriptors.json
+
+      - name: Upload firmware build
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32s3-firmware
+          path: |
+            esp32s3/source/esp32s3_usb_bridge_bluedroid/build/bootloader/bootloader.bin
+            esp32s3/source/esp32s3_usb_bridge_bluedroid/build/partition_table/partition-table.bin
+            esp32s3/source/esp32s3_usb_bridge_bluedroid/build/esp32s3_bluedroid_bridge.bin
+            esp32s3/source/esp32s3_usb_bridge_bluedroid/build/usb-descriptors.json

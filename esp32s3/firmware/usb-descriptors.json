@@ -1,0 +1,101 @@
+{
+  "schema": 1,
+  "evidence": "compiled ELF descriptor bytes; hardware enumeration pending",
+  "application_sha256": "b60e5fceca0867017102169aa3d6307e4654cbee7c2b68071cea11756aa469ca",
+  "personalities": {
+    "bridge": {
+      "vid_pid": "303A:4001",
+      "device_hex": "12010002ef0201403a300140000101020301",
+      "configuration_hex": "09024b00020100a032080b000202020000090400000102020000052400200105240100010424020605240600010705810308000109040100020a0000000705020240000007058202400000",
+      "classes": [
+        2,
+        10
+      ],
+      "iads": [
+        [
+          0,
+          2,
+          2
+        ]
+      ],
+      "endpoints": [
+        129,
+        2,
+        130
+      ],
+      "endpoint_details": [
+        {
+          "address": 129,
+          "transfer": 3,
+          "packet_size": 8,
+          "interval": 1
+        },
+        {
+          "address": 2,
+          "transfer": 2,
+          "packet_size": 64,
+          "interval": 0
+        },
+        {
+          "address": 130,
+          "transfer": 2,
+          "packet_size": 64,
+          "interval": 0
+        }
+      ],
+      "hid_report_length": null
+    },
+    "hid": {
+      "vid_pid": "303A:4005",
+      "device_hex": "12010002ef0201403a300540000101020301",
+      "configuration_hex": "09026400030100a032080b000202020000090400000102020000052400200105240100010424020605240600010705810308000109040100020a000000070502024000000705820240000009040200010300000009211101000122750007058303200001",
+      "classes": [
+        2,
+        10,
+        3
+      ],
+      "iads": [
+        [
+          0,
+          2,
+          2
+        ]
+      ],
+      "endpoints": [
+        129,
+        2,
+        130,
+        131
+      ],
+      "endpoint_details": [
+        {
+          "address": 129,
+          "transfer": 3,
+          "packet_size": 8,
+          "interval": 1
+        },
+        {
+          "address": 2,
+          "transfer": 2,
+          "packet_size": 64,
+          "interval": 0
+        },
+        {
+          "address": 130,
+          "transfer": 2,
+          "packet_size": 64,
+          "interval": 0
+        },
+        {
+          "address": 131,
+          "transfer": 3,
+          "packet_size": 32,
+          "interval": 1
+        }
+      ],
+      "hid_report_length": 117,
+      "input_report_bytes": 13,
+      "report_hex": "05010905a1010509090109020904090509070908090b090c090e090f090d090309060909090a09101500250175019510810205010939150025073500463b0165147504950181426500750495018103093009310932093516008026ff7f751095048102050209c509c4150026ff00750895028102c0"
+    }
+  }
+}

@@ -1,0 +1,200 @@
+# S2P-XInput-Lite
+
+[繁體中文](README_zh-TW.md) · [User Guide](manual/USER_GUIDE.md) · [繁體中文使用手冊](manual/USER_GUIDE_zh-TW.md)
+
+**[Download v0.7.14 for Windows (ZIP)](https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.7.14/S2P-XInput-Lite-v0.7.14.zip)**
+
+Extract the entire ZIP, then open one of the two EXEs in its main folder:
+
+| Application | Purpose |
+|---|---|
+| **S2P-XInput-Lite.exe** | Main settings and controller connection |
+| **GamepadTester.exe** | Standalone gamepad tester |
+
+Support files are grouped in **app/**. Keep that folder beside both EXEs.
+`START_HERE.txt` contains quick-start instructions; the full guides are in
+`app/manual/`. Select the release ZIP above when installing the application.
+
+![S2P-XInput-Lite banner](image/S2P-XInput-Lite-banner.jpg)
+
+<p align="center">
+  <img src="image/GUI.gif" alt="S2P-XInput-Lite settings interface" height="360">
+  <img src="image/test.gif" alt="S2P-XInput-Lite gamepad tester" height="360">
+</p>
+
+S2P-XInput-Lite provides XInput-compatible controller output for a Switch 2 Pro Controller on Windows. It supports wired USB, an ESP32-S3 USB bridge, and native Windows BLE.
+
+Current version: **v0.7.14**
+
+[v0.7.14 release notes](RELEASE_NOTES_v0.7.14.md) ·
+[Source](https://github.com/duoduo-88/S2P-XInput-Lite/tree/main) ·
+[Latest published release](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
+
+**v0.7.14** with **S2P-FW 1.0.7** simplifies ESP32 operation to CDC Bridge
+and Android USB HID standalone. Physical USB XInput and Auto modes are removed;
+Windows desktop XInput through ViGEmBus remains available in Bridge mode.
+The v0.7.14 release includes S2P-FW 1.0.7. Physical hardware validation for
+the new firmware remains pending; see [USB modes, recovery and validation](docs/usb-hid-standardization.md).
+
+> This is an independent, unofficial community project. It is not affiliated with, endorsed by, sponsored by, or certified by Nintendo, Microsoft, Espressif Systems, Apple, or Google.
+>
+> Nintendo Switch is a trademark of Nintendo. Windows and Xbox are trademarks of Microsoft. ESP32 is a trademark of Espressif Systems. Apple, macOS, iOS, and iPadOS are trademarks of Apple Inc. Android is a trademark of Google LLC. All other trademarks are the property of their respective owners.
+
+## Features
+
+- Automatic wired USB priority, followed by ESP32-S3 or native BLE, with live 6-axis/9-axis sensor status
+- XInput-compatible virtual controller output through ViGEmBus
+- Low-latency input dispatch that preserves button edges while using the newest stick and motion report
+- Button, keyboard, mouse, stick-direction, linear-trigger, and linear-scroll mapping with shared target validation
+- Global mapping-layer files with hold/toggle activation, per-layer button and stick overrides, import/export, and per-profile enabled/order state
+- Per-controller stick calibration and connection-time gyro zero-bias initialization
+- Stick curves, deadzones, smoothing, stabilization, and output-shape adjustment
+- Consistent XInput-to-HD Rumble 2 conversion across USB, ESP32, and native BLE, with latest-only pacing, priority stop frames, and audio-reactive vibration
+- ESP32 profile writing for Android USB HID standalone operation without the
+  Windows application, with controller chords and CDC available for recovery
+- Gyroscope mapping to an XInput stick or mouse
+- Independently launchable gamepad tester designed primarily for a Switch 2
+  Pro Controller connected and processed by S2P-XInput-Lite, where it can show
+  complete physical/processed input, mapping, sensor, transport, and ESP32
+  diagnostics. Other XInput, WinMM, and Raw HID controllers can also be
+  tested, but S2P-specific telemetry is unavailable, so some information will
+  be missing. The report-rate page still shows report count, P50/P95/P99
+  intervals, distribution statistics, and a timeline.
+- Built-in ESP32 diagnostics with timed tests, a clear pass/warn/fail verdict,
+  and exportable text reports
+- Startup update notifications plus a manual check and shared automatic-check
+  toggle on the Gamepad Tester About page. Updates always open the official
+  GitHub Release page for manual download; the application never downloads,
+  runs, or replaces files automatically.
+- About page with project links, the software license, and third-party notices
+- Full game profiles for switching stick, gyro, rumble, audio-haptics, and mapping settings together, with automatic UI refresh
+- Import Settings migrates compatible user settings from an older or same-version S2P-XInput-Lite installation with a preview, conflict choice, and rollback protection
+- Audio Reactive Haptics analyzes six frequency bands to distinguish transient attacks from sustained audio and shape LF/HF rumble. Feature classification is independent of Master Strength, and MIX preserves the game's rumble component
+- Traditional Chinese and English interface
+- Live connection, battery, ESP32, ViGEmBus, WASAPI, and HidHide status
+- Battery percentage estimated from a full measured discharge curve, with a
+  shared four-level battery display on the UI and controller player LEDs
+
+Detailed setting descriptions are available from the `?` buttons in the application.
+
+## Requirements
+
+- Windows 10 or 11
+- Switch 2 Pro Controller
+- ViGEmBus 1.22.0
+- Optional for wired USB: the current [HidHide release](https://github.com/nefarius/HidHide/releases/latest), used to hide the physical HID from games
+- A USB-C data cable, Bluetooth, or a compatible ESP32-S3 N16R8 bridge
+
+The packaged release includes a portable Python runtime and all required packages. A separate Python installation is not required.
+
+## Installation and Use
+
+1. Install ViGEmBus with `app\driver\Install-ViGEmBus.bat` if it is not already installed.
+2. For wired USB, install HidHide if you want games to see only the virtual XInput controller. HidHide is optional for ESP32 and native BLE.
+3. Connect the controller before opening Steam or another controller tool. For native BLE, **do not pair it through Windows Bluetooth settings**; turn Bluetooth on and let this application establish the connection. For ESP32, connect a device running compatible firmware.
+4. Run `S2P-XInput-Lite.exe`.
+5. Choose a game profile or adjust settings, then use **Save Profile** or **Save New Profile**.
+6. Saving the active profile updates its stored settings. Switching profiles while connected automatically stops the connection program, applies the selected profile, refreshes the GUI, and reconnects. Use **Restart** only after changing the connection method, device, or serial settings.
+
+The application checks wired USB first, then ESP32, and finally native BLE. The connector opens a separate black command window with live connection and input status; keep that command window open while playing. Minimizing the settings UI sends only its main window to the Windows notification area, while the command window remains visible and the connection continues. Click the notification icon to restore Settings, or right-click it for **Show Settings** and **Exit**.
+
+The settings UI and Gamepad Tester are global single-instance applications. Reopening `S2P-XInput-Lite.exe`, `GamepadTester.exe`, or the in-app tester restores and foregrounds the existing window instead of starting a second process.
+
+If HidHide is missing, the application offers to open its official download page. Declining suppresses the reminder on later launches and does not block the connection; click **HidHide: Missing** at the bottom of the window to open the download page later. When a wired controller is detected and HidHide is installed but not configured, the application asks before adding the portable `app\runtime\python.exe`, `app\src\raw_hid_probe.exe`, and the selected physical Nintendo HID to HidHide. Declining also suppresses later reminders; click **HidHide: Off/Setup** to reopen the setup confirmation. Accepting may enable global cloaking; existing HidHide entries belonging to other applications are preserved. **Restore Defaults** removes these two application entries and the selected controller from HidHide while preserving unrelated entries; reconnect the USB controller first if it is currently hidden.
+
+For first-time native BLE pairing, start the connection program and hold the controller's **SYNC** button. A previously paired controller can normally be woken with any button.
+
+Settings and per-controller stick calibration are stored in `app/src/config.ini`. Gyro zero-bias is initialized again after every controller connection and is not stored as permanent calibration. A missing file is created automatically from `app/src/profiles/System Default.ini`, and missing keys in an older file are added without overwriting existing values. Default and restore operations also use `System Default.ini` as their baseline. Keep this file in every release package; `config.ini` may be omitted from a clean distribution.
+
+### Import Settings
+
+Choose **Import Settings** in the main window and select the *application root*
+of an older or same-version S2P-XInput-Lite installation, not its `src` folder.
+The preview identifies compatible application preferences, persisted controller
+calibration/identity data, user profiles, and managed Mapping Layers. The
+current version supplies the schema and defaults, so missing newer keys keep
+their current defaults rather than disappearing. **System Default** is never
+imported or overwritten. Profile and Layer name/ID conflicts require an
+explicit overwrite-all or skip-all choice, and the whole import rolls back if
+any validated write fails. Runtime files, logs, firmware, executables, and
+other build artifacts are not copied.
+
+The first launch provides General, Audio, FPS-COMP, FPS-IMM, Racing, Action, and Rhythm profiles. Selecting a profile refreshes the GUI. When the connection program is running, it is stopped and reconnected automatically so the newly selected profile is loaded completely. Built-in profiles start from canonical button and stick-direction mappings. Custom profiles can be saved, renamed, or deleted. **System Default** is a protected read-only baseline and always appears at the bottom of the list. **Restore Defaults** resets the current controls without deleting saved profiles or calibration.
+
+Mapping Layer files are global and can temporarily override the active profile while a button chord is held or toggled. A Layer can remap buttons and stick directions, swap sticks, use a stick as a mouse, or produce linear XInput trigger, stick-direction, or scroll output. Layer files are stored under `app/src/layers` and can be imported or exported. Each game profile stores which Layers are enabled and their priority order; switching profiles changes that state without deleting or replacing the Layer files. Only the highest-priority matching Layer is active: held Layers take priority over toggled Layers, then the editor order is used.
+
+## Historical Low-Latency Baseline
+
+These measurements predate v0.7.14 / S2P-FW 1.0.7 and do not validate the new
+USB descriptors, modes or migration. All new firmware hardware checks are pending.
+
+- Wired USB input: 250 Hz, 4 ms report interval, zero queue/drop in concurrent rumble stress testing.
+- ESP32 input: about 132 Hz; the low-latency firmware reduced normal host arrival p50/p95 from 7.986/8.059 ms to 7.500/7.595 ms.
+- Native Windows BLE: 66.7 Hz / 15 ms, which matches WinRT's minimum `throughput_optimized` interval.
+- Rumble is latest-only on every transport. Game changes and zero frames use 7.5 ms priority pacing on ESP32 and wired USB (about 8 ms measured), while native BLE uses 15 ms. Wired audio/Mix updates use 16.6 ms (about 60 Hz), and ordinary refreshes use 15 ms.
+
+Reusable hardware probes and automated tests are maintained in the development repository.
+
+## Notes
+
+- Perform stick calibration from the GUI by following its on-screen instructions. After each connection, keep the controller still for about 0.5 seconds; gyro output begins after at least 16 stable samples and zero-bias sampling continues up to 64 samples.
+- Save or apply mapping changes before testing them; invalid or damaged mapping data is reported and is not silently applied.
+- Each HD Rumble 2 vibration frame packs a 9-bit LF frequency, 10-bit LF amplitude, 9-bit HF frequency, and 10-bit HF amplitude. Frequency values range from `0` to `511` and can be interpreted approximately in Hz; actuator and enclosure response still affect the result.
+- Testing with multiple bridge implementations and controllers found that higher vibration amplitudes make a light mechanical tapping sound more likely when the output changes rapidly. The effect is usually minor during normal use.
+- The configurable amplitude range of `0` to `1023` is the protocol field range, not a published, certified safe limit for continuous hardware output. The system default maximum amplitude is `500`, about 49% of the field maximum, to reduce excessive-output noise while retaining clear feedback. Adjust it for the individual controller and personal preference, and lower it if tapping or other unusual sounds occur.
+- Set both LF and HF amplitudes to zero to stop vibration. Connection and PIN feedback use the same two short pulses as v0.5.1 (LF `225`, HF `481`, amplitude `800`) on every transport. HF `481` is retained only for this established cue and is not a recommended general-game frequency.
+- Before flashing, the application reads the connected ESP32 firmware version and compares it with the bundled `S2P-FW 1.0.7`. It then verifies that the bootloader reports an actual 16 MB flash chip before writing; smaller or unknown flash sizes are rejected. After a successful flash it waits for USB re-enumeration, starts the desktop connector automatically, and searches for the controller again.
+- S2P-FW 1.0.7 retains the bridge-only host lease: after session establishment, 3 seconds of continuous CDC loss or 8 seconds without host heartbeats starts BLE release. Android USB HID retains its independent idle disconnect and reconnect behavior. The updated desktop source and firmware are both required; see the [shutdown investigation and pending hardware checks](docs/bridge-host-shutdown.md).
+- The status line reports 9-axis when sustained magnetometer data is available, or 6-axis when only gyro and accelerometer data are active.
+- If HidHide setup reports an error, close HidHide Configuration Client and retry. Restart Steam or the game after changing hiding, and reconnect USB if the physical controller remains visible.
+
+## Limitations
+
+- Windows only
+- One controller at a time
+- No Joy-Con pairing or PS5 controller emulation
+- The ESP32-S3 standalone USB HID mode is not currently compatible with
+  macOS, iOS, or iPadOS.
+- Mobile use is currently limited to Android devices that support USB OTG and
+  correctly recognize this HID game-controller mode. Compatibility varies by
+  device, Android version, and game, so plug-and-play operation cannot be
+  guaranteed on every device.
+- Mobile mode supports controller input only; game rumble feedback is not
+  supported. Apple-device compatibility and mobile rumble support are future
+  development directions.
+- ESP32 standalone mode does not support Windows keyboard/mouse output, audio
+  haptics, process-based profile switching, phone rumble, or BLE HID output
+- Motion is mapped to a stick or mouse; XInput does not expose raw motion sensors
+- The ESP32 connection requires compatible firmware. Standalone profile
+  writing, direct USB controller output, and the diagnostic page require the
+  bundled `S2P-FW 1.0.7`; older S2P builds and upstream firmware cannot provide
+  the complete `s2p_bridge 1.0.0` feature set.
+- The GitHub source release includes the complete ESP32 source. Packaged
+  releases include the flashing tool and firmware images under `app/esp32s3`, plus
+  the flashing tool's exact tagged source and retained licenses under
+  `third_party`.
+- HidHide is not bundled and is not required for ESP32 or BLE. Without it, wired input still works, but games may detect both the physical HID and virtual XInput controller.
+- If wired status shows Basic mode, fully exit Steam or other controller tools, reconnect the controller, and start this application first
+- Wired USB always requests the controller's complete sensor report; the 6-axis/9-axis label reflects the data actually received rather than a selectable polling mode
+
+## Upstream and License
+
+Parts of this project are based on or derived from [Switch2Connect](https://github.com/TommyWabg/Switch2Connect) by TommyWabg and have been modified and reorganized for this project.
+
+S2P-XInput-Lite is licensed under the [GNU General Public License v3.0](LICENSE). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for attribution and [third_party/README.md](third_party/README.md) for the retained license and source materials shipped with releases.
+
+## Compatibility and Trademarks
+
+Product names and trademarks are used only to identify compatible hardware,
+software, and interfaces. “XInput-compatible” describes interoperability with
+software that accepts XInput controller input; it does not mean that this
+project or its ESP32 firmware is licensed, certified, approved, or manufactured
+by Microsoft.
+
+The firmware uses Espressif/TinyUSB shared default USB identifiers: Bridge
+`303A:4001` (CDC) and `303A:4005` (CDC + HID, `S2P Mobile Gamepad`). These are
+shared class defaults, not a dedicated PID allocation or USB certification.
+VID/PID and product names only locate candidates; S2P operations require a
+matching firmware identity and compatible capabilities. Legacy `CAFE:4020`,
+`CAFE:4021` and `CAFE:4022` are upgrade candidates only.
+See [mode switching, migration, recovery, and official references](docs/usb-hid-standardization.md).

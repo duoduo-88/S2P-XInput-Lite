@@ -1,0 +1,39 @@
+S2P-XInput-Lite v0.7.14
+=====================
+
+繁體中文
+
+1. 請先將整個 ZIP 解壓縮到新資料夾，再執行程式。
+2. S2P-XInput-Lite.exe：主程式，設定連線、按鍵映射與震動。
+3. GamepadTester.exe：獨立開啟手把測試工具。
+
+app 資料夾包含程式所需檔案，請與兩個 EXE 一起保留。
+第一次使用若缺少 ViGEmBus，可由程式提示安裝，或執行
+app\driver\Install-ViGEmBus.bat。
+
+完整手冊：app\manual\USER_GUIDE_zh-TW.md
+發佈說明：app\RELEASE_NOTES_v0.7.14.md
+授權及第三方聲明：app\LICENSE、app\THIRD_PARTY_NOTICES.md
+檔案校驗清單：app\SHA256SUMS.txt（路徑以此安裝資料夾為基準）
+
+舊版升級：在主程式選擇「匯入設定」，選取舊版含 EXE 的程式根目錄。
+新包的設定、方案與映射層位於 app\src，舊版根目錄\src 亦支援匯入。
+
+English
+
+1. Extract the entire ZIP to a new folder before running either application.
+2. S2P-XInput-Lite.exe: Main application for connections, mappings and rumble.
+3. GamepadTester.exe: Open the standalone gamepad tester.
+
+Keep the app folder beside both EXEs. It contains their required support files.
+If ViGEmBus is missing, follow the application prompt or run
+app\driver\Install-ViGEmBus.bat.
+
+User guide: app\manual\USER_GUIDE.md
+Release notes: app\RELEASE_NOTES_v0.7.14.md
+Licenses: app\LICENSE and app\THIRD_PARTY_NOTICES.md
+File checksums: app\SHA256SUMS.txt (paths are relative to this installation folder)
+
+Upgrade: Use Import Settings in the main application and select the old folder
+containing its EXEs. New settings/profiles/layers live in app\src; imports from
+the earlier root\src layout are also supported.
