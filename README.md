@@ -2,7 +2,7 @@
 
 [繁體中文](README_zh-TW.md) · [User Guide](manual/USER_GUIDE.md) · [繁體中文使用手冊](manual/USER_GUIDE_zh-TW.md)
 
-**[Download v0.7.14 for Windows (ZIP)](https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.7.14/S2P-XInput-Lite-v0.7.14.zip)**
+**[Download v0.7.15 for Windows (ZIP)](https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.7.15/S2P-XInput-Lite-v0.7.15.zip)**
 
 Extract the entire ZIP, then open one of the two EXEs in its main folder:
 
@@ -24,9 +24,9 @@ Support files are grouped in **app/**. Keep that folder beside both EXEs.
 
 S2P-XInput-Lite provides XInput-compatible controller output for a Switch 2 Pro Controller on Windows. It supports wired USB, an ESP32-S3 USB bridge, and native Windows BLE.
 
-Current version: **v0.7.14**
+Current version: **v0.7.15**
 
-[v0.7.14 release notes](RELEASE_NOTES_v0.7.14.md) ·
+[v0.7.15 release notes](RELEASE_NOTES_v0.7.15.md) ·
 [Source](https://github.com/duoduo-88/S2P-XInput-Lite/tree/main) ·
 [Latest published release](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 

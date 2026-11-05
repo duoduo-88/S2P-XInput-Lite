@@ -90,6 +90,7 @@ from idle_disconnect import (
 )
 from localization import translate_text
 from tooltip_layout import wrap_tooltip_text
+from readable_combobox import MappingCombobox, mapping_target_label
 from console_i18n import localized_print as print, set_current_language
 from mapping_layers import (
     LAYER_DIR,
@@ -3460,20 +3461,24 @@ class ConfigGUI:
 
 
     def _bind_combobox_popdown_mousewheel_guard(self, widget):
-        """Disable wheel changes inside a ttk Combobox's native popup list."""
+        """Scroll the open list without committing a value or scrolling its parent."""
         try:
             popdown = self.root.tk.call(
                 "ttk::combobox::PopdownWindow",
                 str(widget),
             )
             listbox = f"{popdown}.f.l"
-            # A widget binding runs before the Listbox class binding. Tcl's
-            # ``break`` prevents both list scrolling and selection changes.
+            scroll_script = self.root.tk.call("bind", "Listbox", "<MouseWheel>")
+            if not scroll_script:
+                return
+            # Reuse Tk's platform-specific list scrolling, then stop propagation
+            # so the wheel cannot also scroll the settings page behind the popup.
+            # The native Listbox wheel binding never commits a Combobox choice.
             self.root.tk.call(
                 "bind",
                 listbox,
                 "<MouseWheel>",
-                "break",
+                f"{scroll_script}\nbreak",
             )
         except (AttributeError, tk.TclError):
             # Some Tk themes use a different native popup implementation.
@@ -6156,16 +6161,20 @@ class ConfigGUI:
             return False
 
     def _bind_combobox_overflow_tooltip(self, widget):
-        """Show the complete selected value only when it is visibly clipped."""
+        """Show original mapping tokens or a clipped selector's full text."""
         widget_name = str(widget)
         if widget_name in self._combobox_overflow_bound_widgets:
             return
         tooltip = ToolTip(
             widget,
-            widget.get,
+            getattr(widget, "full_text", widget.get),
             wraplength=420,
             show_condition=lambda current=widget: (
-                self.combobox_text_is_truncated(current)
+                (
+                    isinstance(current, MappingCombobox)
+                    and current.full_text() != current.get()
+                )
+                or self.combobox_text_is_truncated(current)
             ),
         )
         self._combobox_overflow_bound_widgets.add(widget_name)
@@ -7461,6 +7470,9 @@ class ConfigGUI:
         }
         return self.tr(labels.get(str(mode), str(mode)))
 
+    def mapping_target_label(self, value):
+        return mapping_target_label(value, self.tr)
+
     def toggle_language(self):
         """切換中英文並立即保存 GUI 語言偏好。"""
         gamepad_test_process = self.gamepad_test_process
@@ -7583,6 +7595,8 @@ class ConfigGUI:
     def apply_language(self):
         """更新現有元件、頁籤、狀態文字與提示語言。"""
         def update_widget(widget):
+            if isinstance(widget, MappingCombobox):
+                widget.refresh()
             try:
                 if "text" in widget.keys():
                     if not hasattr(widget, "_s2p_zh_text"):
@@ -9597,10 +9611,11 @@ class ConfigGUI:
             ).grid(
                 row=row, column=0, padx=(0, 5), pady=3
             )
-            combo = ttk.Combobox(
+            combo = MappingCombobox(
                 button_inner,
                 textvariable=variable,
                 values=self.button_options,
+                formatter=self.mapping_target_label,
                 state="readonly",
                 width=22,
             )
@@ -9693,10 +9708,11 @@ class ConfigGUI:
                 ttk.Label(
                     cell, text=symbol, anchor="center", font=("", 11, "bold")
                 ).pack()
-                combo = ttk.Combobox(
+                combo = MappingCombobox(
                     cell,
                     textvariable=variable,
                     values=self.stick_direction_options,
+                    formatter=self.mapping_target_label,
                     state="readonly",
                     width=9,
                 )

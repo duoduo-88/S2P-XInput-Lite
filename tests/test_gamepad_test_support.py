@@ -14,6 +14,8 @@ from unittest.mock import Mock, call, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from version import VERSION
+
 from gamepad_devices import (
     GamepadDevice,
     GamepadState,
@@ -133,7 +135,7 @@ class DiagnosticDeviceSelectionTests(unittest.TestCase):
     def test_gamepad_tester_title_includes_product_and_version(self):
         self.assertEqual(
             GAMEPAD_TESTER_TITLE,
-            "S2P-XInput-Lite v0.7.14 GamepadTester",
+            f"S2P-XInput-Lite v{VERSION} GamepadTester",
         )
 
 
@@ -1289,7 +1291,7 @@ class GamepadMathTests(unittest.TestCase):
         )
         self.assertEqual(
             canvas.create_text.call_args.kwargs["text"],
-            "v0.7.14 Starting Gamepad Tester...",
+            f"v{VERSION} Starting Gamepad Tester...",
         )
         window.geometry.assert_called_once_with("600x340+660+370")
         root.update.assert_called_once_with()

@@ -1,6 +1,7 @@
 import math
 import tkinter as tk
 from tkinter import ttk
+from readable_combobox import MappingCombobox
 
 def build_stick_mapping_section(gui, mapping_notebook):
     """Build the stick-direction mapping tab."""
@@ -129,9 +130,10 @@ def build_stick_mapping_section(gui, mapping_notebook):
                 direction_variable
             )
 
-            combo = ttk.Combobox(
+            combo = MappingCombobox(
                 cell,
                 textvariable=direction_variable,
+                formatter=gui.mapping_target_label,
                 values=(
                     gui.stick_direction_options
                 ),

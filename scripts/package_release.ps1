@@ -222,6 +222,11 @@ Copy-CuratedTree `
     -RelativeRoot "manual\assets\annotated" `
     -Extensions @(".png") `
     -DestinationRoot $packageRoot
+Copy-CuratedTree `
+    -SourceRoot (Join-Path $repoRoot "manual\assets\v0.7.14") `
+    -RelativeRoot "manual\assets\v0.7.14" `
+    -Extensions @(".png") `
+    -DestinationRoot $packageRoot
 foreach ($name in @("USER_GUIDE.md", "USER_GUIDE_zh-TW.md")) {
     Copy-ReleaseFile `
         -Source (Join-Path $repoRoot "manual\$name") `

@@ -1,4 +1,5 @@
 from tkinter import ttk
+from readable_combobox import MappingCombobox
 
 def build_mapping_buttons_section(gui, right_frame):
     """Build the mapping notebook and primary button-mapping tab."""
@@ -58,10 +59,11 @@ def build_mapping_buttons_section(gui, right_frame):
             pady=4,
         )
 
-        combo = ttk.Combobox(
+        combo = MappingCombobox(
             mapping_frame,
             textvariable=variable,
             values=gui.button_options,
+            formatter=gui.mapping_target_label,
             state="readonly",
             width=24
         )
@@ -100,7 +102,7 @@ def build_mapping_buttons_section(gui, right_frame):
 
     gui.create_help(
         mapping_frame,
-        "選擇 CUSTOM_KEYBOARD 後，按下要映射的輸入。\n\n"
+        "選擇「自訂按鍵」後，按下要映射的輸入。\n\n"
         "支援鍵盤單鍵、Ctrl／Shift／Alt／Win 複合鍵，"
         "以及滑鼠左鍵、右鍵與中鍵。\n"
         "例如：F12、Ctrl + S、Win + D。"

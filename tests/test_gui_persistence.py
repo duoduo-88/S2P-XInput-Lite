@@ -190,7 +190,7 @@ class GuiPersistenceTests(unittest.TestCase):
         )
         self.assertEqual(
             canvas.create_text.call_args.kwargs["text"],
-            "v0.7.14 Starting...",
+            f"v{config_gui.VERSION} Starting...",
         )
         window.geometry.assert_called_once_with("600x340+660+370")
         self.assertLess(
@@ -203,7 +203,7 @@ class GuiPersistenceTests(unittest.TestCase):
         animation()
         canvas.itemconfigure.assert_called_with(
             "loading-text",
-            text="v0.7.14 Starting.",
+            text=f"v{config_gui.VERSION} Starting.",
         )
 
     def test_initial_window_is_positioned_before_it_is_revealed(self):
@@ -837,37 +837,6 @@ class GuiPersistenceTests(unittest.TestCase):
                     Widget("4WAY")
                 )
             )
-
-    def test_combobox_popdown_list_ignores_mousewheel(self):
-        calls = []
-
-        class Tcl:
-            def call(self, *args):
-                calls.append(args)
-                if args[0] == "ttk::combobox::PopdownWindow":
-                    return ".parameter.popdown"
-                return ""
-
-        gui = object.__new__(config_gui.ConfigGUI)
-        gui.root = SimpleNamespace(tk=Tcl())
-
-        gui._bind_combobox_popdown_mousewheel_guard(".parameter")
-
-        self.assertEqual(
-            calls,
-            [
-                (
-                    "ttk::combobox::PopdownWindow",
-                    ".parameter",
-                ),
-                (
-                    "bind",
-                    ".parameter.popdown.f.l",
-                    "<MouseWheel>",
-                    "break",
-                ),
-            ],
-        )
 
     def test_esp32_write_requires_unsaved_profile_to_be_saved_first(self):
         gui = object.__new__(config_gui.ConfigGUI)

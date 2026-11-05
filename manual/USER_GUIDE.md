@@ -1,13 +1,15 @@
-# S2P-XInput-Lite v0.7.14 User Guide
+# S2P-XInput-Lite v0.7.15 User Guide
 
 [繁體中文](USER_GUIDE_zh-TW.md)
 
 This guide covers installation, connections, profiles, stick tuning, mapping,
 gyro controls, rumble, HidHide, ESP32-S3 bridge and standalone operation, and
 the Gamepad Test, report-rate, diagnostics, and About pages in
-S2P-XInput-Lite v0.7.14.
+S2P-XInput-Lite v0.7.15.
 
-This guide matches the published desktop v0.7.14 release and bundled S2P-FW
+The feature screenshots show the English v0.7.14 interface; profile values are examples.
+
+This guide matches the published desktop v0.7.15 release and bundled S2P-FW
 1.0.7. The firmware build and descriptor checks passed; physical Windows and
 Android hardware validation remains pending.
 
@@ -95,13 +97,13 @@ Pair the controller directly with Windows. This is convenient, but update rate a
 
 ## 2. Main window and profiles
 
-![Main window overview](assets/annotated/01-main-buttons.png)
+![Main window overview](assets/v0.7.14/main-buttons.png)
 
-1. **Stick settings** — Drag curve control points and adjust output, stabilizer, and basic rumble options.
-2. **Feature tabs** — Switch between Buttons, Stick Map, Layers, Advanced Rumble, and Gyro Map. The screenshot shows Xbox button mapping.
-3. **Status row** — Check ViGEm, WASAPI, HidHide, controller, and ESP32 status.
-4. **Profile selector** — Choose the profile to edit or apply.
-5. **Import Settings** — Migrate compatible settings from another S2P-XInput-Lite installation.
+- **Stick settings** — Drag curve control points and adjust output, stabilizer, and basic rumble options.
+- **Feature tabs** — Switch between Buttons, Stick Map, Layers, Advanced Rumble, and Gyro Map. The screenshot shows Xbox button mapping.
+- **Status row** — Check ViGEm, WASAPI, HidHide, controller, and ESP32 status.
+- **Profile selector** — Choose the profile to edit or apply.
+- **Import Settings** — Migrate compatible settings from another S2P-XInput-Lite installation.
 
 The remaining footer controls save or create profiles, import one profile, change
 language, restore defaults, calibrate, flash firmware, restart, and Pin.
@@ -125,11 +127,9 @@ language, restore defaults, calibrate, flash firmware, restart, and Pin.
 
 ### 2.3 Import Settings
 
-![Import Settings conflict preview](assets/annotated/15-import-settings-conflicts.png)
+![Import Settings button at the bottom of the main window](assets/v0.7.14/main-buttons.png)
 
-The numbered preview identifies: **1** source installation, **2** compatible data
-found, **3** items deliberately ignored, **4** profile or Mapping Layer conflicts,
-and **5** the choice applied to all conflicts.
+Select **Import Settings** at the bottom of the main window. After choosing a source folder, the preview lists compatible data, skipped items, and conflicts.
 
 1. Select **Import Settings**.
 2. Choose the previous or same-version S2P-XInput-Lite **application root**; do not choose its `src` folder.
@@ -150,12 +150,14 @@ and build output are not imported. A failed validated write rolls back
 
 ## 3. Stick settings
 
-![Expanded stick curve editor](assets/annotated/07-stick-curve-zoom.png)
+![Expanded stick curve editor](assets/v0.7.14/stick-zoom.png)
 
-1. **25% point** — Controls response for small stick movement.
-2. **50% point** — Controls the middle of the response.
-3. **75% point** — Controls response near the outer range.
-4. **Shape and Stab.** — Adjust response shape and slope-based stabilization.
+Select **Zoom** under Stick Settings in the main window to open this editor.
+
+- **25% point** — Controls response for small stick movement.
+- **50% point** — Controls the middle of the response.
+- **75% point** — Controls response near the outer range.
+- **Shape and Stab.** — Adjust response shape and slope-based stabilization.
 
 ### 3.1 Curve controls
 
@@ -213,14 +215,16 @@ The **Buttons** tab maps physical controller buttons to Xbox 360 outputs.
 
 The common layout swaps A/B and X/Y to match Xbox button positions. CAPT, C, GR, GL, and other extra buttons can also be assigned or disabled.
 
+Choose **Shortcut** to record a keyboard or mouse input. Labels use short names such as `KB:1`, `KB:Ctrl+S`, and `M:Wheel↓`; hover over a short name to see the full mapping. An expanded dropdown scrolls when the wheel is over its list items. Scrolling does not apply a choice; select an item to apply it, then use **Save/Apply** to save.
+
 ### 4.2 Stick Map
 
-![Stick direction mapping](assets/annotated/02-stick-map.png)
+![Stick direction mapping](assets/v0.7.14/main-stick-map.png)
 
-1. **Mode** — Select the direction mode, such as `4WAY`.
-2. **Direction diagram** — Shows the active direction regions and boundary gaps.
-3. **DZ / Trig / Rel** — Direction deadzone, trigger threshold, and release threshold.
-4. **Independent sticks** — The left and right sticks can be configured and reset separately.
+- **Mode** — Select the direction mode, such as `4WAY`.
+- **Direction diagram** — Shows the active direction regions and boundary gaps.
+- **DZ / Trig / Rel** — Direction deadzone, trigger threshold, and release threshold.
+- **Independent sticks** — The left and right sticks can be configured and reset separately.
 
 > [!TIP]
 > Keep **Trig** above **Rel**. The resulting hysteresis prevents repeated activation when the stick rests on a direction boundary.
@@ -229,12 +233,12 @@ The common layout swaps A/B and X/Y to match Xbox button positions. CAPT, C, GR,
 
 ## 5. Mapping Layers
 
-![Mapping Layers](assets/annotated/03-layers.png)
+![Mapping Layers](assets/v0.7.14/main-layers.png)
 
-1. **Enable check box** — Enables or disables the layer.
-2. **Activation** — Assigns the activation button and Toggle/Hold behavior.
-3. **Layer actions** — Edit, Rename, and Delete.
-4. **Layer tools** — Add, Import, and Layer Manager.
+- **Enable check box** — Enables or disables the layer.
+- **Activation** — Assigns the activation button and Toggle/Hold behavior.
+- **Layer actions** — Edit, Rename, and Delete.
+- **Layer tools** — Add, Import, and Layer Manager.
 
 ### 5.1 Creating a layer
 
@@ -255,13 +259,13 @@ The common layout swaps A/B and X/Y to match Xbox button positions. CAPT, C, GR,
 
 ## 6. Gyro mapping
 
-![Gyro mapping](assets/annotated/06-gyro-map.png)
+![Gyro mapping](assets/v0.7.14/main-gyro.png)
 
-1. **Activation** — Assign an activation button and select Off, Hold, or Toggle.
-2. **Target** — Left Stick, Right Stick, or Mouse.
-3. **Control Mode** — Aim (Center) or Wheel (Tilt).
-4. **Gyro Response** — Sensitivity, X/Y ratios, deadzone, anti-deadzone, and smoothing.
-5. **Stability and calibration** — Stability controls, Sensor Cal, and sensitivity curve.
+- **Activation** — Assign an activation button and select Off, Hold, or Toggle.
+- **Target** — Left Stick, Right Stick, or Mouse.
+- **Control Mode** — Aim (Center) or Wheel (Tilt).
+- **Gyro Response** — Sensitivity, X/Y ratios, deadzone, anti-deadzone, and smoothing.
+- **Stability and calibration** — Stability controls, Sensor Cal, and sensitivity curve.
 
 ### 6.1 Activation and target
 
@@ -323,12 +327,12 @@ The default of `500` retains clear feedback while reducing excessive-output nois
 
 ### 7.3 Game, Audio, and Mix
 
-![Advanced Rumble in Game mode](assets/annotated/04-advanced-rumble-game.png)
+![Advanced Rumble in Game mode](assets/v0.7.14/main-rumble-game.png)
 
-1. **Source** — Game, Audio, or Mix.
-2. **Six-band curve** — Gain for each audio range.
-3. **LF/HF Balance** — Routes the middle bands toward LF or HF.
-4. **Final Output** — Tail and decay behavior.
+- **Source** — Game, Audio, or Mix.
+- **Six-band curve** — Gain for each audio range.
+- **LF/HF Balance** — Routes the middle bands toward LF or HF.
+- **Final Output** — Tail and decay behavior.
 
 - **Game** — Uses native game rumble only.
 - **Audio** — Converts the Windows default output into rumble.
@@ -336,12 +340,12 @@ The default of `500` retains clear feedback while reducing excessive-output nois
 
 ### 7.4 Audio Response
 
-![Advanced Rumble in Audio mode](assets/annotated/05-advanced-rumble-audio.png)
+![Advanced Rumble in Audio mode](assets/v0.7.14/main-rumble-audio.png)
 
-1. **Audio source**
-2. **Lvl / Gate / Atk / Rel**
-3. **Low, L-Mid, Mid, H-Mid, High, and Ultra bands**
-4. **LF/HF Balance**
+- **Audio source**
+- **Lvl / Gate / Atk / Rel**
+- **Low, L-Mid, Mid, H-Mid, High, and Ultra bands**
+- **LF/HF Balance**
 
 - **Lvl** — Overall audio-to-rumble sensitivity.
 - **Gate** — Rejects quiet background audio.
@@ -524,18 +528,20 @@ varies by device, OS and game. See [validation and official references](../docs/
 
 ## 9. Gamepad Test
 
-![Gamepad Test input monitor](assets/annotated/08-gamepad-input.png)
+![Gamepad Test input monitor](assets/v0.7.14/tester-input.png)
 
-1. **Device and refresh**: Select the controller to inspect or rescan devices.
-2. **Function tabs**: Open Input Monitor, Rumble Test, Report Rate Test,
+*The screenshot shows a connected S2P-XInput-Lite Bridge. Available controls and data depend on the device.*
+
+- **Device and refresh**: Select the controller to inspect or rescan devices.
+- **Function tabs**: Open Input Monitor, Rumble Test, Report Rate Test,
    Diagnostics, or About.
-3. **Stick source and zoom**: Select each stick's source and adjust its view.
-4. **Left and right stick plots**: Show live position, trails, output shape,
+- **Stick source and zoom**: Select each stick's source and adjust its view.
+- **Left and right stick plots**: Show live position, trails, output shape,
    and guides.
-5. **Sampling and trail controls**: Adjust sampling, trail duration, and
+- **Sampling and trail controls**: Adjust sampling, trail duration, and
    overlays.
-6. **Trigger input**: Shows current LT and RT values and their input type.
-7. **Button events**: Lists button state, held time, effective mapping, and
+- **Trigger input**: Shows current LT and RT values and their input type.
+- **Button events**: Lists button state, held time, effective mapping, and
    active layer.
 
 Select **Gamepad Test** at the bottom of the main window to open the standalone
@@ -562,6 +568,14 @@ also be launched directly without opening the settings window first.
 - **Refresh** rescans devices. Changing the device or plotted source clears the
   old measurement so unrelated samples are not combined.
 
+**Quick test:**
+
+1. Connect and wake the controller. To test S2P output, start the main application and confirm its connection first.
+2. Launch `GamepadTester.exe`, or select **Gamepad Test** in the main window.
+3. Select **Refresh**, then choose the device at the top. If it is missing, check the Windows connection and scan again.
+4. Open **Input Monitor**, move both sticks, and press buttons and triggers; check that the dots and event table change.
+5. Use **Rumble Test**, **Report Rate Test**, or **Diagnostics** as needed. Each requires an appropriate device interface as described below.
+
 ### 9.2 Stick plots
 
 Each stick has its own source selector. The centre crosshair is zero, the dark
@@ -575,7 +589,9 @@ outer circle is the 100% reference, and the live dot is the current value.
 
 ### 9.3 Output-shape capture
 
-Enable **Show Output Shape**, then rotate the stick slowly around its outer
+![Output-shape measurement from a connected controller](assets/v0.7.14/tester-shape.png)
+
+Enable **Shape**, then rotate the stick slowly around its outer
 edge. The purple line records the maximum output reached in every direction and
 reports coverage, roundness error, and maximum radius.
 
@@ -583,8 +599,7 @@ reports coverage, roundness error, and maximum radius.
 - After the displayed line catches the latest maxima and no sector expands for
   one second, the capture locks and stops redrawing to avoid idle rendering
   overhead.
-- Toggle **Show Output Shape**, change the source/settings, or select
-  **Clear Trail & Statistics** to begin a new capture.
+- Toggle **Shape**, change the source/settings, or select **Clear** to begin a new capture.
 
 ### 9.4 Buttons and triggers
 
@@ -596,30 +611,38 @@ the tester retains generic HID behavior.
 
 ### 9.5 Vibration Test
 
-![Gamepad Test vibration page](assets/annotated/09-gamepad-rumble.png)
+![Gamepad Test vibration page](assets/v0.7.14/tester-rumble.png)
 
-1. **Manual output**: Adjust LF and HF motor strength directly.
-2. **Motor levels**: Show the current output percentage for both bands.
-3. **Test patterns**: Select pulse, alternate, impact, engine, wave, and other
+- **Manual output**: Adjust LF and HF motor strength directly.
+- **Motor levels**: Show the current output percentage for both bands.
+- **Test patterns**: Select pulse, alternate, impact, engine, wave, and other
    preset effects.
-4. **Playback controls**: Set repeat, LF/HF routing, rate, and strength.
-5. **Stop controls**: Reset the settings or immediately stop all vibration.
+- **Playback controls**: Set repeat, LF/HF routing, rate, and strength.
+- **Stop controls**: Reset the settings or immediately stop all vibration.
 
-The **Vibration Test** tab sends test patterns to Windows devices that expose
+Choose S2P-XInput-Lite (Bridge) or an XInput device that supports vibration, then open **Rumble Test**. Start with low LF/HF levels or choose a pattern. Enable **Repeat** if needed and select **Stop All Rumble** when finished. If `No XInput rumble` appears or controls are disabled, check that the virtual controller is active or select a supported XInput device. Bridge tests use the current profile's LF/HF settings; game rumble patterns do not output in Audio-only mode.
+
+The **Rumble Test** tab sends test patterns to Windows devices that expose
 XInput rumble. Stopping or closing the tester sends zero vibration. Mobile USB
 HID currently provides input only and does not relay web or game rumble to the
 controller.
 
 ### 9.6 Report Rate
 
-![Gamepad Test report-rate page](assets/annotated/10-gamepad-report-rate.png)
+![Gamepad Test report-rate page](assets/v0.7.14/tester-rate.png)
 
-1. **Measurement settings**: Select the duration, start, or stop early.
-2. **Live summary**: Shows HID rate, effective rate, report count, and time
+*The selected Raw HID interface is a virtual controller. Its results describe that interface, not the physical controller's raw BLE rate.*
+
+- **Measurement settings**: Select the duration, start, or stop early.
+- **Live summary**: Shows HID rate, effective rate, report count, and time
    remaining.
-3. **Interval statistics**: Lists P50, P95, P99, minimum, mean, and maximum.
-4. **Interval distribution**: Plots report-interval distribution and timeline.
-5. **Reading status**: Shows whether measurement is active and its result state.
+- **Interval statistics**: Lists P50, P95, P99, minimum, mean, and maximum.
+- **Interval distribution**: Plots report-interval distribution and timeline.
+- **Reading status**: Shows whether measurement is active and its result state.
+
+1. Select a Raw HID collection in **Device** and open **Report Rate Test**.
+2. Set **Duration (s)**, select **Start**, and move one stick through wide circles until the test ends; use **Stop Early** if needed.
+3. Compare **HID Report Rate** with **Effective Report Rate** and inspect the intervals. If there is no usable data, try another collection.
 
 Open **Report Rate** to measure a Raw HID collection without display-frame
 sampling. Select the collection and test duration, start the measurement, then
@@ -631,19 +654,21 @@ device may expose different reports.
 
 ### 9.7 Diagnostics
 
-![Gamepad Test ESP32 diagnostics page](assets/annotated/11-gamepad-diagnostics.png)
+![Gamepad Test ESP32 diagnostics page](assets/v0.7.14/tester-diagnostics.png)
 
-1. **Diagnostic controls**: Start or stop diagnostics and select the duration.
-2. **Diagnostic status**: Shows the current phase and progress.
-3. **Diagnostic assessment**: Summarizes the verdict, findings, and advice.
-4. **Diagnostic details**: Lists connection, input, sensor, and rumble checks.
-5. **Export Support Log**: Saves diagnostic data for a support report.
+*This example shows a completed diagnosis with a BLE input-gap warning. Results depend on the connection.*
+
+- **Diagnostic controls**: Start or stop diagnostics and select the duration.
+- **Diagnostic status**: Shows the current phase and progress.
+- **Diagnostic assessment**: Summarizes the verdict, findings, and advice.
+- **Diagnostic details**: Lists connection, input, sensor, and rumble checks.
+- **Export Support Log**: Saves diagnostic data for a support report.
 
 The **Diagnostics** tab runs a 30, 60, or 120 second ESP32 health check. Keep
 the controller awake and exercise the sticks, sensors, and rumble during the
 run. The summary covers firmware mode, connection and input continuity,
 latency, calibration, motion sensors, gyro processing, rumble, and an overall
-pass/warn/fail verdict. **Export Report** saves the displayed report as UTF-8
+pass/warn/fail verdict. **Export Support Log** saves the displayed report as UTF-8
 text.
 
 Bridge mode temporarily uses the application's active serial connection.
@@ -652,14 +677,14 @@ diagnostic command set requires the bundled `S2P-FW 1.0.7`.
 
 ### 9.8 About
 
-![About page showing the license agreement](assets/annotated/12-gamepad-about-license.png)
+![About page showing the license agreement](assets/v0.7.14/tester-about.png)
 
-![About page showing third-party software notices](assets/annotated/13-gamepad-about-third-party.png)
+![About page showing third-party software notices](assets/v0.7.14/tester-third-party.png)
 
-1. **Product identity**: Shows the icon, product name, and version.
-2. **Project links**: Opens GitHub, sponsorship, and development-support links.
-3. **Document tabs**: Switches between the license and third-party notices.
-4. **Document content**: Scrolls through the complete bundled notices.
+- **Product identity**: Shows the icon, product name, and version.
+- **Project links**: Opens GitHub, sponsorship, and development-support links.
+- **Document tabs**: Switches between the license and third-party notices.
+- **Document content**: Scrolls through the complete bundled notices.
 
 The **About** tab keeps the logo, version, GitHub, and Ko-fi links visible on
 the left. The right side contains scrollable **License Agreement** and
@@ -762,4 +787,4 @@ Gate → Lvl → six bands → LF/HF Balance → Tail/Decay.
 Keep one verified stable profile and use **Save New** for experimental settings.
 
 > [!NOTE]
-> This guide applies to S2P-XInput-Lite v0.7.14. For later releases, follow the in-app question-mark help and the latest release notes.
+> This guide applies to S2P-XInput-Lite v0.7.15. For later releases, follow the in-app question-mark help and the latest release notes.

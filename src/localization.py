@@ -999,8 +999,8 @@ EN_TEXT = {
     "確定要刪除這個方案嗎？": "Delete this profile?",
     "自定義鍵盤映射": "Custom Key Map",
     "自定義輸入映射": "Custom Input Map",
-    "選擇 CUSTOM_KEYBOARD 後，按下要映射的輸入。\n\n支援鍵盤單鍵、Ctrl／Shift／Alt／Win 複合鍵，以及滑鼠左鍵、右鍵與中鍵。\n例如：F12、Ctrl + S、Win + D。":
-        "Choose CUSTOM_KEYBOARD, then press the input to map.\n\nSupports single keys; Ctrl/Shift/Alt/Win combinations; and left, right, or middle mouse buttons.\nExamples: F12, Ctrl + S, Win + D.",
+    "選擇「自訂按鍵」後，按下要映射的輸入。\n\n支援鍵盤單鍵、Ctrl／Shift／Alt／Win 複合鍵，以及滑鼠左鍵、右鍵與中鍵。\n例如：F12、Ctrl + S、Win + D。":
+        "Choose Shortcut, then press the input to map.\n\nSupports single keys; Ctrl/Shift/Alt/Win combinations; and left, right, or middle mouse buttons.\nExamples: F12, Ctrl + S, Win + D.",
     "等待按鍵...": "Press a key...",
     "請按下要映射的鍵盤按鍵或複合按鍵。\n\n例如：F12、Ctrl + S、Ctrl + Shift + S":
         "Press a key or key combination to map.\n\nExamples: F12, Ctrl + S, Ctrl + Shift + S",
