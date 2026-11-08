@@ -6447,10 +6447,19 @@ class GamepadTestWindow:
             for device in devices
         ]
         mapping = build_device_display_mapping(devices)
+        bridge_slot_changed = (
+            previous_device is not None
+            and previous_device.kind == "s2p"
+            and any(
+                device.key == previous_device_key and device.index != previous_device.index
+                for device in mapping.values()
+            )
+        )
         current_keys = {device.key for device in self.devices.values()}
         new_keys = {device.key for device in mapping.values()}
         if (
             not force
+            and not bridge_slot_changed
             and new_keys == current_keys
             and tuple(mapping) == tuple(self.devices)
         ):
@@ -6493,7 +6502,7 @@ class GamepadTestWindow:
             self._device_selection_explicit = False
         next_device = mapping.get(next_name)
         next_device_key = next_device.key if next_device is not None else None
-        if previous_device_key != next_device_key:
+        if previous_device_key != next_device_key or bridge_slot_changed:
             self.stop_rumble()
         self.selected_device_var.set(next_name)
         self._configure_source_controls()
@@ -6888,11 +6897,22 @@ class GamepadTestWindow:
             return None
         if device.kind == "s2p":
             slot = self.latest_telemetry.get("xinput_slot")
-            return int(slot) if isinstance(slot, int) and 0 <= slot <= 3 else None
+            # Keep a running test tied to the device snapshot that selected
+            # it, including silent template gaps with no active motor output.
+            return int(slot) if (
+                isinstance(slot, int) and 0 <= slot <= 3 and slot == device.index
+            ) else None
         return device.index if device.kind == "xinput" else None
 
     def _set_rumble(self, left, right, slot=None):
         slot = self._rumble_target() if slot is None else slot
+        active_slot = getattr(self, "_active_rumble_slot", None)
+        if active_slot is not None and slot != active_slot:
+            # Telemetry can change between periodic device refreshes. Stop
+            # the previous output before a scheduled tick can move its test
+            # to another controller and replace our only record of that slot.
+            self.stop_rumble()
+            return False
         if slot is None:
             return False
         left = max(0.0, min(1.0, float(left)))

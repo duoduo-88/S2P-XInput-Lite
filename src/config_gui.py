@@ -112,8 +112,9 @@ from mapping_targets import (
     stick_analog_direction_error,
     stick_direction_mode_error,
     stick_setting_key_error,
+    validate_profile_mapping_targets,
 )
-from settings_schema import SettingValidationError
+from settings_schema import SECTION_SCHEMAS, SettingValidationError, validate_config_sections
 from single_instance import SingleInstance, activate_tk_window
 from system_tray import SystemTrayIcon
 from gui_settings import (
@@ -711,6 +712,11 @@ class ToolTip:
 
         self.widget.bind("<Enter>", self.show, add="+")
         self.widget.bind("<Leave>", self.hide, add="+")
+        self.widget.bind("<Destroy>", self._on_widget_destroyed, add="+")
+
+    def _on_widget_destroyed(self, event):
+        if event.widget is self.widget:
+            self.hide()
 
     def show(self, event=None):
         if self.window is not None:
@@ -852,9 +858,13 @@ class ToolTip:
         self.window.deiconify()
 
     def hide(self, event=None):
-        if self.window is not None:
-            self.window.destroy()
-            self.window = None
+        window, self.window = self.window, None
+        if window is not None:
+            try:
+                window.destroy()
+            except tk.TclError:
+                # An owning editor may already have destroyed the popup.
+                pass
 
 def is_vigembus_installed():
     """檢查 Windows 是否已安裝 ViGEmBus。"""
@@ -1944,6 +1954,12 @@ class ConfigGUI:
         self._flash_preflight_poll_job = None
         self._flash_preflight_verified_port = None
         self._flash_preflight_verified_generation = None
+        self._esp32_operation_active = False
+        self._esp32_operation_generation = 0
+        self._esp32_transfer_started = False
+        self._esp32_start_job = None
+        self._esp32_poll_job = None
+        self._esp32_restart_pending = False
         self.vigembus_install_process = None
         self.vigembus_prompt_shown = False
         self.hidhide_prompt_shown = False
@@ -2261,20 +2277,36 @@ class ConfigGUI:
             message,
         )
 
+    def _firmware_operation_is_active(self):
+        process = getattr(self, "flash_process", None)
+        return bool(
+            getattr(self, "_flash_operation_active", False)
+            or (process is not None and process.poll() is None)
+        )
+
     def flash_firmware(self):
         """自動偵測 ESP32-S3 刷機連接埠並刷入相容韌體。"""
 
-        flash_process = getattr(self, "flash_process", None)
-        if (
-            getattr(self, "_flash_operation_active", False)
-            or (
-                flash_process is not None
-                and flash_process.poll() is None
-            )
-        ):
+        if getattr(self, "_close_in_progress", False):
+            return
+        if getattr(self, "_esp32_operation_active", False):
+            self._show_esp32_operation_busy()
+            return
+        if self._firmware_operation_is_active():
             messagebox.showinfo(
                 self.tr("韌體刷寫中"),
                 self.tr("ESP32-S3 韌體偵測或刷寫仍在進行，請等待完成。"),
+            )
+            return
+
+        calibration = getattr(self, "calibration_process", None)
+        if (
+            getattr(self, "_calibration_start_job", None) is not None
+            or (calibration is not None and calibration.poll() is None)
+        ):
+            messagebox.showinfo(
+                self.tr("校正已啟動"),
+                self.tr("搖桿校正程式正在啟動或已經在執行。"),
             )
             return
 
@@ -2299,19 +2331,31 @@ class ConfigGUI:
             )
             return
 
-        firmware_info, resume_connector = self.inspect_esp32_firmware()
-        confirmed = self.confirm_firmware_flash(firmware_info)
-
-        if not confirmed:
-            if resume_connector:
-                self._resume_connector_after_firmware_check()
-            return
-
+        restart_pending = self._cancel_scheduled_job("_main_start_job")
         self._flash_operation_active = True
         self._flash_operation_generation = getattr(
             self, "_flash_operation_generation", 0
         ) + 1
+        operation_generation = self._flash_operation_generation
         try:
+            firmware_info, resume_connector = self.inspect_esp32_firmware()
+            if operation_generation != self._flash_operation_generation:
+                return
+            if getattr(self, "_close_in_progress", False):
+                self._finish_flash_operation()
+                return
+            confirmed = self.confirm_firmware_flash(firmware_info)
+            if operation_generation != self._flash_operation_generation:
+                return
+            if getattr(self, "_close_in_progress", False):
+                self._finish_flash_operation()
+                return
+            if not confirmed:
+                self._finish_flash_operation()
+                if resume_connector or restart_pending:
+                    self._resume_connector_after_firmware_check()
+                return
+
             # 查詢版本時可能已關閉主連接程式；若使用快取則在此釋放 COM Port。
             self.stop_main_process()
 
@@ -6180,6 +6224,22 @@ class ConfigGUI:
         self._combobox_overflow_bound_widgets.add(widget_name)
         self._combobox_overflow_tooltips[widget_name] = tooltip
 
+        def forget_destroyed_widget(event):
+            if event.widget is not widget:
+                return
+            tooltip.hide()
+            self._combobox_overflow_tooltips.pop(widget_name, None)
+            for registry_name in (
+                "_combobox_overflow_bound_widgets",
+                "_parameter_wheel_bound_widgets",
+                "_parameter_reset_bound_widgets",
+            ):
+                registry = getattr(self, registry_name, None)
+                if registry is not None:
+                    registry.discard(widget_name)
+
+        widget.bind("<Destroy>", forget_destroyed_widget, add="+")
+
     def parameter_binding_for_widget(self, widget):
         if widget is self.profile_combo:
             return None
@@ -6327,6 +6387,8 @@ class ConfigGUI:
             and new_active_filename
             and old_snapshot.get(old_active_filename)
             != new_snapshot.get(new_active_filename)
+            and self.profile_file_fingerprint(self.active_profile)
+            != getattr(self, "_active_profile_content_baseline", None)
         ):
             self._external_active_profile_changed = True
 
@@ -6506,7 +6568,7 @@ class ConfigGUI:
         except (OSError, ValueError, configparser.Error, SettingsImportError) as exc:
             messagebox.showerror(
                 self.tr("設定匯入失敗"),
-                self.tr("無法匯入選取安裝的設定：") + f"\n{self.tr(str(exc))}",
+                self.tr("無法匯入選取安裝的設定：") + "\n" + self._settings_error_text(exc),
                 parent=self.root,
             )
 
@@ -6890,7 +6952,8 @@ class ConfigGUI:
                 self.profile_name_var.set(self.active_profile)
                 return
 
-            profile = read_profile(selected, PROFILE_DIR)
+            profile, loaded_fingerprint = read_profile(selected, PROFILE_DIR, return_fingerprint=True)
+            validate_profile_mapping_targets(profile, SWITCH_BUTTONS)
 
             # Merge into the latest on-disk configuration instead of the GUI's
             # potentially older copy.  This preserves calibration data written
@@ -6904,10 +6967,10 @@ class ConfigGUI:
                 atomic_write_config(updated_config, CONFIG_PATH)
             self.config = load_config(CONFIG_PATH)
             self.active_profile = selected
-            self._external_active_profile_changed = False
             self.reload_profile_variables()
-            self._active_profile_content_baseline = (
-                self.profile_file_fingerprint(selected)
+            self._active_profile_content_baseline = loaded_fingerprint
+            self._external_active_profile_changed = (
+                self.profile_file_fingerprint(selected) != loaded_fingerprint
             )
             self.request_adaptive_window_update()
             if was_running:
@@ -6920,7 +6983,7 @@ class ConfigGUI:
             self.profile_name_var.set(self.active_profile)
             messagebox.showerror(
                 self.tr("方案切換失敗"),
-                self.tr("無法載入所選方案：") + f"\n{exc}",
+                self.tr("無法載入所選方案：") + "\n" + self._settings_error_text(exc),
             )
         finally:
             # Variable traces may change the required height.  One coalesced
@@ -6948,6 +7011,14 @@ class ConfigGUI:
             self.active_profile
         )
         snapshot = None
+
+        def capture_before_write():
+            nonlocal snapshot
+            snapshot = self.capture_settings_bundle(self.active_profile)
+            # The profile is the final atomic commit, so earlier rollback
+            # never owns external changes to that file.
+            snapshot.pop(profile_path(self.active_profile, PROFILE_DIR), None)
+
         try:
             with config_file_lock():
                 if (
@@ -6957,11 +7028,11 @@ class ConfigGUI:
                     raise ValueError(
                         self.tr("方案檔案在儲存前再次變更，請重新操作。")
                     )
-                snapshot = self.capture_settings_bundle(self.active_profile)
                 try:
-                    if not self.save_config(show_confirmation=False):
-                        self.restore_settings_bundle(snapshot)
-                        self.refresh_saved_settings_baseline()
+                    if not self.save_config(show_confirmation=False, before_write=capture_before_write):
+                        if snapshot is not None:
+                            self.restore_settings_bundle(snapshot)
+                            self.refresh_saved_settings_baseline()
                         return False
                     if (
                         self.profile_file_fingerprint(self.active_profile)
@@ -6970,18 +7041,21 @@ class ConfigGUI:
                         raise ValueError(
                             self.tr("方案檔案在儲存期間再次變更，已取消儲存。")
                         )
-                    save_profile(self.config, self.active_profile, PROFILE_DIR)
+                    _path, saved_fingerprint = save_profile(
+                        self.config, self.active_profile, PROFILE_DIR, return_fingerprint=True,
+                    )
                 except (OSError, configparser.Error, ValueError):
-                    self.restore_settings_bundle(snapshot)
-                    self.refresh_saved_settings_baseline()
+                    if snapshot is not None:
+                        self.restore_settings_bundle(snapshot)
+                        self.refresh_saved_settings_baseline()
                     raise
-            self._external_active_profile_changed = False
-            self._active_profile_content_baseline = (
-                self.profile_file_fingerprint(self.active_profile)
+            self._active_profile_content_baseline = saved_fingerprint
+            self._external_active_profile_changed = (
+                self.profile_file_fingerprint(self.active_profile) != saved_fingerprint
             )
             reload_request = self.request_live_settings_reload()
-            self.refresh_profile_list(self.active_profile)
-            if show_message:
+            refreshed = self._refresh_profile_list_after_save(self.active_profile)
+            if show_message and refreshed:
                 messagebox.showinfo(
                     self.tr("方案已儲存"),
                     self.tr(
@@ -7067,16 +7141,19 @@ class ConfigGUI:
             return "overwrite"
         try:
             with config_file_lock():
-                profile = read_profile(self.active_profile, PROFILE_DIR)
+                profile, loaded_fingerprint = read_profile(
+                    self.active_profile, PROFILE_DIR, return_fingerprint=True,
+                )
+                validate_profile_mapping_targets(profile, SWITCH_BUTTONS)
                 latest = load_config(CONFIG_PATH)
                 apply_profile(latest, profile)
                 latest.set("gui", "active_profile", self.active_profile)
                 atomic_write_config(latest, CONFIG_PATH)
             self.config = load_config(CONFIG_PATH)
             self.reload_profile_variables()
-            self._external_active_profile_changed = False
-            self._active_profile_content_baseline = (
-                self.profile_file_fingerprint(self.active_profile)
+            self._active_profile_content_baseline = loaded_fingerprint
+            self._external_active_profile_changed = (
+                self.profile_file_fingerprint(self.active_profile) != loaded_fingerprint
             )
             self.refresh_profile_list(self.active_profile)
             self.request_live_settings_reload()
@@ -7088,7 +7165,7 @@ class ConfigGUI:
             return "reloaded"
         except (OSError, ValueError, configparser.Error) as exc:
             messagebox.showerror(
-                self.tr("外部方案載入失敗"), str(exc), parent=self.root
+                self.tr("外部方案載入失敗"), self._settings_error_text(exc), parent=self.root
             )
             return "cancel"
 
@@ -7121,35 +7198,49 @@ class ConfigGUI:
             ):
                 return False
             name = existing or name
-            with config_file_lock():
+            expected_profile_fingerprint = self.profile_file_fingerprint(name)
+
+            def capture_before_write():
+                nonlocal snapshot
                 snapshot = self.capture_settings_bundle(name)
+                snapshot.pop(profile_path(name, PROFILE_DIR), None)
+
+            with config_file_lock():
                 try:
-                    if not self.save_config(show_confirmation=False):
-                        self.restore_settings_bundle(snapshot)
-                        self.refresh_saved_settings_baseline()
+                    if not self.save_config(show_confirmation=False, before_write=capture_before_write):
+                        if snapshot is not None:
+                            self.restore_settings_bundle(snapshot)
+                            self.refresh_saved_settings_baseline()
                         return False
-                    save_profile(self.config, name, PROFILE_DIR)
-                    self.active_profile = name
-                    self._external_active_profile_changed = False
                     self.config.set("gui", "active_profile", name)
                     atomic_write_config(self.config, CONFIG_PATH)
+                    if self.profile_file_fingerprint(name) != expected_profile_fingerprint:
+                        raise ValueError(
+                            self.tr("方案檔案在儲存期間再次變更，已取消儲存。")
+                        )
+                    _path, saved_fingerprint = save_profile(
+                        self.config, name, PROFILE_DIR, return_fingerprint=True,
+                    )
                 except (OSError, configparser.Error, ValueError):
-                    self.restore_settings_bundle(snapshot)
-                    self.refresh_saved_settings_baseline()
+                    if snapshot is not None:
+                        self.restore_settings_bundle(snapshot)
+                        self.refresh_saved_settings_baseline()
                     raise
+            self.active_profile = name
+            self._active_profile_content_baseline = saved_fingerprint
+            self._external_active_profile_changed = (
+                self.profile_file_fingerprint(name) != saved_fingerprint
+            )
             reload_request = self.request_live_settings_reload()
-            self.refresh_profile_list(name)
-            self._active_profile_content_baseline = (
-                self.profile_file_fingerprint(name)
-            )
-            messagebox.showinfo(
-                self.tr("方案已建立"),
-                self.tr(
-                    "已建立並切換方案，正在套用："
-                    if reload_request else
-                    "已建立並切換方案，將於下次連線時生效："
-                ) + name,
-            )
+            if self._refresh_profile_list_after_save(name):
+                messagebox.showinfo(
+                    self.tr("方案已建立"),
+                    self.tr(
+                        "已建立並切換方案，正在套用："
+                        if reload_request else
+                        "已建立並切換方案，將於下次連線時生效："
+                    ) + name,
+                )
             return True
         except (OSError, configparser.Error, ValueError) as exc:
             self.active_profile = previous_active
@@ -7159,6 +7250,23 @@ class ConfigGUI:
                 str(exc),
             )
             return False
+
+    def _refresh_profile_list_after_save(self, name):
+        # The files are already committed. A directory refresh failure must
+        # not reset the active identity or turn that commit into a failed save.
+        if hasattr(self, "profile_name_var"):
+            self.profile_name_var.set(name)
+        try:
+            self.refresh_profile_list(name)
+        except (OSError, configparser.Error, ValueError) as exc:
+            LOGGER.warning("Profile saved, but list refresh failed: %s", exc)
+            messagebox.showwarning(
+                self.tr("方案已儲存"),
+                self.tr("設定已儲存，但方案清單暫時無法更新。請稍後重新開啟方案選單。")
+                + f"\n\n{exc}",
+            )
+            return False
+        return True
 
     def import_profile_file(self):
         """Import one INI profile without changing the active profile."""
@@ -7190,15 +7298,21 @@ class ConfigGUI:
 
             # Start from the current defaults so profiles exported by an older
             # version automatically receive newly added sections and options.
-            normalized_config = load_config(DEFAULT_CONFIG_PATH)
+            normalized_config = load_config(DEFAULT_CONFIG_PATH, persist=False)
             for section in imported_sections:
                 for option, value in imported_config.items(section):
                     normalized_config.set(section, option, value)
+            validate_config_sections(
+                normalized_config,
+                tuple(section for section in PROFILE_SECTIONS if section in SECTION_SCHEMAS),
+                strict=True,
+            )
+            validate_profile_mapping_targets(normalized_config, SWITCH_BUTTONS)
             imported_profile = build_profile(normalized_config)
         except (OSError, UnicodeError, configparser.Error, ValueError) as exc:
             messagebox.showerror(
                 self.tr("方案匯入失敗"),
-                self.tr("無法匯入方案檔：") + f"\n{exc}",
+                self.tr("無法匯入方案檔：") + "\n" + self._settings_error_text(exc),
             )
             return
 
@@ -7240,7 +7354,7 @@ class ConfigGUI:
                 )
                 proposed_name = name
                 continue
-            if existing == self.active_profile:
+            if existing and existing.casefold() == self.active_profile.casefold():
                 messagebox.showwarning(
                     self.tr("無法覆蓋目前方案"),
                     self.tr(
@@ -7288,7 +7402,7 @@ class ConfigGUI:
                 self.tr("系統預設是唯讀方案，不能刪除。"),
             )
             return
-        if selected == self.active_profile:
+        if selected.casefold() == self.active_profile.casefold():
             messagebox.showwarning(
                 self.tr("無法刪除方案"),
                 self.tr("目前正在使用這個方案；請先切換至其他方案。"),
@@ -7421,7 +7535,7 @@ class ConfigGUI:
                 raise FileExistsError(
                     self.tr("同名方案已存在，請使用其他名稱。")
                 )
-            if selected == self.active_profile:
+            if selected.casefold() == self.active_profile.casefold():
                 self.rename_active_profile_transaction(selected, name)
             else:
                 rename_profile(selected, name, PROFILE_DIR)
@@ -7447,9 +7561,18 @@ class ConfigGUI:
                 raise
         self.active_profile = name
         self.config.set("gui", "active_profile", name)
-        self._active_profile_content_baseline = (
-            self.profile_file_fingerprint(name)
-        )
+        # Renaming does not load the file's contents into the GUI. Retain the
+        # loaded-content baseline so edits made during the name dialog cannot
+        # silently become the version that a later Save may overwrite.
+        if self.profile_file_fingerprint(name) != getattr(
+            self, "_active_profile_content_baseline", None
+        ):
+            self._external_active_profile_changed = True
+
+    def _settings_error_text(self, error):
+        if isinstance(error, SettingValidationError):
+            return error.localized(self.language)
+        return self.tr(str(error))
 
     def tr(self, text):
         local_translations = {
@@ -9337,7 +9460,15 @@ class ConfigGUI:
                 item["enabled"] = bool(var.get())
                 self.persist_mapping_layer_files()
 
-            enabled_var.trace_add("write", update_enabled)
+            enabled_trace = enabled_var.trace_add("write", update_enabled)
+
+            def release_enabled_trace(
+                event, widget=enabled, var=enabled_var, trace=enabled_trace
+            ):
+                if event.widget is widget:
+                    var.trace_remove("write", trace)
+
+            enabled.bind("<Destroy>", release_enabled_trace, add="+")
             def update_mode(
                 _event, item=layer, var=mode_var, reverse=mode_value
             ):
@@ -9389,16 +9520,20 @@ class ConfigGUI:
         self.refresh_mapping_layer_rows()
 
     def rename_mapping_layer(self, index):
-        layer = self.mapping_layers[index]
+        original = json.loads(json.dumps(self.mapping_layers[index]))
         name = self._ask_mapping_layer_name(
             self.tr("重新命名映射層"),
             self.tr("新名稱："),
-            initial=layer.get("name", ""),
+            initial=original.get("name", ""),
         )
         if name and name.strip():
+            target = self._mapping_layer_editor_target(original, self.root)
+            if target is None:
+                return
+            current_index, layer = target
             try:
                 layer["name"] = self._unique_mapping_layer_name(
-                    name, exclude_index=index
+                    name, exclude_index=current_index
                 )
             except ValueError as exc:
                 messagebox.showerror(
@@ -9411,20 +9546,40 @@ class ConfigGUI:
             self.refresh_mapping_layer_rows()
 
     def delete_mapping_layer(self, index):
-        layer = self.mapping_layers[index]
+        original = json.loads(json.dumps(self.mapping_layers[index]))
         if messagebox.askyesno(
             self.tr("刪除映射層"),
             self.tr("確定刪除映射層：")
-            + layer.get("name", "")
+            + original.get("name", "")
             + self.tr("？"),
             parent=self.root,
         ):
-            del self.mapping_layers[index]
+            target = self._mapping_layer_editor_target(original, self.root)
+            if target is None:
+                return
+            current_index, _layer = target
+            del self.mapping_layers[current_index]
             self.persist_mapping_layer_files()
             self.refresh_mapping_layer_rows()
 
+    def _mapping_layer_editor_target(self, original, dialog):
+        """Find the same unchanged layer after a directory reload or reorder."""
+        layer_id = original.get("id")
+        matches = [
+            (index, layer) for index, layer in enumerate(self.mapping_layers)
+            if layer_id and layer.get("id") == layer_id
+        ]
+        if len(matches) == 1 and matches[0][1] == original:
+            return matches[0]
+        messagebox.showwarning(
+            self.tr("映射層已變更"),
+            self.tr("此映射層已被變更或刪除。請重新開啟此操作後再試。"),
+            parent=dialog,
+        )
+        return None
+
     def edit_mapping_layer_activation(self, index):
-        layer = self.mapping_layers[index]
+        original = json.loads(json.dumps(self.mapping_layers[index]))
         dialog = tk.Toplevel(self.root)
         dialog.withdraw()
         dialog.transient(self.root)
@@ -9437,7 +9592,7 @@ class ConfigGUI:
         # Reuse the gyro activation selector's exact physical-button order so
         # both multi-button dialogs stay visually and behaviorally consistent.
         names = list(self.gyro_activation_button_options)
-        selected = set(layer.get("activation_buttons", ()))
+        selected = set(original.get("activation_buttons", ()))
         variables = {}
         for item_index, name in enumerate(names):
             variable = tk.BooleanVar(value=name in selected)
@@ -9459,6 +9614,10 @@ class ConfigGUI:
                     parent=dialog,
                 )
                 return
+            target = self._mapping_layer_editor_target(original, dialog)
+            if target is None:
+                return
+            _current_index, layer = target
             layer["activation_buttons"] = chosen
             self.persist_mapping_layer_files()
             dialog.destroy()
@@ -9481,7 +9640,8 @@ class ConfigGUI:
 
     def edit_mapping_layer(self, index):
         """Open a complete button/stick-direction editor for one layer."""
-        working = json.loads(json.dumps(self.mapping_layers[index]))
+        original = json.loads(json.dumps(self.mapping_layers[index]))
+        working = json.loads(json.dumps(original))
         layer_defaults = load_config(DEFAULT_CONFIG_PATH)
         default_buttons = dict(layer_defaults.items("buttons"))
         default_sticks = {
@@ -9495,6 +9655,19 @@ class ConfigGUI:
             f"{self.tr('編輯映射層')} - {working.get('name', '')}"
         )
         dialog.resizable(False, False)
+        editor_traces = []
+
+        def release_editor_traces(event):
+            if event.widget is not dialog:
+                return
+            for variable, trace_id in editor_traces:
+                try:
+                    variable.trace_remove("write", trace_id)
+                except tk.TclError:
+                    pass
+            editor_traces.clear()
+
+        dialog.bind("<Destroy>", release_editor_traces, add="+")
         # Keep this editor owned by the settings window so it cannot fall
         # behind a parent that is blocked by its modal grab.
 
@@ -9605,6 +9778,7 @@ class ConfigGUI:
             self._track_custom_mapping_variable(
                 variable
             )
+            editor_traces.append((variable, variable._s2p_custom_mapping_trace))
             button_vars[key] = variable
             ttk.Label(
                 button_inner, text=f"{name}  →", width=10, anchor="e"
@@ -9704,6 +9878,7 @@ class ConfigGUI:
                 self._track_custom_mapping_variable(
                     variable
                 )
+                editor_traces.append((variable, variable._s2p_custom_mapping_trace))
                 variables[direction.lower()] = variable
                 ttk.Label(
                     cell, text=symbol, anchor="center", font=("", 11, "bold")
@@ -9872,7 +10047,7 @@ class ConfigGUI:
                     slider_help[key],
                     step=step,
                     number_format=number_format,
-                    setter=lambda numeric, current_key=key: snap_layer_value(
+                    setter=lambda numeric, current_key=key, snap=snap_layer_value: snap(
                         current_key, numeric
                     ),
                 )
@@ -9926,7 +10101,7 @@ class ConfigGUI:
                 mouse_speed_help,
                 step=50,
                 number_format=".0f",
-                setter=lambda numeric: snap_layer_value("mouse_speed", numeric),
+                setter=lambda numeric, snap=snap_layer_value: snap("mouse_speed", numeric),
             )
             bind_editor_parameter_reset(
                 mouse_speed_value,
@@ -9976,7 +10151,7 @@ class ConfigGUI:
                 mouse_deadzone_help,
                 step=0.01,
                 number_format=".2f",
-                setter=lambda numeric: snap_layer_value("mouse_deadzone", numeric),
+                setter=lambda numeric, snap=snap_layer_value: snap("mouse_deadzone", numeric),
             )
             bind_editor_parameter_reset(
                 mouse_deadzone_value,
@@ -10211,7 +10386,7 @@ class ConfigGUI:
                 variables["mouse_speed"],
                 variables["mouse_deadzone"],
             ):
-                variable.trace_add("write", draw_preview)
+                editor_traces.append((variable, variable.trace_add("write", draw_preview)))
             preview.bind("<Configure>", draw_preview, add="+")
             for column in range(3):
                 page.columnconfigure(column, weight=1)
@@ -10273,6 +10448,10 @@ class ConfigGUI:
             load_snapshot_into_editor(snapshot_from_config(defaults))
 
         def accept():
+            target = self._mapping_layer_editor_target(original, dialog)
+            if target is None:
+                return
+            current_index, _layer = target
             pending_fields = []
             for name, variable in button_vars.items():
                 if self._is_pending_custom_mapping(
@@ -10351,7 +10530,7 @@ class ConfigGUI:
                     key: editor_stick_value(side, key, variable)
                     for key, variable in stick_vars[side].items()
                 }
-            self.mapping_layers[index] = working
+            self.mapping_layers[current_index] = working
             self.persist_mapping_layer_files()
             dialog.destroy()
             self.refresh_mapping_layer_rows()
@@ -10772,6 +10951,17 @@ class ConfigGUI:
 
 
     def run_calibration(self):
+        if getattr(self, "_close_in_progress", False):
+            return
+        if getattr(self, "_esp32_operation_active", False):
+            self._show_esp32_operation_busy()
+            return
+        if self._firmware_operation_is_active():
+            messagebox.showinfo(
+                self.tr("韌體刷寫中"),
+                self.tr("ESP32-S3 韌體偵測或刷寫仍在進行，請等待完成。"),
+            )
+            return
         calibration_path = Path(__file__).with_name("calibration.py")
 
         if not calibration_path.exists():
@@ -10797,9 +10987,13 @@ class ConfigGUI:
 
         # 校正與主連接程式不能同時占用 ESP32 COM Port
         # 或同一支藍牙手把。先正常停止主程式，再稍後啟動。
+        restart_pending = getattr(self, "_main_start_job", None) is not None
+        self._cancel_scheduled_job("_main_start_job")
         if (
-            self.main_process is not None
-            and self.main_process.poll() is None
+            restart_pending or (
+                self.main_process is not None
+                and self.main_process.poll() is None
+            )
         ):
             self.stop_main_process()
             self._schedule_calibration_start(calibration_path, 500)
@@ -10821,7 +11015,14 @@ class ConfigGUI:
         return True
 
     def _start_calibration_process(self, calibration_path):
-        if getattr(self, "_close_in_progress", False):
+        if (
+            getattr(self, "_close_in_progress", False)
+            or getattr(self, "_esp32_operation_active", False)
+            or self._firmware_operation_is_active()
+        ):
+            return False
+        main_process = getattr(self, "main_process", None)
+        if main_process is not None and main_process.poll() is None:
             return False
         calibration_process = getattr(self, "calibration_process", None)
         if (
@@ -10922,14 +11123,29 @@ class ConfigGUI:
 
         self.main_process = None
 
-    def start_main(self, main_path):
-        if getattr(self, "_close_in_progress", False):
+    def _can_start_main(self):
+        if (
+            getattr(self, "_close_in_progress", False)
+            or getattr(self, "_esp32_operation_active", False)
+            or self._firmware_operation_is_active()
+            or getattr(self, "_calibration_start_job", None) is not None
+        ):
             return False
-        main_process = getattr(self, "main_process", None)
-        if main_process is not None and main_process.poll() is None:
+        for attribute in ("main_process", "calibration_process"):
+            process = getattr(self, attribute, None)
+            if process is not None and process.poll() is None:
+                return False
+        return True
+
+    def start_main(self, main_path):
+        if not self._can_start_main():
             return False
         self._cancel_scheduled_job("_main_start_job")
         if not self.prepare_hidhide_before_start():
+            return False
+        # HidHide prompts run a nested Tk loop: calibration, another start,
+        # or shutdown may have taken ownership while the prompt was open.
+        if not self._can_start_main():
             return False
         try:
             child_env = os.environ.copy()
@@ -11075,7 +11291,117 @@ class ConfigGUI:
             ).format(mode=mode_name),
         )
 
+    def _show_esp32_operation_busy(self):
+        messagebox.showinfo(
+            self.tr("ESP32 操作進行中"),
+            self.tr("ESP32 設定寫入或模式切換仍在進行，請等待完成。"),
+            parent=self.root,
+        )
+
+    def _begin_esp32_operation(self):
+        if getattr(self, "_close_in_progress", False):
+            return False
+        if getattr(self, "_esp32_operation_active", False):
+            self._show_esp32_operation_busy()
+            return False
+        if self._firmware_operation_is_active():
+            messagebox.showinfo(
+                self.tr("韌體刷寫中"),
+                self.tr("ESP32-S3 韌體偵測或刷寫仍在進行，請等待完成。"),
+            )
+            return False
+        calibration = getattr(self, "calibration_process", None)
+        if (
+            getattr(self, "_calibration_start_job", None) is not None
+            or (calibration is not None and calibration.poll() is None)
+        ):
+            messagebox.showinfo(
+                self.tr("校正已啟動"),
+                self.tr("搖桿校正程式正在啟動或已經在執行。"),
+            )
+            return False
+        self._esp32_operation_active = True
+        self._esp32_operation_generation = getattr(self, "_esp32_operation_generation", 0) + 1
+        self._esp32_transfer_started = False
+        self._esp32_result_queue = queue.Queue()
+        self._esp32_restart_pending = self._cancel_scheduled_job("_main_start_job")
+        button = getattr(self, "write_esp32_button", None)
+        if button is not None:
+            button.config(state="disabled")
+        return True
+
+    def _release_esp32_operation(self, resume_pending=False):
+        if not getattr(self, "_esp32_operation_active", False):
+            return
+        restart = resume_pending and self._esp32_restart_pending
+        self._esp32_operation_active = False
+        self._esp32_operation_generation += 1
+        self._esp32_transfer_started = False
+        self._esp32_restart_pending = False
+        self._cancel_scheduled_job("_esp32_start_job")
+        self._cancel_scheduled_job("_esp32_poll_job")
+        button = getattr(self, "write_esp32_button", None)
+        if button is not None:
+            button.config(state="normal")
+        if restart:
+            self._resume_connector_after_firmware_check()
+
+    def _queue_esp32_worker(self, target, args, restart_after, delay_ms):
+        generation = self._esp32_operation_generation
+        results = self._esp32_result_queue
+        self._esp32_transfer_started = True
+
+        def worker():
+            try:
+                target(*args, result_queue=results)
+            except Exception as exc:
+                results.put(("finish", False, self._settings_error_text(exc), restart_after))
+
+        def start_worker():
+            if generation != self._esp32_operation_generation or not self._esp32_operation_active:
+                return
+            self._esp32_start_job = None
+            try:
+                threading.Thread(target=worker, daemon=True, name="ESP32Writer").start()
+            except Exception as exc:
+                self._finish_esp32_profile_write(False, str(exc), restart_after)
+                return
+            self._poll_esp32_operation(generation)
+
+        try:
+            self._esp32_start_job = self.root.after(delay_ms, start_worker)
+        except Exception:
+            self._esp32_transfer_started = False
+            raise
+
+    def _poll_esp32_operation(self, generation):
+        if generation != self._esp32_operation_generation or not self._esp32_operation_active:
+            return
+        self._esp32_poll_job = None
+        while True:
+            try:
+                event = self._esp32_result_queue.get_nowait()
+            except queue.Empty:
+                self._esp32_poll_job = self.root.after(
+                    50, lambda: self._poll_esp32_operation(generation)
+                )
+                return
+            if event[0] == "migration":
+                self._show_esp32_mode_migration(event[1])
+            elif event[0] == "finish":
+                self._finish_esp32_profile_write(*event[1:])
+                return
+
     def write_current_profile_to_esp32(self, target_mode="standalone_hid"):
+        if not self._begin_esp32_operation():
+            return
+        try:
+            self._prepare_esp32_profile_write(target_mode)
+        finally:
+            if not self._esp32_transfer_started:
+                self._release_esp32_operation(resume_pending=True)
+
+    def _prepare_esp32_profile_write(self, target_mode):
         """Compile, review and atomically write the visible standalone profile."""
         if not self._confirm_saved_profile_before_esp32_action():
             return
@@ -11139,7 +11465,7 @@ class ConfigGUI:
         ) as exc:
             messagebox.showerror(
                 self.tr("無法建立 ESP32 設定"),
-                str(exc),
+                self._settings_error_text(exc),
             )
             return
 
@@ -11195,30 +11521,22 @@ class ConfigGUI:
                 return
 
         was_running = bool(
-            self.main_process is not None
-            and self.main_process.poll() is None
+            self._esp32_restart_pending or (
+                self.main_process is not None
+                and self.main_process.poll() is None
+            )
         )
         if was_running:
             self.stop_main_process()
 
-        button = getattr(self, "write_esp32_button", None)
-        if button is not None:
-            button.config(state="disabled")
-
-        def start_worker():
-            thread = threading.Thread(
-                target=self._write_esp32_profile_worker,
-                args=(compiled, was_running, target_mode),
-                daemon=True,
-                name="ESP32ProfileWriter",
-            )
-            thread.start()
-
         # Give the connector process enough time to release the CDC port.
-        self.root.after(500 if was_running else 0, start_worker)
+        self._queue_esp32_worker(
+            self._write_esp32_profile_worker, (compiled, was_running, target_mode),
+            was_running, 500 if was_running else 0,
+        )
 
     def _write_esp32_profile_worker(
-        self, compiled, restart_after, target_mode
+        self, compiled, restart_after, target_mode, *, result_queue
     ):
         """Perform serial detection and transfer without blocking Tk."""
         try:
@@ -11234,7 +11552,7 @@ class ConfigGUI:
                         "而且沒有其他程式占用連接埠。"
                     )
                 )
-            self.root.after(0, lambda: self._show_esp32_mode_migration(firmware))
+            result_queue.put(("migration", firmware))
             result = write_standalone_profile(
                 port,
                 baudrate,
@@ -11247,12 +11565,7 @@ class ConfigGUI:
             OSError,
             ValueError,
         ) as exc:
-            self.root.after(
-                0,
-                lambda error=str(exc): self._finish_esp32_profile_write(
-                    False, error, restart_after
-                ),
-            )
+            result_queue.put(("finish", False, str(exc), restart_after))
             return
 
         if self.language == "en":
@@ -11281,18 +11594,18 @@ class ConfigGUI:
                 "\n\nESP32 已自動重新啟動，USB 裝置會短暫消失。"
                 "若數秒後沒有重新出現，請拔除後重新插入 ESP32。"
             )
-        self.root.after(
-            0,
-            lambda: self._finish_esp32_profile_write(
-                True,
-                summary,
-                restart_after and target_mode not in (
-                    "standalone_hid",
-                ),
-            ),
-        )
+        result_queue.put(("finish", True, summary, restart_after and target_mode != "standalone_hid"))
 
     def set_esp32_bridge_mode(self):
+        if not self._begin_esp32_operation():
+            return
+        try:
+            self._prepare_esp32_bridge_mode()
+        finally:
+            if not self._esp32_transfer_started:
+                self._release_esp32_operation(resume_pending=True)
+
+    def _prepare_esp32_bridge_mode(self):
         """Return compatible firmware to its desktop bridge personality."""
         if not self._confirm_saved_profile_before_esp32_action():
             return
@@ -11307,16 +11620,14 @@ class ConfigGUI:
         ):
             return
         was_running = bool(
-            self.main_process is not None
-            and self.main_process.poll() is None
+            self._esp32_restart_pending or (
+                self.main_process is not None
+                and self.main_process.poll() is None
+            )
         )
         if was_running:
             self.stop_main_process()
-        button = getattr(self, "write_esp32_button", None)
-        if button is not None:
-            button.config(state="disabled")
-
-        def worker():
+        def worker(*, result_queue):
             try:
                 baudrate = self.config.getint(
                     "serial", "baudrate", fallback=2_000_000
@@ -11335,12 +11646,7 @@ class ConfigGUI:
                 OSError,
                 ValueError,
             ) as exc:
-                self.root.after(
-                    0,
-                    lambda error=str(exc): self._finish_esp32_profile_write(
-                        False, error, was_running
-                    ),
-                )
+                result_queue.put(("finish", False, str(exc), was_running))
                 return
             message = self.tr(
                 "ESP32 已切回橋接模式。程式將自動啟動連接並重新搜尋手把。"
@@ -11351,35 +11657,18 @@ class ConfigGUI:
                     "請等待橋接裝置重新出現；若數秒後仍未出現，"
                     "請拔除後重新插入 ESP32。"
                 )
-            self.root.after(
-                0,
-                lambda: self._finish_esp32_profile_write(
-                    True,
-                    message,
-                    True,
-                ),
-            )
+            result_queue.put(("finish", True, message, True))
 
-        threading.Thread(
-            target=worker,
-            daemon=True,
-            name="ESP32ModeWriter",
-        ).start()
+        self._queue_esp32_worker(worker, (), was_running, 500 if was_running else 0)
 
     def _finish_esp32_profile_write(self, succeeded, message, restart_after):
-        button = getattr(self, "write_esp32_button", None)
-        if button is not None:
-            button.config(state="normal")
-        if succeeded:
-            messagebox.showinfo(
-                self.tr("寫入完成"),
-                message,
-            )
-        else:
-            messagebox.showerror(
-                self.tr("ESP32 寫入失敗"),
-                self.tr(message),
-            )
+        try:
+            if succeeded:
+                messagebox.showinfo(self.tr("寫入完成"), message)
+            else:
+                messagebox.showerror(self.tr("ESP32 寫入失敗"), self.tr(message))
+        finally:
+            self._release_esp32_operation()
         if restart_after:
             main_path = Path(__file__).with_name("main.py")
             if main_path.exists():
@@ -11565,14 +11854,25 @@ class ConfigGUI:
     def _perform_on_close(self):
         """關閉 GUI 前檢查未儲存設定，並清理所有子程序。"""
 
+        if getattr(self, "_esp32_operation_active", False):
+            # Closing is already rejected. Clear the guard before this modal
+            # loop can process a completion that needs to restart connection.
+            self._close_in_progress = False
+            messagebox.showinfo(
+                self.tr("ESP32 操作進行中"),
+                self.tr("ESP32 操作完成前無法關閉設定視窗。"),
+                parent=self.root,
+            )
+            return
+
         flash_process = getattr(self, "flash_process", None)
         if flash_process is not None and flash_process.poll() is None:
+            self._close_in_progress = False
             messagebox.showinfo(
                 self.tr("韌體刷寫中"),
                 self.tr("韌體刷寫完成前無法關閉設定視窗。"),
                 parent=self.root,
             )
-            self._close_in_progress = False
             return
 
         # 先檢查是否有尚未儲存的設定
@@ -11662,7 +11962,7 @@ class ConfigGUI:
         self._stop_system_tray()
         self.root.destroy()
 
-    def save_config(self, show_confirmation=True):
+    def save_config(self, show_confirmation=True, *, before_write=None):
         try:
             if self._mapping_layer_load_error:
                 raise ValueError(
@@ -11705,7 +12005,7 @@ class ConfigGUI:
             # 手動陀螺儀校正由正在執行的連接程式寫入。
             # 儲存 GUI 設定前先合併磁碟最新版，避免覆蓋剛完成的
             # [gyro] / [gyro.<controller>] 校正資料。
-            self.config = load_config(CONFIG_PATH)
+            self.config = load_config(CONFIG_PATH, persist=False)
 
             # Save and dirty-state detection now consume the exact same bundle.
             # This prevents new controls from being added to one path but
@@ -11721,6 +12021,7 @@ class ConfigGUI:
                 self.mapping_layers,
                 LAYER_DIR,
                 deletable_paths=getattr(self, "_layer_managed_paths", ()),
+                before_write=before_write,
             )
 
             atomic_write_config(self.config, CONFIG_PATH)

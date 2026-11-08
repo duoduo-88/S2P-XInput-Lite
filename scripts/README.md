@@ -59,9 +59,23 @@ For a quick local packaging check after all build outputs already exist:
 Use `-SkipTests` or `-SkipFirmwareBuild` only for local diagnostics, not for
 an official release.
 
+### Local v0.7.16 preparation
+
+Rebuild the versioned launchers, then reuse the existing runtime and native
+helpers while keeping tests and firmware verification enabled:
+
+```powershell
+.\scripts\build_launchers.ps1 -SkipBootstrap
+.\scripts\package_release.ps1 -UseExistingBuildOutputs
+```
+
+These commands create the local ZIP and checksum files. They do not create a
+tag, push changes, upload files or publish a GitHub Release. Physical-device
+acceptance checks remain pending.
+
 ## v0.7.14 firmware and evidence
 
-The desktop version is 0.7.14 and bundled firmware is S2P-FW 1.0.7; protocol
+The v0.7.14 firmware baseline remains bundled in desktop v0.7.16 as S2P-FW 1.0.7; protocol
 s2p_bridge 1.0.0 and the existing profile schema remain. ESP-IDF 5.5.4 builds
 use reproducible-build configuration with esp_tinyusb 1.7.6~2 and tinyusb 0.19.0~3.
 Synchronize bootloader, partition table and application from the same build before

@@ -221,3 +221,31 @@ def validate_direction_target(value):
     if error:
         raise ValueError(f"{normalized or '<空白>'}：{error}")
     return normalized
+
+
+def validate_profile_mapping_targets(config, valid_sources):
+    """Reject profile mappings that cannot be consumed by the runtime."""
+    if config.has_section("buttons"):
+        for source, target in config.items("buttons"):
+            try:
+                validate_button_source(source, valid_sources)
+                validate_button_target(target)
+            except ValueError as exc:
+                raise ValueError(f"[buttons] {source}: {exc}") from exc
+
+    for side in ("LEFT", "RIGHT"):
+        section = f"stick_direction_{side.lower()}"
+        if not config.has_section(section):
+            continue
+        for key, value in config.items(section):
+            try:
+                normalized = validate_stick_setting_key(key)
+                if normalized in STICK_DIRECTION_KEYS:
+                    validate_direction_target(value)
+                elif normalized == "MODE":
+                    validate_stick_direction_mode(value, side)
+                elif normalized == "ANALOG_DIRECTION":
+                    validate_stick_analog_direction(value)
+            except ValueError as exc:
+                raise ValueError(f"[{section}] {key}: {exc}") from exc
+    return config

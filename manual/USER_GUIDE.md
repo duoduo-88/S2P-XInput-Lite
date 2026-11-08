@@ -1,17 +1,17 @@
-# S2P-XInput-Lite v0.7.15 User Guide
+# S2P-XInput-Lite v0.7.16 User Guide
 
 [繁體中文](USER_GUIDE_zh-TW.md)
 
 This guide covers installation, connections, profiles, stick tuning, mapping,
 gyro controls, rumble, HidHide, ESP32-S3 bridge and standalone operation, and
 the Gamepad Test, report-rate, diagnostics, and About pages in
-S2P-XInput-Lite v0.7.15.
+S2P-XInput-Lite v0.7.16.
 
 The feature screenshots show the English v0.7.14 interface; profile values are examples.
 
-This guide matches the published desktop v0.7.15 release and bundled S2P-FW
-1.0.7. The firmware build and descriptor checks passed; physical Windows and
-Android hardware validation remains pending.
+This guide matches the locally prepared desktop v0.7.16 and bundled S2P-FW
+1.0.7. v0.7.16 has not been published. Automated Settings workflows have been
+checked; physical Windows and Android hardware validation remains pending.
 
 The screenshots use the English interface. Select **中 / En** in the lower-left corner of the main window to switch languages without changing the layout.
 
@@ -91,7 +91,11 @@ S2P-FW 1.0.7, without keeping the Windows application open.
 
 #### Windows BLE
 
-Pair the controller directly with Windows. This is convenient, but update rate and stability can depend on the Bluetooth adapter and wireless environment.
+Enable Windows Bluetooth and start the application. For first-time pairing,
+hold the controller's **SYNC** button and let this application establish the
+connection; do not manually pair it in Windows Bluetooth settings. Wake an
+already paired controller with a button. Update rate and stability depend on
+the Bluetooth adapter and wireless environment.
 
 ---
 
@@ -125,6 +129,10 @@ language, restore defaults, calibrate, flash firmware, restart, and Pin.
 - **Import Profile** — Import an external `.ini` profile.
 - **Import Settings** — Migrate settings from an older or same-version S2P-XInput-Lite installation.
 
+Saving or switching profiles asks the running connection to apply the settings
+without reconnecting. If application fails, the saved settings take effect at
+the next connection; use **Restart** when needed.
+
 ### 2.3 Import Settings
 
 ![Import Settings button at the bottom of the main window](assets/v0.7.14/main-buttons.png)
@@ -143,8 +151,29 @@ Default** is never overwritten; runtime caches, logs, firmware, executables,
 and build output are not imported. A failed validated write rolls back
 `config.ini`, user profiles, and managed Layers together.
 
+Invalid numeric values, unfinished shortcut recordings and unsupported mappings
+are rejected before replacing a profile. Calibration added to the destination
+while the preview is open is retained unless the imported source explicitly
+replaces that same calibration.
+
 > [!WARNING]
 > **System Default** is read-only. Use **Save New** to create an editable profile from it.
+
+### 2.4 Unsaved edits and external file changes
+
+- When switching with unsaved edits, choose whether to save, discard or cancel.
+  **Cancel** keeps the current profile and edits. Closing does not save edits automatically.
+- If another program changes the active profile, the conflict dialog offers
+  **Yes** to reload the external version, **No** to overwrite it with the values
+  on screen, or **Cancel** to keep editing without writing the file.
+- A change that arrives during loading or immediately after saving still needs
+  a decision before the next overwrite. Reopen or reload the latest version
+  when you want to keep the external changes.
+- Correct invalid input before saving again. A validation error does not mean
+  the displayed edits have been saved or applied.
+- A message saying the settings were saved but the profile list could not be
+  refreshed means the files are already saved. Reopen the profile menu later;
+  the selected profile remains the saved one.
 
 ---
 
@@ -254,6 +283,12 @@ Choose **Shortcut** to record a keyboard or mouse input. Labels use short names 
 
 > [!WARNING]
 > Layer edits remain in memory until **Save/Apply** succeeds. The layer files and profile state are not permanently saved before that point.
+
+The editor's left and right stick number controls are independent. **Cancel**
+closes an editor without applying its edits. If files are changed or deleted
+externally while an editor, rename or delete prompt is open, the application
+checks the intended layer again. A changed-layer warning means you should
+reopen the operation from the refreshed list.
 
 ---
 
@@ -480,6 +515,10 @@ A/B storage retains the previous valid profile until the new slot passes
 validation. Do not assume a failed write or mode save changed the device.
 The obsolete Auto menu screenshot has been removed from this section.
 
+Only one ESP32 write or mode change can run at a time. Repeated requests are
+blocked while the operation is active, and Settings stays open until it finishes.
+Read the completion message before disconnecting the device.
+
 ### 8.6 Returning to Bridge and recovery
 
 - **Desktop menu:** Connect the ESP32 to Windows and choose **ESP32 ▼ → Return
@@ -503,6 +542,12 @@ The obsolete Auto menu screenshot has been removed from this section.
 
 Returning to Bridge retains the last stored standalone profile. **Restart
 Connection** only restarts the desktop connection.
+
+Connection, stick calibration and firmware operations also avoid competing for
+the same device. Close the calibration program before starting a connection or
+flashing firmware. When a version check or write is canceled, a connection that
+was waiting to restart can resume; wait for the current operation to finish
+before retrying another action.
 
 ### 8.7 Standalone support and validation limits
 
@@ -622,6 +667,9 @@ the tester retains generic HID behavior.
 
 Choose S2P-XInput-Lite (Bridge) or an XInput device that supports vibration, then open **Rumble Test**. Start with low LF/HF levels or choose a pattern. Enable **Repeat** if needed and select **Stop All Rumble** when finished. If `No XInput rumble` appears or controls are disabled, check that the virtual controller is active or select a supported XInput device. Bridge tests use the current profile's LF/HF settings; game rumble patterns do not output in Audio-only mode.
 
+If the output connection changes, the running rumble test stops rather than
+moving to the new connection. Check the selected device before starting again.
+
 The **Rumble Test** tab sends test patterns to Windows devices that expose
 XInput rumble. Stopping or closing the tester sends zero vibration. Mobile USB
 HID currently provides input only and does not relay web or game rumble to the
@@ -738,7 +786,7 @@ Hover over the six-band description to display a question-mark cursor and the co
 |---|---|
 | ViGEm is not Ready | Reinstall ViGEmBus, restart Windows, and launch the application again. |
 | Duplicate game input | Configure HidHide and check whether Steam Input is also remapping the device. |
-| Controller not found | Use a data-capable cable, reconnect the controller, or remove and repeat Windows BLE pairing. |
+| Controller not found | Use a data-capable cable. For native BLE, enable Bluetooth, start this application and hold SYNC for first-time pairing; let the application handle pairing. |
 | ESP32 remains Searching | Check the OTG port, firmware, USB connection, and controller pairing state. |
 | ESP32 received old settings | Select Save/Apply first. Modified System Default settings must be saved with Save New. |
 | Device is missing after a mode change | Wait for automatic USB re-enumeration and reconnection. If the bridge still does not appear, reconnect the ESP32; use Restart Connection only as a manual fallback. |
@@ -750,6 +798,9 @@ Hover over the six-band description to display a question-mark cursor and the co
 | Gyro drift | Run Sensor Cal on a stable surface and avoid magnetic or powered objects. |
 | Profile cannot be overwritten | System Default is read-only; use Save New. |
 | Settings disappear after restart | Select Save/Apply and ensure the application folder is writable. |
+| A profile or layer changed externally | Reopen the operation and decide whether to reload, overwrite or cancel. Keep the external version if you need its changes. |
+| Settings saved, but the list could not refresh | The files are already saved. Open the profile menu again after the folder becomes available. |
+| Another device operation is in progress | Wait for it to finish. Close stick calibration before starting a connection or flashing firmware. |
 
 ### Restoring a stable configuration
 
@@ -787,4 +838,4 @@ Gate → Lvl → six bands → LF/HF Balance → Tail/Decay.
 Keep one verified stable profile and use **Save New** for experimental settings.
 
 > [!NOTE]
-> This guide applies to S2P-XInput-Lite v0.7.15. For later releases, follow the in-app question-mark help and the latest release notes.
+> This guide applies to S2P-XInput-Lite v0.7.16. For later releases, follow the in-app question-mark help and the latest release notes.

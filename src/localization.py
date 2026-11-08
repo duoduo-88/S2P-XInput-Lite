@@ -1,6 +1,13 @@
 """Traditional Chinese / English text used by the settings GUI."""
 
 EN_TEXT = {
+    "設定已儲存，但方案清單暫時無法更新。請稍後重新開啟方案選單。":
+        "Your settings were saved, but the profile list could not be refreshed. Try opening the profile menu again later.",
+    "ESP32 操作進行中": "ESP32 Operation in Progress",
+    "ESP32 設定寫入或模式切換仍在進行，請等待完成。":
+        "An ESP32 settings write or mode change is in progress. Please wait until it finishes.",
+    "ESP32 操作完成前無法關閉設定視窗。":
+        "Wait for the ESP32 operation to finish before closing the settings window.",
     "ESP32 韌體身分不符。": "ESP32 firmware identity does not match.",
     "ESP32 裝置序號不符。": "ESP32 device serial number does not match.",
     "ESP32 缺少可安全重連的唯一序號；請更新韌體。":
@@ -689,6 +696,9 @@ EN_TEXT = {
     "無法開啟存放映射層的資料夾：":
         "Could not open the mapping-layer folder:",
     "映射層資料夾已變更": "Mapping Layer Folder Changed",
+    "映射層已變更": "Mapping Layer Changed",
+    "此映射層已被變更或刪除。請重新開啟此操作後再試。":
+        "This mapping layer was changed or deleted. Reopen this action and try again.",
     "映射層資料夾已在外部變更，但目前有尚未儲存的映射層調整。\n\n是否重新載入資料夾內容並放棄目前調整？":
         "The mapping-layer folder changed externally, but there are unsaved layer edits.\n\nReload the folder and discard the current edits?",
     "映射層名稱：": "Layer name:",
@@ -1454,6 +1464,7 @@ EN_TEXT = {
 
 
 PHRASES = (
+    ("<空白>", "<blank>"),
     ("主要映射", "Main Mapping"),
     ("左搖桿", "Left Stick"),
     ("右搖桿", "Right Stick"),

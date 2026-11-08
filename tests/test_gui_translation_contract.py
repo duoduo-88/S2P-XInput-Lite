@@ -1,12 +1,33 @@
 import ast
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class GUITranslationContractTests(unittest.TestCase):
+    def test_layer_conflict_warning_uses_the_selected_language(self):
+        from config_gui import ConfigGUI
+
+        for language in ("en", "zh"):
+            with self.subTest(language=language):
+                gui = object.__new__(ConfigGUI)
+                gui.language = language
+                gui.root = None
+                gui.mapping_layers = []
+                with patch("config_gui.messagebox.showwarning") as warning:
+                    self.assertIsNone(gui._mapping_layer_editor_target({"id": "gone"}, None))
+                title, message = warning.call_args.args
+                if language == "en":
+                    self.assertEqual(title, "Mapping Layer Changed")
+                    self.assertIn("changed or deleted", message)
+                    self.assertNotRegex(title + message, r"[\u4e00-\u9fff]")
+                else:
+                    self.assertEqual(title, "映射層已變更")
+                    self.assertIn("已被變更或刪除", message)
+
     def test_identity_and_reconnect_errors_have_english_translations(self):
         from localization import translate_text
         expected = {

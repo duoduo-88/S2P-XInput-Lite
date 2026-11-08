@@ -301,7 +301,7 @@ def _unique_filename(name, used):
     return candidate
 
 
-def save_layers(config, layers, layer_dir=LAYER_DIR, deletable_paths=None):
+def save_layers(config, layers, layer_dir=LAYER_DIR, deletable_paths=None, *, before_write=None):
     """Atomically store every layer as one JSON file and remove legacy INI data."""
     directory = Path(layer_dir)
     directory.mkdir(parents=True, exist_ok=True)
@@ -363,11 +363,19 @@ def save_layers(config, layers, layer_dir=LAYER_DIR, deletable_paths=None):
 
     used_names = set()
     desired_paths = set()
+    prepared = []
     for order, layer in enumerate(layers):
         filename = _unique_filename(layer.get("name", f"Layer {order + 1}"), used_names)
         path = directory / f"{filename}.json"
-        _atomic_write_json(path, _layer_payload(layer))
+        prepared.append((path, _layer_payload(layer)))
         desired_paths.add(path.resolve())
+
+    # Reject malformed payloads and directory conflicts before the caller
+    # assumes rollback ownership of files that have not been written yet.
+    if before_write is not None:
+        before_write()
+    for path, payload in prepared:
+        _atomic_write_json(path, payload)
 
     deletable = (
         managed_existing

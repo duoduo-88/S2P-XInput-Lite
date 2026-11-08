@@ -48,6 +48,7 @@ from mapping_layers import (
     store_layer_state,
 )
 from switch2_input import SWITCH_BUTTONS
+from mapping_targets import validate_profile_mapping_targets
 
 
 class SettingsImportError(ValueError):
@@ -66,6 +67,7 @@ class ImportPlan:
     calibration_count: int
     source_active_profile: str
     current_active_profile: str
+    source_config: configparser.ConfigParser
 
 
 @dataclass
@@ -218,6 +220,7 @@ def _read_source_profiles(directory: Path):
             continue
         try:
             profiles[name] = read_profile(name, directory)
+            validate_profile_mapping_targets(profiles[name], SWITCH_BUTTONS)
         except (OSError, ValueError, configparser.Error) as exc:
             raise SettingsImportError(f"方案檔無法匯入：{path.name}") from exc
     return profiles, ignored_system_default
@@ -280,6 +283,7 @@ def scan_settings_import(source_root, *, config_path=CONFIG_PATH, profile_dir=PR
     return ImportPlan(
         root, current, profiles, source_layers, profile_conflicts, layer_conflicts,
         ignored_system_default, calibration_count, source_active, current_active,
+        source_config,
     )
 
 
@@ -312,6 +316,14 @@ def apply_settings_import(plan: ImportPlan, *, profile_conflict="skip", layer_co
     # cross-process lock so a concurrent migration cannot leave a stale plan
     # or rollback snapshot between the layer/profile scans and file changes.
     with config_file_lock():
+        # The connector can save calibrations while the preview is open. Merge
+        # the reviewed source values into the current destination, not its old
+        # preview snapshot, and keep the plan unchanged for retries.
+        candidate = load_config(config_path, persist=False)
+        current_active = candidate.get(
+            "gui", "active_profile", fallback=plan.current_active_profile
+        ).strip()
+        _copy_known_global_settings(candidate, plan.source_config)
         destination_names = {
             name.casefold(): name for name in list_profiles(profile_dir)
         }
@@ -323,7 +335,7 @@ def apply_settings_import(plan: ImportPlan, *, profile_conflict="skip", layer_co
             else:
                 profiles_to_write[name] = profile
 
-        base_buttons, base_sticks = _base_layer_defaults(plan.config)
+        base_buttons, base_sticks = _base_layer_defaults(candidate)
         destination_layers, managed_paths = load_managed_layer_directory(
             base_buttons, base_sticks, SWITCH_BUTTONS, layer_dir
         )
@@ -347,14 +359,21 @@ def apply_settings_import(plan: ImportPlan, *, profile_conflict="skip", layer_co
             layers_imported.append(name)
 
         accepted_profiles = {name.casefold(): name for name in profiles_to_write}
-        active = _fallback_active(plan.current_active_profile, profile_dir)
+        active = _fallback_active(current_active, profile_dir)
         source_active = plan.source_active_profile
         if source_active.casefold() in accepted_profiles:
             active = accepted_profiles[source_active.casefold()]
 
-        candidate = plan.config
         if active.casefold() in accepted_profiles:
+            active = accepted_profiles[active.casefold()]
             apply_profile(candidate, profiles_to_write[active])
+        elif active and active.casefold() != current_active.casefold():
+            # Falling back changes the profile identity, so load its gameplay
+            # settings too. Otherwise its name would label the deleted or
+            # unavailable profile's values still held in config.ini.
+            fallback = read_profile(active, profile_dir)
+            validate_profile_mapping_targets(fallback, SWITCH_BUTTONS)
+            apply_profile(candidate, fallback)
         if not candidate.has_section("gui"):
             candidate.add_section("gui")
         candidate.set("gui", "active_profile", active)

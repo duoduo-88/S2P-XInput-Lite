@@ -40,11 +40,18 @@ The automated suite covers:
   preferences, and per-version notification suppression;
 - standalone A/B fallback, commit ordering, schema validation, and callback
   fast-path contracts;
-- multi-controller calibration selection.
+- multi-controller calibration selection;
+- profile save/import conflicts, exact loaded/saved snapshots, mapping-layer
+  editor identity and cleanup, and serialized ESP32 operations;
+- five normal-use GUI workflows with real Tk controls and temporary settings:
+  profile switching and Save New, language switching and invalid-input recovery,
+  mapping-layer management and cancelled edits, and closing with unsaved changes. Device, network and tray
+  operations are mocked so these checks do not access physical controllers.
 
-The v0.7.9 release baseline contains 561 automated tests. v0.7.10 contains
-583 automated tests; one optional full ESP-IDF rebuild test is skipped unless
-`S2P_RUN_IDF_BUILD=1` is set.
+The locally prepared v0.7.16 suite contains 771 tests: 770 pass and one optional
+full ESP-IDF rebuild test is skipped unless `S2P_RUN_IDF_BUILD=1` is set.
+The complete suite takes about one minute on the development machine. Package
+preparation also verifies the firmware build separately.
 
 Desktop-output tests use a fake Windows backend. They do not connect to a
 controller, create a ViGEm target, or send real keyboard or mouse input.
