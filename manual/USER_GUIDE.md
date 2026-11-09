@@ -1,17 +1,15 @@
-# S2P-XInput-Lite v0.7.16 User Guide
+# S2P-XInput-Lite v0.8.0 User Guide
 
 [繁體中文](USER_GUIDE_zh-TW.md)
 
 This guide covers installation, connections, profiles, stick tuning, mapping,
 gyro controls, rumble, HidHide, ESP32-S3 bridge and standalone operation, and
-the Gamepad Test, report-rate, diagnostics, and About pages in
-S2P-XInput-Lite v0.7.16.
+Gamepad Test, including Aim Test, report-rate measurements, and diagnostics.
 
 The feature screenshots show the English v0.7.14 interface; profile values are examples.
 
-This guide matches the locally prepared desktop v0.7.16 and bundled S2P-FW
-1.0.7. v0.7.16 has not been published. Automated Settings workflows have been
-checked; physical Windows and Android hardware validation remains pending.
+This guide covers desktop v0.8.0 and the bundled S2P-FW 1.0.7. The firmware
+sections describe the scope of Windows and Android hardware validation.
 
 The screenshots use the English interface. Select **中 / En** in the lower-left corner of the main window to switch languages without changing the layout.
 
@@ -32,6 +30,7 @@ The screenshots use the English interface. Select **中 / En** in the lower-left
 - [7. Rumble settings](#7-rumble-settings)
 - [8. HidHide and ESP32-S3](#8-hidhide-and-esp32-s3)
 - [9. Gamepad Test](#9-gamepad-test)
+  - [9.9 Aim Test](#99-aim-test)
 - [10. Quick controls](#10-quick-controls)
 - [11. Troubleshooting](#11-troubleshooting)
 - [Appendix: recommended tuning order](#appendix-recommended-tuning-order)
@@ -578,7 +577,7 @@ varies by device, OS and game. See [validation and official references](../docs/
 *The screenshot shows a connected S2P-XInput-Lite Bridge. Available controls and data depend on the device.*
 
 - **Device and refresh**: Select the controller to inspect or rescan devices.
-- **Function tabs**: Open Input Monitor, Rumble Test, Report Rate Test,
+- **Function tabs**: Open Input Monitor, Aim Test, Rumble Test, Report Rate Test,
    Diagnostics, or About.
 - **Stick source and zoom**: Select each stick's source and adjust its view.
 - **Left and right stick plots**: Show live position, trails, output shape,
@@ -631,6 +630,13 @@ outer circle is the 100% reference, and the live dot is the current value.
 - `-`, `+`, and **Reset** control plot zoom.
 - S2P output sources can also show the applied deadzone, outer limit, response
   curve, and gyro guides.
+
+The trail uses the reports received from the selected source. It draws each
+selected sample at its recorded position and merges overlapping pixels. The
+corner FPS counter measures plot updates that change the image. Use **Report
+Rate Test** to measure reports from a selected Raw HID interface. On supported
+Windows runtimes, the trail uses native Canvas composition and falls back to
+Tk image tiles if needed.
 
 ### 9.3 Output-shape capture
 
@@ -740,6 +746,96 @@ the left. The right side contains scrollable **License Agreement** and
 
 ---
 
+### 9.9 Aim Test
+
+#### Test mapped gyro output
+
+1. Connect the controller through S2P-XInput-Lite. In **Gyro Map**, set **Target**
+   to **Right Stick** and **Control Mode** to **Aim (Center)**. Assign a button
+   and choose **Hold** or **Toggle**, then select **Save/Apply**.
+2. Open **Gamepad Test** and select **S2P-XInput-Lite (Bridge)** from the device
+   list. Aim Test reads that virtual controller's right-stick output as Windows
+   sees it, so the active profile's mapping, deadzone, and response settings apply.
+3. Open **Aim Test**, choose **3D Mode → Tracking**, and select **Start**. Activate
+   the gyro and rotate the controller with your thumb off the right stick to check
+   its response. For a shooting drill, choose **Targets** or **Timed Targets**.
+
+#### Choose and run a drill
+
+In **2D Mode**, the mouse and right stick move the same reticle and take over
+automatically as you use them. Shoot with left-click, RT, or Space. In **3D Mode**,
+right-stick output turns the camera, and RT or Space fires. Stick values set
+reticle or camera speed proportionally. **3D Mode → Targets** is selected by
+default.
+
+| Drill | 2D Mode | 3D Mode |
+|---|---|---|
+| **Tracking** | Follow the moving target with the reticle. | Turn the camera to follow the moving ball. |
+| **Targets** | Click or shoot one target at a time. | Shoot one ball at a time. |
+| **Timed Targets** | Shoot as many of the replenishing targets as you can. | Shoot as many of the replenishing balls as you can. |
+
+Tracking runs for the configured duration. In Targets, a hit advances to the
+next target. The round ends at the configured hit count or optional time limit. Timed Targets starts
+with two targets. Each stays until hit and is replaced after a brief delay.
+The timer ends the round and the score shows the total hits.
+
+Select **Start**, press Enter, or press controller START. Scoring starts after
+the 3, 2, 1 countdown. Use the top-right **Restart** button, Enter, or START to
+run the drill again. Use **Close**, Esc, or controller B to return to Gamepad
+Tester. A fullscreen test also closes when you switch away, restoring the
+previous display mode.
+
+#### Test settings and performance
+
+- In windowed mode, **Auto (Highest)** fits the test window, including its title bar,
+  to the current monitor's work area above or beside the Windows taskbar.
+  In **Fullscreen**, **Auto (Highest)** uses the highest resolution Windows validates on
+  that monitor. You can select a specific size for either mode.
+- Set the target count, the optional Targets time limit, and the Tracking and
+  Timed Targets durations in **Test Settings**. A Targets time limit of `0`
+  lets the round continue until you hit every target.
+- A layout seed of `0` uses the built-in Targets sequence or Tracking path.
+  Timed Targets uses a repeatable sequence even with seed `0`. Select **↻** for
+  a new seed, then save it to replay the same sequence.
+- Adjust the reticle's color and size in any drill. The 2D target diameter is a
+  percentage of the viewport's shorter edge. The depth and horizontal and
+  vertical spread sliders control placement in 3D Targets and Timed Targets.
+- Tracking changes the target color and gives light feedback while you stay on
+  it. In Targets and Timed Targets, the reticle changes color when on target.
+  Hits trigger a short burst, sound, and vibration on a supported controller.
+  Misses use a distinct sound. Set vibration strength to `0` to turn it off,
+  or use the sound checkbox to mute the cues. Select **Restore Defaults** and
+  save to reset the test settings.
+
+The lower-right **Draw FPS** readout measures frames drawn by the test. **GPU**
+identifies hardware-accelerated Direct2D drawing. **Tk** identifies the fallback renderer.
+Drawing targets the monitor's refresh rate up to 500 FPS. **Update Hz** measures
+how often the test reads the selected gamepad, up to 500 Hz. Use **Report Rate
+Test** for measurements of device report intervals.
+
+#### Read and compare results
+
+**Accuracy** is hits divided by shots. **Mean Error** is the average distance
+from the reticle to the target center, measured in pixels in 2D and degrees in
+3D. Shooting averages shots taken with a target present, including misses. In
+Timed Targets, a shot during a gap between targets still counts toward accuracy.
+Tracking weights error by time. **On Target** is the percentage of the round
+spent within the target.
+
+Completed rounds appear in the **Aim Test** tab, with changes from the best
+earlier result under the same conditions. The comparison uses the mode,
+viewport, seed, vibration and sound, and relevant drill settings such as target
+count, duration, target size, depth, and spread. You can change colors or reticle
+size and keep the same baseline.
+
+**Targets** ranks by hits, then accuracy, completion time, and mean error.
+Completion time is compared when both rounds hit every target. **Timed Targets**
+ranks by hits, then accuracy and mean error. **Tracking** ranks by time on target,
+then mean error. Arrows indicate the direction of change, green means better,
+and red means worse. Accuracy and On Target changes use percentage points.
+Select a result to see its comparison, or use **Clear History** to remove saved
+rounds. The **?** beside the mode controls explains the comparison rules.
+
 ## 10. Quick controls
 
 ### 10.1 Sliders and values
@@ -838,4 +934,4 @@ Gate → Lvl → six bands → LF/HF Balance → Tail/Decay.
 Keep one verified stable profile and use **Save New** for experimental settings.
 
 > [!NOTE]
-> This guide applies to S2P-XInput-Lite v0.7.16. For later releases, follow the in-app question-mark help and the latest release notes.
+> This guide applies to S2P-XInput-Lite v0.8.0. For later releases, see the in-app help and release notes.

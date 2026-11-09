@@ -8,7 +8,7 @@ import threading
 import time
 import tkinter as tk
 
-from config_utils import CONFIG_PATH, load_config
+from config_utils import CONFIG_PATH, atomic_write_config, config_file_lock, load_config
 from gamepad_test_window import GamepadTestWindow, TEST_ICON_PATH
 from localization import translate_text
 from single_instance import SingleInstance, activate_tk_window
@@ -216,8 +216,11 @@ class GamepadTestHost:
             allow_automatic_update_prompt
         )
         requested = str(language or "").strip().lower()
+        config = load_config(CONFIG_PATH, persist=requested not in SUPPORTED_LANGUAGES)
+        saved = config.get("gui", "gamepad_tester_language", fallback="").strip().lower()
+        if saved in SUPPORTED_LANGUAGES:
+            requested = saved
         if requested not in SUPPORTED_LANGUAGES:
-            config = load_config(CONFIG_PATH)
             requested = config.get(
                 "gui", "language", fallback="zh"
             ).strip().lower()
@@ -227,6 +230,15 @@ class GamepadTestHost:
 
     def tr(self, text):
         return translate_text(text, self.language)
+
+    def set_tester_language(self, language):
+        if language not in SUPPORTED_LANGUAGES:
+            raise ValueError(f"Unsupported tester language: {language}")
+        with config_file_lock():
+            config = load_config(CONFIG_PATH, persist=False)
+            config.set("gui", "gamepad_tester_language", language)
+            atomic_write_config(config, CONFIG_PATH)
+        self.language = language
 
 
 def main(instance=None):

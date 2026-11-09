@@ -1,6 +1,154 @@
 """Traditional Chinese / English text used by the settings GUI."""
 
 EN_TEXT = {
+    "瞄準設定": "Aim Settings",
+    "測試設定": "Test Settings",
+    "開始": "Start",
+    "請先結束目前的測試再切換語言。": "End the current test before switching languages.",
+    "無法儲存手把測試語言。": "Could not save the Gamepad Tester language.",
+    "視窗大小": "Window Size",
+    "解析度": "Resolution",
+    "自動（最高）": "Auto (Highest)",
+    "全螢幕": "Fullscreen",
+    "全螢幕會暫時切換螢幕解析度。關閉測試後會還原。":
+        "Fullscreen temporarily switches the display resolution. Closing the test restores it.",
+    "這台螢幕不支援 {size} 的全螢幕解析度。": "This display does not support {size} in fullscreen.",
+    "無法以 {size} 開啟全螢幕測試。請在測試設定選擇其他解析度。":
+        "Could not start the test fullscreen at {size}. Choose another resolution in Test Settings.",
+    "關閉 (Esc)": "Close (Esc)",
+    "關閉 (Esc / B)": "Close (Esc / B)",
+    "無法儲存測試設定。": "Could not save test settings.",
+    "按 Enter 或手把 START 開始測試。": "Press Enter or controller START to begin.",
+    "測試已中斷。按 Enter 或手把 START 重新開始。": "Test interrupted. Press Enter or controller START to restart.",
+    "測試已中斷。請選擇有搖桿輸出的手把，再按 Enter 或 START。":
+        "Test interrupted. Select a gamepad with stick output, then press Enter or START.",
+    "瞄準測試說明": "Aim Test Help",
+    "跟槍模式用右搖桿輸出轉動視角，盡量讓準心留在移動的靶上。跟靶率是準心在靶上的時間比例。":
+        "In Tracking, use right-stick output to keep the reticle on the moving target. "
+        "The on-target percentage measures how long the reticle stayed on the target.",
+    "點靶模式用右搖桿輸出瞄準，按 RT 或空白鍵射擊。按 Enter 或手把 START 可開始或重測。":
+        "In Targets, aim with right-stick output and shoot with RT or Space. "
+        "Press Enter or controller START to start or retry.",
+    "同設定的紀錄須使用相同的模式、畫面尺寸、出靶種子、震動與音效。"
+    "也會比對該模式的靶數、秒數、靶心大小、遠近與出靶範圍。"
+    "靶色、準心顏色與大小不影響比對。":
+        "History matches the mode, viewport size, layout seed, vibration, and sound settings. "
+        "It also matches any target count, duration, target size, depth, and spread that apply. "
+        "Target color, reticle color, and reticle size are ignored.",
+    "成績與同設定的歷史最佳回合比較。點靶依序比命中數、命中率、完成耗時與平均偏差。"
+    "跟槍依序比跟靶率與平均偏差。":
+        "Results are compared with the best earlier round using the same settings. "
+        "Targets ranks by hits, accuracy, completion time, then mean error. "
+        "Tracking ranks by time on target, then mean error.",
+    "↑ 和 ↓ 表示數值上升或下降，綠色代表進步，紅色代表退步。"
+    "命中率和跟靶率的差異以百分點表示，例如從 80% 降到 65.6% 是下降 14.4 百分點。":
+        "↑ and ↓ show whether a value rose or fell. Green marks improvement and red marks a decline. "
+        "Accuracy and on-target changes use percentage points. A drop from 80% to 65.6% is 14.4 points.",
+    "命中率是命中數除以射擊次數。兩次都打完所有靶才比較耗時。"
+    "平均偏差是準心與靶心的平均距離，2D 用像素（px），3D 用角度（°）。"
+    "耗時和平均偏差越小越好。":
+        "Accuracy is hits divided by shots. Completion times are compared when both rounds hit every target. "
+        "Mean error is the average distance from the reticle to the target center, in pixels for 2D and degrees for 3D. "
+        "Lower time and mean error are better.",
+    "重新開始": "Restart",
+    "恢復預設": "Restore Defaults",
+    "測試紀錄": "History",
+    "點靶數量": "Target count",
+    "點靶秒數（0 為不限時）": "Targets time limit (0 for none)",
+    "跟槍秒數": "Tracking duration",
+    "限時點靶秒數": "Timed targets duration",
+    "出靶種子（0 為固定配置）": "Layout seed (0 for fixed layout)",
+    "重新抽靶": "Randomize",
+    "3D 點靶遠近差異": "3D target depth variation",
+    "3D 點靶水平範圍": "3D target horizontal spread",
+    "3D 點靶垂直範圍": "3D target vertical spread",
+    "震動強度": "Vibration strength",
+    "準心顏色": "Reticle color",
+    "準心對靶色": "Reticle on target",
+    "跟槍靶變色": "Tracking target on contact",
+    "準心大小": "Reticle size",
+    "2D 靶心大小（畫面短邊）": "2D target size (short edge)",
+    "靶心 {size}%": "Target size {size}%",
+    "靶顏色": "Target color",
+    "命中與跟靶音效": "Hit and contact sounds",
+    "{label}請輸入 {low} 到 {high} 的整數。": "Enter a whole number from {low} to {high} for {label}.",
+    "無法儲存瞄準設定。": "Could not save aim settings.",
+    "測試完成": "Test complete",
+    "按 Enter 或手把 START 再測一次。": "Press Enter or controller START to retry.",
+    "測試完成。無法儲存這筆紀錄。": "Test complete. Could not save this result.",
+    "同基準無變化": "No change from the best match",
+    "同基準尚無紀錄": "No previous result with the same settings",
+    "瞄準測試紀錄": "Aim Test History",
+    "日期與時間": "Date & Time",
+    "命中": "Hits",
+    "命中率": "Accuracy",
+    "耗時": "Time",
+    "平均偏差": "Mean Error",
+    "跟靶率": "On Target",
+    "清除紀錄": "Clear History",
+    "關閉": "Close",
+    "百分點": "pp",
+    "尚無瞄準測試紀錄。": "No aim test results yet.",
+    "時限 {seconds} 秒 · 種子 {seed} · {width}×{height}": "{seconds} s limit · Seed {seed} · {width}×{height}",
+    "不限時 · 種子 {seed} · {width}×{height}": "No time limit · Seed {seed} · {width}×{height}",
+    "遠近差異 {depth}%": "Depth variation {depth}%",
+    "水平 {horizontal}%／垂直 {vertical}%": "Horizontal {horizontal}% / Vertical {vertical}%",
+    "準心 {color}": "Reticle {color}",
+    "靶色 {color}": "Target {color}",
+    "震動 {value}%": "Vibration {value}%",
+    "音效開啟": "Sound on",
+    "音效關閉": "Sound off",
+    "與同設定最佳成績比較": "vs. Best Match",
+    "沒有可顯示的差異。": "No changes to display.",
+    "尚無相同設定的測試紀錄。": "No previous result with the same settings.",
+    "要清除所有瞄準測試紀錄嗎？": "Clear all aim test history?",
+    "無法清除瞄準測試紀錄": "Could Not Clear Aim Test History",
+    "瞄準測試": "Aim Test",
+    "2D 模式": "2D Mode",
+    "3D 模式": "3D Mode",
+    "跟槍": "Tracking",
+    "點靶": "Targets",
+    "限時點靶": "Timed Targets",
+    "限時 · 模擬遊標": "Timed · Simulated",
+    "限時 · Windows 游標": "Timed · Windows",
+    "全螢幕 (F11)": "Fullscreen (F11)",
+    "離開全螢幕 (Esc)": "Exit Fullscreen (Esc)",
+    "模擬遊標": "Simulated Cursor",
+    "Windows 游標": "Windows Cursor",
+    "開始跟槍": "Start Tracking",
+    "開始點靶": "Start Targets",
+    "開始限時點靶": "Start Timed Targets",
+    "繪圖 {fps:.0f} FPS": "Draw {fps:.0f} FPS",
+    "繪圖 {fps:.0f} FPS　更新 {hz:.0f} Hz": "Draw {fps:.0f} FPS   Update {hz:.0f} Hz",
+    "請選擇有搖桿輸出的手把。": "Select a gamepad with stick output.",
+    "測試已中斷，請重新開始。": "Test interrupted. Start a new round.",
+    "用右搖桿輸出轉動視角，追蹤移動球靶。": "Use right-stick output to turn and follow the moving target.",
+    "用右搖桿輸出瞄準球靶，按 RT 或空白鍵射擊。":
+        "Use right-stick output to aim. Press RT or Space to shoot.",
+    "移動 Windows 游標，按滑鼠左鍵點靶。": "Move the Windows cursor and left-click to hit targets.",
+    "2D 模式可直接用滑鼠或右搖桿移動準心，依輸入自動接手。按左鍵、RT 或空白鍵點靶。":
+        "In 2D, move the reticle with either the mouse or the right stick. "
+        "The active input takes over automatically. Left-click or press RT or Space to shoot.",
+    "用滑鼠或右搖桿移動準心，追蹤移動球靶。": "Use the mouse or right stick to follow the moving target.",
+    "用滑鼠或右搖桿瞄準，按左鍵、RT 或空白鍵點靶。":
+        "Aim with the mouse or right stick. Left-click or press RT or Space to shoot.",
+    "用右搖桿輸出移動游標，按 RT 或空白鍵點靶。":
+        "Use right-stick output to move the cursor. Press RT or Space to shoot.",
+    "剩餘 {seconds:.1f} 秒　跟靶率 {percent}　平均偏差 {error}":
+        "{seconds:.1f} s left   On target {percent}   Mean error {error}",
+    "剩餘 {seconds:.1f} 秒　命中 {hits}　命中率 {accuracy}　平均偏差 {error}":
+        "{seconds:.1f} s left   Hits {hits}   Accuracy {accuracy}   Mean error {error}",
+    "2D 和 3D 都有「限時點靶」。開場就有兩顆靶。"
+    "靶會留到被擊中，命中後補新靶。倒數歸零時結算命中數，並記錄命中率與平均偏差。":
+        "Timed Targets starts with two targets in both 2D and 3D. "
+        "Targets stay until hit and are replaced after a hit. The round records hits, accuracy, "
+        "and mean error when time runs out.",
+    "命中 {hits}/{total}　點擊 {shots}　平均偏差 {error}":
+        "Hits {hits}/{total}   Shots {shots}   Mean error {error}",
+    "命中 {hits}/{total}　命中率 {accuracy}　耗時 {seconds:.1f} 秒　平均偏差 {error}":
+        "Hits {hits}/{total}   Accuracy {accuracy}   Time {seconds:.1f} s   Mean error {error}",
+    "命中 {hits}/{total}　命中率 {accuracy}　耗時 {seconds:.1f}/{limit} 秒　平均偏差 {error}":
+        "Hits {hits}/{total}   Accuracy {accuracy}   Time {seconds:.1f}/{limit} s   Mean error {error}",
     "設定已儲存，但方案清單暫時無法更新。請稍後重新開啟方案選單。":
         "Your settings were saved, but the profile list could not be refreshed. Try opening the profile menu again later.",
     "ESP32 操作進行中": "ESP32 Operation in Progress",

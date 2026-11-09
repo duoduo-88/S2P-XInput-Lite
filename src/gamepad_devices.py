@@ -771,6 +771,7 @@ class NativeGamepadSampler:
         self._stop = threading.Event()
         self._thread = None
         self._device = None
+        self._device_generation = 0
         self._latest_state = None
         self._last_token = None
         self._samples = deque(maxlen=4096)
@@ -833,6 +834,7 @@ class NativeGamepadSampler:
                 self._device = device
                 return
             self._device = device
+            self._device_generation += 1
             self._latest_state = None
             self._last_token = None
             self._samples.clear()
@@ -861,13 +863,14 @@ class NativeGamepadSampler:
     def _poll_once(self):
         with self._lock:
             device = self._device
+            generation = self._device_generation
         if device is None:
             return
         with self._backend_lock:
             state = self.backend.read_state(device)
         now = self.clock()
         with self._lock:
-            if self._device is None or self._device.key != device.key:
+            if generation != self._device_generation:
                 return
             self._latest_state = state
             if state is None:
@@ -891,6 +894,13 @@ class NativeGamepadSampler:
             self._rate_points.append(
                 (now, self._observed_update_count)
             )
+
+    def read_latest_state(self, device):
+        """Read the selected device without consuming queued monitor samples."""
+        with self._lock:
+            if self._device is not None and self._device.key == device.key:
+                return self._latest_state
+            return None
 
     def read_snapshot(self):
         now = self.clock()

@@ -1,9 +1,11 @@
-"""Balanced, punctuation-aware line layout for Tk tooltip text."""
+"""Tk hover help with punctuation-aware text wrapping."""
 
 from __future__ import annotations
 
 import math
 import re
+import tkinter as tk
+from tkinter import font as tkfont
 
 
 _CLOSING_PUNCTUATION = frozenset("，。；：！？、,.；:!?)]}）》】」』")
@@ -145,3 +147,70 @@ def wrap_tooltip_text(text, maximum_width, measure):
             )
         )
     return "\n".join(output)
+
+
+class HoverTip:
+    """Tooltip matching the settings UI's native question-mark help."""
+
+    def __init__(self, widget, text, wraplength=320):
+        self.widget = widget
+        self.text = text
+        self.wraplength = max(160, int(wraplength))
+        self._window = None
+        widget.bind("<Enter>", self.show, add="+")
+        widget.bind("<Leave>", self.hide, add="+")
+        widget.bind("<Unmap>", self.hide, add="+")
+
+    def show(self, _event=None):
+        if self._window is not None:
+            return
+        try:
+            text = self.text() if callable(self.text) else self.text
+            owner = self.widget.winfo_toplevel()
+            tip = tk.Toplevel(owner)
+            tip.withdraw()
+            tip.overrideredirect(True)
+            tip.transient(owner)
+            screen_width = self.widget.winfo_screenwidth()
+            screen_height = self.widget.winfo_screenheight()
+            effective_wrap = min(
+                self.wraplength,
+                max(160, screen_width - 32),
+            )
+            label = tk.Label(
+                tip,
+                text="",
+                justify="left",
+                relief="solid",
+                borderwidth=1,
+                padx=8,
+                pady=6,
+                wraplength=0,
+            )
+            label_font = tkfont.Font(font=label.cget("font"))
+            label.configure(text=wrap_tooltip_text(
+                text,
+                effective_wrap,
+                label_font.measure,
+            ))
+            label.pack()
+            tip.update_idletasks()
+            width = tip.winfo_reqwidth()
+            height = tip.winfo_reqheight()
+            x = self.widget.winfo_rootx() + 25
+            y = self.widget.winfo_rooty() + 25
+            x = max(5, min(x, screen_width - width - 5))
+            y = max(5, min(y, screen_height - height - 5))
+            tip.geometry(f"+{x}+{y}")
+            tip.deiconify()
+            self._window = tip
+        except tk.TclError:
+            self._window = None
+
+    def hide(self, _event=None):
+        if self._window is not None:
+            try:
+                self._window.destroy()
+            except tk.TclError:
+                pass
+            self._window = None

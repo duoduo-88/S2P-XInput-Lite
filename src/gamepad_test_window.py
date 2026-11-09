@@ -14,6 +14,7 @@ import tkinter as tk
 import webbrowser
 import zlib
 from collections import deque
+from ctypes import wintypes
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from tkinter import ttk, filedialog, font as tkfont, messagebox
@@ -26,6 +27,13 @@ from diagnostic_session import (
     read_controller_status,
 )
 from command_queue import enqueue_controller_command
+from config_utils import CONFIG_PATH
+from gamepad_aim import AimTestPane
+from gamepad_aim_feedback import AimFeedback
+from gamepad_aim_gpu import Direct2DAimRenderer
+from gamepad_aim_history import AimHistory
+from gamepad_trail_canvas import TrailCanvasSurface
+from gamepad_trail_photo import TrailPhotoUploader
 from gamepad_devices import (
     GamepadDevice,
     NativeGamepadSampler,
@@ -41,7 +49,7 @@ from raw_hid_probe import (
 from switch2_input import SWITCH_BUTTONS
 from support_log import format_support_log
 from test_telemetry import SharedTestTelemetry
-from tooltip_layout import wrap_tooltip_text
+from tooltip_layout import HoverTip
 from update_manager import (
     UpdateCheckError,
     automatic_update_checks_enabled,
@@ -57,7 +65,7 @@ PLOT_SIZE = 320
 PLOT_CENTER = PLOT_SIZE / 2
 PLOT_RADIUS = 146
 SHAPE_BIN_COUNT = 72
-TRAIL_TILE_SIZE = 40
+TRAIL_TILE_SIZE = 64
 MAX_CANVAS_TRAIL_ITEMS = 2000
 TRIGGER_EVENT_THRESHOLD = 30.0 / 255.0
 SWITCH_RAW_HID_BUTTONS = tuple(SWITCH_BUTTONS.items())
@@ -87,6 +95,44 @@ GITHUB_URL = "https://github.com/duoduo-88/S2P-XInput-Lite/tree/main"
 SPONSOR_URL = "https://ko-fi.com/duoduo88"
 CONTROLLER_STATUS_PATH = Path(__file__).with_name("controller_status.json")
 GAMEPAD_TESTER_TITLE = f"{APP_NAME} v{VERSION} GamepadTester"
+
+
+class _ProcessPowerThrottlingState(ctypes.Structure):
+    _fields_ = (
+        ("version", wintypes.ULONG),
+        ("control_mask", wintypes.ULONG),
+        ("state_mask", wintypes.ULONG),
+    )
+
+
+def _honor_high_resolution_timer():
+    """Keep Windows 11 from ignoring the tester's 1 ms timer request."""
+    power_throttling = 4  # ProcessPowerThrottling
+    ignore_timer = 0x4  # PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION
+    try:
+        kernel = ctypes.WinDLL("kernel32")
+        kernel.GetCurrentProcess.restype = wintypes.HANDLE
+        get_info = kernel.GetProcessInformation
+        set_info = kernel.SetProcessInformation
+        for function in (get_info, set_info):
+            function.argtypes = (wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD)
+            function.restype = wintypes.BOOL
+        process = kernel.GetCurrentProcess()
+        previous = _ProcessPowerThrottlingState(1, 0, 0)
+        size = ctypes.sizeof(previous)
+        if not get_info(process, power_throttling, ctypes.byref(previous), size):
+            return None
+        if previous.control_mask & ignore_timer and not previous.state_mask & ignore_timer:
+            return None
+        current = _ProcessPowerThrottlingState(
+            previous.version, previous.control_mask | ignore_timer,
+            previous.state_mask & ~ignore_timer,
+        )
+        if set_info(process, power_throttling, ctypes.byref(current), size):
+            return lambda: set_info(process, power_throttling, ctypes.byref(previous), size)
+    except (AttributeError, OSError):
+        pass
+    return None
 
 
 def _gyro_mapping_enabled(gyro):
@@ -207,77 +253,15 @@ XINPUT_OUTPUT_BUTTONS = (
 )
 
 
-class HoverTip:
-    """Tooltip matching the settings UI's native question-mark help."""
-
-    def __init__(self, widget, text, wraplength=320):
-        self.widget = widget
-        self.text = text
-        self.wraplength = max(160, int(wraplength))
-        self._window = None
-        widget.bind("<Enter>", self.show, add="+")
-        widget.bind("<Leave>", self.hide, add="+")
-
-    def show(self, _event=None):
-        if self._window is not None:
-            return
-        try:
-            text = self.text() if callable(self.text) else self.text
-            owner = self.widget.winfo_toplevel()
-            tip = tk.Toplevel(owner)
-            tip.withdraw()
-            tip.overrideredirect(True)
-            tip.transient(owner)
-            screen_width = self.widget.winfo_screenwidth()
-            screen_height = self.widget.winfo_screenheight()
-            effective_wrap = min(
-                self.wraplength,
-                max(160, screen_width - 32),
-            )
-            label = tk.Label(
-                tip,
-                text="",
-                justify="left",
-                relief="solid",
-                borderwidth=1,
-                padx=8,
-                pady=6,
-                wraplength=0,
-            )
-            label_font = tkfont.Font(font=label.cget("font"))
-            label.configure(text=wrap_tooltip_text(
-                text,
-                effective_wrap,
-                label_font.measure,
-            ))
-            label.pack()
-            tip.update_idletasks()
-            width = tip.winfo_reqwidth()
-            height = tip.winfo_reqheight()
-            x = self.widget.winfo_rootx() + 25
-            y = self.widget.winfo_rooty() + 25
-            x = max(5, min(x, screen_width - width - 5))
-            y = max(5, min(y, screen_height - height - 5))
-            tip.geometry(f"+{x}+{y}")
-            tip.deiconify()
-            self._window = tip
-        except tk.TclError:
-            self._window = None
-
-    def hide(self, _event=None):
-        if self._window is not None:
-            try:
-                self._window.destroy()
-            except tk.TclError:
-                pass
-            self._window = None
-
-
 def display_refresh_rate(window=None):
     """Read the refresh rate for a Tk window's current display."""
     try:
         user32 = ctypes.windll.user32
         gdi32 = ctypes.windll.gdi32
+        user32.GetDC.argtypes = (wintypes.HWND,)
+        user32.GetDC.restype = wintypes.HDC
+        gdi32.GetDeviceCaps.argtypes = (wintypes.HDC, ctypes.c_int)
+        user32.ReleaseDC.argtypes = (wintypes.HWND, wintypes.HDC)
         window_handle = (
             int(window.winfo_id()) if window is not None else 0
         )
@@ -288,14 +272,15 @@ def display_refresh_rate(window=None):
             refresh_rate = int(gdi32.GetDeviceCaps(device_context, 116))
         finally:
             user32.ReleaseDC(window_handle, device_context)
-        if 30 <= refresh_rate <= 500:
-            return float(refresh_rate)
+        if refresh_rate >= 30:
+            return min(500.0, float(refresh_rate))
     except (
         AttributeError,
         OSError,
         RuntimeError,
         TypeError,
         ValueError,
+        ctypes.ArgumentError,
         tk.TclError,
     ):
         pass
@@ -485,13 +470,14 @@ class StickHistory:
     def add(self, x, y, now, record_shape):
         x = clamp_unit(x)
         y = clamp_unit(y)
-        radius = min(1.5, math.hypot(x, y))
         sequence = self.next_sequence
         self.next_sequence += 1
         self.trail.append((float(now), x, y, sequence))
-        if record_shape and not self.shape_frozen:
-            self.maximum_radius = max(self.maximum_radius, radius)
-        if record_shape and not self.shape_frozen and radius > 0.03:
+        if not record_shape or self.shape_frozen:
+            return
+        radius = min(1.5, math.hypot(x, y))
+        self.maximum_radius = max(self.maximum_radius, radius)
+        if radius > 0.03:
             angle = math.atan2(y, x) % (2.0 * math.pi)
             center_bin = int(
                 angle / (2.0 * math.pi) * SHAPE_BIN_COUNT
@@ -642,9 +628,12 @@ class StickPlot:
         self._trail_selected_sequences = deque()
         self._trail_last_processed_sequence = -1
         self._trail_render_percent = None
-        # Transparent tiles keep high-rate report count independent from the
-        # Canvas item count while avoiding full 320x320 PNG updates.
+        # Compose the trail in one native Canvas item when available.
+        # Transparent tiles provide a bounded fallback.
         self._bitmap_enabled = True
+        self._bitmap_native_enabled = True
+        self._bitmap_surface = None
+        self._bitmap_uploader = TrailPhotoUploader()
         self._bitmap_photo = None
         self._bitmap_item = None
         self._bitmap_scanlines = None
@@ -1123,7 +1112,7 @@ class StickPlot:
                 0, 0, 0, 0,
                 outline=GYRO_ACTIVE_COLOR,
                 width=2,
-                tags="dynamic",
+                tags=("dynamic", "trail_foreground"),
             )
             self._dynamic_deadzone_item = item
         coordinates = (
@@ -1353,6 +1342,31 @@ class StickPlot:
                     self._trail_free_items.append(expired_item)
         self._trail_last_processed_sequence = newest_sequence
 
+    def _trail_surface(self, has_samples):
+        surface = getattr(self, "_bitmap_surface", None)
+        if surface is not None:
+            if not surface.failed:
+                return surface
+            surface.close()
+            self._bitmap_surface = self._bitmap_item = None
+            self._bitmap_render_config = None
+            self._bitmap_native_enabled = False
+        if not has_samples or not getattr(self, "_bitmap_native_enabled", False):
+            return None
+        try:
+            surface = TrailCanvasSurface(self.canvas, PLOT_SIZE, PLOT_SIZE)
+        except (OSError, RuntimeError, tk.TclError):
+            self._bitmap_native_enabled = False
+            return None
+        self._bitmap_surface = surface
+        self._bitmap_item = surface.item
+        self.canvas.addtag_withtag("trail_bitmap", surface.item)
+        foreground = self.canvas.find_withtag("trail_foreground")
+        if foreground:
+            self.canvas.tag_lower(surface.item, foreground[0])
+        self._bitmap_render_config = None
+        return surface
+
     def _draw_trail_bitmap(self, history, now=None):
         now = time.perf_counter() if now is None else float(now)
         self._bitmap_presented = False
@@ -1376,6 +1390,8 @@ class StickPlot:
             trail_length,
         )
         try:
+            surface = self._trail_surface(bool(trail))
+            pixels = surface.pixels if surface is not None else None
             pixel_count = PLOT_SIZE * PLOT_SIZE
             row_stride = 1 + PLOT_SIZE * 4
             tile_photos = getattr(self, "_bitmap_tile_photos", None)
@@ -1402,15 +1418,36 @@ class StickPlot:
                 or newest_sequence
                 < self._bitmap_last_processed_sequence
             )
-            dirty_tiles = set()
+            if (
+                not rebuild
+                and newest_sequence == self._bitmap_last_processed_sequence
+                and (
+                    not self._bitmap_expiry_heap
+                    or self._bitmap_expiry_heap[0][0] > now
+                )
+            ):
+                return True
+            dirty_tiles = {}
+
+            def mark_dirty(tile_key, x, y):
+                bounds = dirty_tiles.get(tile_key)
+                dirty_tiles[tile_key] = (
+                    (x, y, x + 1, y + 1) if bounds is None else (
+                        min(x, bounds[0]), min(y, bounds[1]),
+                        max(x + 1, bounds[2]), max(y + 1, bounds[3]),
+                    )
+                )
             if rebuild:
-                if tile_items or self._bitmap_item is not None:
+                if pixels is not None:
+                    ctypes.memset(pixels, 0, ctypes.sizeof(pixels))
+                elif tile_items or self._bitmap_item is not None:
                     self.canvas.delete("trail_bitmap")
                 tile_photos.clear()
                 tile_items.clear()
                 tile_live_counts.clear()
                 self._bitmap_photo = None
-                self._bitmap_item = None
+                if surface is None:
+                    self._bitmap_item = None
                 self._bitmap_scanlines[:] = (
                     b"\x00" * len(self._bitmap_scanlines)
                 )
@@ -1444,27 +1481,17 @@ class StickPlot:
                     >= display_percent
                 ):
                     continue
-                point_x, point_y = self._view_point(x, y)
                 expiry = float(time_value) + trail_length
                 if expiry <= now:
                     continue
-                minimum_x = max(
-                    0, int(math.floor(point_x - radius))
-                )
-                maximum_x = min(
-                    PLOT_SIZE - 1,
-                    int(math.ceil(point_x + radius)),
-                )
-                minimum_y = max(
-                    0, int(math.floor(point_y - radius))
-                )
-                maximum_y = min(
-                    PLOT_SIZE - 1,
-                    int(math.ceil(point_y + radius)),
-                )
-                for pixel_y in range(minimum_y, maximum_y + 1):
+                point_x, point_y = self._view_point(x, y)
+                center_x, center_y = math.floor(point_x), math.floor(point_y)
+                # More distant pixel centers are at least 1.5 px away.
+                xs = range(max(0, center_x - 1), min(PLOT_SIZE, center_x + 2))
+                ys = range(max(0, center_y - 1), min(PLOT_SIZE, center_y + 2))
+                for pixel_y in ys:
                     delta_y = (pixel_y + 0.5) - point_y
-                    for pixel_x in range(minimum_x, maximum_x + 1):
+                    for pixel_x in xs:
                         delta_x = (pixel_x + 0.5) - point_x
                         if (
                             delta_x * delta_x + delta_y * delta_y
@@ -1495,6 +1522,8 @@ class StickPlot:
                     pixel_y * row_stride + 1 + pixel_x * 4
                 )
                 if self._bitmap_scanlines[rgba_index + 3]:
+                    if pixels is not None:
+                        pixels[pixel_index] = 0
                     self._bitmap_scanlines[
                         rgba_index:rgba_index + 4
                     ] = b"\x00\x00\x00\x00"
@@ -1505,13 +1534,14 @@ class StickPlot:
                     tile_live_counts[tile_key] = max(
                         0, tile_live_counts.get(tile_key, 1) - 1
                     )
-                    dirty_tiles.add(tile_key)
+                    mark_dirty(tile_key, pixel_x, pixel_y)
 
             color = tuple(
                 int(self.trail_color[index:index + 2], 16)
                 for index in (1, 3, 5)
             ) + (255,)
             color_bytes = bytes(color)
+            native_color = 0xFF000000 | int(self.trail_color[1:], 16) if pixels is not None else 0
             for pixel_index, expiry in frame_pixels.items():
                 if expiry <= self._bitmap_pixel_expiry[pixel_index]:
                     continue
@@ -1523,6 +1553,8 @@ class StickPlot:
                 pixel_y, pixel_x = divmod(pixel_index, PLOT_SIZE)
                 rgba_index = pixel_y * row_stride + 1 + pixel_x * 4
                 if not self._bitmap_scanlines[rgba_index + 3]:
+                    if pixels is not None:
+                        pixels[pixel_index] = native_color
                     self._bitmap_scanlines[
                         rgba_index:rgba_index + 4
                     ] = color_bytes
@@ -1533,7 +1565,7 @@ class StickPlot:
                     tile_live_counts[tile_key] = (
                         tile_live_counts.get(tile_key, 0) + 1
                     )
-                    dirty_tiles.add(tile_key)
+                    mark_dirty(tile_key, pixel_x, pixel_y)
 
             live_pixels = sum(tile_live_counts.values())
             if len(self._bitmap_expiry_heap) > max(
@@ -1548,7 +1580,21 @@ class StickPlot:
                 ]
                 heapq.heapify(self._bitmap_expiry_heap)
 
-            for tile_key in dirty_tiles:
+            if surface is not None:
+                if rebuild:
+                    surface.invalidate(0, 0, PLOT_SIZE, PLOT_SIZE)
+                elif dirty_tiles:
+                    surface.invalidate(
+                        min(box[0] for box in dirty_tiles.values()),
+                        min(box[1] for box in dirty_tiles.values()),
+                        max(box[2] for box in dirty_tiles.values()),
+                        max(box[3] for box in dirty_tiles.values()),
+                    )
+                self._bitmap_presented = rebuild or bool(dirty_tiles)
+                return True
+
+            foreground = None
+            for tile_key, bounds in dirty_tiles.items():
                 tile_x, tile_y = tile_key
                 item = tile_items.get(tile_key)
                 if tile_live_counts.get(tile_key, 0) <= 0:
@@ -1565,21 +1611,9 @@ class StickPlot:
                 top = tile_y * TRAIL_TILE_SIZE
                 width = min(TRAIL_TILE_SIZE, PLOT_SIZE - left)
                 height = min(TRAIL_TILE_SIZE, PLOT_SIZE - top)
-                bitmap_data = encode_rgba_png_region(
-                    PLOT_SIZE,
-                    self._bitmap_scanlines,
-                    left,
-                    top,
-                    width,
-                    height,
-                )
                 photo = tile_photos.get(tile_key)
-                if photo is None:
-                    photo = tk.PhotoImage(
-                        master=self.canvas,
-                        data=bitmap_data,
-                        format="png",
-                    )
+                photo = self._update_trail_photo(photo, row_stride, left, top, width, height, bounds)
+                if item is None:
                     tile_photos[tile_key] = photo
                     item = self.canvas.create_image(
                         left,
@@ -1589,14 +1623,15 @@ class StickPlot:
                         tags="trail_bitmap",
                     )
                     tile_items[tile_key] = item
-                else:
-                    photo.configure(data=bitmap_data, format="png")
+                    if foreground is None:
+                        foreground = self.canvas.find_withtag("trail_foreground")
+                    if foreground:
+                        self.canvas.tag_lower(item, foreground[0])
 
             if tile_items:
                 first_key = next(iter(tile_items))
                 self._bitmap_item = tile_items[first_key]
                 self._bitmap_photo = tile_photos[first_key]
-                self.canvas.tag_raise("trail_bitmap")
             else:
                 self._bitmap_item = None
                 self._bitmap_photo = None
@@ -1610,20 +1645,42 @@ class StickPlot:
             ValueError,
             tk.TclError,
         ):
-            # An older Tk build without PNG PhotoImage support remains usable.
-            if self._bitmap_item is not None:
+            # Release bitmap resources before returning to Canvas dots.
+            surface = getattr(self, "_bitmap_surface", None)
+            if surface is not None:
+                surface.close()
+            elif self._bitmap_item is not None or getattr(self, "_bitmap_tile_items", None):
                 try:
                     self.canvas.delete("trail_bitmap")
                 except tk.TclError:
                     pass
             self._bitmap_item = None
             self._bitmap_photo = None
+            self._bitmap_surface = None
             self._bitmap_tile_photos = {}
             self._bitmap_tile_items = {}
             self._bitmap_tile_live_counts = {}
             self._bitmap_enabled = False
             self._bitmap_render_config = None
             return False
+
+    def _update_trail_photo(self, photo, stride, left, top, width, height, bounds):
+        uploader = getattr(self, "_bitmap_uploader", None)
+        if uploader is not None:
+            if photo is None:
+                photo = tk.PhotoImage(master=self.canvas, width=width, height=height)
+            x, y, right, bottom = bounds
+            if uploader.upload(
+                photo, self._bitmap_scanlines, stride, x, y, right - x, bottom - y,
+                dest_x=x - left, dest_y=y - top,
+            ):
+                return photo
+            self._bitmap_uploader = None
+        data = encode_rgba_png_region(PLOT_SIZE, self._bitmap_scanlines, left, top, width, height)
+        if photo is None:
+            return tk.PhotoImage(master=self.canvas, data=data, format="png")
+        photo.configure(data=data, format="png")
+        return photo
 
     def _static_signature(self, side_data, telemetry, is_s2p):
         """Only include configuration data, never the live stick samples."""
@@ -1681,6 +1738,7 @@ class StickPlot:
 
     def _draw_static(self, side_data, telemetry, is_s2p):
         self.canvas.delete("all")
+        self._bitmap_surface = None
         self._trail_bucket_items = {}
         self._trail_bucket_coords = {}
         self._trail_free_items = []
@@ -1742,8 +1800,6 @@ class StickPlot:
             self._draw_static(side_data, telemetry, is_s2p)
             self._static_key = static_key
             frame_changed = True
-            if self._bitmap_item is not None:
-                self.canvas.tag_raise("trail_bitmap", "static")
         now = time.perf_counter()
         # Redraw the measured envelope at up to 60 FPS only while its data is
         # changing. Once settled, keeping the tester open emits no trace Canvas
@@ -1790,10 +1846,7 @@ class StickPlot:
             self._draw_trail(history, now)
             frame_changed = bool(history.trail) or frame_changed
         if trace_redrawn and self._bitmap_item is not None:
-            # Animated physical-stick colour bands are recreated after the
-            # raster item. Restore the intended bands -> trail -> live-dot
-            # stacking order only on those 30 Hz overlay frames.
-            self.canvas.tag_raise("trail_bitmap")
+            self.canvas.tag_lower("trace", "trail_bitmap")
         gyro = telemetry.get("gyro") or {}
         show_dynamic_deadzone = bool(is_s2p and (
             (
@@ -1828,7 +1881,7 @@ class StickPlot:
                 0, 0, 0, 0,
                 fill=self.trail_color,
                 outline="",
-                tags="dynamic",
+                tags=("dynamic", "trail_foreground"),
             )
             self._dot_item = dot_item
         dot_coords = (
@@ -2069,7 +2122,7 @@ class StickPlot:
                 anchor="ne",
                 fill="#777777",
                 font=("Segoe UI", 8),
-                tags="fps",
+                tags=("fps", "trail_foreground"),
             )
         elif text != self._fps_text:
             self.canvas.itemconfigure(self._fps_item, text=text)
@@ -2085,6 +2138,8 @@ class GamepadTestWindow:
         self.window = None
         self.test_notebook = None
         self.input_tab = None
+        self.aim_tab = None
+        self.aim_pane = None
         self.rumble_tab = None
         self.high_rate_tab = None
         self.diagnostic_tab = None
@@ -2208,6 +2263,7 @@ class GamepadTestWindow:
         self._window_motion_until = 0.0
         self._last_window_geometry = None
         self._high_resolution_timer_active = False
+        self._restore_timer_policy = None
         self._window_icon = None
         self._about_logo = None
         self._about_fonts = ()
@@ -2324,7 +2380,56 @@ class GamepadTestWindow:
         window.protocol("WM_DELETE_WINDOW", self.close)
         window.bind("<Configure>", self._on_window_configure, add="+")
 
+        self._build_content(window)
+        self._refresh_devices(force=True)
+        self._update_raw_hid_availability()
+        # The first telemetry frame is published only after read_latest() has
+        # established the reader heartbeat. Continue scanning at a low rate so
+        # controllers that connect later appear without a manual refresh.
+        self._device_refresh_job = window.after(
+            300, self._refresh_devices_after_telemetry
+        )
+        self._schedule_poll()
+        window.update_idletasks()
+        root_width = self.root.winfo_width()
+        root_height = self.root.winfo_height()
+        if (
+            self.root.winfo_viewable()
+            and root_width > 100
+            and root_height > 100
+        ):
+            x = self.root.winfo_rootx() + (
+                root_width - initial_width
+            ) // 2
+            y = self.root.winfo_rooty() + (
+                root_height - initial_height
+            ) // 2
+        else:
+            # The standalone tester's host root is intentionally withdrawn
+            # and reports a 1x1 geometry at (0, 0). Centre on the display
+            # instead of mistaking that hidden host for the settings window.
+            x = (screen_width - initial_width) // 2
+            y = (screen_height - initial_height) // 2
+        x = max(0, min(screen_width - initial_width, x))
+        y = max(0, min(screen_height - initial_height, y))
+        self._reveal_positioned_window(
+            window,
+            f"{initial_width}x{initial_height}+{x}+{y}",
+        )
+        if (
+            getattr(self.gui, "allow_automatic_update_prompt", False)
+            and self.automatic_update_checks_var.get()
+            and not self._automatic_update_check_started
+        ):
+            self._automatic_update_check_started = True
+            window.after(
+                1400,
+                lambda: self.check_for_updates(manual=False),
+            )
+
+    def _build_content(self, window):
         content = ttk.Frame(window, padding=12)
+        self._content = content
         content.pack(fill="both", expand=True)
         content.columnconfigure(0, weight=1)
         content.rowconfigure(1, weight=1)
@@ -2347,11 +2452,17 @@ class GamepadTestWindow:
         )
         self.device_refresh_button = ttk.Button(
             selector,
-            text=self.gui.tr("重新整理"),
-            width=8,
+            text="↻",
+            width=3,
             command=self._request_device_refresh,
         )
         self.device_refresh_button.grid(row=0, column=2, padx=(5, 0))
+        HoverTip(self.device_refresh_button, self.gui.tr("重新整理"))
+        self.language_button = ttk.Button(
+            selector, text="中" if self.gui.language == "en" else "En", width=3,
+            command=self._toggle_language,
+        )
+        self.language_button.grid(row=0, column=3, padx=(4, 0))
         self.status_label = None
         # Per-radar presentation FPS is rendered in each plot's upper-right
         # corner, leaving this header's spare width for device selection.
@@ -2360,17 +2471,20 @@ class GamepadTestWindow:
         notebook = ttk.Notebook(content)
         notebook.grid(row=1, column=0, sticky="nsew")
         input_tab = ttk.Frame(notebook, padding=(8, 6))
+        aim_tab = ttk.Frame(notebook, padding=(10, 8, 10, 2))
         rumble_tab = ttk.Frame(notebook, padding=(10, 8))
         high_rate_tab = ttk.Frame(notebook, padding=(10, 8))
         diagnostic_tab = ttk.Frame(notebook, padding=(10, 8))
         about_tab = ttk.Frame(notebook, padding=(10, 8))
         self.test_notebook = notebook
         self.input_tab = input_tab
+        self.aim_tab = aim_tab
         self.rumble_tab = rumble_tab
         self.high_rate_tab = high_rate_tab
         self.diagnostic_tab = diagnostic_tab
         self.about_tab = about_tab
         notebook.add(input_tab, text=f" {self.gui.tr('輸入監看')} ")
+        notebook.add(aim_tab, text=f" {self.gui.tr('瞄準測試')} ")
         notebook.add(rumble_tab, text=f" {self.gui.tr('震動測試')} ")
         notebook.add(high_rate_tab, text=f" {self.gui.tr('回報率量測')} ")
         notebook.add(
@@ -2613,55 +2727,48 @@ class GamepadTestWindow:
             )
         self.event_tree.grid(row=0, column=0, sticky="nsew")
 
+        self.aim_pane = AimTestPane(
+            aim_tab, self.gui.tr, self._read_aim_output,
+            display_hz=display_refresh_rate,
+            settings_path=CONFIG_PATH.with_name("aim_settings.json"),
+            history=AimHistory(CONFIG_PATH.with_name("aim_history.json")),
+            feedback=AimFeedback(window, self._set_aim_rumble),
+            gpu_renderer=Direct2DAimRenderer,
+        )
         self._build_rumble_tab(rumble_tab)
         self._build_high_rate_tab(high_rate_tab)
         self._build_diagnostic_tab(diagnostic_tab)
         self._build_about_tab(about_tab)
-        self._refresh_devices(force=True)
-        self._update_raw_hid_availability()
-        # The first telemetry frame is published only after read_latest() has
-        # established the reader heartbeat. Continue scanning at a low rate so
-        # controllers that connect later appear without a manual refresh.
-        self._device_refresh_job = window.after(
-            300, self._refresh_devices_after_telemetry
-        )
-        self._schedule_poll()
-        window.update_idletasks()
-        root_width = self.root.winfo_width()
-        root_height = self.root.winfo_height()
-        if (
-            self.root.winfo_viewable()
-            and root_width > 100
-            and root_height > 100
-        ):
-            x = self.root.winfo_rootx() + (
-                root_width - initial_width
-            ) // 2
-            y = self.root.winfo_rooty() + (
-                root_height - initial_height
-            ) // 2
-        else:
-            # The standalone tester's host root is intentionally withdrawn
-            # and reports a 1x1 geometry at (0, 0). Centre on the display
-            # instead of mistaking that hidden host for the settings window.
-            x = (screen_width - initial_width) // 2
-            y = (screen_height - initial_height) // 2
-        x = max(0, min(screen_width - initial_width, x))
-        y = max(0, min(screen_height - initial_height, y))
-        self._reveal_positioned_window(
-            window,
-            f"{initial_width}x{initial_height}+{x}+{y}",
-        )
-        if (
-            getattr(self.gui, "allow_automatic_update_prompt", False)
-            and self.automatic_update_checks_var.get()
-            and not self._automatic_update_check_started
-        ):
-            self._automatic_update_check_started = True
-            window.after(
-                1400,
-                lambda: self.check_for_updates(manual=False),
-            )
+
+    def _toggle_language(self):
+        window = self.window
+        if window is None or window.grab_current() is not None:
+            return
+        if (self.aim_pane.test_open or self.diagnostic_session.running or self._raw_hid_pending_start
+                or self.raw_hid_probe.read_snapshot().get("state") in {"opening", "running"}):
+            messagebox.showinfo(self.gui.tr("手把測試"), self.gui.tr("請先結束目前的測試再切換語言。"), parent=window)
+            return
+        language = "zh" if self.gui.language == "en" else "en"
+        try:
+            self.gui.set_tester_language(language)
+        except OSError:
+            messagebox.showerror(self.gui.tr("儲存失敗"), self.gui.tr("無法儲存手把測試語言。"), parent=window)
+            return
+        tab = self.test_notebook.index("current")
+        def aim_mode_vars():
+            pane = self.aim_pane
+            return pane.dimension, pane.mode
+
+        aim_modes = tuple(choice.get() for choice in aim_mode_vars())
+        self._content.destroy()
+        self._last_event_input_signature = self._last_rumble_notice = None
+        self._build_content(window)
+        for choice, value in zip(aim_mode_vars(), aim_modes):
+            choice.set(value)
+        self.aim_pane._reset()
+        self.test_notebook.select(tab)
+        self._refresh_devices(refresh_controls=True)
+        self.language_button.focus_set()
 
     def _retry_native_sampler_start(self, sampler):
         """Restart after a previous sampler generation finishes winding down."""
@@ -3728,6 +3835,8 @@ class GamepadTestWindow:
             self._high_resolution_timer_active = result == 0
         except (AttributeError, OSError):
             self._high_resolution_timer_active = False
+        if self._high_resolution_timer_active:
+            self._restore_timer_policy = _honor_high_resolution_timer()
 
     def _disable_high_resolution_timer(self):
         if not self._high_resolution_timer_active:
@@ -3736,6 +3845,9 @@ class GamepadTestWindow:
             ctypes.windll.winmm.timeEndPeriod(1)
         except (AttributeError, OSError):
             pass
+        if self._restore_timer_policy is not None:
+            self._restore_timer_policy()
+            self._restore_timer_policy = None
         self._high_resolution_timer_active = False
 
     @staticmethod
@@ -5860,6 +5972,8 @@ class GamepadTestWindow:
             selected = notebook.select()
         except tk.TclError:
             return "input"
+        if selected == str(getattr(self, "aim_tab", None)):
+            return "aim"
         if self.high_rate_tab is not None and selected == str(
             self.high_rate_tab
         ):
@@ -5880,7 +5994,10 @@ class GamepadTestWindow:
         # Drain at the event boundary. A fast away-and-back switch can happen
         # before the next background poll and must not replay hidden movement.
         self._discard_pending_monitor_samples()
-        if self._active_test_tab() == "high_rate":
+        active_tab = self._active_test_tab()
+        if active_tab != "aim" and getattr(self, "aim_pane", None) is not None:
+            self.aim_pane.close_test()
+        if active_tab == "high_rate":
             self._raw_hid_last_distribution = None
         self._sync_raw_hid_stream()
 
@@ -6178,6 +6295,10 @@ class GamepadTestWindow:
             else None
         )
         record_shape = self.shape_enabled_var.get()
+        sources = tuple(
+            (side, _selected_plot_source(self.plots[side]), self.histories[side])
+            for side in ("left", "right")
+        )
         for item in samples:
             timestamp_ns = int(item.get("timestamp_ns", 0) or 0)
             age = max(
@@ -6185,8 +6306,7 @@ class GamepadTestWindow:
                 (newest_timestamp_ns - timestamp_ns) / 1_000_000_000.0,
             )
             sample_time = now - age
-            for side in ("left", "right"):
-                source = _selected_plot_source(self.plots[side])
+            for side, source, history in sources:
                 if source == "實體搖桿":
                     values = item.get(f"physical_{side}") or (0.0, 0.0)
                 elif source == "陀螺儀":
@@ -6197,9 +6317,7 @@ class GamepadTestWindow:
                     )
                 else:
                     values = item.get(f"final_{side}") or (0.0, 0.0)
-                self.histories[side].add(
-                    values[0], values[1], sample_time, record_shape
-                )
+                history.add(values[0], values[1], sample_time, record_shape)
 
     def _draw_plots(self, is_s2p, update_details=True):
         telemetry = self.latest_telemetry if is_s2p else {}
@@ -6332,6 +6450,30 @@ class GamepadTestWindow:
     def _selected_device(self):
         return self.devices.get(self.selected_device_var.get())
 
+    def _read_aim_output(self):
+        device = self._selected_device()
+        if device is None:
+            return None
+        key = device.key, device.index
+        if device.kind == "s2p":
+            telemetry = self.latest_telemetry
+            slot = telemetry.get("xinput_slot")
+            if (
+                not isinstance(slot, int)
+                or not 0 <= slot <= 3
+                or slot != device.index
+                or not self._telemetry_is_fresh(telemetry)
+            ):
+                return None
+            # Read the Windows output of the paired virtual device. Telemetry
+            # identifies its slot without supplying any aiming axis values.
+            state = self.backend.read_state(replace(device, kind="xinput"))
+        elif self.native_sampler is not None:
+            state = self.native_sampler.read_latest_state(device)
+        else:
+            state = self.backend.read_state(device)
+        return (key, state) if state is not None else None
+
     def _request_device_refresh(self):
         """Safely replace device snapshots after a physical hot-plug."""
         if self._device_refresh_in_progress:
@@ -6367,7 +6509,7 @@ class GamepadTestWindow:
                     )
                 )
 
-    def _refresh_devices(self, force=False):
+    def _refresh_devices(self, force=False, *, refresh_controls=False):
         probe_state = self.raw_hid_probe.read_snapshot().get("state")
         should_enumerate = (
             (force or not self._device_enumeration_initialized)
@@ -6459,6 +6601,7 @@ class GamepadTestWindow:
         new_keys = {device.key for device in mapping.values()}
         if (
             not force
+            and not refresh_controls
             and not bridge_slot_changed
             and new_keys == current_keys
             and tuple(mapping) == tuple(self.devices)
@@ -7089,7 +7232,26 @@ class GamepadTestWindow:
         for layer_left, layer_right in self._rumble_layers.values():
             left += layer_left
             right += layer_right
-        self._set_rumble(left, right)
+        return self._set_rumble(left, right)
+
+    def _set_aim_rumble(self, left, right):
+        previous = self._rumble_layers.get("aim")
+        active_slot = getattr(self, "_active_rumble_slot", None)
+        if left or right:
+            self._rumble_layers["aim"] = (left, right)
+        elif self._rumble_layers.pop("aim", None) is None:
+            return True
+        applied = self._apply_rumble_mix()
+        if not applied:
+            if previous is not None and (
+                "aim" in self._rumble_layers
+                or (active_slot is not None and active_slot == self._active_rumble_slot)
+            ):
+                # A failed same-slot release still owns the old pulse.
+                self._rumble_layers["aim"] = previous
+            else:
+                self._rumble_layers.pop("aim", None)
+        return applied
 
     def _set_rumble_layer(self, layer_id, left, right):
         if layer_id not in self._rumble_layers:
@@ -7206,6 +7368,9 @@ class GamepadTestWindow:
             self._play_rumble_pattern(name, layer_id)
 
     def close(self):
+        if getattr(self, "aim_pane", None) is not None:
+            self.aim_pane.set_visible(False)
+            self.aim_pane = None
         if self.diagnostic_session.running:
             self.diagnostic_session.stop("window_closed")
         self.diagnostic_reader.stop(timeout=0.5)
@@ -7239,6 +7404,7 @@ class GamepadTestWindow:
         self._device_refresh_job = None
         self._disable_high_resolution_timer()
         if self.native_sampler is not None:
+            self.native_sampler.set_device(None)
             if self.native_sampler.stop():
                 self.native_sampler = None
         try:

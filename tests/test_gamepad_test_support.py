@@ -1,3 +1,4 @@
+import configparser
 import mmap
 import math
 import struct
@@ -1311,12 +1312,29 @@ class GamepadMathTests(unittest.TestCase):
         setter.assert_called_once_with(GAMEPAD_TEST_APP_ID)
 
     def test_gamepad_test_accepts_explicit_parent_language(self):
-        with patch("gamepad_test_app.load_config") as load_config:
+        config = configparser.ConfigParser()
+        config.read_dict({"gui": {"language": "en"}})
+        with patch("gamepad_test_app.load_config", return_value=config):
             host = GamepadTestHost(Mock(), language="ZH")
 
         self.assertEqual(host.language, "zh")
         self.assertTrue(host.allow_automatic_update_prompt)
-        load_config.assert_not_called()
+
+    def test_tester_language_is_saved_separately_from_the_settings_language(self):
+        config = configparser.ConfigParser()
+        config.read_dict({"gui": {"language": "en", "gamepad_tester_language": "en"}})
+        with (
+            patch("gamepad_test_app.load_config", return_value=config),
+            patch("gamepad_test_app.config_file_lock"),
+            patch("gamepad_test_app.atomic_write_config") as save,
+        ):
+            host = GamepadTestHost(Mock(), language="zh")
+            self.assertEqual(host.language, "en")
+            host.set_tester_language("zh")
+        self.assertEqual(host.language, "zh")
+        self.assertEqual(config["gui"]["language"], "en")
+        self.assertEqual(config["gui"]["gamepad_tester_language"], "zh")
+        save.assert_called_once()
 
     def test_parent_gamepad_tester_can_disable_duplicate_update_prompt(self):
         host = GamepadTestHost(
@@ -1604,9 +1622,8 @@ class GamepadMathTests(unittest.TestCase):
             update_details=False,
         )
 
-        plot.canvas.tag_raise.assert_has_calls([
-            call("trail_bitmap"), call(9)
-        ])
+        plot.canvas.tag_lower.assert_called_once_with("trace", "trail_bitmap")
+        plot.canvas.tag_raise.assert_called_once_with(9)
         plot._last_trace_draw_at = 0.0
         plot.draw(
             history,
@@ -1913,6 +1930,7 @@ class GamepadMathTests(unittest.TestCase):
         )
         plot.canvas = Mock()
         plot.canvas.create_image.return_value = 9
+        plot.canvas.find_withtag.return_value = (8,)
         plot._bitmap_photo = None
         plot._bitmap_item = None
         plot._bitmap_scanlines = None
@@ -1937,13 +1955,17 @@ class GamepadMathTests(unittest.TestCase):
             plot._draw_trail_bitmap(history, now=9.0)
             bitmap_data = photo_factory.call_args.kwargs["data"]
             self.assertTrue(bitmap_data.startswith(b"\x89PNG\r\n\x1a\n"))
+            plot.canvas.tag_lower.assert_called_once_with(9, 8)
+            plot.canvas.reset_mock()
             plot._draw_trail_bitmap(history, now=9.0)
             photo.configure.assert_not_called()
+            plot.canvas.tag_raise.assert_not_called()
+            plot.canvas.tag_lower.assert_not_called()
 
             history.add(0.2, 0.1, 10.0, record_shape=False)
             plot._draw_trail_bitmap(history, now=10.0)
 
-        plot.canvas.create_image.assert_called_once()
+        photo_factory.assert_called_once()
         photo.configure.assert_called_once()
 
     def test_bitmap_trail_deduplicates_high_rate_samples_per_pixel(self):
@@ -1961,6 +1983,7 @@ class GamepadMathTests(unittest.TestCase):
         )
         plot.canvas = Mock()
         plot.canvas.create_image.return_value = 9
+        plot.canvas.find_withtag.return_value = ()
         plot._bitmap_photo = None
         plot._bitmap_item = None
         plot._bitmap_scanlines = None
@@ -1983,6 +2006,29 @@ class GamepadMathTests(unittest.TestCase):
             history.trail[-1][3],
         )
         self.assertLessEqual(len(plot._bitmap_expiry_heap), 16)
+
+    def test_native_trail_upload_uses_dirty_bounds_and_can_fall_back(self):
+        plot = object.__new__(StickPlot)
+        plot.canvas = Mock()
+        plot._bitmap_scanlines = bytearray((1 + PLOT_SIZE * 4) * PLOT_SIZE)
+        plot._bitmap_uploader = Mock()
+        plot._bitmap_uploader.upload.side_effect = [True, False]
+        uploader = plot._bitmap_uploader
+        photo = Mock()
+        stride = 1 + PLOT_SIZE * 4
+
+        with patch("gamepad_test_window.encode_rgba_png_region", return_value=b"png") as encode:
+            self.assertIs(plot._update_trail_photo(photo, stride, 40, 80, 40, 40, (42, 84, 45, 89)), photo)
+            uploader.upload.assert_called_once_with(
+                photo, plot._bitmap_scanlines, stride, 42, 84, 3, 5, dest_x=2, dest_y=4,
+            )
+            encode.assert_not_called()
+            self.assertIs(plot._update_trail_photo(photo, stride, 40, 80, 40, 40, (42, 84, 45, 89)), photo)
+
+        self.assertIsNone(plot._bitmap_uploader)
+        encode.assert_called_once_with(PLOT_SIZE, plot._bitmap_scanlines, 40, 80, 40, 40)
+        photo.configure.assert_called_once_with(data=b"png", format="png")
+
     def test_bitmap_merge_preserves_subpixel_footprint_union(self):
         plot = object.__new__(StickPlot)
         plot.trail_color = "#1976D2"
@@ -1997,6 +2043,7 @@ class GamepadMathTests(unittest.TestCase):
         )
         plot.canvas = Mock()
         plot.canvas.create_image.return_value = 9
+        plot.canvas.find_withtag.return_value = ()
         plot._bitmap_photo = None
         plot._bitmap_item = None
         plot._bitmap_scanlines = None
@@ -2393,6 +2440,29 @@ class GamepadMathTests(unittest.TestCase):
 
 
 class NativeSamplerTests(unittest.TestCase):
+    def test_in_flight_sample_is_discarded_after_switching_away_and_back(self):
+        first = GamepadDevice("xinput:0", "xinput", 0, "First", True)
+        second = GamepadDevice("xinput:1", "xinput", 1, "Second", True)
+        stale = GamepadState(1, 0, (), (0, 0), (1, 0), 0, 1)
+        fresh = GamepadState(2, 0, (), (0, 0), (0, 0), 0, 0)
+
+        def read(_device):
+            sampler.set_device(second)
+            sampler.set_device(first)
+            return stale
+
+        backend = SimpleNamespace(read_state=Mock(side_effect=read))
+        sampler = NativeGamepadSampler(backend)
+        sampler.set_device(first)
+        sampler._poll_once()
+        self.assertIsNone(sampler.read_latest_state(first))
+        self.assertEqual(sampler.read_snapshot()[1], ())
+
+        backend.read_state.side_effect = None
+        backend.read_state.return_value = fresh
+        sampler._poll_once()
+        self.assertIs(sampler.read_latest_state(first), fresh)
+
     def test_isolated_enumeration_restores_winmm_capabilities(self):
         devices, caps_by_index = _decode_isolated_enumeration({
             "devices": [{

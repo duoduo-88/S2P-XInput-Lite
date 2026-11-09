@@ -2,10 +2,9 @@
 
 [English](README.md) · [使用手冊](manual/USER_GUIDE_zh-TW.md) · [English Guide](manual/USER_GUIDE.md)
 
-**[目前已發佈的 Windows ZIP：v0.7.15](https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.7.15/S2P-XInput-Lite-v0.7.15.zip)**
+**[已發佈的 Windows ZIP（v0.7.15）](https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.7.15/S2P-XInput-Lite-v0.7.15.zip)**
 
-**v0.7.16 正在本機準備，尚未發佈。** 本版改善方案儲存／匯入、映射層編輯，
-以及連線、校正和 ESP32 操作之間的協調。詳見 [v0.7.16 更新說明](RELEASE_NOTES_v0.7.16.md)。
+**目前準備中的版本為 v0.8.0。** [v0.8.0 更新說明](RELEASE_NOTES_v0.8.0.md)
 
 完整解壓縮後，直接開啟根目錄的兩個 EXE：
 
@@ -26,8 +25,6 @@
 </p>
 
 S2P-XInput-Lite 可在 Windows 為 Switch 2 Pro Controller 提供 XInput 相容控制器輸出，支援 USB 有線、ESP32-S3 USB 橋接器及 Windows 原生 BLE。
-
-目前準備版本：**v0.7.16（尚未發佈）**；最新已發佈版本：**v0.7.15**。
 
 [v0.7.15 發佈說明](https://github.com/duoduo-88/S2P-XInput-Lite/releases/tag/v0.7.15) ·
 [原始碼](https://github.com/duoduo-88/S2P-XInput-Lite/tree/main) ·
@@ -73,6 +70,10 @@ Release 頁面供手動下載；程式不會自動下載、執行或覆蓋任何
   連線與 ESP32 診斷資訊。亦可測試其他 XInput、WinMM 及 Raw HID 手把，
   但這些裝置不會提供 S2P 專屬遙測，因此部分資訊會缺少；回報率頁面仍可
   顯示回報筆數、P50／P95／P99、間隔統計與時間軸
+- **搖桿軌跡（v0.8.0）** 透過 Windows 原生 Canvas 加速呈現所選來源的真實取樣。
+  搖桿圖的 FPS 統計有變化的畫面更新，回報率量測分頁則統計輸入回報。[搖桿圖手冊](manual/USER_GUIDE_zh-TW.md#92-搖桿圖)
+- **瞄準測試（v0.8.0）** 在 2D 和 3D 各提供跟槍、點靶與限時點靶。可用 Windows 收到的右搖桿
+  輸出測試陀螺儀映射，並與相同測試條件下的歷史最佳成績比較。[瞄準測試手冊](manual/USER_GUIDE_zh-TW.md#99-瞄準測試)
 - 內建 ESP32 診斷頁：支援定時測試、通過／警告／失敗判定及匯出文字報告
 - 關於頁：提供專案與贊助連結、軟體許可協議及第三方程式聲明
 - 完整遊戲設定檔，可一起切換搖桿、陀螺儀、震動、音訊觸覺與映射設定

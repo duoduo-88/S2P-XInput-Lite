@@ -15,6 +15,8 @@ htmlcov/
 
 # Local application state
 src/config.ini
+src/aim_settings.json
+src/aim_history.json
 src/controller_status.json
 /src/controller_commands/
 

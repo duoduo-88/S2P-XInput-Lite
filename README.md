@@ -2,11 +2,9 @@
 
 [繁體中文](README_zh-TW.md) · [User Guide](manual/USER_GUIDE.md) · [繁體中文使用手冊](manual/USER_GUIDE_zh-TW.md)
 
-**[Latest published Windows ZIP: v0.7.15](https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.7.15/S2P-XInput-Lite-v0.7.15.zip)**
+**[Published Windows ZIP (v0.7.15)](https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.7.15/S2P-XInput-Lite-v0.7.15.zip)**
 
-**v0.7.16 is being prepared locally and has not been published.** It improves
-profile saving/import, Mapping Layer editing and coordination between connection,
-calibration and ESP32 operations. See the [v0.7.16 notes](RELEASE_NOTES_v0.7.16.md).
+**v0.8.0 is the working version.** [v0.8.0 release notes](RELEASE_NOTES_v0.8.0.md)
 
 Extract the entire ZIP, then open one of the two EXEs in its main folder:
 
@@ -27,8 +25,6 @@ Support files are grouped in **app/**. Keep that folder beside both EXEs.
 </p>
 
 S2P-XInput-Lite provides XInput-compatible controller output for a Switch 2 Pro Controller on Windows. It supports wired USB, an ESP32-S3 USB bridge, and native Windows BLE.
-
-Working version: **v0.7.16 (not published)**. Latest published version: **v0.7.15**.
 
 [v0.7.15 release notes](https://github.com/duoduo-88/S2P-XInput-Lite/releases/tag/v0.7.15) ·
 [Source](https://github.com/duoduo-88/S2P-XInput-Lite/tree/main) ·
@@ -64,6 +60,12 @@ the new firmware remains pending; see [USB modes, recovery and validation](docs/
   tested, but S2P-specific telemetry is unavailable, so some information will
   be missing. The report-rate page still shows report count, P50/P95/P99
   intervals, distribution statistics, and a timeline.
+- **Stick trails (v0.8.0)** render actual reports from the selected source with
+  faster native Windows Canvas drawing. The plot's FPS tracks visible updates,
+  while Report Rate Test measures input reports. [Stick plots guide](manual/USER_GUIDE.md#92-stick-plots)
+- **Aim Test (v0.8.0)** offers Tracking, Targets, and Timed Targets in both 2D
+  and 3D. Test your gyro mapping with the right-stick output Windows receives
+  and compare completed rounds with your best result under the same conditions. [Aim Test guide](manual/USER_GUIDE.md#99-aim-test)
 - Built-in ESP32 diagnostics with timed tests, a clear pass/warn/fail verdict,
   and exportable text reports
 - Startup update notifications plus a manual check and shared automatic-check
