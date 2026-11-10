@@ -35,6 +35,7 @@ from gamepad_aim_gpu import Direct2DAimRenderer
 from gamepad_aim_history import AimHistory
 from gamepad_trail_canvas import TrailCanvasSurface
 from gamepad_trail_photo import TrailPhotoUploader
+from gamepad_trail_worker import TrailRasterWorker, TrailStyle
 from gamepad_devices import (
     GamepadDevice,
     NativeGamepadSampler,
@@ -443,6 +444,7 @@ class StickHistory:
     # allocating per-report UI objects.
     trail: deque = field(default_factory=lambda: deque(maxlen=65536))
     next_sequence: int = 0
+    trail_generation: int = 0
     shape_target: list = field(
         default_factory=lambda: [0.0] * SHAPE_BIN_COUNT
     )
@@ -585,6 +587,7 @@ class StickHistory:
     def reset(self):
         self.trail.clear()
         self.next_sequence = 0
+        self.trail_generation += 1
         self.shape_target[:] = [0.0] * SHAPE_BIN_COUNT
         self.shape_display[:] = [0.0] * SHAPE_BIN_COUNT
         self.shape_target_angles[:] = [
@@ -634,6 +637,11 @@ class StickPlot:
         self._bitmap_enabled = True
         self._bitmap_native_enabled = True
         self._bitmap_surface = None
+        self._bitmap_worker_view = None
+        self._bitmap_worker_key = None
+        self._bitmap_worker_sequence = -1
+        self._bitmap_worker_force_reset = False
+        self._bitmap_worker_disabled = False
         self._bitmap_uploader = TrailPhotoUploader()
         self._bitmap_photo = None
         self._bitmap_item = None
@@ -1360,6 +1368,7 @@ class StickPlot:
             self._bitmap_native_enabled = False
             return None
         self._bitmap_surface = surface
+        self._bitmap_worker_view = object()
         self._bitmap_item = surface.item
         self.canvas.addtag_withtag("trail_bitmap", surface.item)
         foreground = self.canvas.find_withtag("trail_foreground")
@@ -1367,6 +1376,41 @@ class StickPlot:
             self.canvas.tag_lower(surface.item, foreground[0])
         self._bitmap_render_config = None
         return surface
+
+    def _draw_worker_bitmap(self, worker, surface, history, render_config, now):
+        trail = history.trail
+        view = self._bitmap_worker_view
+        key = (view, id(history), history.trail_generation, render_config)
+        previous = self._bitmap_worker_key
+        reset = previous != key or self._bitmap_worker_force_reset
+        if reset:
+            self._bitmap_worker_sequence = -1
+            self._bitmap_worker_force_reset = False
+            self._bitmap_worker_key = key
+            percent, zoom, pan_x, pan_y, length = render_config
+            self._bitmap_worker_style = TrailStyle(percent, length, PLOT_CENTER, PLOT_RADIUS, zoom, pan_x, pan_y)
+            if previous is not None and previous[0] is view:
+                ctypes.memset(surface.pixels, 0, ctypes.sizeof(surface.pixels))
+                surface.invalidate(0, 0, PLOT_SIZE, PLOT_SIZE)
+                self._bitmap_presented = True
+            samples = trail
+        else:
+            samples = []
+            for sample in reversed(trail):
+                if sample[3] <= self._bitmap_worker_sequence:
+                    break
+                samples.append(sample)
+            samples.reverse()
+        if samples:
+            self._bitmap_worker_sequence = samples[-1][3]
+
+        worker.submit(self.side, key, self._bitmap_worker_style, samples, now, full_trail=trail)
+        frame = worker.take(self.side)
+        if frame is not None:
+            offset = frame.bounds[1] * PLOT_SIZE * ctypes.sizeof(ctypes.c_uint32)
+            ctypes.memmove(ctypes.addressof(surface.pixels) + offset, frame.rows, len(frame.rows))
+            surface.invalidate(*frame.bounds)
+            self._bitmap_presented = True
 
     def _draw_trail_bitmap(self, history, now=None):
         now = time.perf_counter() if now is None else float(now)
@@ -1392,6 +1436,15 @@ class StickPlot:
         )
         try:
             surface = self._trail_surface(bool(trail))
+            worker = getattr(self.owner, "_trail_raster_worker", None)
+            if surface is not None and worker is not None and not self._bitmap_worker_disabled:
+                try:
+                    self._draw_worker_bitmap(worker, surface, history, render_config, now)
+                    return True
+                except (OSError, RuntimeError, TypeError, ValueError):
+                    worker.discard(self.side)
+                    self._bitmap_worker_disabled = True
+                    self._bitmap_render_config = None
             pixels = surface.pixels if surface is not None else None
             pixel_count = PLOT_SIZE * PLOT_SIZE
             row_stride = 1 + PLOT_SIZE * 4
@@ -2137,6 +2190,7 @@ class GamepadTestWindow:
         self.gui = gui
         self.root = gui.root
         self.window = None
+        self._trail_raster_worker = None
         self.test_notebook = None
         self.input_tab = None
         self.aim_tab = None
@@ -2370,6 +2424,10 @@ class GamepadTestWindow:
         self._last_shape_advance_at = self._next_frame_at
         window = self._create_hidden_window(self.root)
         self.window = window
+        self._trail_raster_worker = TrailRasterWorker.open(
+            PLOT_SIZE, PLOT_SIZE,
+            {"left": 0xFF000000 | int(TRAIL_COLOR[1:], 16), "right": 0xFF000000 | int(RIGHT_TRAIL_COLOR[1:], 16)},
+        )
         window.title(GAMEPAD_TESTER_TITLE)
         self._apply_window_icon(window)
         # Keep the tester layout and its two high-refresh canvases at the
@@ -2384,6 +2442,7 @@ class GamepadTestWindow:
         initial_height = min(720, max(660, screen_height - 80))
         window.protocol("WM_DELETE_WINDOW", self.close)
         window.bind("<Configure>", self._on_window_configure, add="+")
+        window.bind("<Destroy>", self._on_trail_window_destroyed, add="+")
 
         self._build_content(window)
         self._refresh_devices(force=True)
@@ -2741,6 +2800,7 @@ class GamepadTestWindow:
             history=AimHistory(CONFIG_PATH.with_name("aim_history.json")),
             feedback=AimFeedback(window, self._set_aim_rumble),
             gpu_renderer=Direct2DAimRenderer,
+            render_in_worker=True,
         )
         self._build_rumble_tab(rumble_tab)
         self._build_high_rate_tab(high_rate_tab)
@@ -6002,6 +6062,11 @@ class GamepadTestWindow:
         # Drain at the event boundary. A fast away-and-back switch can happen
         # before the next background poll and must not replay hidden movement.
         self._discard_pending_monitor_samples()
+        worker = getattr(self, "_trail_raster_worker", None)
+        if worker is not None:
+            worker.discard()
+            for plot in self.plots.values():
+                plot._bitmap_worker_force_reset = True
         active_tab = self._active_test_tab()
         if active_tab != "aim" and getattr(self, "aim_pane", None) is not None:
             self.aim_pane.close_test()
@@ -7439,7 +7504,18 @@ class GamepadTestWindow:
             self._rumble_jobs[layer_id] = []
             self._play_rumble_pattern(name, layer_id)
 
+    def _close_trail_worker(self):
+        worker = getattr(self, "_trail_raster_worker", None)
+        if worker is not None:
+            self._trail_raster_worker = None
+            worker.close()
+
+    def _on_trail_window_destroyed(self, event):
+        if event.widget is self.window:
+            self._close_trail_worker()
+
     def close(self):
+        self._close_trail_worker()
         if getattr(self, "aim_pane", None) is not None:
             self.aim_pane.set_visible(False)
             self.aim_pane = None

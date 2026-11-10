@@ -97,7 +97,7 @@ def _release(instance):
 
 
 class Direct2DAimRenderer:
-    """Draw complete frames in physical client pixels on the HWND's owning thread."""
+    """Draw complete frames in physical client pixels on the render target's owning thread."""
 
     def __init__(self, hwnd: int, width: int, height: int):
         if sys.platform != "win32":

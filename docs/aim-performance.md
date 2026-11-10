@@ -11,9 +11,10 @@ Below 240 Hz, the existing Windows 1 ms timer resolution request helps Tk wake
 near the next deadline. The Tk fallback rounds against an absolute phase and
 allows up to half a millisecond of early timer rounding. At 240 Hz and higher,
 an active round uses a Windows high-resolution one-shot waitable timer when
-available. The worker sleeps between deadlines and posts a wake-only Windows message. Tk's timer still runs the callback
-on its own thread, which owns the simulation and the render target. The worker and its
-handles are released on stop, hide or close. Both paths submit at most one
+available. The timer worker sleeps between deadlines and posts a wake-only
+Windows message. Tk runs the callback and owns the simulation. A separate
+render worker owns the Direct2D target. The timer worker and its handles are
+released on stop, hide or close. Both scheduler paths request at most one
 frame per wake and skip expired frame slots. Idle viewports only render
 after a visual change, and a hidden aim tab cancels its callback and input
 capture. A visible idle pane checks shortcuts at 30 Hz.
@@ -94,3 +95,54 @@ completion or a physical 4K panel's refresh rate.
 Each scene was sampled for 5 seconds. Of the 4K modes tested, 360 FPS came
 closest to its target for both scenes. At higher targets, submission
 throughput continued to rise while long frames and CPU load increased.
+
+## Background rendering
+
+The Direct2D worker draws the latest scene snapshot and timestamps each
+successful submission. If it falls behind, it replaces the pending scene and
+continues with current data. Input, simulation and scoring stay on their
+existing timelines. The worker also projects the 3D grid through the native
+helper when available. Tk remains the fallback if Direct2D fails.
+
+The stick monitor has a separate native raster worker shared by both plots.
+It consumes original samples in sequence, applies the display settings and
+returns completed pixel rows to Tk. When pending work overflows, it rebuilds
+from the retained history. The existing raster path works without the helper.
+
+### Paired Windows run
+
+The baseline is `7af1c08`. The Windows monitor was at 180 Hz. CPU figures
+represent process time as a percentage of one logical core.
+
+| Aim scene | Direct2D submissions/s before → after | P99 ms | CPU, one core |
+| --- | ---: | ---: | ---: |
+| 720p window, 2D | 180.03 → 180.01 | 7.89 → 6.88 | 37.50% → 32.43% |
+| 720p window, 3D | 180.00 → 180.03 | 8.29 → 6.72 | 39.06% → 26.17% |
+| 4K offscreen at 500 Hz, 2D | 491.40 → 499.38 | 3.73 → 2.78 | 53.75% → 63.76% |
+| 4K offscreen at 500 Hz, 3D | 489.55 → 499.71 | 4.11 → 2.76 | 73.74% → 56.56% |
+
+At a 600 Hz target, the 4K offscreen worker submitted 599.05 frames/s in 2D
+and 598.30 in 3D. P99 was 2.76 and 2.73 ms respectively. The 500 Hz 2D
+worker reduced long gaps at the cost of higher CPU time in this run. The
+offscreen tests measured successful Direct2D submissions. Physical 4K
+presentation, GPU utilization and input-to-display latency were unmeasured.
+
+The trail benchmark streamed approximately 10,000 synthetic samples/s for
+8.6 seconds, with five seconds of history per plot. The optimized run held
+50,085 samples per plot at its peak and received 86,090 sequential samples
+with zero gaps and zero ring drops. The left and right plot update rates
+rose from 159.98/152.96 to 176.95/173.93 per second. P95 update gaps fell
+from 10.90/12.15 to 7.85/8.27 ms, and CPU time fell from 46.51% to 44.69%
+of one core.
+
+Build the native helper in the candidate checkout, then use the same
+benchmark and display mode for the baseline and candidate runs.
+
+```powershell
+.\native\build_gamepad_render_native.ps1
+.\runtime\python.exe -B .\scripts\benchmark_aim.py --source C:\path\to\base --seconds 4
+.\runtime\python.exe -B .\scripts\benchmark_aim.py --render-worker --seconds 4
+.\runtime\python.exe -B .\scripts\benchmark_aim.py --render-worker --size 3840x2160 --offscreen --target-hz 600
+.\runtime\python.exe -B .\scripts\benchmark_gamepad_trails.py --source C:\path\to\base --seconds 8.6
+.\runtime\python.exe -B .\scripts\benchmark_gamepad_trails.py --seconds 8.6
+```

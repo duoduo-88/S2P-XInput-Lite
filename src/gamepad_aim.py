@@ -34,6 +34,7 @@ from gamepad_aim_model import (
     room_redraw_interval,
 )
 from gamepad_aim_native_timer import NativeAimTimer
+from gamepad_aim_render_worker import AimRenderFrame, AimRenderWorker
 from gamepad_aim_settings import AimSettings, show_aim_settings
 from gamepad_aim_timing import (
     IDLE_PERIOD, SIMULATION_PERIOD, TIMER_HALF_MS,
@@ -184,7 +185,7 @@ class AimTestHud:
 class AimTestPane:
     def __init__(self, parent, translate, read_output, display_hz=lambda _window: 60.0, *,
                  settings_path=None, history=None, feedback=None, gpu_renderer=None,
-                 read_input=None, set_input_active=None):
+                 read_input=None, set_input_active=None, render_in_worker=False):
         self.tr = translate
         self.read_output = read_output
         self.read_input = read_input
@@ -199,6 +200,11 @@ class AimTestPane:
         self.window.resizable(False, False)
         self.window.protocol("WM_DELETE_WINDOW", self.close_test)
         self._gpu_factory = gpu_renderer
+        self._render_in_worker = render_in_worker
+        self._render_worker = None
+        self._retired_render_view = None
+        self._render_cleanup_job = None
+        self._render_stats_since = 0.0
         self._gpu_view = None
         self.gpu = None
         self.gpu_error = None
@@ -386,13 +392,19 @@ class AimTestPane:
         if not self.test_open:
             self._stop_gpu()
             return
-        if self.gpu is not None or self._gpu_factory is None or self.gpu_error is not None:
+        if (self.gpu is not None or self._gpu_factory is None or self.gpu_error is not None
+                or self._retired_render_view is not None):
             return
         if self._gpu_view is None:
             self._gpu_view = tk.Frame(self.window, background=VIEW_BACKGROUND, borderwidth=0)
             self._bind_view(self._gpu_view)
         try:
-            self.gpu = self._gpu_factory(self._gpu_view.winfo_id(), *self.size)
+            hwnd = self._gpu_view.winfo_id()
+            if self._render_in_worker:
+                self._render_worker = AimRenderWorker(self._gpu_factory, hwnd, self.size)
+                self.gpu = self._render_worker
+            else:
+                self.gpu = self._gpu_factory(hwnd, *self.size)
         except (OSError, RuntimeError, tk.TclError) as error:
             self.gpu_error = str(error)
             return
@@ -406,16 +418,28 @@ class AimTestPane:
         self._gpu_overlay = None
         self.grid_pose = None
         self.next_draw = 0.0
+        self._frame_dirty = True
 
     def _stop_gpu(self, *, restore=True):
         if self.gpu is None:
             return
         renderer, self.gpu = self.gpu, None
+        worker, self._render_worker = self._render_worker, None
         had_focus = restore and self._view.focus_displayof() is self._view
         self._view = self.canvas
         renderer.close()
-        if self._gpu_view.winfo_exists():
-            self._gpu_view.place_forget()
+        view = self._gpu_view
+        if view.winfo_exists():
+            view.place_forget()
+        if worker is not None:
+            self._gpu_view = None
+            if restore:
+                if worker.stopped.is_set():
+                    if view.winfo_exists():
+                        view.destroy()
+                else:
+                    self._retired_render_view = worker, view
+                    self._render_cleanup_job = self.owner.after(25, self._reap_render_view)
         if restore:
             self._sync_canvas_scene()
             self._place_view()
@@ -425,6 +449,20 @@ class AimTestPane:
         self.grid_pose = None
         self.next_draw = 0.0
 
+    def _reap_render_view(self):
+        self._render_cleanup_job = None
+        worker, view = self._retired_render_view
+        if not worker.stopped.is_set():
+            self._render_cleanup_job = self.owner.after(25, self._reap_render_view)
+            return
+        self._retired_render_view = None
+        if view.winfo_exists():
+            view.destroy()
+        if self.test_open:
+            self._sync_gpu()
+        else:
+            self._restore_display_after_close()
+
     def _canvas_destroyed(self, _event):
         self.test_open = False
         self._deactivate_input()
@@ -433,6 +471,10 @@ class AimTestPane:
         try:
             self._stop_gpu(restore=False)
         finally:
+            if self._render_cleanup_job is not None:
+                self.owner.after_cancel(self._render_cleanup_job)
+                self._render_cleanup_job = None
+            self._retired_render_view = None
             self._restore_display_mode()
 
     def _destroy(self, event, parent):
@@ -485,6 +527,8 @@ class AimTestPane:
 
     def _reset(self):
         self._check_finish(skip_animation=True)
+        if self._render_worker is not None:
+            self._render_worker.discard_pending()
         if self.feedback is not None:
             self.feedback.stop()
         self.feedback_at = 0.0
@@ -595,7 +639,7 @@ class AimTestPane:
             self.round_basis["target_top"] = self._cursor_top()
         self.round_started_at = now
         self._simulated_at = now
-        self._frame_stats.reset(now)
+        self._reset_frame_stats(now)
         self.fps_started = now
         self._round().start()
         if not self.mode_is_3d:
@@ -617,6 +661,8 @@ class AimTestPane:
             self.feedback.stop()
 
     def _open_test_window(self):
+        if self._retired_render_view is not None and (self._fullscreen_mode is not None or self.settings.fullscreen):
+            return False  # Let Direct2D finish before changing the display mode again.
         if not self._restore_display_mode():
             raise OSError("Could not restore the previous display mode")
         hwnd = self.owner.winfo_id()
@@ -677,7 +723,7 @@ class AimTestPane:
             self.draws = 0
             self.fps_text.set("")
             self.fps_started = self.next_draw = time.perf_counter()
-            self._frame_stats.reset(self.fps_started)
+            self._reset_frame_stats(self.fps_started)
             self._layout_hud()
         except BaseException:
             self.close_test()
@@ -705,10 +751,14 @@ class AimTestPane:
                         and self.start_button.winfo_exists() and self.start_button.winfo_viewable()):
                     self.start_button.focus_set()
         finally:
-            if not self._restore_display_mode() and self.owner.winfo_exists():
-                self.owner.after(100, self._retry_display_restore, self._fullscreen_mode)
+            if self._retired_render_view is None:
+                self._restore_display_after_close()
             self._schedule(time.perf_counter())
         return "break"
+
+    def _restore_display_after_close(self):
+        if not self._restore_display_mode() and self.owner.winfo_exists():
+            self.owner.after(100, self._retry_display_restore, self._fullscreen_mode)
 
     def _retry_display_restore(self, mode):
         if self._fullscreen_mode is mode and not self.test_open:
@@ -733,7 +783,7 @@ class AimTestPane:
         if rate != self.display_hz:
             self.display_hz = rate
             self.next_draw = now + refresh_interval(rate)
-            self._frame_stats.reset(now)
+            self._reset_frame_stats(now)
             self._frame_dirty = True
             self._wake_tick()
 
@@ -861,6 +911,8 @@ class AimTestPane:
             return
         size = event.width, event.height
         if size != self.size:
+            if self._render_worker is not None:
+                self._render_worker.discard_pending()
             if self.countdown_until is None and not self.finished:
                 self._interrupt()
             self.size = size
@@ -1036,6 +1088,7 @@ class AimTestPane:
         now = time.perf_counter()
         if self.test_open and now >= self._rate_check_at:
             self._refresh_display_rate()
+        self._collect_render_results()
         if now >= self.next_frame:
             deadline = self.next_frame or now
             if now - min(self.last_frame, deadline) > 0.25:
@@ -1220,10 +1273,30 @@ class AimTestPane:
         self._draw()
         self._draw_hit_effect(now)
         if self.gpu is None or self._present_gpu():
-            self.draws += 1
-            self._frame_stats.submitted(time.perf_counter())
+            if self._render_worker is None:
+                self._record_submission(time.perf_counter())
         else:
             self._draw_hit_effect(now)
+            self._frame_dirty = True
+
+    def _reset_frame_stats(self, now):
+        self._render_stats_since = now
+        self._frame_stats.reset(now)
+
+    def _record_submission(self, completed):
+        self.draws += 1
+        self._frame_stats.submitted(completed)
+
+    def _collect_render_results(self):
+        if self._render_worker is None:
+            return
+        completed, error = self._render_worker.drain()
+        for timestamp in completed:
+            if timestamp >= self._render_stats_since:
+                self._record_submission(timestamp)
+        if error is not None:
+            self.gpu_error = error
+            self._stop_gpu()
             self._frame_dirty = True
 
     def _present_gpu(self):
@@ -1237,6 +1310,11 @@ class AimTestPane:
         lines = self._gpu_lines if self.mode_is_3d else ()
         balls = tuple((*bounds, self.ball_color) for bounds in self._ball_bounds if bounds is not None)
         reticle = (*self.reticle_geometry, self.reticle_color) if self.reticle_geometry is not None else None
+        if self._render_worker is not None:
+            pose = (*self.size, self.scene.yaw, self.scene.pitch) if self.mode_is_3d else None
+            return self._render_worker.submit(AimRenderFrame(
+                self.size, pose, balls, reticle, self._gpu_fragments, overlays, labels,
+            ))
         try:
             self.gpu.draw(
                 *self.size, lines=lines, balls=balls, reticle=reticle,
@@ -1395,7 +1473,9 @@ class AimTestPane:
             return cx + focal * x / z, cy - focal * y / z
 
         pose = width, height, self.scene.yaw, self.scene.pitch
-        if self.gpu is not None:
+        if self._render_worker is not None:
+            room_changed = False  # The worker projects the matching scene pose.
+        elif self.gpu is not None:
             room_changed = pose != self.grid_pose
         else:
             now = time.perf_counter()

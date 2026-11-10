@@ -113,7 +113,8 @@ foreach ($requiredBuild in @(
     (Join-Path $launcherOutput "GamepadTester.exe"),
     $launcherMetadataPath,
     (Join-Path $nativeOutput "raw_hid_probe.exe"),
-    (Join-Path $nativeOutput "raw_hid_stream_probe.exe")
+    (Join-Path $nativeOutput "raw_hid_stream_probe.exe"),
+    (Join-Path $nativeOutput "gamepad_render_native.dll")
 )) {
     if (-not (Test-Path -LiteralPath $requiredBuild -PathType Leaf)) {
         throw "Required build output is missing: $requiredBuild"
@@ -303,6 +304,10 @@ Copy-ReleaseFile `
 Copy-ReleaseFile `
     -Source (Join-Path $nativeOutput "raw_hid_stream_probe.exe") `
     -RelativePath "src\raw_hid_stream_probe.exe" `
+    -DestinationRoot $packageRoot
+Copy-ReleaseFile `
+    -Source (Join-Path $nativeOutput "gamepad_render_native.dll") `
+    -RelativePath "src\gamepad_render_native.dll" `
     -DestinationRoot $packageRoot
 
 Get-ChildItem -LiteralPath $packageRoot -Directory -Recurse -Force |

@@ -153,7 +153,10 @@ def benchmark(args):
         frame.pack(fill="both", expand=True)
         replay = InputReplay(dimension)
         gpu_factory = MeasuredRenderer if args.renderer == "d2d" else None
-        pane = MeasuredPane(frame, str, replay.read, display_hz=read_display, gpu_renderer=gpu_factory)
+        worker_options = {"render_in_worker": True} if args.render_worker else {}
+        pane = MeasuredPane(
+            frame, str, replay.read, display_hz=read_display, gpu_renderer=gpu_factory, **worker_options,
+        )
         pane.dimension.set(dimension)
         pane.mode.set("tracking")
         pane._save_settings(AimSettings(
@@ -184,7 +187,8 @@ def benchmark(args):
     def finish(pane, frame, dimension, active, start, cpu_start):
         nonlocal measuring
         measuring = False
-        wall = time.perf_counter() - start
+        end = time.perf_counter()
+        wall = end - start
         cpu = time.process_time() - cpu_start
         if args.renderer == "d2d" and pane.gpu is None:
             raise RuntimeError(f"Direct2D did not remain available: {pane.gpu_error}")
@@ -198,7 +202,8 @@ def benchmark(args):
             ),
             "size": list(pane.size), "detected_display_hz": display_refresh_rate(pane.window),
             "scheduler": "native" if getattr(pane, "_native_timer", None) is not None else "Tk",
-            **summarize(frames, pane.display_hz, wall, cpu, active=active),
+            "render_thread": "worker" if args.render_worker else "ui",
+            **summarize([stamp for stamp in frames if start <= stamp <= end], pane.display_hz, wall, cpu, active=active),
         })
         if active and args.idle_seconds:
             pane._reset()
@@ -230,13 +235,14 @@ def main():
     parser.add_argument("--renderer", choices=("d2d", "tk"), default="d2d")
     parser.add_argument("--size", default="1280x720")
     parser.add_argument("--offscreen", action="store_true", help="Use a hardware-compatible Direct2D bitmap target")
+    parser.add_argument("--render-worker", action="store_true", help="Run Direct2D submissions on the aim worker")
     parser.add_argument("--warmup", type=float, default=1.0)
     parser.add_argument("--seconds", type=float, default=5.0)
     parser.add_argument("--idle-seconds", type=float, default=0.0, help="Also measure each visible idle scene")
     parser.add_argument("--target-hz", type=float, help="Override the scheduler target without changing the Windows display mode")
     args = parser.parse_args()
-    if args.offscreen and args.renderer != "d2d":
-        parser.error("--offscreen requires the Direct2D renderer")
+    if (args.offscreen or args.render_worker) and args.renderer != "d2d":
+        parser.error("--offscreen and --render-worker require the Direct2D renderer")
     if sys.platform != "win32":
         parser.error("The fixed-scene benchmark requires a Windows desktop")
     if not (0 < args.seconds <= 120 and 0 <= args.warmup <= 30 and 0 <= args.idle_seconds <= 30):

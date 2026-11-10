@@ -126,6 +126,7 @@ $required = @(
     "src\requirements-binary.txt",
     "src\raw_hid_probe.exe",
     "src\raw_hid_stream_probe.exe",
+    "src\gamepad_render_native.dll",
     "src\profiles\System Default.ini",
     "esp32s3\firmware\bootloader.bin",
     "esp32s3\firmware\partition-table.bin",
@@ -349,6 +350,9 @@ if (
 $runtimePython = Join-Path $ApplicationDirectory "runtime\python.exe"
 $importCheck = (
     "import config_gui, gamepad_test_window, main; " +
+    "from gamepad_render_native import load_render_library; " +
+    "native = load_render_library(); " +
+    "assert native is not None and native.aim_project_room and native.s2p_trail_update; " +
     "print('release import smoke test passed')"
 )
 & $runtimePython -B -c $importCheck

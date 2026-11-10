@@ -1,5 +1,6 @@
 import math
 import sys
+import threading
 import time
 import tkinter as tk
 import unittest
@@ -262,6 +263,76 @@ class AimPaneTests(unittest.TestCase):
         self.assertTrue(pane.scene.running)
         self.assertTrue(pane.canvas.winfo_ismapped())
         self.assertFalse(pane._gpu_view.winfo_ismapped())
+
+    def test_threaded_gpu_failure_restores_canvas_without_counting_failed_draw(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_settings import AimSettings
+
+        def draw(_width, _height, **_parts):
+            raise OSError("worker device lost")
+
+        renderer = SimpleNamespace(draw=draw, close=Mock())
+        pane = AimTestPane(
+            self.root, str, lambda: None, gpu_renderer=lambda *_: renderer, render_in_worker=True,
+        )
+        pane.dimension.set("2d")
+        pane._save_settings(AimSettings(fullscreen=False, window_size="800x450"))
+        pane._open_test_window()
+        worker = pane._render_worker
+        pane._draw_if_due(time.perf_counter())
+        self.assertTrue(worker.stopped.wait(2))
+        pane._collect_render_results()
+
+        self.assertEqual(pane.gpu_error, "worker device lost")
+        self.assertIsNone(pane.gpu)
+        self.assertIs(pane._view, pane.canvas)
+        self.assertIsNone(pane._gpu_view)
+        self.assertEqual(pane.draws, 0)
+        renderer.close.assert_called_once()
+        pane._draw_if_due(time.perf_counter())
+        self.assertEqual(pane.draws, 1)
+        pane.close_test()
+
+    def test_reopen_does_not_reuse_a_view_with_an_inflight_submission(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_settings import AimSettings
+
+        entered = threading.Event()
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def draw(_width, _height, **_parts):
+            entered.set()
+            if not release.wait(2):
+                raise OSError("test did not unblock the renderer")
+
+        renderer = SimpleNamespace(draw=draw, close=Mock())
+        factory = Mock(return_value=renderer)
+        pane = AimTestPane(self.root, str, lambda: None, gpu_renderer=factory, render_in_worker=True)
+        pane.dimension.set("2d")
+        pane._save_settings(AimSettings(fullscreen=False, window_size="800x450"))
+        pane._open_test_window()
+        worker, old_view = pane._render_worker, pane._gpu_view
+        pane._draw_if_due(time.perf_counter())
+        self.assertTrue(entered.wait(2))
+        self.assertEqual(pane.draws, 0)
+
+        pane.close_test()
+        self.assertFalse(worker.stopped.is_set())
+        self.assertTrue(old_view.winfo_exists())
+        self.assertTrue(pane._open_test_window())
+        self.assertIsNone(pane.gpu)
+        factory.assert_called_once()
+
+        release.set()
+        self.assertTrue(worker.stopped.wait(2))
+        self.root.after(50, self.root.quit)
+        self.root.mainloop()
+        self.assertFalse(old_view.winfo_exists())
+        self.assertIsNotNone(pane.gpu)
+        self.assertIsNone(pane._render_cleanup_job)
+        self.assertIsNot(pane._gpu_view, old_view)
+        pane.close_test()
 
     def test_windows_pointer_can_score_with_no_gamepad(self):
         from gamepad_aim import AimTestPane

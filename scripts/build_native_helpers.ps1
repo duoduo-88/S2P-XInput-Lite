@@ -21,4 +21,10 @@ if ($LASTEXITCODE -ne 0) {
     throw "Raw HID stream probe build failed."
 }
 
+& (Join-Path $repoRoot "native\build_gamepad_render_native.ps1") `
+    -OutputDirectory $OutputDirectory
+if ($LASTEXITCODE -ne 0) {
+    throw "Native rendering library build failed."
+}
+
 Write-Output "Native helpers are ready in $OutputDirectory"
