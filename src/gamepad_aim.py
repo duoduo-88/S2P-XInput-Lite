@@ -6,6 +6,7 @@ import logging
 import math
 import time
 import tkinter as tk
+from collections import deque
 from tkinter import font as tkfont, messagebox, ttk
 
 from gamepad_aim_display import (
@@ -32,12 +33,17 @@ from gamepad_aim_model import (
     project_ball,
     room_redraw_interval,
 )
+from gamepad_aim_native_timer import NativeAimTimer
 from gamepad_aim_settings import AimSettings, show_aim_settings
+from gamepad_aim_timing import (
+    IDLE_PERIOD, SIMULATION_PERIOD, TIMER_HALF_MS,
+    FrameStats, next_deadline, refresh_interval, timer_delay_ms,
+)
 from tooltip_layout import HoverTip
 
 
-FRAME_INTERVAL = 1.0 / 500.0
 MOUSE_PRIORITY_SECONDS = 0.05
+NATIVE_TIMER_MIN_HZ = 240
 COUNTDOWN_SECONDS = 3
 ACTION_BUTTON_WIDTH = 18
 TOOLBAR_BUTTON_WIDTH = 11
@@ -105,8 +111,9 @@ class AimTestHud:
         footer_width = max(1, min(540, (width - 3 * margin) // 2))
         wrap = max(1, footer_width - 2 * pad)
         self.footer_bottom = height - margin
-        fps_y = self.footer_bottom - pad - line
-        change_y = fps_y - max(1, len(self._change_rows(changes, wrap))) * line
+        fps_y = self.footer_bottom - pad - HUD_LINE_GAP
+        fps_top = fps_y - 2 * line
+        change_y = fps_top - max(1, len(self._change_rows(changes, wrap))) * line
         stats_x = width - margin - footer_width
         self.status_panel = self.canvas.create_image(margin, 0, anchor="nw", tags=self.tag)
         self.stats_panel = self.canvas.create_image(stats_x, 0, anchor="nw", tags=self.tag)
@@ -115,7 +122,7 @@ class AimTestHud:
         self.labels = (
             self._text(margin + pad, self.footer_bottom - pad - HUD_LINE_GAP, anchor="sw", width=wrap),
             self._text(right, change_y - HUD_LINE_GAP, anchor="se", justify="right", width=wrap),
-            self._text(right, fps_y, anchor="ne"),
+            self._text(right, fps_y, anchor="se", justify="right"),
         )
         self.change_origin = (right, change_y, wrap)
         self.change_items = []
@@ -176,9 +183,12 @@ class AimTestHud:
 
 class AimTestPane:
     def __init__(self, parent, translate, read_output, display_hz=lambda _window: 60.0, *,
-                 settings_path=None, history=None, feedback=None, gpu_renderer=None):
+                 settings_path=None, history=None, feedback=None, gpu_renderer=None,
+                 read_input=None, set_input_active=None):
         self.tr = translate
         self.read_output = read_output
+        self.read_input = read_input
+        self.set_input_active = set_input_active
         self.owner = parent.winfo_toplevel()
         self.read_display_hz = display_hz
         self.display_hz = display_hz(self.owner)
@@ -194,6 +204,9 @@ class AimTestPane:
         self.gpu_error = None
         self._gpu_overlay = None
         self._gpu_fragments = ()
+        self._gpu_lines = ()
+        self._hud_values = None
+        self._frame_dirty = True
         self.settings_path = settings_path
         self.settings = AimSettings.load(settings_path) if settings_path else AimSettings()
         self.settings_dialog = None
@@ -215,6 +228,16 @@ class AimTestPane:
         self.fps_text = tk.StringVar(parent)
         self.size = (640, 360)
         self.job = None
+        self._native_timer = None
+        self._native_timer_failed = False
+        self._visible = False
+        self._simulated_at = 0.0
+        self._sim_state = None
+        self._input_events = deque()
+        self._source_hz = None
+        self._rate_check_at = 0.0
+        self._frame_stats = FrameStats()
+        self._playfield_margin = VIEW_MARGIN
         self.device_key = None
         self.output_ready = False
         self.trigger_pressed = True
@@ -223,7 +246,7 @@ class AimTestPane:
         self.countdown_until = self.countdown_value = None
         self.last_frame = self.next_frame = self.next_draw = 0.0
         self.fps_started = self.label_update_at = 0.0
-        self.frames = self.draws = 0
+        self.draws = 0
 
         parent.columnconfigure(0, weight=1)
         parent.rowconfigure(1, weight=1)
@@ -394,8 +417,7 @@ class AimTestPane:
         if self._gpu_view.winfo_exists():
             self._gpu_view.place_forget()
         if restore:
-            for item, bounds in zip(self.grid_lines, self.grid_bounds):
-                self.canvas.coords(item, *(bounds or (-20, -20, -20, -20)))
+            self._sync_canvas_scene()
             self._place_view()
             if had_focus:
                 self._view.focus_set()
@@ -405,13 +427,13 @@ class AimTestPane:
 
     def _canvas_destroyed(self, _event):
         self.test_open = False
+        self._deactivate_input()
+        self._cancel_tick()
+        self._close_native_timer()
         try:
             self._stop_gpu(restore=False)
         finally:
             self._restore_display_mode()
-        if self.job is not None:
-            self.owner.after_cancel(self.job)
-            self.job = None
 
     def _destroy(self, event, parent):
         if event.widget is parent:
@@ -424,25 +446,49 @@ class AimTestPane:
 
     def set_visible(self, visible):
         if visible:
-            if self.job is None:
+            if not self._visible:
+                self._visible = True
+                if self.set_input_active is not None:
+                    self.set_input_active(True)
                 self.start_pressed = self.cancel_pressed = True
                 now = time.perf_counter()
                 self.last_frame = self.next_frame = self.next_draw = self.fps_started = now
-                self.frames = self.draws = 0
-                self.job = self.owner.after(1, self._tick)
+                self.draws = 0
                 self._sync_gpu()
+                self._schedule(now)
             return
+        self._deactivate_input()
+        self._cancel_tick()
+        self._close_native_timer()
+        self.close_test()
+        self.fps_text.set("")
+
+    def _deactivate_input(self):
+        if self._visible and self.set_input_active is not None:
+            self.set_input_active(False)
+        self._visible = False
+        self._input_events.clear()
+        self._sim_state = None
+        self.device_key = None
+
+    def _cancel_tick(self):
         if self.job is not None:
             self.owner.after_cancel(self.job)
             self.job = None
-        self.close_test()
-        self.fps_text.set("")
+        if self._native_timer is not None:
+            self._native_timer.cancel()
+
+    def _close_native_timer(self):
+        timer, self._native_timer = self._native_timer, None
+        if timer is not None:
+            timer.close()
 
     def _reset(self):
         self._check_finish(skip_animation=True)
         if self.feedback is not None:
             self.feedback.stop()
         self.feedback_at = 0.0
+        self._frame_dirty = True
         self.round_basis = None
         self.round_started_at = None
         self.finished = False
@@ -509,12 +555,14 @@ class AimTestPane:
         self._view.focus_set()
         self.last_frame = time.perf_counter()
         self.countdown_until = self.last_frame + COUNTDOWN_SECONDS
+        self.next_frame = self.last_frame
         self._display_countdown(COUNTDOWN_SECONDS)
         self._draw()
         self._update_labels()
+        self._wake_tick()
 
     def _start_shortcut(self, _event=None):
-        if self.job is not None and self.owner.grab_current() is None:
+        if (self._visible or self.job is not None) and self.owner.grab_current() is None:
             focus = self.owner.focus_displayof()
             if focus is not None and focus.winfo_toplevel() in (self.owner, self.window):
                 self.start_button.invoke()
@@ -528,6 +576,7 @@ class AimTestPane:
         if value != self.countdown_value:
             self.countdown_value = value
             self._gpu_overlay = None
+            self._frame_dirty = True
             if self.canvas.winfo_exists():
                 self.canvas.itemconfigure(self.countdown_item, text="" if value is None else str(value))
 
@@ -545,6 +594,9 @@ class AimTestPane:
         if not self.mode_is_3d:
             self.round_basis["target_top"] = self._cursor_top()
         self.round_started_at = now
+        self._simulated_at = now
+        self._frame_stats.reset(now)
+        self.fps_started = now
         self._round().start()
         if not self.mode_is_3d:
             self.cursor.x, self.cursor.y = self.size[0] / 2, self.size[1] / 2
@@ -558,6 +610,7 @@ class AimTestPane:
             self._display_countdown(None)
             self.scene.running = self.cursor.running = False
             self.interrupted = True
+            self._frame_dirty = True
             self.round_basis = None
             self.round_started_at = None
         if self.feedback is not None:
@@ -612,7 +665,7 @@ class AimTestPane:
             self.window.update_idletasks()
             if not self.test_open:
                 return False
-            self.display_hz = self.read_display_hz(self.window)
+            self._refresh_display_rate()
             self.gpu_error = None
             self._sync_gpu()
             # The native GPU child must be mapped before it can receive focus.
@@ -620,9 +673,11 @@ class AimTestPane:
             if not self.test_open:
                 return False
             self._view.focus_force()
-            self.frames = self.draws = 0
+            self._playfield_margin = VIEW_MARGIN + self.close_button.winfo_reqheight()
+            self.draws = 0
             self.fps_text.set("")
             self.fps_started = self.next_draw = time.perf_counter()
+            self._frame_stats.reset(self.fps_started)
             self._layout_hud()
         except BaseException:
             self.close_test()
@@ -630,6 +685,9 @@ class AimTestPane:
         return True
 
     def close_test(self, _event=None):
+        if self._native_timer is not None:
+            self._cancel_tick()
+            self._close_native_timer()
         try:
             if self._focus_close_job is not None:
                 self.owner.after_cancel(self._focus_close_job)
@@ -649,6 +707,7 @@ class AimTestPane:
         finally:
             if not self._restore_display_mode() and self.owner.winfo_exists():
                 self.owner.after(100, self._retry_display_restore, self._fullscreen_mode)
+            self._schedule(time.perf_counter())
         return "break"
 
     def _retry_display_restore(self, mode):
@@ -665,9 +724,18 @@ class AimTestPane:
             self._fullscreen_mode = None
         return True
 
-    def _refresh_display_rate(self, event):
-        if self.test_open and event.widget is self.window:
-            self.display_hz = self.read_display_hz(self.window)
+    def _refresh_display_rate(self, event=None):
+        if not self.test_open or (event is not None and event.widget is not self.window):
+            return
+        now = time.perf_counter()
+        self._rate_check_at = now + 1.0
+        rate = self.read_display_hz(self.window)
+        if rate != self.display_hz:
+            self.display_hz = rate
+            self.next_draw = now + refresh_interval(rate)
+            self._frame_stats.reset(now)
+            self._frame_dirty = True
+            self._wake_tick()
 
     def _layout_hud(self):
         if not self.test_open:
@@ -675,14 +743,19 @@ class AimTestPane:
         if self.hud is None:
             self.hud = AimTestHud(self.canvas)
         self.hud.layout(*self.size, changes=self.change_parts)
+        self._hud_values = None
         self._update_hud()
 
     def _update_hud(self):
-        self._gpu_overlay = None
         if self.test_open and self.hud is not None:
-            changes = tuple((text, "#79e8a4" if better else "#ff9a9a" if better is False else None)
-                            for text, better in self.change_parts)
-            self.hud.update(self.status.get(), self.score.get(), self.fps_text.get(), changes)
+            values = self.status.get(), self.score.get(), self.fps_text.get(), self.change_parts
+            if values != self._hud_values:
+                self._hud_values = values
+                self._gpu_overlay = None
+                self._frame_dirty = True
+                changes = tuple((text, "#79e8a4" if better else "#ff9a9a" if better is False else None)
+                                for text, better in self.change_parts)
+                self.hud.update(*values[:3], changes)
 
     def _mode_key(self):
         if self.mode_is_3d:
@@ -816,7 +889,7 @@ class AimTestPane:
         if self._mouse_move(event, now) and not self.mode_is_tracking:
             self._shoot(now)
             self._draw()
-            self._draw_hit_effect(now)
+            self._frame_dirty = True
             self._update_labels()
 
     def _sync_pointer(self):
@@ -857,14 +930,22 @@ class AimTestPane:
         self.space_pressed = self.space_armed = False
         if not armed or not self._round().running:
             return
+        now = time.perf_counter()
         if self.mode_is_3d:
-            output = self.read_output()
-            self.output_ready = output is not None
-            if output is None or output[0] != self.device_key:
+            if self.read_input is not None:
+                key = self.device_key
+                self._sample_input(now)
+                if self.output_ready and self.device_key == key:
+                    self._simulate_tick(now)
+            else:
+                output = self.read_output()
+                self.output_ready = output is not None
+                key = output[0] if output is not None else None
+            if not self.output_ready or key != self.device_key:
                 self._interrupt()
                 self._update_labels()
                 return
-        self._shoot()
+        self._shoot(now)
 
     def _shoot(self, now=None):
         if self.mode_is_tracking:
@@ -924,9 +1005,9 @@ class AimTestPane:
         if self.mode_is_3d:
             bounds = project_ball(self.scene.camera_transform()(impact), *self.size)
         if bounds is None:
-            self.canvas.itemconfigure("hit_effect", state="hidden")
+            if self.gpu is None:
+                self.canvas.itemconfigure("hit_effect", state="hidden")
             return
-        self.canvas.itemconfigure("hit_effect", state="normal")
         x, y, radius = bounds
         distance = min(30, radius) * (0.45 + 1.5 * progress)
         fragment = max(1, min(6, radius / 4) * (1 - progress))
@@ -934,115 +1015,216 @@ class AimTestPane:
         if self.gpu is not None:
             self._gpu_fragments = tuple((*point, fragment, self.settings.target_color) for point in points)
         else:
+            self.canvas.itemconfigure("hit_effect", state="normal")
             for item, (px, py) in zip(self.hit_particles, points):
                 self.canvas.coords(item, px - fragment, py + fragment, px + fragment, py, px, py - fragment)
 
     def _cursor_top(self):
         if self.test_open:
-            return min(self.size[1] / 2, VIEW_MARGIN + self.close_button.winfo_reqheight())
+            return min(self.size[1] / 2, self._playfield_margin)
         return 0
+
+    def _active_round(self):
+        return self.test_open and self._round().running
+
+    def _needs_frame(self):
+        return self.test_open and (
+            self._frame_dirty or self._round().running or self.hit_effect is not None
+        )
 
     def _tick(self):
         now = time.perf_counter()
-        if now + 0.0003 < self.next_frame:
-            self._schedule(now)
-            return
-        seconds = max(0, now - self.last_frame)
-        self.last_frame = now
-        if seconds > 0.25:
-            self._interrupt()
-            seconds = 0
-        output = self.read_output()
-        self.output_ready = output is not None
-        key, state = output if output is not None else (None, None)
-        if key != self.device_key:
-            self.device_key = key
-            self.trigger_pressed = self.start_pressed = self.cancel_pressed = True
-            if self.mode_is_3d:
+        if self.test_open and now >= self._rate_check_at:
+            self._refresh_display_rate()
+        if now >= self.next_frame:
+            deadline = self.next_frame or now
+            if now - min(self.last_frame, deadline) > 0.25:
                 self._interrupt()
-                seconds = 0
-            elif self.feedback is not None:
-                self.feedback.stop()
-        if state is not None:
-            start = "START" in state.buttons
-            cancel = "B" in state.buttons
-            if cancel and not self.cancel_pressed and self.test_open:
-                focus = self.window.focus_displayof()
-                if focus is not None and focus.winfo_toplevel() is self.window:
-                    self.close_test()
-            elif start and not self.start_pressed:
-                job = self.job
-                self._start_shortcut()
-                if self.job != job:
-                    return
-            self.start_pressed = start
-            self.cancel_pressed = cancel
-        if self.countdown_until is not None:
-            self._advance_countdown(now)
-            seconds = 0
-        if self._round().running and (state is not None or not self.mode_is_3d):
-            if self.mode_is_3d:
-                if self.mode_is_shooting:
-                    self.scene.turn(state.right, seconds)
-                else:
-                    self.scene.advance(state.right, seconds)
+                self._input_events.clear()
+                deadline = now
+            self.last_frame = now
+            self._sample_input(now)
+            if self._active_round() or self.countdown_until is not None:
+                # Advance gameplay on its own time grid. Render stalls never
+                # replay frames. A long UI suspension interrupts as before.
+                while deadline <= now:
+                    self._simulate_tick(deadline)
+                    if not self._active_round() and self.countdown_until is None:
+                        break
+                    period = IDLE_PERIOD if self.countdown_until is not None else SIMULATION_PERIOD
+                    deadline += period
+                self.next_frame = (
+                    deadline if self._active_round() or self.countdown_until is not None
+                    else now + IDLE_PERIOD
+                )
             else:
-                if state is not None and now >= self._mouse_priority_until:
-                    self.cursor.move(state.right, seconds, *self.size)
-                if self.mode_is_tracking:
-                    self.cursor.advance(seconds, *self.size, self._cursor_top())
-            if not self.mode_is_tracking:
-                self._advance_point_clock(now)
-                if state is not None:
-                    pressed = (state.right_trigger or 0) >= 0.5
-                    if pressed and not self.trigger_pressed:
-                        self._shoot(now)
-                    self.trigger_pressed = pressed
-            self._check_finish()
-            self._update_feedback(now)
-        if self.test_open:
-            if output is not None:
-                self.frames += 1
-            if not self.mode_is_3d or output is not None or self.gpu is not None:
-                self._draw_if_due(now)
-            else:
-                self._draw_hit_effect(now)
+                self._simulate_tick(now)
+                self.next_frame = now + (SIMULATION_PERIOD if self._active_round() else IDLE_PERIOD)
         if now >= self.label_update_at:
             self.label_update_at = now + 0.1
             self._update_labels()
-        if self.test_open and now - self.fps_started >= 0.5:
-            span = now - self.fps_started
-            renderer = "GPU · " if self.gpu is not None else ("Tk · " if self._gpu_factory else "")
-            rate = (
-                "繪圖 {fps:.0f} FPS　更新 {hz:.0f} Hz" if self.output_ready or self.mode_is_3d
-                else "繪圖 {fps:.0f} FPS"
-            )
-            self.fps_text.set(renderer + self.tr(rate).format(fps=self.draws / span, hz=self.frames / span))
-            self.fps_started, self.frames, self.draws = now, 0, 0
-            self._update_hud()
-        if not self.test_open:
-            interval = 0.03
-        elif not self.mode_is_3d and not self.output_ready:
-            interval = max(FRAME_INTERVAL, 1.0 / self.display_hz)
-        else:
-            interval = FRAME_INTERVAL if self.output_ready else 0.03
-        self.next_frame = max(self.next_frame + interval, now + interval / 2)
+        if self._needs_frame():
+            self._draw_if_due(now)
+        if self.test_open and now - self.fps_started >= 0.5 and (
+            self._active_round() or not self.fps_text.get()
+        ):
+            self._update_performance(now)
         self._schedule(time.perf_counter())
 
+    def _sample_input(self, now):
+        if self.read_input is not None:
+            output = self.read_input()
+            key, state, samples, self._source_hz = output if output is not None else (None, None, (), None)
+        else:
+            output = self.read_output()
+            key, state = output if output is not None else (None, None)
+            samples = ()
+        self.output_ready = state is not None
+        if key != self.device_key:
+            self.device_key = key
+            self._input_events.clear()
+            self._sim_state = None
+            self.trigger_pressed = self.start_pressed = self.cancel_pressed = True
+            if self.mode_is_3d:
+                self._interrupt()
+            elif self.feedback is not None:
+                self.feedback.stop()
+        if state is None:
+            self._sim_state = None
+            return
+        if self.read_input is None:
+            # Compatibility for callers supplying only snapshots, with no
+            # claim about the controller's transport rate or event timing.
+            self._sim_state = state
+            self._handle_buttons(state, now, shoot=False)
+        elif samples:
+            self._input_events.extend(samples)
+        elif self._sim_state is None and not self._input_events:
+            self._input_events.append((now, state))
+
+    def _handle_buttons(self, state, at, *, shoot=True):
+        start = "START" in state.buttons
+        cancel = "B" in state.buttons
+        if cancel and not self.cancel_pressed and self.test_open:
+            focus = self.window.focus_displayof()
+            if focus is not None and focus.winfo_toplevel() is self.window:
+                self.close_test()
+        elif start and not self.start_pressed:
+            self._start_shortcut()
+        self.start_pressed, self.cancel_pressed = start, cancel
+        if shoot and self._round().running and not self.mode_is_tracking:
+            pressed = (state.right_trigger or 0) >= 0.5
+            if pressed and not self.trigger_pressed:
+                self._shoot(at)
+            self.trigger_pressed = pressed
+
+    def _simulate_tick(self, deadline):
+        was_running = self._round().running
+        while self._input_events and self._input_events[0][0] <= deadline:
+            stamp, state = self._input_events.popleft()
+            at = max(self._simulated_at, stamp)
+            self._simulate_to(at)
+            self._sim_state = state
+            self._handle_buttons(state, at)
+        self._simulate_to(deadline)
+        if self.read_input is None and self._sim_state is not None and self._round().running:
+            self._handle_buttons(self._sim_state, deadline)
+        if was_running or self._round().running:
+            self._frame_stats.simulations += 1
+            self._check_finish()
+            self._update_feedback(deadline)
+
+    def _simulate_to(self, at):
+        if self.countdown_until is not None:
+            self._advance_countdown(min(at, self.countdown_until))
+        if not self._round().running or at <= self._simulated_at:
+            return
+        previous, self._simulated_at = self._simulated_at, at
+        seconds = at - previous
+        test = self._round()
+        if test.duration:
+            seconds = min(seconds, max(0.0, test.duration - test.elapsed))
+        state = self._sim_state
+        if self.mode_is_3d:
+            if state is None:
+                return
+            if self.mode_is_shooting:
+                self.scene.turn(state.right, seconds)
+            else:
+                self.scene.advance(state.right, seconds)
+        else:
+            stick_seconds = max(0.0, min(seconds, at - self._mouse_priority_until))
+            if state is not None and stick_seconds:
+                self.cursor.move(state.right, stick_seconds, *self.size)
+            if self.mode_is_tracking:
+                self.cursor.advance(seconds, *self.size, self._cursor_top())
+        if not self.mode_is_tracking:
+            self._advance_point_clock(at)
+
+    def _update_performance(self, now):
+        metrics = self._frame_stats.take(now, refresh_interval(self.display_hz))
+        self.fps_started = now
+        renderer = self.tr("D2D 提交") if self.gpu is not None else self.tr("Tk 更新")
+        rate = self._source_hz
+        source = f"{rate:.0f} Hz" if isinstance(rate, (int, float)) and math.isfinite(rate) else "—"
+        text = self.tr("{renderer} {fps:.0f} FPS · 輸入 {source} · 模擬 {sim:.0f} Hz").format(
+            renderer=renderer, fps=metrics.fps, source=source, sim=metrics.simulation_hz,
+        )
+        if metrics.mean_ms is not None:
+            text += "\n" + self.tr("平均 {mean:.2f} ms · P95 {p95:.2f} · P99 {p99:.2f} · 超時 {late:.0f}%").format(
+                mean=metrics.mean_ms, p95=metrics.p95_ms, p99=metrics.p99_ms, late=metrics.over_budget,
+            )
+        self.fps_text.set(text)
+        self._update_hud()
+
+    def _run_tick(self):
+        self.job = None
+        self._tick()
+
+    def _wake_tick(self):
+        if self._visible:
+            self._cancel_tick()
+            self._schedule(time.perf_counter())
+
     def _schedule(self, now):
-        delay = max(1, int((self.next_frame - now) * 1000))
-        self.job = self.owner.after(delay, self._tick)
+        if not self._visible or self.job is not None:
+            return
+        delay = max(1, math.ceil((self.next_frame - now) * 1000))
+        if self._needs_frame():
+            delay = min(delay, timer_delay_ms(now, self.next_draw))
+        self.job = self.owner.after(delay, self._run_tick)
+        if self.test_open and self.display_hz >= NATIVE_TIMER_MIN_HZ and (
+            self._round().running or self.hit_effect is not None
+        ):
+            self._arm_native_wake(delay)
+        else:
+            self._close_native_timer()
+
+    def _arm_native_wake(self, delay):
+        if self._native_timer_failed:
+            return
+        try:
+            if self._native_timer is None:
+                self._native_timer = NativeAimTimer(self.owner.winfo_id())
+            # Arm after Tk. The wake should arrive once Tk's deadline is due.
+            self._native_timer.arm((delay + 0.1) / 1000)
+        except (AttributeError, OSError, RuntimeError):
+            self._native_timer_failed = True
+            self._close_native_timer()
 
     def _draw_if_due(self, now):
-        if now + 0.0003 < self.next_draw:
+        if now + TIMER_HALF_MS < self.next_draw:
             return
-        interval = max(FRAME_INTERVAL, 1.0 / self.display_hz)
-        slots = max(1, int((now - self.next_draw) / interval) + 1)
-        self.next_draw += slots * interval
+        self.next_draw = next_deadline(self.next_draw, now, refresh_interval(self.display_hz))
+        self._frame_dirty = False
         self._draw()
         self._draw_hit_effect(now)
         if self.gpu is None or self._present_gpu():
             self.draws += 1
+            self._frame_stats.submitted(time.perf_counter())
+        else:
+            self._draw_hit_effect(now)
+            self._frame_dirty = True
 
     def _present_gpu(self):
         if self._gpu_overlay is None:
@@ -1052,9 +1234,7 @@ class AimTestPane:
                 self.canvas, (*items, *outlines, self.countdown_item, self.finish_hint_item),
             )
         overlays, labels = self._gpu_overlay
-        lines = ()
-        if self.mode_is_3d:
-            lines = ((*bounds, line[0]) for line, bounds in zip(ROOM_LINES, self.grid_bounds) if bounds is not None)
+        lines = self._gpu_lines if self.mode_is_3d else ()
         balls = tuple((*bounds, self.ball_color) for bounds in self._ball_bounds if bounds is not None)
         reticle = (*self.reticle_geometry, self.reticle_color) if self.reticle_geometry is not None else None
         try:
@@ -1155,14 +1335,20 @@ class AimTestPane:
         color = self.settings.reticle_on_target_color if on_target else self.settings.reticle_color
         if color != self.reticle_color:
             self.reticle_color = color
-            for item in self.reticle:
-                self.canvas.itemconfigure(item, fill=color)
+            if self.gpu is None:
+                for item in self.reticle:
+                    self.canvas.itemconfigure(item, fill=color)
         if self.countdown_until is not None or self.finished:
             center = None
         geometry = None if center is None else (*center, self.settings.reticle_size / 2)
         if geometry == self.reticle_geometry:
             return
         self.reticle_geometry = geometry
+        if self.gpu is None:
+            self._position_reticle()
+
+    def _position_reticle(self):
+        geometry = self.reticle_geometry
         if geometry is None:
             for item in self.reticle:
                 self.canvas.coords(item, -20, -20, -20, -20)
@@ -1177,10 +1363,21 @@ class AimTestPane:
             bounds = targets[index] if index < len(targets) else None
             if bounds != self._ball_bounds[index]:
                 self._ball_bounds[index] = bounds
-                self._position_ball(item, bounds)
-            if color != self.ball_color:
+                if self.gpu is None:
+                    self._position_ball(item, bounds)
+            if self.gpu is None and color != self.ball_color:
                 self.canvas.itemconfigure(item, fill=color, outline=target_outline_color(color))
         self.ball_color = color
+
+    def _sync_canvas_scene(self):
+        for item, bounds in zip(self.grid_lines, self.grid_bounds):
+            self.canvas.coords(item, *(bounds or (-20, -20, -20, -20)))
+        for item, bounds in zip(self._ball_items, self._ball_bounds):
+            self._position_ball(item, bounds)
+            self.canvas.itemconfigure(item, fill=self.ball_color, outline=target_outline_color(self.ball_color))
+        for item in self.reticle:
+            self.canvas.itemconfigure(item, fill=self.reticle_color)
+        self._position_reticle()
 
     def _position_ball(self, item, bounds):
         if bounds is None:
@@ -1224,6 +1421,11 @@ class AimTestPane:
                     self.grid_bounds[index] = bounds
                     if self.gpu is None:
                         self.canvas.coords(item, *(bounds or (-20, -20, -20, -20)))
+            if self.gpu is not None:
+                self._gpu_lines = tuple(
+                    (*bounds, line[0]) for line, bounds in zip(ROOM_LINES, self.grid_bounds)
+                    if bounds is not None
+                )
         targets = sorted(map(transform, self.scene.target_positions()), key=lambda target: target[2], reverse=True)
         visible = []
         on_target = False

@@ -341,20 +341,169 @@ class AimPaneTests(unittest.TestCase):
         self.assertFalse(pane.tracking.running)
         self.assertIsNone(pane.job)
 
-    def test_scene_redraw_follows_display_rate_up_to_500_fps(self):
+    def test_scene_redraw_follows_display_rate_through_600_fps(self):
         from gamepad_aim import AimTestPane
 
-        for refresh, expected in ((180, 180), (360, 360), (500, 500)):
+        for refresh in (60, 120, 144, 180, 240, 360, 500, 540, 600):
             with self.subTest(refresh=refresh):
                 frame = tk.Frame(self.root)
                 pane = AimTestPane(frame, str, lambda: None, display_hz=lambda _window: refresh)
                 pane.dimension.set("3d")
                 pane.mode.set("tracking")
                 pane._reset()
-                for index in range(500):
-                    pane._draw_if_due(index / 500)
-                self.assertEqual(pane.draws, expected)
+                for index in range(refresh):
+                    pane._draw_if_due(index / refresh)
+                self.assertEqual(pane.draws, refresh)
                 frame.destroy()
+
+    def test_render_stalls_do_not_change_tracking_simulation(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_settings import AimSettings
+        from gamepad_aim_timing import SIMULATION_PERIOD
+
+        def play(dimension, hz, tick_spacing):
+            frame = tk.Frame(self.root)
+            state = SimpleNamespace(buttons=(), right=(0.31, -0.17), right_trigger=0.0)
+            pane = AimTestPane(frame, str, lambda: ("pad", state), display_hz=lambda _window: hz)
+            pane.dimension.set(dimension)
+            pane.mode.set("tracking")
+            pane._save_settings(AimSettings(fullscreen=False, tracking_seconds=1))
+            pane.device_key = "pad"
+            pane._sim_state = state
+            pane.test_open = True
+            pane.countdown_until = 100.0
+            pane._advance_countdown(100.0)
+            pane.last_frame = 100.0
+            pane.next_frame = 100.0 + SIMULATION_PERIOD
+            pane._draw_if_due = lambda _stamp: None
+            for index in range(1, math.ceil(1.025 / tick_spacing) + 1):
+                with patch("gamepad_aim.time.perf_counter", return_value=100 + index * tick_spacing):
+                    pane._tick()
+            self.assertTrue(pane.finished)
+            test = pane._round()
+            position = (test.yaw, test.pitch) if dimension == "3d" else (test.x, test.y)
+            result = (*position, test.elapsed, test.mean_error, test.on_target_percent)
+            frame.destroy()
+            return result
+
+        for dimension in ("2d", "3d"):
+            with self.subTest(dimension=dimension):
+                smooth = play(dimension, 600, 1 / 600)
+                stalled = play(dimension, 60, 0.04)
+                for actual, expected in zip(smooth, stalled):
+                    self.assertAlmostEqual(actual, expected, places=9)
+
+    def test_buffered_rt_presses_are_ordered_and_not_repeated(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_settings import AimSettings
+
+        released = SimpleNamespace(buttons=(), right=(0.0, 0.0), right_trigger=0.0)
+        pressed = SimpleNamespace(buttons=(), right=(0.0, 0.0), right_trigger=1.0)
+        reports = tuple((100 + offset, state) for offset, state in (
+            (0.001, released), (0.002, pressed), (0.003, released), (0.004, pressed),
+        ))
+        batch = reports
+
+        def input_report():
+            nonlocal batch
+            samples, batch = batch, ()
+            return "pad", pressed, samples, None
+
+        pane = AimTestPane(self.root, str, lambda: None, read_input=input_report)
+        pane.dimension.set("2d")
+        pane._save_settings(AimSettings(fullscreen=False))
+        pane.countdown_until = 100
+        pane._advance_countdown(100)
+        pane._sample_input(100.01)
+        pane._simulate_tick(100.01)
+        self.assertEqual(pane.cursor.shots, 2)
+        pane._sample_input(100.02)
+        pane._simulate_tick(100.02)
+        self.assertEqual(pane.cursor.shots, 2)
+        self.assertIsNone(pane._source_hz)
+
+    def test_3d_keyboard_shot_uses_buffered_input_identity(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_settings import AimSettings
+
+        state = SimpleNamespace(buttons=(), right=(0.0, 0.0), right_trigger=0.0)
+        pane = AimTestPane(
+            self.root, str, lambda: ("legacy", state),
+            read_input=lambda: ("generation", state, (), 125.0),
+        )
+        pane._save_settings(AimSettings(fullscreen=False))
+        pane.device_key = "generation"
+        pane._sim_state = state
+        pane.countdown_until = 100
+        pane._advance_countdown(100)
+        pane.space_armed = True
+        with patch("gamepad_aim.time.perf_counter", return_value=100.01):
+            pane._space_shot(None)
+        self.assertEqual(pane.shooting.shots, 1)
+        self.assertTrue(pane.shooting.running)
+
+    def test_gpu_initialization_failure_draws_and_close_releases_aim_work(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_settings import AimSettings
+
+        capture = Mock()
+        factory = Mock(side_effect=OSError("no Direct2D target"))
+        pane = AimTestPane(self.root, str, lambda: None, gpu_renderer=factory, set_input_active=capture)
+        pane.dimension.set("2d")
+        pane._save_settings(AimSettings(fullscreen=False, window_size="800x450"))
+        pane.set_visible(True)
+        pane._start()
+        self.assertTrue(pane.test_open)
+        self.assertIs(pane._view, pane.canvas)
+        self.assertIsNone(pane.gpu)
+        pane._draw_if_due(time.perf_counter())
+        self.assertEqual(pane.draws, 1)
+        pane.set_visible(False)
+        self.assertFalse(pane.test_open)
+        self.assertIsNone(pane.job)
+        self.assertEqual([call.args for call in capture.call_args_list], [(True,), (False,)])
+        factory.assert_called_once()
+
+    def test_frame_stall_produces_only_one_draw_and_does_not_leave_a_backlog(self):
+        from gamepad_aim import AimTestPane
+
+        pane = AimTestPane(self.root, str, lambda: None, display_hz=lambda _window: 600)
+        pane.next_draw = 10.0
+        pane._draw = Mock()
+        pane._draw_if_due(10.3)
+        pane._draw.assert_called_once_with()
+        self.assertGreater(pane.next_draw, 10.3)
+        self.assertLessEqual(pane.next_draw - 10.3, 1 / 600 + 1e-9)
+
+    def test_unavailable_native_timer_falls_back_to_tk(self):
+        from gamepad_aim import AimTestPane
+
+        pane = AimTestPane(self.root, str, lambda: None, display_hz=lambda _window: 540)
+        pane.dimension.set("2d")
+        pane._reset()
+        pane.test_open = pane._visible = True
+        pane.cursor.start()
+        with patch("gamepad_aim.NativeAimTimer", side_effect=OSError("unavailable")) as native:
+            pane._schedule(time.perf_counter())
+        native.assert_called_once()
+        self.assertIsInstance(pane.job, str)
+        self.assertIsNone(pane._native_timer)
+        pane.set_visible(False)
+        self.assertIsNone(pane.job)
+
+    def test_monitor_change_rephases_draws_without_moving_simulation(self):
+        from gamepad_aim import AimTestPane
+
+        refresh = 60
+        pane = AimTestPane(self.root, str, lambda: None, display_hz=lambda _window: refresh)
+        pane.test_open = True
+        pane.next_frame = 1.025
+        refresh = 540
+        with patch("gamepad_aim.time.perf_counter", return_value=1.0):
+            pane._refresh_display_rate(SimpleNamespace(widget=pane.window))
+        self.assertEqual(pane.display_hz, 540)
+        self.assertAlmostEqual(pane.next_draw - 1, 1 / 540)
+        self.assertEqual(pane.next_frame, 1.025)
 
     def test_both_dimensions_share_the_three_drill_controls(self):
         from gamepad_aim import AimTestPane

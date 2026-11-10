@@ -7,6 +7,7 @@ from ctypes import wintypes
 from itertools import count
 from math import prod
 from threading import RLock
+from tkinter import TclError
 
 
 _DWORD = ctypes.c_uint32
@@ -168,6 +169,19 @@ def fullscreen_monitor_bounds(hwnd: int) -> tuple[int, int, int, int]:
     with _MODE_LOCK:
         _, _, bounds = _WindowsDisplay().monitor(hwnd)
         return bounds
+
+
+def window_refresh_rate(window):
+    """Return the current mode of the monitor nearest the Tk window."""
+    try:
+        api = _WindowsDisplay()
+        _, device, _ = api.monitor(window.winfo_id())
+        rate = _current_mode(api, device).dmDisplayFrequency
+        if rate > 1:
+            return float(rate)
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError, TclError):
+        pass
+    return 60.0
 
 
 def available_resolutions(hwnd: int) -> tuple[str, ...]:

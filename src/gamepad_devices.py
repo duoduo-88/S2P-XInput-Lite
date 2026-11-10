@@ -775,6 +775,8 @@ class NativeGamepadSampler:
         self._latest_state = None
         self._last_token = None
         self._samples = deque(maxlen=4096)
+        self._aim_capture = False
+        self._aim_samples = deque(maxlen=512)
         self._observed_update_count = 0
         self._rate_points = deque(maxlen=4096)
 
@@ -810,9 +812,10 @@ class NativeGamepadSampler:
             return True
 
     def stop(self, timeout=1.0):
-        self._stop.set()
+        with self._lifecycle_lock:
+            self._stop.set()
+            thread = self._thread
         self._wake.set()
-        thread = self._thread
         if thread is None:
             return True
         if thread is threading.current_thread():
@@ -820,8 +823,9 @@ class NativeGamepadSampler:
         thread.join(timeout=max(0.0, float(timeout)))
         if thread.is_alive():
             return False
-        if self._thread is thread:
-            self._thread = None
+        with self._lifecycle_lock:
+            if self._thread is thread:
+                self._thread = None
         return True
 
     def set_device(self, device):
@@ -834,13 +838,32 @@ class NativeGamepadSampler:
                 self._device = device
                 return
             self._device = device
-            self._device_generation += 1
-            self._latest_state = None
-            self._last_token = None
-            self._samples.clear()
-            self._observed_update_count = 0
-            self._rate_points.clear()
+            self._reset_device_samples()
         self._wake.set()
+
+    def _reset_device_samples(self):
+        self._device_generation += 1
+        self._latest_state = None
+        self._last_token = None
+        self._samples.clear()
+        self._aim_samples.clear()
+        self._observed_update_count = 0
+        self._rate_points.clear()
+
+    def set_aim_capture(self, enabled):
+        """Start or stop a separate, bounded queue for the visible aim pane."""
+        with self._lock:
+            self._aim_capture = enabled
+            self._aim_samples.clear()
+
+    def read_aim_snapshot(self, device):
+        """Read ordered Windows state updates without draining the monitor queue."""
+        with self._lock:
+            if self._device is None or self._device.key != device.key:
+                return None, None, ()
+            samples = tuple(self._aim_samples)
+            self._aim_samples.clear()
+            return self._latest_state, self._device_generation, samples
 
     def enumerate_devices(self, excluded_xinput_slot=None):
         if self.isolate_enumeration:
@@ -872,25 +895,33 @@ class NativeGamepadSampler:
         with self._lock:
             if generation != self._device_generation:
                 return
-            self._latest_state = state
             if state is None:
+                if self._latest_state is not None:
+                    self._reset_device_samples()
                 return
+            self._latest_state = state
             token = self._state_token(device, state)
             if token == self._last_token:
                 return
             previous_token = self._last_token
-            self._last_token = token
             update_count = 1
             if device.kind == "xinput" and previous_token is not None:
                 packet_delta = (
                     int(token) - int(previous_token)
                 ) & 0xFFFFFFFF
-                # A backwards counter after reconnect looks like an enormous
-                # unsigned delta; count that snapshot once instead.
+                # A normal 32-bit wrap is a small forward delta. A reset
+                # indicates a new controller generation even without a failed poll.
                 if 0 < packet_delta <= 0x7FFFFFFF:
                     update_count = packet_delta
+                elif packet_delta > 0x7FFFFFFF:
+                    self._reset_device_samples()
+                    self._latest_state = state
+            self._last_token = token
             self._observed_update_count += update_count
-            self._samples.append((now, state))
+            sample = (now, state)
+            self._samples.append(sample)
+            if self._aim_capture:
+                self._aim_samples.append(sample)
             self._rate_points.append(
                 (now, self._observed_update_count)
             )
@@ -932,13 +963,20 @@ class NativeGamepadSampler:
     def _run(self):
         thread = threading.current_thread()
         try:
-            while not self._stop.is_set():
+            while True:
+                self._wake.clear()
+                if self._stop.is_set():
+                    break
+                with self._lock:
+                    has_device = self._device is not None
+                if not has_device:
+                    self._wake.wait()
+                    continue
                 started = self.clock()
                 self._poll_once()
                 elapsed = self.clock() - started
                 delay = max(0.0, self.poll_interval - elapsed)
                 self._wake.wait(delay)
-                self._wake.clear()
         finally:
             with self._lifecycle_lock:
                 if self._thread is thread:

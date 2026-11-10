@@ -29,6 +29,7 @@ from diagnostic_session import (
 from command_queue import enqueue_controller_command
 from config_utils import CONFIG_PATH
 from gamepad_aim import AimTestPane
+from gamepad_aim_display import window_refresh_rate
 from gamepad_aim_feedback import AimFeedback
 from gamepad_aim_gpu import Direct2DAimRenderer
 from gamepad_aim_history import AimHistory
@@ -2140,6 +2141,10 @@ class GamepadTestWindow:
         self.input_tab = None
         self.aim_tab = None
         self.aim_pane = None
+        self._aim_input_active = False
+        self._aim_selected_device = None
+        self._aim_native_device = None
+        self._aim_raw_rate_sample = None
         self.rumble_tab = None
         self.high_rate_tab = None
         self.diagnostic_tab = None
@@ -2729,7 +2734,9 @@ class GamepadTestWindow:
 
         self.aim_pane = AimTestPane(
             aim_tab, self.gui.tr, self._read_aim_output,
-            display_hz=display_refresh_rate,
+            display_hz=window_refresh_rate,
+            read_input=self._read_aim_input,
+            set_input_active=self._set_aim_input_active,
             settings_path=CONFIG_PATH.with_name("aim_settings.json"),
             history=AimHistory(CONFIG_PATH.with_name("aim_history.json")),
             feedback=AimFeedback(window, self._set_aim_rumble),
@@ -5946,7 +5953,8 @@ class GamepadTestWindow:
             return
         current = time.perf_counter()
         frame_interval = self._frame_interval
-        if self._active_test_tab() == "high_rate":
+        if self._active_test_tab() in ("high_rate", "aim"):
+            # The aim pane has its own render and input deadlines.
             frame_interval = max(frame_interval, 1.0 / 60.0)
         if current < self._window_motion_until:
             # A Canvas redraw competes with Windows' move/resize loop. Keep
@@ -6048,7 +6056,7 @@ class GamepadTestWindow:
         self._sync_shape_capture_context(device, is_s2p)
         if is_s2p and self._telemetry_is_fresh(self.latest_telemetry):
             sample = self._sample_from_telemetry(self.latest_telemetry)
-        elif device is not None:
+        elif device is not None and not is_s2p:
             if self.native_sampler is not None:
                 native_state, native_samples, native_rate = (
                     self.native_sampler.read_snapshot()
@@ -6450,6 +6458,59 @@ class GamepadTestWindow:
     def _selected_device(self):
         return self.devices.get(self.selected_device_var.get())
 
+    def _set_aim_input_active(self, active):
+        if active == getattr(self, "_aim_input_active", False):
+            return
+        self._aim_input_active = active
+        self._aim_raw_rate_sample = None
+        sampler = self.native_sampler
+        if sampler is None:
+            return
+        if not active:
+            sampler.set_aim_capture(False)
+        self._configure_native_sampler()
+        if active:
+            sampler.set_aim_capture(True)
+
+    def _read_aim_input(self):
+        """Drain distinct Windows output states and report the source rate separately."""
+        sampler = self.native_sampler
+        device = self._aim_selected_device
+        native = self._aim_native_device
+        if sampler is None or device is None or native is None or not self._aim_input_active:
+            return None
+        state, generation, samples = sampler.read_aim_snapshot(native)
+        if state is None:
+            return None
+        source_rate = None
+        if device.kind == "s2p":
+            telemetry = self.latest_telemetry
+            if telemetry.get("xinput_slot") != device.index or not self._telemetry_is_fresh(telemetry):
+                return None
+            source_rate = telemetry.get("source_rate_hz")
+        elif device.kind == "raw_hid":
+            source_rate = self._read_aim_raw_report_rate()
+        # Generation changes on disconnect and packet-counter resets. The
+        # pane then establishes a fresh button baseline for the new device.
+        return (device.key, device.index, native.key, generation), state, samples, source_rate
+
+    def _read_aim_raw_report_rate(self):
+        now = time.perf_counter()
+        previous = self._aim_raw_rate_sample
+        if previous is not None and now - previous[0] < 0.5:
+            return previous[2]
+        raw_device = self._selected_raw_hid_device()
+        count = None
+        if raw_device is not None and raw_device.path == self._raw_hid_stream_path:
+            status = self.raw_hid_stream.status()
+            if status.get("state") == "running":
+                count = status.get("raw_reports")
+        rate = None
+        if previous is not None and count is not None and previous[1] is not None and count >= previous[1]:
+            rate = (count - previous[1]) / (now - previous[0])
+        self._aim_raw_rate_sample = now, count, rate
+        return rate
+
     def _read_aim_output(self):
         device = self._selected_device()
         if device is None:
@@ -6764,13 +6825,24 @@ class GamepadTestWindow:
         if self.native_sampler is None:
             return
         device = self._selected_device()
+        aim_active = getattr(self, "_aim_input_active", False)
         if device is not None and device.kind in {"xinput", "winmm"}:
             native_device = device
         elif device is not None and device.kind == "raw_hid":
             native_device = self._native_device_for_raw_hid()
+        elif aim_active and device is not None and device.kind == "s2p" and 0 <= device.index <= 3:
+            # The bridge still uses its own telemetry for the monitor. Only
+            # the visible aim tab needs its final Windows output sampled.
+            native_device = replace(device, key=f"s2p-aim:{device.index}", kind="xinput")
         else:
             native_device = None
+        previous_device = getattr(self, "_aim_selected_device", None)
+        self._aim_selected_device = device
+        self._aim_native_device = native_device
         self.native_sampler.set_device(native_device)
+        if aim_active and device != previous_device:
+            self._aim_raw_rate_sample = None
+            self.native_sampler.set_aim_capture(True)
 
     def _sync_connection_status(self, sample):
         """Mirror the settings UI's connection summary in the tester header."""

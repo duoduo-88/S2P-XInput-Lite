@@ -118,6 +118,12 @@ EN_TEXT = {
     "開始跟槍": "Start Tracking",
     "開始點靶": "Start Targets",
     "開始限時點靶": "Start Timed Targets",
+    "D2D 提交": "D2D submits",
+    "Tk 更新": "Tk updates",
+    "{renderer} {fps:.0f} FPS · 輸入 {source} · 模擬 {sim:.0f} Hz":
+        "{renderer} {fps:.0f} FPS · Input {source} · Sim {sim:.0f} Hz",
+    "平均 {mean:.2f} ms · P95 {p95:.2f} · P99 {p99:.2f} · 超時 {late:.0f}%":
+        "Mean {mean:.2f} ms · P95 {p95:.2f} · P99 {p99:.2f} · Late {late:.0f}%",
     "繪圖 {fps:.0f} FPS": "Draw {fps:.0f} FPS",
     "繪圖 {fps:.0f} FPS　更新 {hz:.0f} Hz": "Draw {fps:.0f} FPS   Update {hz:.0f} Hz",
     "請選擇有搖桿輸出的手把。": "Select a gamepad with stick output.",

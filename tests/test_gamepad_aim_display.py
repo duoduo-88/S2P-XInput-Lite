@@ -1,6 +1,7 @@
 import ctypes
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -86,6 +87,12 @@ class TemporaryDisplayModeTests(unittest.TestCase):
         patcher = patch.object(display, "_WindowsDisplay", return_value=self.fake)
         patcher.start()
         self.addCleanup(patcher.stop)
+
+    def test_reads_the_viewports_monitor_mode_without_a_500_hz_cap(self):
+        window = SimpleNamespace(winfo_id=lambda: 42)
+        for rate in (120, 540, 600):
+            self.fake.current = make_mode(1920, 1080, rate)
+            self.assertEqual(self.display.window_refresh_rate(window), rate)
 
     def test_lists_distinct_sizes_with_current_color_depth_and_orientation(self):
         self.fake.modes = [
