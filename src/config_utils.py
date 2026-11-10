@@ -459,11 +459,15 @@ def store_accelerometer_calibration(
         )
 
 
-def atomic_write_config(config, path=CONFIG_PATH, *, return_fingerprint=False):
-    """Write ConfigParser data in the same directory, then atomically replace."""
+def _config_bytes(config):
     output = io.StringIO(newline="")
     config.write(output)
-    data = output.getvalue().encode("utf-8")
+    return output.getvalue().encode("utf-8")
+
+
+def atomic_write_config(config, path=CONFIG_PATH, *, return_fingerprint=False):
+    """Write ConfigParser data in the same directory, then atomically replace."""
+    data = _config_bytes(config)
     atomic_write_bytes(data, path)
     if return_fingerprint:
         return hashlib.sha256(data).hexdigest()
@@ -488,6 +492,80 @@ def atomic_write_bytes(data, path):
         except OSError:
             pass
         raise
+
+
+class SettingsFileChanges:
+    """Track completed file changes and restore only versions this save wrote."""
+
+    def __init__(self):
+        self._files = {}
+        self._watched = {}
+
+    def __bool__(self):
+        return bool(self._files)
+
+    @property
+    def paths(self):
+        return self._files.keys()
+
+    @staticmethod
+    def _read(path):
+        try:
+            return path.read_bytes()
+        except FileNotFoundError:
+            return None
+
+    def watch(self, path):
+        """Remember the input version before preparing a replacement."""
+        path = Path(path)
+        self._watched[path] = self._read(path)
+
+    def check_unchanged(self, path):
+        self._original(Path(path))
+
+    def _original(self, path):
+        current = self._read(path)
+        original, expected = self._files.get(path, (current, self._watched.get(path, current)))
+        if current != expected:
+            raise OSError(f"File changed during save: {path.name}")
+        return original
+
+    def write_bytes(self, data, path):
+        path = Path(path)
+        original = self._original(path)
+        atomic_write_bytes(data, path)
+        self._files[path] = original, data
+
+    def write_config(self, config, path):
+        self.write_bytes(_config_bytes(config), path)
+
+    def delete(self, path):
+        path = Path(path)
+        original = self._original(path)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return
+        self._files[path] = original, None
+
+    def restore(self):
+        preserved = set()
+        errors = []
+        files, self._files = self._files, {}
+        for path, (original, written) in reversed(files.items()):
+            try:
+                if self._read(path) != written:
+                    preserved.add(path)
+                elif original != written:
+                    if original is None:
+                        path.unlink()
+                    else:
+                        atomic_write_bytes(original, path)
+            except OSError as error:
+                errors.append(error)
+        if errors:
+            raise errors[0]
+        return preserved
 
 
 @contextlib.contextmanager

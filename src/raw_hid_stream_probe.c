@@ -53,7 +53,8 @@ typedef char CHAR;
 
 #define STREAM_MAGIC 0x53524853UL
 #define STREAM_VERSION 1UL
-#define STREAM_AXES_ALL 0x0FUL
+#define STREAM_STICK_AXES 0x0FUL
+#define STREAM_TRIGGER_AXES 0x30UL
 #define MAX_CAPACITY 262144UL
 #define MIN_CAPACITY 1024UL
 #define REPORT_BUFFER_SIZE 512UL
@@ -315,7 +316,7 @@ static float normalize_signed16(short raw) {
     return (float)raw / 32768.0f;
 }
 
-static int parse_report(
+static DWORD parse_report(
     LPCWSTR path,
     const BYTE *report,
     DWORD length,
@@ -338,7 +339,7 @@ static int parse_report(
         *left_y = normalize_signed16(read_i16_le(report, 8));
         *right_x = normalize_signed16(read_i16_le(report, 10));
         *right_y = normalize_signed16(read_i16_le(report, 12));
-        return 1;
+        return STREAM_STICK_AXES | STREAM_TRIGGER_AXES;
     }
     /*
      * Windows' XInput HID collection (&IG_) exposes four unsigned 16-bit axes
@@ -360,7 +361,7 @@ static int parse_report(
         *left_trigger = 0.0f;
         *right_trigger = 0.0f;
         *buttons = 0;
-        return 1;
+        return STREAM_STICK_AXES;
     }
     return 0;
 }
@@ -415,7 +416,7 @@ static DWORD run_stream(
     header->header_size = (DWORD)sizeof(StreamHeader);
     header->slot_size = (DWORD)sizeof(StreamSlot);
     header->capacity = capacity;
-    header->axes_mask = STREAM_AXES_ALL;
+    header->axes_mask = STREAM_STICK_AXES;
     frequency_value.QuadPart = 0;
     if (!QueryPerformanceFrequency(&frequency_value) || frequency_value.QuadPart <= 0) {
         header->error_code = ERROR_INVALID_DATA;
@@ -553,16 +554,13 @@ static DWORD run_stream(
         if (bytes_read == 0) continue;
         _InterlockedIncrement64((volatile LONGLONG *)&header->reserved);
         {
-            DWORD sample_axes = 0;
             StreamSlot *slot;
-            if (parse_report(
+            DWORD sample_axes = parse_report(
                 path, report, bytes_read,
                 &left_x, &left_y, &right_x, &right_y,
                 &left_trigger, &right_trigger, &buttons
-            )) {
-                sample_axes = STREAM_AXES_ALL;
-                ++parsed_samples;
-            }
+            );
+            if (sample_axes != 0) ++parsed_samples;
             ++sequence;
             slot = &slots[((ULONGLONG)sequence - 1ULL) % capacity];
             _InterlockedExchange64(&slot->sequence, 0);

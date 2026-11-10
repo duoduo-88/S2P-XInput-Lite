@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import ctypes
 import logging
 import math
+import random
 import time
 import tkinter as tk
 from collections import deque
+from functools import lru_cache
 from tkinter import font as tkfont, messagebox, ttk
 
 from gamepad_aim_display import (
+    DISPLAY_RESTORE_RETRY_MS,
+    DisplayModeRestoreError,
     activate_fullscreen_mode,
     available_resolutions,
     fullscreen_monitor_bounds,
@@ -45,6 +50,7 @@ from tooltip_layout import HoverTip
 
 MOUSE_PRIORITY_SECONDS = 0.05
 NATIVE_TIMER_MIN_HZ = 240
+MOUSE_LOOK_RADIANS_PER_PIXEL = math.radians(0.18)
 COUNTDOWN_SECONDS = 3
 ACTION_BUTTON_WIDTH = 18
 TOOLBAR_BUTTON_WIDTH = 11
@@ -54,6 +60,7 @@ HUD_LINE_GAP = 4
 VIEW_BACKGROUND = "#101825"
 RETICLE_COLOR = "#edf4fc"
 TARGET_COLOR = "#57dab1"
+DEPTH_SHADE_STEPS = 255
 HIT_DURATION = 0.15
 HIT_DIRECTIONS = ((1, 0.2), (0.4, -1), (-0.7, -0.8), (-1, 0.4), (0.3, 1))
 # One RGBA pixel of dark blue at 72% opacity, scaled once per HUD panel.
@@ -61,6 +68,30 @@ HUD_PIXEL = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGPgFVfZAQABfgEB8X2Y/"
     "AAAAABJRU5ErkJggg=="
 )
+
+
+def _warp_mouse(x, y):
+    try:
+        return ctypes.windll.user32.SetCursorPos(x, y)
+    except (AttributeError, OSError):
+        return False
+
+
+@lru_cache(maxsize=32)
+def _target_depth_palette(color):
+    channels = tuple(bytes.fromhex(color[1:]))
+    brightness = sum(weight * channel for weight, channel in zip((0.299, 0.587, 0.114), channels))
+    # Lift custom dark colors enough to leave a visible near-to-far range.
+    if brightness < 118:
+        lift = (118 - brightness) / (255 - brightness)
+        channels = tuple(channel + (255 - channel) * lift for channel in channels)
+        brightness = 118
+    darkest = max(0.42, 76 / brightness)
+    colors = []
+    for step in range(DEPTH_SHADE_STEPS + 1):
+        scale = 1 - (1 - darkest) * step / DEPTH_SHADE_STEPS
+        colors.append("#" + bytes(round(channel * scale) for channel in channels).hex())
+    return tuple(colors)
 
 
 def _scene_button_style(window):
@@ -226,6 +257,7 @@ class AimTestPane:
         self.start_pressed = self.cancel_pressed = True
         self.test_open = False
         self._fullscreen_mode = None
+        self._display_restore_job = None
         self._focus_close_job = None
         self.hud = None
         self.dimension = tk.StringVar(parent, "3d")
@@ -343,7 +375,8 @@ class AimTestPane:
         self.finish_hint_item = self.canvas.create_text(
             0, 0, text="", anchor="n", fill="#d0dcec", font=("Segoe UI", 12),
         )
-        self.ball_color = TARGET_COLOR
+        self._ball_colors = [TARGET_COLOR] * len(self._ball_items)
+        self._ball_outlines = True
         self._bind_view(self.canvas)
         self.canvas.bind("<Destroy>", self._canvas_destroyed)
         # Start on release so the Windows Enter auto-repeat cannot restart a round.
@@ -354,24 +387,32 @@ class AimTestPane:
         parent.bind("<Map>", lambda _event: self.set_visible(True), add="+")
         parent.bind("<Unmap>", lambda _event: self.set_visible(False), add="+")
         parent.bind("<Destroy>", lambda event: self._destroy(event, parent), add="+")
-        self.connection_hint = ttk.Label(parent, text=self.tr("請選擇有搖桿輸出的手把。"))
+        self.connection_hint = ttk.Label(parent)
         self.connection_hint.grid(row=2, column=0, sticky="w", pady=(4, 0))
         self._reset()
 
     def _bind_view(self, view):
         view.bind("<Configure>", self._resize)
         view.bind("<Button-1>", self._mouse_click)
+        view.bind("<Button-3>", self._toggle_mouse_look)
         view.bind("<Motion>", self._mouse_move)
+        view.bind("<Leave>", self._mouse_left_view)
         view.bind("<KeyPress-space>", self._space_down)
         view.bind("<KeyRelease-space>", self._space_shot)
         view.bind("<Tab>", lambda _event: "break")
         view.bind("<Shift-Tab>", lambda _event: "break")
         view.bind("<FocusOut>", self._view_lost_focus)
 
+    def _mouse_left_view(self, event):
+        if event.widget is self._view:
+            self._mouse_position = None
+
     def _view_lost_focus(self, event):
         if event.widget is not self._view or self.window.focus_displayof() is self._view:
             return
+        self._advance_point_clock(time.perf_counter())
         self._interrupt()
+        self._check_finish()
         if self.test_open and self.settings.fullscreen and self._focus_close_job is None:
             self._focus_close_job = self.owner.after_idle(self._close_inactive_fullscreen)
 
@@ -474,13 +515,18 @@ class AimTestPane:
         self._cancel_tick()
         self._close_native_timer()
         try:
-            self._stop_gpu(restore=False)
+            self._advance_point_clock(time.perf_counter())
+            if self._awaiting_finish():
+                self._store_result()
         finally:
-            if self._render_cleanup_job is not None:
-                self.owner.after_cancel(self._render_cleanup_job)
-                self._render_cleanup_job = None
-            self._retired_render_view = None
-            self._restore_display_mode()
+            try:
+                self._stop_gpu(restore=False)
+            finally:
+                if self._render_cleanup_job is not None:
+                    self.owner.after_cancel(self._render_cleanup_job)
+                    self._render_cleanup_job = None
+                self._retired_render_view = None
+                self._restore_display_after_close()
 
     def _destroy(self, event, parent):
         if event.widget is parent:
@@ -531,7 +577,7 @@ class AimTestPane:
             timer.close()
 
     def _reset(self):
-        self._check_finish(skip_animation=True)
+        self._finish_before_leaving()
         if self._render_worker is not None:
             self._render_worker.discard_pending()
         if self.feedback is not None:
@@ -549,6 +595,8 @@ class AimTestPane:
         self.mode_is_shooting = self.mode_is_3d and not self.mode_is_tracking
         self.mode_is_timed = self.mode.get() == "timed-shooting"
         self._mouse_priority_until = 0.0
+        self._mouse_position = None
+        self._mouse_released = False
         settings = self.settings
         if self.mode_is_tracking:
             self.cursor = CursorTrackingTest(settings.tracking_seconds, settings.seed, target_size=settings.target_size_2d)
@@ -565,6 +613,11 @@ class AimTestPane:
         else:
             self.shooting = ShootingTest(settings.target_count, settings.target_seconds, settings.seed, settings.depth, **spread)
         self.scene = self.shooting if self.mode_is_shooting else self.tracking
+        self._shade_near = self._shade_scale = 0.0
+        if self.mode_is_3d and settings.depth_shading:
+            self._shade_near, far = self.scene.target_distance_range
+            if far > self._shade_near:
+                self._shade_scale = DEPTH_SHADE_STEPS / (far - self._shade_near)
         self.trigger_pressed = True
         self.space_pressed = self.space_armed = False
         self.interrupted = False
@@ -572,7 +625,6 @@ class AimTestPane:
         self._display_countdown(None)
         self.canvas.itemconfigure(self.countdown_item, font=("Segoe UI", 56, "bold"))
         self.canvas.itemconfigure(self.finish_hint_item, text="")
-        self.canvas.delete("finish_outline")
         self._gpu_overlay = None
         self.hit_effect = None
         self.canvas.itemconfigure("hit_effect", state="hidden")
@@ -583,8 +635,7 @@ class AimTestPane:
         self._update_labels()
 
     def _start(self):
-        if (self.countdown_until is not None or self._awaiting_finish()
-                or (self.mode_is_3d and not self.output_ready)):
+        if self.countdown_until is not None or self._awaiting_finish():
             return
         if self._wait_for_render_cleanup():
             self._start_after_render_cleanup = True
@@ -650,13 +701,17 @@ class AimTestPane:
         self._reset_frame_stats(now)
         self.fps_started = now
         self._round().start()
-        if not self.mode_is_3d:
+        if self.mode_is_3d:
+            position = self._view.winfo_pointerxy()
+            self._mouse_position = position if self._view.winfo_containing(*position) is self._view else None
+        else:
             self.cursor.x, self.cursor.y = self.size[0] / 2, self.size[1] / 2
         self._draw()
         self._update_labels()
 
     def _interrupt(self):
         self.space_pressed = self.space_armed = False
+        self._mouse_position = None
         if self.countdown_until is not None or self.scene.running or self.cursor.running:
             self.countdown_until = None
             self._display_countdown(None)
@@ -698,7 +753,12 @@ class AimTestPane:
         x = max(min(0, owner_x), owner_x + (owner_width - width) // 2)
         y = max(min(0, owner_y), owner_y + (owner_height - height) // 2)
         if fullscreen:
-            self._fullscreen_mode = activate_fullscreen_mode(hwnd, (width, height))
+            try:
+                self._fullscreen_mode = activate_fullscreen_mode(hwnd, (width, height))
+            except DisplayModeRestoreError as error:
+                self._fullscreen_mode = error.mode
+                self._schedule_display_restore(0)
+                raise
             x, y, right, bottom = (
                 self._fullscreen_mode.bounds if self._fullscreen_mode is not None
                 else fullscreen_monitor_bounds(hwnd)
@@ -752,9 +812,10 @@ class AimTestPane:
             if self._focus_close_job is not None:
                 self.owner.after_cancel(self._focus_close_job)
                 self._focus_close_job = None
+            if self.test_open:
+                self._finish_before_leaving()
             self._interrupt()
             if self.test_open:
-                self._check_finish(skip_animation=True)
                 focus = self.window.focus_displayof()
                 self.test_open = False
                 self.window.withdraw()
@@ -771,12 +832,20 @@ class AimTestPane:
         return "break"
 
     def _restore_display_after_close(self):
-        if not self._restore_display_mode() and self.owner.winfo_exists():
-            self.owner.after(100, self._retry_display_restore, self._fullscreen_mode)
+        if not self._restore_display_mode():
+            self._schedule_display_restore(0)
 
-    def _retry_display_restore(self, mode):
-        if self._fullscreen_mode is mode and not self.test_open:
-            self._restore_display_mode()
+    def _schedule_display_restore(self, attempt):
+        if (self._display_restore_job is None and attempt < len(DISPLAY_RESTORE_RETRY_MS)
+                and self.owner.winfo_exists()):
+            self._display_restore_job = self.owner.after(
+                DISPLAY_RESTORE_RETRY_MS[attempt], self._retry_display_restore, self._fullscreen_mode, attempt,
+            )
+
+    def _retry_display_restore(self, mode, attempt):
+        self._display_restore_job = None
+        if self._fullscreen_mode is mode and not self.test_open and not self._restore_display_mode():
+            self._schedule_display_restore(attempt + 1)
 
     def _restore_display_mode(self):
         if self._fullscreen_mode is not None:
@@ -786,6 +855,9 @@ class AimTestPane:
                 logging.getLogger(__name__).exception("Could not restore the original display mode")
                 return False
             self._fullscreen_mode = None
+        if self._display_restore_job is not None:
+            self.owner.after_cancel(self._display_restore_job)
+            self._display_restore_job = None
         return True
 
     def _refresh_display_rate(self, event=None):
@@ -846,9 +918,10 @@ class AimTestPane:
         notes = (
             "瞄準測試說明",
             "2D 模式可直接用滑鼠或右搖桿移動準心，依輸入自動接手。按左鍵、RT 或空白鍵點靶。",
-            "跟槍模式用右搖桿輸出轉動視角，盡量讓準心留在移動的靶上。"
+            "3D 模式可用滑鼠或右搖桿轉動視角，依輸入自動接手。"
+            "跟槍時盡量讓準心留在移動的靶上。"
             "跟靶率是準心在靶上的時間比例。",
-            "點靶模式用右搖桿輸出瞄準，按 RT 或空白鍵射擊。"
+            "點靶時按滑鼠左鍵、RT 或空白鍵射擊。"
             "按 Enter 或手把 START 可開始或重測。",
             "2D 和 3D 都有「限時點靶」。開場就有兩顆靶。"
             "靶會留到被擊中，命中後補新靶。倒數歸零時結算命中數，並記錄命中率與平均偏差。",
@@ -876,18 +949,28 @@ class AimTestPane:
     def _awaiting_finish(self):
         return self.round_basis is not None and self._round().completed
 
+    def _finish_before_leaving(self):
+        self._advance_point_clock(time.perf_counter())
+        self._check_finish(skip_animation=True)
+
     def _check_finish(self, *, skip_animation=False):
         if not self._awaiting_finish() or (self.hit_effect is not None and not skip_animation):
             return
-        test = self._round()
-        basis, self.round_basis = self.round_basis, None
-        self.round_started_at = None
+        parts = self._store_result()
         self.finished = True
         self.canvas.itemconfigure(self.countdown_item, font=("Segoe UI", 32, "bold"))
         self._display_countdown(self.tr("測試完成"))
         self.canvas.itemconfigure(self.finish_hint_item, text=self.tr("按 Enter 或手把 START 再測一次。"))
         self._position_finish_hint()
         self._draw()
+        if parts is not None:
+            self._show_changes(parts)
+        self._update_labels()
+
+    def _store_result(self):
+        test = self._round()
+        basis, self.round_basis = self.round_basis, None
+        self.round_started_at = None
         metrics = {"seconds": test.elapsed}
         if self.mode_is_tracking:
             metrics.update(tracking=test.on_target_percent, error=test.mean_error)
@@ -901,15 +984,11 @@ class AimTestPane:
             changes, previous = self.history.add_with_comparison(basis, metrics)
         except OSError:
             self.history_error = True
-            self._update_labels()
-            return
+            return None
         parts = tuple((f"{self.tr(METRIC_LABELS[key])} "
                        f"{format_change(key, value, self._metric_unit(key))}", improved)
                       for key, value, improved in changes)
-        if not parts:
-            parts = ((self.tr("同基準無變化" if previous else "同基準尚無紀錄"), None),)
-        self._show_changes(parts)
-        self._update_labels()
+        return parts or ((self.tr("同基準無變化" if previous else "同基準尚無紀錄"), None),)
 
     def _metric_unit(self, key):
         if key == "error":
@@ -928,39 +1007,83 @@ class AimTestPane:
             if self._render_worker is not None:
                 self._render_worker.discard_pending()
             if self.countdown_until is None and not self.finished:
+                self._advance_point_clock(time.perf_counter())
                 self._interrupt()
             self.size = size
             self._gpu_overlay = None
             self.next_draw = 0.0
             self.cursor.x = self.cursor.y = None
             self.canvas.coords(self.countdown_item, size[0] / 2, size[1] / 2)
+            self._check_finish()
             if self.finished:
                 self._position_finish_hint()
             self._draw()
             self._layout_hud()
 
-    def _mouse_move(self, event, now=None):
-        if self.mode_is_3d or not self.cursor.running:
+    def _can_aim_with_mouse(self, event):
+        if not self._round().running:
             return False
         width, height = self.size
         if not (0 <= event.x < width and 0 <= event.y < height):
             return False
-        self.cursor.x, self.cursor.y = event.x, event.y
+        return not self.mode_is_3d or (
+            not self._mouse_released and self._view.focus_displayof() is self._view
+        )
+
+    def _mouse_move(self, event, now=None):
+        if not self._can_aim_with_mouse(event):
+            return False
         now = time.perf_counter() if now is None else now
-        self._mouse_priority_until = now + MOUSE_PRIORITY_SECONDS
+        if self.mode_is_3d:
+            self._mouse_look(now, *self.size)
+        else:
+            self.cursor.x, self.cursor.y = event.x, event.y
+            self._mouse_priority_until = now + MOUSE_PRIORITY_SECONDS
         return True
+
+    def _mouse_look(self, now, width, height):
+        left, top = self._view.winfo_rootx(), self._view.winfo_rooty()
+        x, y = position = self._view.winfo_pointerxy()
+        previous = self._mouse_position
+        if (not (left <= x < left + width and top <= y < top + height)
+                or self._view.winfo_containing(x, y) is not self._view):
+            self._mouse_position = None
+            return
+        # Read the current pointer because a queued Motion can predate the warp.
+        if position == previous:
+            return
+        if previous is not None:
+            old_x, old_y = previous
+            if left <= old_x < left + width and top <= old_y < top + height:
+                self.scene.look(
+                    (x - old_x) * MOUSE_LOOK_RADIANS_PER_PIXEL,
+                    (old_y - y) * MOUSE_LOOK_RADIANS_PER_PIXEL,
+                )
+        center = left + width // 2, top + height // 2
+        self._mouse_position = center if _warp_mouse(*center) else position
+        self._mouse_priority_until = now + MOUSE_PRIORITY_SECONDS
 
     def _mouse_click(self, event):
         now = time.perf_counter()
-        if self._mouse_move(event, now) and not self.mode_is_tracking:
+        # Motion may already have moved the real pointer beyond this click.
+        aiming = self._can_aim_with_mouse(event) if self.mode_is_3d else self._mouse_move(event, now)
+        if aiming and not self.mode_is_tracking:
             self._shoot(now)
             self._draw()
             self._frame_dirty = True
             self._update_labels()
 
+    def _toggle_mouse_look(self, _event):
+        if self.mode_is_3d and self._round().running:
+            self._mouse_released = not self._mouse_released
+            self._mouse_position = None if self._mouse_released else self._view.winfo_pointerxy()
+            self._mouse_priority_until = 0.0
+            self._update_labels()
+        return "break"
+
     def _sync_pointer(self):
         active = self.countdown_until is not None or self._round().running
-        cursor = "none" if active else ""
+        cursor = "none" if active and not self._mouse_released else ""
         if self._view.cget("cursor") != cursor:
             self._view.configure(cursor=cursor)
 
@@ -968,20 +1091,6 @@ class AimTestPane:
         heading = self.canvas.bbox(self.countdown_item)
         if heading is not None:
             self.canvas.coords(self.finish_hint_item, self.size[0] / 2, heading[3] + 7)
-            self.canvas.delete("finish_outline")
-            background = self.canvas.cget("background")
-            for item, radius in ((self.countdown_item, 2), (self.finish_hint_item, 1)):
-                x, y = self.canvas.coords(item)
-                options = {
-                    key: self.canvas.itemcget(item, key)
-                    for key in ("text", "font", "anchor")
-                }
-                for dx, dy in ((-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0),
-                               (-1, 1), (0, 1), (1, 1)):
-                    self.canvas.create_text(
-                        x + radius * dx, y + radius * dy, fill=background,
-                        tags="finish_outline", **options,
-                    )
             self.canvas.tag_raise(self.countdown_item)
             self.canvas.tag_raise(self.finish_hint_item)
             self._gpu_overlay = None
@@ -997,20 +1106,9 @@ class AimTestPane:
         if not armed or not self._round().running:
             return
         now = time.perf_counter()
-        if self.mode_is_3d:
-            if self.read_input is not None:
-                key = self.device_key
-                self._sample_input(now)
-                if self.output_ready and self.device_key == key:
-                    self._simulate_tick(now)
-            else:
-                output = self.read_output()
-                self.output_ready = output is not None
-                key = output[0] if output is not None else None
-            if not self.output_ready or key != self.device_key:
-                self._interrupt()
-                self._update_labels()
-                return
+        if self.read_input is not None:
+            self._sample_input(now)
+        self._simulate_to_input(now)
         self._shoot(now)
 
     def _shoot(self, now=None):
@@ -1031,7 +1129,7 @@ class AimTestPane:
         self._after_shot(hits, now, impact)
 
     def _advance_point_clock(self, now):
-        if self.round_started_at is not None:
+        if self.round_started_at is not None and not self.mode_is_tracking:
             test = self._round()
             test.advance_time(max(0.0, now - self.round_started_at - test.elapsed))
 
@@ -1040,7 +1138,17 @@ class AimTestPane:
             if self.feedback is not None:
                 self.feedback.hit(self.settings.rumble / 100, self.settings.sound)
             if impact is not None:
-                self.hit_effect = (now, impact)
+                angle = random.uniform(0, math.tau)
+                cos_angle, sin_angle = math.cos(angle), math.sin(angle)
+                fragments = []
+                for dx, dy in HIT_DIRECTIONS:
+                    speed = random.uniform(0.7, 1.35)
+                    fragments.append((
+                        (dx * cos_angle - dy * sin_angle) * speed,
+                        (dx * sin_angle + dy * cos_angle) * speed,
+                        random.uniform(0.65, 1.25),
+                    ))
+                self.hit_effect = (now, impact, fragments)
                 self.canvas.itemconfigure("hit_effect", fill=self.settings.target_color)
         self._check_finish()
 
@@ -1060,7 +1168,7 @@ class AimTestPane:
         self._gpu_fragments = ()
         if self.hit_effect is None:
             return
-        started, impact = self.hit_effect
+        started, impact, fragments = self.hit_effect
         progress = max(0, (now - started) / HIT_DURATION)
         if progress >= 1:
             self.canvas.itemconfigure("hit_effect", state="hidden")
@@ -1076,13 +1184,16 @@ class AimTestPane:
             return
         x, y, radius = bounds
         distance = min(30, radius) * (0.45 + 1.5 * progress)
-        fragment = max(1, min(6, radius / 4) * (1 - progress))
-        points = tuple((x + dx * distance, y + dy * distance) for dx, dy in HIT_DIRECTIONS)
+        size = min(6, radius / 4) * (1 - progress)
+        points = tuple(
+            (x + dx * distance, y + dy * distance, max(1, size * scale))
+            for dx, dy, scale in fragments
+        )
         if self.gpu is not None:
-            self._gpu_fragments = tuple((*point, fragment, self.settings.target_color) for point in points)
+            self._gpu_fragments = tuple((*point, self.settings.target_color) for point in points)
         else:
             self.canvas.itemconfigure("hit_effect", state="normal")
-            for item, (px, py) in zip(self.hit_particles, points):
+            for item, (px, py, fragment) in zip(self.hit_particles, points):
                 self.canvas.coords(item, px - fragment, py + fragment, px + fragment, py, px, py - fragment)
 
     def _cursor_top(self):
@@ -1152,9 +1263,7 @@ class AimTestPane:
             self._input_events.clear()
             self._sim_state = None
             self.trigger_pressed = self.start_pressed = self.cancel_pressed = True
-            if self.mode_is_3d:
-                self._interrupt()
-            elif self.feedback is not None:
+            if self.feedback is not None:
                 self.feedback.stop()
         if state is None:
             self._sim_state = None
@@ -1185,8 +1294,7 @@ class AimTestPane:
                 self._shoot(at)
             self.trigger_pressed = pressed
 
-    def _simulate_tick(self, deadline):
-        was_running = self._round().running
+    def _simulate_to_input(self, deadline):
         while self._input_events and self._input_events[0][0] <= deadline:
             stamp, state = self._input_events.popleft()
             at = max(self._simulated_at, stamp)
@@ -1194,6 +1302,10 @@ class AimTestPane:
             self._sim_state = state
             self._handle_buttons(state, at)
         self._simulate_to(deadline)
+
+    def _simulate_tick(self, deadline):
+        was_running = self._round().running
+        self._simulate_to_input(deadline)
         if self.read_input is None and self._sim_state is not None and self._round().running:
             self._handle_buttons(self._sim_state, deadline)
         if was_running or self._round().running:
@@ -1212,16 +1324,18 @@ class AimTestPane:
         if test.duration:
             seconds = min(seconds, max(0.0, test.duration - test.elapsed))
         state = self._sim_state
+        stick_seconds = max(0.0, min(seconds, at - self._mouse_priority_until)) if state is not None else 0.0
         if self.mode_is_3d:
-            if state is None:
-                return
             if self.mode_is_shooting:
-                self.scene.turn(state.right, seconds)
+                if stick_seconds:
+                    self.scene.turn(state.right, stick_seconds)
             else:
-                self.scene.advance(state.right, seconds)
+                if seconds > stick_seconds:
+                    self.scene.advance((0, 0), seconds - stick_seconds)
+                if stick_seconds:
+                    self.scene.advance(state.right, stick_seconds)
         else:
-            stick_seconds = max(0.0, min(seconds, at - self._mouse_priority_until))
-            if state is not None and stick_seconds:
+            if stick_seconds:
                 self.cursor.move(state.right, stick_seconds, *self.size)
             if self.mode_is_tracking:
                 self.cursor.advance(seconds, *self.size, self._cursor_top())
@@ -1290,6 +1404,7 @@ class AimTestPane:
             if self._render_worker is None:
                 self._record_submission(time.perf_counter())
         else:
+            self._sync_pointer()
             self._draw_hit_effect(now)
             self._frame_dirty = True
 
@@ -1311,27 +1426,32 @@ class AimTestPane:
         if error is not None:
             self.gpu_error = error
             self._stop_gpu()
+            self._sync_pointer()
             self._frame_dirty = True
 
     def _present_gpu(self):
         if self._gpu_overlay is None:
             items = self.canvas.find_withtag(self.hud.tag) if self.hud else ()
-            outlines = self.canvas.find_withtag("finish_outline") if self.finished else ()
             self._gpu_overlay = capture_overlay(
-                self.canvas, (*items, *outlines, self.countdown_item, self.finish_hint_item),
+                self.canvas, (*items, self.countdown_item, self.finish_hint_item),
             )
         overlays, labels = self._gpu_overlay
         lines = self._gpu_lines if self.mode_is_3d else ()
-        balls = tuple((*bounds, self.ball_color) for bounds in self._ball_bounds if bounds is not None)
+        balls = tuple(
+            (*bounds, color)
+            for bounds, color in zip(self._ball_bounds, self._ball_colors)
+            if bounds is not None
+        )
         reticle = (*self.reticle_geometry, self.reticle_color) if self.reticle_geometry is not None else None
         if self._render_worker is not None:
             pose = (*self.size, self.scene.yaw, self.scene.pitch) if self.mode_is_3d else None
             return self._render_worker.submit(AimRenderFrame(
                 self.size, pose, balls, reticle, self._gpu_fragments, overlays, labels,
+                ball_outlines=self._ball_outlines,
             ))
         try:
             self.gpu.draw(
-                *self.size, lines=lines, balls=balls, reticle=reticle,
+                *self.size, lines=lines, balls=balls, ball_outlines=self._ball_outlines, reticle=reticle,
                 fragments=self._gpu_fragments, overlays=overlays, labels=labels,
             )
         except (OSError, RuntimeError) as error:
@@ -1341,8 +1461,7 @@ class AimTestPane:
         return True
 
     def _update_labels(self):
-        ready = not self.mode_is_3d or self.output_ready
-        can_start = ready and self.countdown_until is None and not self._awaiting_finish()
+        can_start = self.countdown_until is None and not self._awaiting_finish()
         for button in (self.start_button, self.restart_button):
             button.state(["!disabled" if can_start else "disabled"])
         self._sync_pointer()
@@ -1359,12 +1478,9 @@ class AimTestPane:
         if self.restart_button.cget("text") != restart_text:
             self.restart_button.configure(text=restart_text)
         if self.interrupted:
-            start_hint_key = (
-                "測試已中斷。按 Enter 或手把 START 重新開始。" if ready
-                else "測試已中斷。請選擇有搖桿輸出的手把，再按 Enter 或 START。"
-            )
+            start_hint_key = "測試已中斷。按 Enter 或手把 START 重新開始。"
         else:
-            start_hint_key = "按 Enter 或手把 START 開始測試。" if ready else "請選擇有搖桿輸出的手把。"
+            start_hint_key = "按 Enter 或手把 START 開始測試。"
         start_hint = self.tr(start_hint_key)
         if self.connection_hint.cget("text") != start_hint:
             self.connection_hint.configure(text=start_hint)
@@ -1374,17 +1490,20 @@ class AimTestPane:
             instruction = ""
         elif self.interrupted:
             instruction = start_hint_key
-        elif not ready:
-            instruction = "請選擇有搖桿輸出的手把。"
         elif self.mode_is_shooting:
-            instruction = "用右搖桿輸出瞄準球靶，按 RT 或空白鍵射擊。"
+            instruction = "用滑鼠或右搖桿轉動視角，按左鍵、RT 或空白鍵射擊。"
         elif self.mode_is_3d:
-            instruction = "用右搖桿輸出轉動視角，追蹤移動球靶。"
+            instruction = "用滑鼠或右搖桿轉動視角，追蹤移動球靶。"
         elif self.mode_is_tracking:
             instruction = "用滑鼠或右搖桿移動準心，追蹤移動球靶。"
         else:
             instruction = "用滑鼠或右搖桿瞄準，按左鍵、RT 或空白鍵點靶。"
         status = self.tr(instruction) if instruction else ""
+        if self.mode_is_3d and self._round().running:
+            if self._mouse_released:
+                status = self.tr("游標已釋放。按右鍵繼續用滑鼠瞄準。")
+            else:
+                status += " " + self.tr("按右鍵釋放游標。")
         if status != self.status.get():
             self.status.set(status)
         if self.mode_is_tracking:
@@ -1449,24 +1568,37 @@ class AimTestPane:
             self.canvas.coords(self.reticle[0], x - half, y, x + half, y)
             self.canvas.coords(self.reticle[1], x, y - half, x, y + half)
 
-    def _draw_balls(self, targets, on_target=False):
-        color = self.settings.target_on_target_color if on_target else self.settings.target_color
+    def _draw_balls(self, targets, on_target=False, *, distances=()):
+        if self._round().completed:
+            targets = distances = ()
+        base_color = self.settings.target_on_target_color if on_target else self.settings.target_color
+        palette = _target_depth_palette(base_color) if distances else ()
+        show_outlines = not (self.mode_is_3d and self.settings.depth_shading)
+        outlines_changed = show_outlines != self._ball_outlines
         for index, item in enumerate(self._ball_items):
             bounds = targets[index] if index < len(targets) else None
             if bounds != self._ball_bounds[index]:
                 self._ball_bounds[index] = bounds
                 if self.gpu is None:
                     self._position_ball(item, bounds)
-            if self.gpu is None and color != self.ball_color:
-                self.canvas.itemconfigure(item, fill=color, outline=target_outline_color(color))
-        self.ball_color = color
+            color = base_color
+            if bounds is not None and palette:
+                step = round((distances[index] - self._shade_near) * self._shade_scale)
+                color = palette[max(0, min(DEPTH_SHADE_STEPS, step))]
+            if outlines_changed or color != self._ball_colors[index]:
+                outline = target_outline_color(color) if show_outlines else ""
+                if self.gpu is None:
+                    self.canvas.itemconfigure(item, fill=color, outline=outline)
+                self._ball_colors[index] = color
+        self._ball_outlines = show_outlines
 
     def _sync_canvas_scene(self):
         for item, bounds in zip(self.grid_lines, self.grid_bounds):
             self.canvas.coords(item, *(bounds or (-20, -20, -20, -20)))
-        for item, bounds in zip(self._ball_items, self._ball_bounds):
+        for item, bounds, color in zip(self._ball_items, self._ball_bounds, self._ball_colors):
             self._position_ball(item, bounds)
-            self.canvas.itemconfigure(item, fill=self.ball_color, outline=target_outline_color(self.ball_color))
+            outline = target_outline_color(color) if self._ball_outlines else ""
+            self.canvas.itemconfigure(item, fill=color, outline=outline)
         for item in self.reticle:
             self.canvas.itemconfigure(item, fill=self.reticle_color)
         self._position_reticle()
@@ -1520,13 +1652,22 @@ class AimTestPane:
                     (*bounds, line[0]) for line, bounds in zip(ROOM_LINES, self.grid_bounds)
                     if bounds is not None
                 )
-        targets = sorted(map(transform, self.scene.target_positions()), key=lambda target: target[2], reverse=True)
+        targets = list(map(transform, self.scene.target_positions()))
+        if (len(targets) == 2 and (first := self.scene.crosshair_depth(targets[0])) is not None
+                and (second := self.scene.crosshair_depth(targets[1])) is not None):
+            if first <= second:
+                targets.reverse()
+        else:
+            targets.sort(key=lambda target: target[2], reverse=True)
         visible = []
+        distances = []
         on_target = False
         for target in targets:
             bounds = project_ball(target, width, height)
             if bounds is not None:
                 visible.append(bounds)
+                if self.settings.depth_shading:
+                    distances.append(math.hypot(*target))
                 on_target = on_target or self.scene.on_target(target)
-        self._draw_balls(visible, on_target and not self.mode_is_shooting)
+        self._draw_balls(visible, on_target and not self.mode_is_shooting, distances=distances)
         return on_target

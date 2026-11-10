@@ -174,6 +174,11 @@ class GamepadState:
     right_trigger: float | None
 
 
+def xinput_packet_delta(previous, current):
+    """Return the unsigned distance between two 32-bit packet counters."""
+    return (int(current) - int(previous)) & 0xFFFFFFFF
+
+
 def normalize_signed_axis(value):
     value = int(value)
     divisor = 32767.0 if value >= 0 else 32768.0
@@ -906,11 +911,9 @@ class NativeGamepadSampler:
             previous_token = self._last_token
             update_count = 1
             if device.kind == "xinput" and previous_token is not None:
-                packet_delta = (
-                    int(token) - int(previous_token)
-                ) & 0xFFFFFFFF
-                # A normal 32-bit wrap is a small forward delta. A reset
-                # indicates a new controller generation even without a failed poll.
+                packet_delta = xinput_packet_delta(previous_token, token)
+                # A restarted counter can reveal a reconnect missed between polls.
+                # Normal 32-bit wrap still produces a small forward delta.
                 if 0 < packet_delta <= 0x7FFFFFFF:
                     update_count = packet_delta
                 elif packet_delta > 0x7FFFFFFF:
@@ -928,10 +931,14 @@ class NativeGamepadSampler:
 
     def read_latest_state(self, device):
         """Read the selected device without consuming queued monitor samples."""
+        return self.read_latest_with_generation(device)[0]
+
+    def read_latest_with_generation(self, device):
+        """Return one snapshot and its connection generation under the same lock."""
         with self._lock:
             if self._device is not None and self._device.key == device.key:
-                return self._latest_state
-            return None
+                return self._latest_state, self._device_generation
+            return None, None
 
     def read_snapshot(self):
         now = self.clock()

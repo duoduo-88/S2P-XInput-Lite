@@ -51,6 +51,10 @@ The ZIP root contains only `S2P-XInput-Lite.exe`, `GamepadTester.exe`,
 installation root. Launcher metadata records portable layout 2 to reject old
 same-version launchers. Settings import accepts both `src/` and `app/src/`.
 
+The ZIP includes both current manuals and their screenshots for offline use.
+Its READMEs load the demo GIFs from GitHub. Archived screenshots and dependency
+test suites are excluded from the ZIP.
+
 For a quick local packaging check after all build outputs already exist:
 
 ```powershell

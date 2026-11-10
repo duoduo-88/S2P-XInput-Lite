@@ -326,6 +326,7 @@ class Direct2DAimRenderer:
         *,
         lines=(),
         balls=(),
+        ball_outlines=True,
         reticle=None,
         fragments=(),
         overlays=(),
@@ -340,11 +341,12 @@ class Direct2DAimRenderer:
             self._size = (width, height)
 
         # Trim between frames so deferred commands always finish before release.
-        if len(self._brushes) > 64:
+        brush_limit = 640  # Keep both 256-step target palettes resident.
+        if len(self._brushes) > brush_limit:
             # Prepared commands contain borrowed brushes from this target.
             self._line_source = self._rectangle_source = self._label_source = None
             self._lines.clear()
-        for cache, limit in ((self._brushes, 64), (self._formats, 32)):
+        for cache, limit in ((self._brushes, brush_limit), (self._formats, 32)):
             while len(cache) > limit:
                 _release(cache.pop(next(iter(cache))))
         self._prepare_lines(lines)
@@ -359,8 +361,9 @@ class Direct2DAimRenderer:
             for x, y, radius, color in balls:
                 center.x, center.y = x, y
                 ellipse.radius_x = ellipse.radius_y = radius
-                self._fill_ellipse(self._ellipse_pointer, self._brush(target_outline_color(color)))
-                ellipse.radius_x = ellipse.radius_y = radius - min(TARGET_OUTLINE_WIDTH, radius / 2)
+                if ball_outlines:
+                    self._fill_ellipse(self._ellipse_pointer, self._brush(target_outline_color(color)))
+                    ellipse.radius_x = ellipse.radius_y = radius - min(TARGET_OUTLINE_WIDTH, radius / 2)
                 self._fill_ellipse(self._ellipse_pointer, self._brush(color))
             if reticle is not None:
                 x, y, span, color = reticle

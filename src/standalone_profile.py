@@ -16,6 +16,7 @@ from esp32_detection import (
     firmware_identity_matches, stable_usb_serial, verified_firmware_status,
 )
 from idle_disconnect import normalize_idle_disconnect_minutes
+from direction_deadzones import CUSTOM_DEADZONE_KEY, parse_custom_zones
 
 import serial
 from serial.tools import list_ports
@@ -168,10 +169,12 @@ def analyze_standalone_v2_compatibility(
                 issues, "blocking", "按鍵 Windows 輸出",
                 f"{str(source).upper()} → {target or '<空白>'}",
             )
-    for side, mappings in settings.get("direction_mappings", {}).items():
-        mode = str(
-            sections.get(f"stick_direction_{side}", {}).get("mode", "4WAY")
-        ).upper()
+    direction_mappings = settings.get("direction_mappings", {})
+    for side in ("left", "right"):
+        stick = sections.get(f"stick_direction_{side}", {})
+        mappings = direction_mappings.get(side, {})
+        mode = str(stick.get("mode", "4WAY")).upper()
+        _check_standalone_deadzone(issues, stick, mode, side.upper())
         if "MOUSE" in mode or mode not in (
             "4WAY", "8WAY", "XINPUT_LT_LINEAR", "XINPUT_RT_LINEAR",
         ):
@@ -210,6 +213,7 @@ def analyze_standalone_v2_compatibility(
         for side in ("left", "right"):
             stick = layer.get(f"stick_{side}", {})
             mode = str(stick.get("mode", "4WAY")).upper()
+            _check_standalone_deadzone(issues, stick, mode, f"{name}: {side.upper()}")
             if "MOUSE" in mode or mode not in (
                 "4WAY", "8WAY", "XINPUT_LT_LINEAR", "XINPUT_RT_LINEAR",
             ):
@@ -232,6 +236,27 @@ def analyze_standalone_v2_compatibility(
                         ),
                     )
     return tuple(issues)
+
+
+def _check_standalone_deadzone(issues, stick, mode, label):
+    try:
+        zones = parse_custom_zones(stick.get(CUSTOM_DEADZONE_KEY))
+    except (TypeError, ValueError, OverflowError):
+        return
+    if mode in zones:
+        _issue(
+            issues, "blocking", "逐區方向死區",
+            f"{label} 使用逐區方向死區。ESP32 獨立模式目前支援統一死區。",
+        )
+
+
+def _standalone_layer(layer):
+    snapshot = dict(layer)
+    for key in ("stick_left", "stick_right"):
+        if CUSTOM_DEADZONE_KEY in layer.get(key, {}):
+            snapshot[key] = dict(layer[key])
+            snapshot[key].pop(CUSTOM_DEADZONE_KEY)
+    return snapshot
 
 
 def compile_standalone_profile(
@@ -259,6 +284,8 @@ def compile_standalone_profile(
             "gyro_mapping",
         )
     }
+    for side in ("left", "right"):
+        typed_sections[f"stick_direction_{side}"].pop(CUSTOM_DEADZONE_KEY, None)
     document = {
         "schema": STANDALONE_PROFILE_SCHEMA,
         "profile_name": str(profile_name).strip() or "Unnamed",
@@ -290,7 +317,7 @@ def compile_standalone_profile(
         "sensor_calibration": settings.get("sensor_calibration"),
         "buttons": dict(sorted(settings.get("buttons", {}).items())),
         "mapping_layers": [
-            layer for layer in mapping_layers if layer.get("enabled", False)
+            _standalone_layer(layer) for layer in mapping_layers if layer.get("enabled", False)
         ],
     }
     payload = json.dumps(

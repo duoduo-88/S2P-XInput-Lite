@@ -1,7 +1,139 @@
-"""Compact mapping labels without changing serialized controller targets."""
+"""Overflow help for selectors and compact labels for controller mappings."""
 
 import tkinter as tk
 from tkinter import ttk
+
+from gamepad_aim_display import fullscreen_monitor_bounds
+
+
+class _PopdownTooltip:
+    def __init__(self, widget, popup, listbox):
+        self.widget = widget
+        self.popup = popup
+        self.listbox = listbox
+        self.window = None
+        self.row = None
+        call = widget.tk.call
+        self.inset = sum(
+            call("winfo", "pixels", listbox, call(listbox, "cget", option))
+            for option in ("-borderwidth", "-highlightthickness")
+        )
+        hover = widget.register(self.hover)
+        hide = widget.register(self.hide)
+        fit = widget.register(self.fit_width)
+        call("bind", listbox, "<Map>", f"+{fit}")
+        for event in ("<Enter>", "<Motion>"):
+            call("bind", listbox, event, f"+{hover} %y")
+        for event in ("<Leave>", "<MouseWheel>", "<KeyPress>", "<ButtonPress>"):
+            call("bind", listbox, event, f"+{hide}")
+        call("bind", popup, "<Unmap>", f"+{hide}")
+
+    def _monitor_bounds(self):
+        call = self.widget.tk.call
+        try:
+            return fullscreen_monitor_bounds(int(call("winfo", "id", self.popup), 0))
+        except OSError:
+            return (0, 0, self.widget.winfo_screenwidth(), self.widget.winfo_screenheight())
+
+    def fit_width(self):
+        """Fit the native list after ttk has populated it and placed its scrollbar."""
+        call = self.widget.tk.call
+        values = self.widget.tk.splitlist(call(self.listbox, "get", 0, "end"))
+        font = call(self.listbox, "cget", "-font")
+        text_width = max((call("font", "measure", font, value) for value in values), default=0)
+        current_width = call("winfo", "width", self.popup)
+        list_width = call("winfo", "width", self.listbox)
+        padding = current_width - list_width + 2 * (self.inset + 1)
+        left, _top, right, _bottom = self._monitor_bounds()
+        width = min(right - left, max(current_width, text_width + padding))
+        current_x = call("winfo", "rootx", self.popup)
+        x = max(left, min(current_x, right - width))
+        if width != current_width or x != current_x:
+            y = call("winfo", "rooty", self.popup)
+            height = call("winfo", "height", self.popup)
+            call("wm", "geometry", self.popup, f"{width}x{height}+{x}+{y}")
+
+    def hover(self, y):
+        call = self.widget.tk.call
+        try:
+            y = int(y)
+            index = call(self.listbox, "nearest", y)
+            bbox = call(self.listbox, "bbox", index)
+            if bbox:
+                x, row_y, width, height = bbox
+                right = call("winfo", "width", self.listbox) - self.inset
+                clipped = x < self.inset or x + width > right
+                if clipped and row_y <= y < row_y + height:
+                    text = str(call(self.listbox, "get", index))
+                    if self.row != (index, text):
+                        self.hide()
+                        self.show(row_y, text)
+                        self.row = (index, text)
+                    return
+        except tk.TclError:
+            pass
+        self.hide()
+
+    def show(self, row_y, text):
+        call = self.widget.tk.call
+        left, top, right, bottom = self._monitor_bounds()
+        popup_x = call("winfo", "rootx", self.popup)
+        popup_right = popup_x + call("winfo", "width", self.popup)
+        popup_y = call("winfo", "rooty", self.popup)
+        popup_bottom = popup_y + call("winfo", "height", self.popup)
+        row_top = call("winfo", "rooty", self.listbox) + row_y
+        space_left, space_right = popup_x - left, right - popup_right
+        side_space = max(space_left, space_right)
+        wrap_space = side_space if side_space >= 160 else right - left
+
+        tip = self.window = tk.Toplevel(self.widget)
+        tip.withdraw()
+        tip.overrideredirect(True)
+        call("wm", "transient", str(tip), self.popup)
+        label = tk.Label(
+            tip, text=text, justify="left", relief="solid", borderwidth=1,
+            padx=8, pady=6, wraplength=max(1, min(420, wrap_space - 28)),
+        )
+        label.pack()
+        width, height = label.winfo_reqwidth(), label.winfo_reqheight()
+        y = row_top
+        if space_right >= width + 6:
+            x = popup_right + 6
+        elif space_left >= width + 6:
+            x = popup_x - width - 6
+        else:
+            x = max(left, min(popup_x, right - width))
+            y = popup_bottom + 6 if bottom - popup_bottom >= height + 6 else popup_y - height - 6
+        y = max(top, min(y, bottom - height))
+        tip.geometry(f"+{x}+{y}")
+        tip.deiconify()
+
+    def hide(self):
+        if self.window is not None:
+            try:
+                self.window.destroy()
+            except tk.TclError:
+                pass
+            self.window = None
+        self.row = None
+
+
+def bind_popdown_tooltip(widget):
+    """Show the full text of a clipped list row without changing selection."""
+    try:
+        popup = widget.tk.call("ttk::combobox::PopdownWindow", str(widget))
+        listbox = f"{popup}.f.l"
+        if widget.tk.call("winfo", "exists", listbox):
+            _PopdownTooltip(widget, popup, listbox)
+    except (AttributeError, tk.TclError):
+        # Tk may use a native popup without an accessible listbox.
+        pass
+
+
+class ReadableCombobox(ttk.Combobox):
+    def __init__(self, parent, **options):
+        super().__init__(parent, **options)
+        bind_popdown_tooltip(self)
 
 
 _KEY_LABELS = {

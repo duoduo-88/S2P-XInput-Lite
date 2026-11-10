@@ -5,10 +5,14 @@ from __future__ import annotations
 import heapq
 import math
 import random
+from functools import cached_property
+from itertools import islice
 
 
 ROUND_SECONDS = 30.0
 MAX_TIMED_TARGETS = 2
+MIN_REFILL_SECONDS = 0.06
+MAX_REFILL_SECONDS = 0.14
 TIMED_MODES = frozenset(("timed-shooting", "timed-cursor", "timed-cursor-stick", "timed-cursor-mouse"))
 TRACKING_MODES = frozenset(("tracking", "cursor-tracking"))
 TARGET_RADIUS = 0.36
@@ -166,9 +170,12 @@ class AimCamera:
         self.yaw = self.pitch = 0.0
 
     def turn(self, axes, seconds):
-        self.yaw = math.remainder(self.yaw + axes[0] * math.radians(140) * seconds, math.tau)
+        self.look(axes[0] * math.radians(140) * seconds, axes[1] * math.radians(115) * seconds)
+
+    def look(self, yaw_delta, pitch_delta):
+        self.yaw = math.remainder(self.yaw + yaw_delta, math.tau)
         limit = math.radians(85)
-        self.pitch = max(-limit, min(limit, self.pitch + axes[1] * math.radians(115) * seconds))
+        self.pitch = max(-limit, min(limit, self.pitch + pitch_delta))
 
     def camera_transform(self):
         cos_yaw, sin_yaw = math.cos(self.yaw), math.sin(self.yaw)
@@ -198,6 +205,18 @@ class AimCamera:
     def on_target(target):
         x, y, z = target
         return z > 0 and x * x + y * y <= TARGET_RADIUS * TARGET_RADIUS
+
+    @staticmethod
+    def crosshair_depth(target):
+        """Depth of the first sphere surface hit by the +Z crosshair ray."""
+        x, y, z = target
+        radius_squared = TARGET_RADIUS * TARGET_RADIUS - (x * x + y * y)
+        return z - math.sqrt(radius_squared) if z > 0 and radius_squared >= 0 else None
+
+
+def _distance_range(positions):
+    distances = [math.hypot(*position) for position in positions]
+    return min(distances), max(distances)
 
 
 def _seed_tracking_path(path, seed):
@@ -266,6 +285,11 @@ class TrackingTest(_TrackingRound, AimCamera):
             amplitude * math.sin(seconds * rate) for amplitude, rate in self._path
         )
         return wide + small, vertical, 7.4 + depth
+
+    @cached_property
+    def target_distance_range(self):
+        steps = max(1, math.ceil(self.duration * 30))
+        return _distance_range(self.target(self.duration * step / steps) for step in range(steps + 1))
 
     def target_position(self):
         return self.target(self.elapsed)
@@ -367,6 +391,10 @@ class ShootingTest(_TargetRound, AimCamera):
             return self._targets[self.hits % len(self._targets)]
         return None
 
+    @cached_property
+    def target_distance_range(self):
+        return _distance_range(self._targets[:self.count])
+
     def crosshair_on_target(self):
         return self.running and self.on_target(self.camera_transform()(self.target_position()))
 
@@ -411,16 +439,17 @@ class _TimedTargetRound(_TargetRound):
         self.shots += 1
         if not self._live:
             return None
-        missed, error, index = min(
-            (not hit, error, index)
-            for index, (error, hit) in enumerate(map(contact, self._live))
+        missed, _, error, index = min(
+            (hit_order is None, error if hit_order is None else hit_order, error, index)
+            for index, (error, hit_order) in enumerate(map(contact, self._live))
         )
         self.error_sum += error
         self._error_samples += 1
         if missed:
             return None
         self.hits += 1
-        heapq.heappush(self._pending, self.elapsed + self._timing.uniform(0.06, 0.14))
+        refill = self._timing.uniform(MIN_REFILL_SECONDS, MAX_REFILL_SECONDS)
+        heapq.heappush(self._pending, self.elapsed + refill)
         return self._live.pop(index)
 
     @property
@@ -450,12 +479,24 @@ class TimedShootingTest(_TimedTargetRound, AimCamera):
     def target_positions(self):
         return tuple(self._live) if self.running else ()
 
+    @cached_property
+    def target_distance_range(self):
+        # Hitting each ball as soon as it spawns gives the earliest refill schedule.
+        timing = random.Random(self.seed)
+        ready = [0.0] * MAX_TIMED_TARGETS
+        count = 0
+        while ready[0] < self.duration:
+            count += 1
+            refill = timing.uniform(MIN_REFILL_SECONDS, MAX_REFILL_SECONDS)
+            heapq.heapreplace(ready, ready[0] + refill)
+        return _distance_range(islice(self._position_stream(), count))
+
     def shoot(self):
         transform = self.camera_transform()
 
         def contact(position):
             target = transform(position)
-            return self.target_error(target), self.on_target(target)
+            return self.target_error(target), self.crosshair_depth(target)
 
         return self._shoot_at(contact)
 
@@ -486,7 +527,8 @@ class TimedCursorTest(_TimedTargetRound, _CursorGeometry):
             return None
 
         def contact(position):
-            return self._cursor_error(x, y, self._project_target(position, width, height, top))
+            error, hit = self._cursor_error(x, y, self._project_target(position, width, height, top))
+            return error, error if hit else None
 
         point = self._shoot_at(contact)
         return self._project_target(point, width, height, top) if point is not None else None

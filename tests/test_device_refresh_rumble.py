@@ -3,6 +3,7 @@ import sys
 import time
 from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -35,7 +36,8 @@ class DeviceRefreshRumbleTests(unittest.TestCase):
     def make_tester(self):
         tester = object.__new__(GamepadTestWindow)
         tester.gui = SimpleNamespace(tr=lambda text: "Bridge")
-        tester.raw_hid_probe = SimpleNamespace(read_snapshot=lambda: {"state": "idle"})
+        tester.raw_hid_probe = SimpleNamespace(has_reader=False)
+        tester._raw_hid_pending_start = None
         tester._device_enumeration_initialized = True
         tester._native_test_devices = ()
         tester.raw_hid_devices = {}
@@ -82,6 +84,28 @@ class DeviceRefreshRumbleTests(unittest.TestCase):
         self.assertEqual(tester.backend.outputs[0], (0.5, 0.25))
         self.assertEqual(tester._manual_rumble, (0.5, 0.25))
         self.assertEqual(tester._active_rumble_slot, 0)
+
+    def test_disappearing_device_clears_measurements_before_using_a_fallback(self):
+        tester = self.make_tester()
+        fallback = GamepadDevice("xinput:1", "xinput", 1, "Other controller", True)
+        tester._native_test_devices = (fallback,)
+        tester.latest_telemetry = {}
+        tester.clear_measurements = Mock()
+
+        tester._refresh_devices(force=False)
+
+        self.assertEqual(tester._selected_device().key, fallback.key)
+        tester.clear_measurements.assert_called_once_with()
+
+    def test_bridge_slot_change_clears_measurements_but_unchanged_refresh_does_not(self):
+        tester = self.make_tester()
+        tester.clear_measurements = Mock()
+
+        tester.latest_telemetry["xinput_slot"] = 1
+        tester._refresh_devices(force=False)
+        tester._refresh_devices(force=False)
+
+        tester.clear_measurements.assert_called_once_with()
 
     def test_rumble_tick_before_device_refresh_cannot_transfer_to_new_slot(self):
         tester = self.make_tester()

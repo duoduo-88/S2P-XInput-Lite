@@ -19,6 +19,8 @@ class FakeDisplay:
         self.fail_read_after_apply = False
         self.apply_failure = None
         self.reject_restore = False
+        self.ignore_restore = False
+        self.restore_failures_remaining = 0
         self.active_origin = None
         self.active_bounds = None
 
@@ -53,6 +55,11 @@ class FakeDisplay:
             return self.apply_failure
         if flags == 0 and self.reject_restore:
             return -1
+        if flags == 0 and self.restore_failures_remaining:
+            self.restore_failures_remaining -= 1
+            return -1
+        if flags == 0 and self.ignore_restore:
+            return 0
         if flags != 2:
             self.current = type(mode).from_buffer_copy(mode)
         if flags == 4 and self.active_origin is not None:
@@ -195,8 +202,9 @@ class TemporaryDisplayModeTests(unittest.TestCase):
         self.fake.fail_read_after_apply = True
         self.fake.reject_restore = True
         try:
-            with self.assertRaises(OSError):
+            with self.assertRaises(self.display.DisplayModeRestoreError) as error:
                 self.display.activate_fullscreen_mode(42, (2176, 1224))
+            self.assertIs(error.exception.mode, self.display._ACTIVE_MODES[self.fake.device])
             self.fake.reject_restore = False
             self.assertIsNone(self.display.activate_fullscreen_mode(42, (2560, 1440)))
             self.assertEqual(bytes(self.fake.current), bytes(self.current))
@@ -236,8 +244,60 @@ class TemporaryDisplayModeTests(unittest.TestCase):
             finally:
                 self.fake.reject_restore = False
             register.call_args.args[0]()
-            unregister.assert_called_once_with(session.close)
+            unregister.assert_called_once_with(register.call_args.args[0])
         self.assertEqual(bytes(self.fake.current), bytes(self.current))
+
+    def test_success_code_does_not_release_an_unrestored_mode(self):
+        self.fake.modes = [make_mode(2176, 1224)]
+        session = self.display.activate_fullscreen_mode(42, (2176, 1224))
+        self.addCleanup(session.close)
+        self.fake.ignore_restore = True
+        try:
+            with self.assertRaises(OSError):
+                session.close()
+            self.assertIs(self.display._ACTIVE_MODES[self.fake.device], session)
+        finally:
+            self.fake.ignore_restore = False
+        session.close()
+        self.assertEqual(bytes(self.fake.current), bytes(self.current))
+
+    def test_restore_verifies_refresh_rate_at_the_original_resolution(self):
+        self.fake.modes = [make_mode(2176, 1224)]
+        session = self.display.activate_fullscreen_mode(42, (2176, 1224))
+        self.addCleanup(session.close)
+        change = self.fake.change
+
+        def change_with_wrong_refresh(device, mode, flags):
+            result = change(device, mode, flags)
+            if flags == 0 and result == 0:
+                self.fake.current.dmDisplayFrequency = 60
+            return result
+
+        with patch.object(self.fake, "change", side_effect=change_with_wrong_refresh):
+            with self.assertRaises(OSError):
+                session.close()
+        self.assertEqual(self.fake.current.size, self.current.size)
+        self.assertIs(self.display._ACTIVE_MODES[self.fake.device], session)
+        session.close()
+        self.assertEqual(self.fake.current.dmDisplayFrequency, self.current.dmDisplayFrequency)
+
+    def test_exit_retries_restore_without_the_tk_event_loop(self):
+        self.fake.modes = [make_mode(2176, 1224)]
+        with (
+            patch.object(self.display.atexit, "register") as register,
+            patch.object(self.display, "sleep") as sleep,
+        ):
+            session = self.display.activate_fullscreen_mode(42, (2176, 1224))
+            self.addCleanup(session.close)
+            self.fake.restore_failures_remaining = 2
+            try:
+                register.call_args.args[0]()
+            finally:
+                self.fake.restore_failures_remaining = 0
+
+        self.assertEqual(sleep.call_count, 2)
+        self.assertEqual(bytes(self.fake.current), bytes(self.current))
+        self.assertNotIn(self.fake.device, self.display._ACTIVE_MODES)
 
 
 @unittest.skipUnless(sys.platform == "win32", "Display modes require Windows")

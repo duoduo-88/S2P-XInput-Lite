@@ -1,5 +1,6 @@
 import math
 import unittest
+from unittest.mock import patch
 
 
 class AimViewportTests(unittest.TestCase):
@@ -130,24 +131,20 @@ class TimedShootingTests(unittest.TestCase):
         self.assertAlmostEqual(drill.mean_error, error / 4)
         self.assertAlmostEqual(drill.accuracy, 60)
 
-    def test_overlapping_hit_prefers_the_target_with_the_smallest_angular_error(self):
+    def test_overlapping_hit_prefers_the_nearer_intersection_in_either_spawn_order(self):
         from gamepad_aim_model import TimedShootingTest
 
-        for seed in range(12):
-            drill = TimedShootingTest(seconds=10, seed=seed, horizontal_spread=25, vertical_spread=25)
-            drill.start()
-            for _ in range(10 * 32):
-                live = drill.target_positions()
-                if len(live) == 2:
-                    first, second = live
-                    self.aim_at(drill, second)
-                    if drill.on_target(drill.camera_transform()(first)):
-                        self.assertEqual(drill.shoot(), second)
-                        self.assertAlmostEqual(drill.mean_error, 0.0)
-                        self.assertEqual(drill.target_positions(), (first,))
-                        return
-                drill.advance_time(1 / 32)
-        self.fail("The seeded layouts must exercise a crosshair intersecting both live targets")
+        far = (0, 0, 8)
+        near = (0.24, 0, 4)
+        for positions in ((far, near), (near, far)):
+            with self.subTest(positions=positions):
+                drill = TimedShootingTest(seconds=10)
+                with patch.object(drill, "_position_stream", return_value=iter(positions)):
+                    drill.start()
+                self.assertEqual(drill.shoot(), near)
+                self.assertAlmostEqual(drill.mean_error, drill.target_error(near))
+                self.assertEqual(drill.target_positions(), (far,))
+                self.assertEqual(drill.shoot(), far)
 
 
 class CursorTrackingTests(unittest.TestCase):

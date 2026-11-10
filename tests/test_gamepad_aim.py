@@ -150,10 +150,35 @@ class AimOutputTests(unittest.TestCase):
         window.native_sampler = sampler
         window.backend = SimpleNamespace(read_state=lambda _device: None)
         window._selected_device = lambda: first
-        self.assertEqual(window._read_aim_output(), ((first.key, first.index), state))
+        first_key, first_state = window._read_aim_output()
+        self.assertIs(first_state, state)
         window._selected_device = lambda: second
         self.assertIsNone(window._read_aim_output())
         self.assertEqual(len(sampler.read_snapshot()[1]), 1)
+        window._selected_device = lambda: first
+        sampler.backend.read_state = Mock(side_effect=(None, state))
+        sampler._poll_once()
+        sampler._poll_once()
+        self.assertNotEqual(window._read_aim_output()[0], first_key)
+
+    def test_raw_hid_aim_uses_the_paired_windows_output(self):
+        from gamepad_devices import GamepadDevice, GamepadState, NativeGamepadSampler
+        from gamepad_test_window import GamepadTestWindow
+
+        raw = GamepadDevice("raw:0", "raw_hid", 0, "Raw", False)
+        paired = GamepadDevice("xinput:1", "xinput", 1, "Paired", True)
+        state = GamepadState(1, 0, ("START",), (0.0, 0.0), (0.125, -0.25), 0.0, 1.0)
+        window = object.__new__(GamepadTestWindow)
+        window.native_sampler = NativeGamepadSampler(SimpleNamespace(read_state=lambda _device: state))
+        window._selected_device = lambda: raw
+        window._native_device_for_raw_hid = Mock(return_value=paired)
+        window._configure_native_sampler()
+        window.native_sampler._poll_once()
+        self.assertEqual(window._read_aim_output()[1], state)
+        self.assertEqual(len(window.native_sampler.read_snapshot()[1]), 1)
+        window._native_device_for_raw_hid.return_value = None
+        window._configure_native_sampler()
+        self.assertIsNone(window._read_aim_output())
 
     def test_s2p_aim_reads_the_published_xinput_slot(self):
         from gamepad_devices import GamepadDevice, GamepadState
@@ -161,19 +186,52 @@ class AimOutputTests(unittest.TestCase):
 
         state = GamepadState(4, 0, (), (0.0, 0.0), (0.125, -0.25), 0.0, 0.5)
         window = object.__new__(GamepadTestWindow)
+        window._aim_bridge_packet = None
+        window._aim_bridge_generation = 0
         window._selected_device = lambda: GamepadDevice("s2p", "s2p", 2, "S2P", True)
         window.latest_telemetry = {"xinput_slot": 2, "right": {"final": (1.0, 1.0)}}
         window._telemetry_is_fresh = lambda _telemetry: True
         window.backend = SimpleNamespace(read_state=lambda device: (
             state if (device.kind, device.index) == ("xinput", 2) else None
         ))
-        self.assertEqual(window._read_aim_output(), (("s2p", 2), state))
+        self.assertEqual(window._read_aim_output(), (("s2p", 2, 0), state))
         window.latest_telemetry["xinput_slot"] = 1
         self.assertIsNone(window._read_aim_output())
+
+    def test_s2p_aim_distinguishes_packet_reset_from_normal_wrap(self):
+        from gamepad_devices import GamepadDevice, GamepadState
+        from gamepad_test_window import GamepadTestWindow
+
+        window = object.__new__(GamepadTestWindow)
+        window._aim_bridge_packet = None
+        window._aim_bridge_generation = 0
+        window._selected_device = lambda: GamepadDevice("s2p", "s2p", 2, "S2P", True)
+        window.latest_telemetry = {"xinput_slot": 2}
+        window._telemetry_is_fresh = lambda _telemetry: True
+        packets = (0xFFFFFFFF, 0, 100, 4, 5)
+        window.backend = SimpleNamespace(read_state=Mock(side_effect=[
+            GamepadState(packet, 0, (), (0.0, 0.0), (0.0, 0.0), 0.0, 0.0)
+            for packet in packets
+        ]))
+
+        keys = [window._read_aim_output()[0] for _packet in packets]
+
+        self.assertEqual(keys[0], keys[1])
+        self.assertEqual(keys[1], keys[2])
+        self.assertNotEqual(keys[2], keys[3])
+        self.assertEqual(keys[3], keys[4])
 
 
 class AimPaneTests(unittest.TestCase):
     def setUp(self):
+        from gamepad_aim_settings import AimSettings
+
+        # Ordinary UI tests use a window. Fullscreen tests supply a fake display mode.
+        defaults = patch("gamepad_aim.AimSettings", return_value=AimSettings(fullscreen=False))
+        display = patch("gamepad_aim.activate_fullscreen_mode", side_effect=AssertionError("Unexpected display change"))
+        for patcher in (defaults, display):
+            patcher.start()
+            self.addCleanup(patcher.stop)
         try:
             self.root = tk.Tk()
         except tk.TclError as error:
@@ -234,6 +292,82 @@ class AimPaneTests(unittest.TestCase):
         self.assertEqual(closed, [True])
         self.assertIs(pane._view, pane.canvas)
 
+    def test_3d_depth_shading_matches_in_tk_and_gpu_and_keeps_dark_colors_visible(self):
+        from dataclasses import replace
+
+        from gamepad_aim import VIEW_BACKGROUND, AimTestPane
+        from gamepad_aim_settings import AimSettings
+
+        draw = Mock()
+        pane = AimTestPane(self.root, str, lambda: None, gpu_renderer=lambda *_: SimpleNamespace(
+            draw=draw, close=lambda: None,
+        ))
+        pane.mode.set("timed-shooting")
+        pane._save_settings(AimSettings(fullscreen=False, window_size="800x450", target_color=VIEW_BACKGROUND, depth_shading=True))
+        pane._open_test_window()
+        near, far = (-0.4, 0, 4), (0.4, 0, 23)
+        with patch.object(pane.scene, "target_positions", return_value=(near, far)):
+            pane._draw()
+            self.assertTrue(pane._present_gpu())
+        pane._stop_gpu()
+        fills = tuple(pane.canvas.itemcget(item, "fill") for item in pane._ball_items)
+        self.assertEqual(tuple(ball[-1] for ball in draw.call_args.kwargs["balls"]), fills)
+        self.assertFalse(draw.call_args.kwargs["ball_outlines"])
+        self.assertTrue(all(not pane.canvas.itemcget(item, "outline") for item in pane._ball_items))
+
+        def brightness(color):
+            return sum(weight * channel for weight, channel in zip((299, 587, 114), bytes.fromhex(color[1:])))
+
+        self.assertGreater(brightness(fills[1]), brightness(fills[0]))
+        self.assertGreater(brightness(fills[0]) - brightness(VIEW_BACKGROUND), 40_000)
+
+        pane._save_settings(replace(pane.settings, depth_shading=False))
+        with patch.object(pane.scene, "target_positions", return_value=(near, far)):
+            pane._draw()
+            self.assertTrue(pane._present_gpu())
+        pane._stop_gpu()
+        self.assertTrue(draw.call_args.kwargs["ball_outlines"])
+        self.assertTrue(all(pane.canvas.itemcget(item, "outline") for item in pane._ball_items))
+
+    def test_seeded_depth_shading_uses_the_full_palette_even_at_default_depth(self):
+        from gamepad_aim import AimTestPane, _target_depth_palette
+        from gamepad_aim_settings import AimSettings
+
+        pane = AimTestPane(self.root, str, lambda: None)
+        pane._save_settings(AimSettings(fullscreen=False, seed=17))
+        near = min(pane.scene._targets, key=lambda target: math.hypot(*target))
+        far = max(pane.scene._targets, key=lambda target: math.hypot(*target))
+        with patch.object(pane.scene, "target_positions", return_value=(near, far)):
+            pane._draw()
+        colors = {
+            round(pane.canvas.coords(item)[2] - pane.canvas.coords(item)[0], 4):
+            pane.canvas.itemcget(item, "fill")
+            for item in pane._ball_items
+        }
+        self.assertEqual(colors[max(colors)], pane.settings.target_color)
+        self.assertEqual(colors[min(colors)], _target_depth_palette(pane.settings.target_color)[-1])
+
+    def test_depth_palette_changes_by_at_most_one_color_unit_per_channel(self):
+        from gamepad_aim import _target_depth_palette
+
+        colors = [bytes.fromhex(color[1:]) for color in _target_depth_palette("#57dab1")]
+        self.assertGreater(len(set(colors)), 64)
+        self.assertTrue(all(0 <= near - far <= 1 for before, after in zip(colors, colors[1:])
+                            for near, far in zip(before, after)))
+
+    def test_overlapping_3d_target_draws_the_first_surface_last(self):
+        from gamepad_aim import AimTestPane, project_ball
+
+        pane = AimTestPane(self.root, str, lambda: None)
+        pane.mode.set("timed-shooting")
+        pane._reset()
+        pane.scene.start()
+        front, back = (0.10, 0.0, 6.94), (0.35, 0.0, 6.82)
+        pane.scene._live[:] = [front, back]
+        pane._draw()
+        self.assertEqual(pane._ball_bounds[1], project_ball(front, *pane.size))
+        self.assertEqual(pane.scene.shoot(), front)
+
     def test_gpu_failure_restores_the_software_canvas(self):
         from gamepad_aim import AimTestPane
 
@@ -254,15 +388,20 @@ class AimPaneTests(unittest.TestCase):
         pane._reset()
         pane.output_ready = True
         pane._start()
-        pane._advance_countdown(pane.countdown_until)
+        started = pane.countdown_until
+        pane._advance_countdown(started)
+        pane.scene.yaw = math.atan2(2, 8)
+        pane._shoot(started + 0.01)
         pane.next_draw = 0.0
-        pane._draw_if_due(1.0)
+        pane._draw_if_due(started + 0.05)
         self.root.update()
         self.assertEqual(closed, [True])
         self.assertEqual(pane.gpu_error, "device lost")
         self.assertTrue(pane.scene.running)
         self.assertTrue(pane.canvas.winfo_ismapped())
         self.assertFalse(pane._gpu_view.winfo_ismapped())
+        self.assertTrue(any(pane.canvas.coords(pane.hit_particles[0])))
+        self.assertEqual(pane.canvas.cget("cursor"), "none")
 
     def test_threaded_gpu_failure_restores_canvas_without_counting_failed_draw(self):
         from gamepad_aim import AimTestPane
@@ -416,7 +555,7 @@ class AimPaneTests(unittest.TestCase):
         pane = AimTestPane(self.root, str, lambda: None)
         pane.dimension.set("2d")
         pane.mode.set("tracking")
-        pane._save_settings(AimSettings(tracking_seconds=1))
+        pane._save_settings(AimSettings(fullscreen=False, tracking_seconds=1))
         pane._start()
         start = pane.countdown_until
         pane._advance_countdown(start)
@@ -644,7 +783,7 @@ class AimPaneTests(unittest.TestCase):
         frame = tk.Frame(self.root)
         frame.pack(fill="both", expand=True)
         pane = AimTestPane(frame, str, lambda: None)
-        pane._save_settings(AimSettings(window_size="960x540"))
+        pane._save_settings(AimSettings(fullscreen=False, window_size="960x540"))
         self.root.deiconify()
         self.root.update()
         self.assertTrue(pane.history_view.winfo_ismapped())
@@ -824,17 +963,38 @@ class AimPaneTests(unittest.TestCase):
         from gamepad_aim import AimTestPane
 
         pane = AimTestPane(self.root, str, lambda: None)
-        mode = SimpleNamespace(close=Mock(side_effect=(OSError("temporary display error"), None)))
+        mode = SimpleNamespace(close=Mock(side_effect=(OSError("temporary display error"), OSError("retry failed"), None)))
         pane._fullscreen_mode = mode
         with (
             self.assertLogs("gamepad_aim", level="ERROR"),
             patch.object(self.root, "after") as after,
         ):
             pane.close_test()
-        self.assertIs(pane._fullscreen_mode, mode)
-        after.assert_called_once()
-        _delay, retry, failed_mode = after.call_args.args
-        retry(failed_mode)
+            self.assertIs(pane._fullscreen_mode, mode)
+            after.assert_called_once()
+            _, retry, *args = after.call_args.args
+            retry(*args)
+            self.assertEqual(after.call_count, 2)
+            _, retry, *args = after.call_args.args
+            retry(*args)
+        self.assertEqual(mode.close.call_count, 3)
+        self.assertIsNone(pane._fullscreen_mode)
+
+    def test_destroyed_fullscreen_window_retries_restoring_its_display_mode(self):
+        from gamepad_aim import AimTestPane
+
+        pane = AimTestPane(self.root, str, lambda: None)
+        mode = SimpleNamespace(close=Mock(side_effect=(OSError("temporary display error"), None)))
+        pane._fullscreen_mode = mode
+        with (
+            self.assertLogs("gamepad_aim", level="ERROR"),
+            patch.object(self.root, "after", return_value="display-retry") as after,
+        ):
+            pane.window.destroy()
+            after.assert_called_once()
+            _, retry, *args = after.call_args.args
+            retry(*args)
+
         self.assertEqual(mode.close.call_count, 2)
         self.assertIsNone(pane._fullscreen_mode)
 
@@ -855,12 +1015,30 @@ class AimPaneTests(unittest.TestCase):
         self.assertFalse(pane.test_open)
         self.assertIsNone(pane.countdown_until)
 
+    def test_failed_fullscreen_setup_schedules_rollback_retry(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_display import DisplayModeRestoreError
+        from gamepad_aim_settings import AimSettings
+
+        pane = AimTestPane(self.root, str, lambda: None)
+        pane._save_settings(AimSettings(fullscreen=True, fullscreen_size="1920x1080"))
+        mode = SimpleNamespace(close=Mock())
+        with (
+            patch("gamepad_aim.activate_fullscreen_mode", side_effect=DisplayModeRestoreError(mode, "rollback failed")),
+            patch("gamepad_aim.messagebox.showerror"),
+            self.assertLogs("gamepad_aim", level="ERROR"),
+        ):
+            pane._start()
+        self.assertIs(pane._fullscreen_mode, mode)
+        self.assertIsNotNone(pane._display_restore_job)
+        self.assertFalse(pane.test_open)
+
     def test_fullscreen_auto_selects_highest_driver_resolution(self):
         from gamepad_aim import AimTestPane
         from gamepad_aim_settings import AimSettings
 
         pane = AimTestPane(self.root, str, lambda: None)
-        pane._save_settings(AimSettings(fullscreen=True))
+        pane._save_settings(AimSettings())
         pane.output_ready = True
         with (
             patch("gamepad_aim.available_resolutions", return_value=("1920x1080", "3840x2160", "2560x1440")),
@@ -886,7 +1064,7 @@ class AimPaneTests(unittest.TestCase):
         self.assertFalse(pane.window.overrideredirect())
         activate.assert_not_called()
         pane.close_test()
-        pane._save_settings(AimSettings(window_size="960x540"))
+        pane._save_settings(AimSettings(fullscreen=False, window_size="960x540"))
         pane._start()
         self.root.update()
         self.assertEqual(pane.window.state(), "normal")
@@ -931,7 +1109,7 @@ class AimPaneTests(unittest.TestCase):
         self.root.deiconify()
         self.root.update()
         pane.mode.set("timed-shooting")
-        pane._save_settings(AimSettings(timed_shooting_seconds=12, seed=0))
+        pane._save_settings(AimSettings(fullscreen=False, timed_shooting_seconds=12, seed=0))
         pane.output_ready = True
         pane._start()
         started = pane.countdown_until
@@ -1001,7 +1179,7 @@ class AimPaneTests(unittest.TestCase):
                 pane = AimTestPane(frame, str, lambda: None)
                 pane.dimension.set("2d")
                 pane.mode.set("timed-shooting")
-                pane._save_settings(AimSettings(timed_shooting_seconds=5))
+                pane._save_settings(AimSettings(fullscreen=False, timed_shooting_seconds=5))
                 pane.output_ready = True
                 pane._start()
                 start = pane.countdown_until
@@ -1043,7 +1221,8 @@ class AimPaneTests(unittest.TestCase):
         from gamepad_aim_settings import AimSettings
 
         pane = AimTestPane(self.root, str, lambda: None)
-        pane._save_settings(AimSettings(target_color="#fa5544", target_on_target_color="#4d8dff"))
+        pane.dimension.set("2d")
+        pane._save_settings(AimSettings(fullscreen=False, target_color="#fa5544", target_on_target_color="#4d8dff"))
         pane._draw_balls(((100, 100, 12),), on_target=True)
         self.assertEqual(pane.canvas.itemcget(pane._ball_items[0], "fill"), "#4d8dff")
         self.assertEqual(float(pane.canvas.itemcget(pane._ball_items[0], "width")), 1.0)
@@ -1052,7 +1231,7 @@ class AimPaneTests(unittest.TestCase):
         pane._draw_balls(((100, 100, 12),), on_target=False)
         self.assertEqual(pane.canvas.itemcget(pane._ball_items[0], "fill"), "#fa5544")
         self.assertEqual(pane.canvas.itemcget(pane._ball_items[0], "outline"), outline)
-        pane._save_settings(AimSettings(target_color="#172231"))
+        pane._save_settings(AimSettings(fullscreen=False, target_color="#172231"))
         pane._draw_balls(((100, 100, 12),))
         self.assertNotEqual(pane.canvas.itemcget(pane._ball_items[0], "outline"), outline)
 
@@ -1088,7 +1267,7 @@ class AimPaneTests(unittest.TestCase):
         pane = AimTestPane(self.root, str, lambda: None, feedback=feedback)
         pane.dimension.set("3d")
         pane.mode.set("shooting")
-        pane._save_settings(AimSettings(reticle_on_target_color="#ff467a"))
+        pane._save_settings(AimSettings(fullscreen=False, depth_shading=False, reticle_on_target_color="#ff467a"))
         pane.output_ready = True
         pane._start()
         pane._shoot()
@@ -1118,6 +1297,32 @@ class AimPaneTests(unittest.TestCase):
         pane._draw_hit_effect(start_at + 0.4)
         self.assertEqual(pane.canvas.itemcget(pane.hit_particles[0], "state"), "hidden")
 
+    def test_hit_burst_varies_between_hits_and_keeps_its_pattern_through_redraws(self):
+        from gamepad_aim import HIT_DURATION, AimTestPane
+        from gamepad_aim_settings import AimSettings
+
+        pane = AimTestPane(self.root, str, lambda: None)
+        pane.dimension.set("2d")
+        pane._save_settings(AimSettings(fullscreen=False, target_count=3))
+        pane._start()
+        started = pane.countdown_until
+        pane._advance_countdown(started)
+        patterns = []
+        for shot, angle in enumerate((0, math.pi / 2), 1):
+            x, y, _ = pane.cursor.target(*pane.size, pane._cursor_top())
+            pane.cursor.x, pane.cursor.y = x, y
+            now = started + shot
+            magnitudes = (1.1, 0.75, 1.2, 1.15, 0.8, 0.9, 1.3, 0.8, 0.95, 1)
+            with patch("gamepad_aim.random.uniform", side_effect=(angle, *magnitudes)):
+                pane._shoot(now)
+            pane._draw_hit_effect(now + HIT_DURATION / 2)
+            positions = [pane.canvas.coords(item) for item in pane.hit_particles]
+            pane._draw_hit_effect(now + HIT_DURATION / 2)
+            self.assertEqual(positions, [pane.canvas.coords(item) for item in pane.hit_particles])
+            self.assertGreater(len({round(coords[2] - coords[0], 3) for coords in positions}), 1)
+            patterns.append([(round(coords[2] - x, 3), round(coords[3] - y, 3)) for coords in positions])
+        self.assertNotEqual(*patterns)
+
     def test_controller_test_hides_system_pointer_except_over_fullscreen_controls(self):
         from gamepad_aim import AimTestPane
 
@@ -1141,7 +1346,7 @@ class AimPaneTests(unittest.TestCase):
                 frame = tk.Frame(self.root)
                 pane = AimTestPane(frame, str, lambda: None)
                 pane.dimension.set(dimension)
-                pane._save_settings(AimSettings(target_count=1))
+                pane._save_settings(AimSettings(fullscreen=False, target_count=1))
                 pane.output_ready = True
                 pane._start()
                 start = pane.countdown_until
@@ -1171,7 +1376,7 @@ class AimPaneTests(unittest.TestCase):
 
         pane = AimTestPane(self.root, str, lambda: None)
         pane.dimension.set("2d")
-        pane._save_settings(AimSettings(reticle_size=26, target_size_2d=14))
+        pane._save_settings(AimSettings(fullscreen=False, reticle_size=26, target_size_2d=14))
         x1, _, x2, _ = pane.canvas.coords(pane.reticle[0])
         self.assertEqual(x2 - x1, 26)
         pane.cursor.start()
@@ -1182,6 +1387,7 @@ class AimPaneTests(unittest.TestCase):
 
     def test_3d_mode_shoots_once_per_rt_press(self):
         from gamepad_aim import AimTestPane
+        from gamepad_aim_settings import AimSettings
         from gamepad_devices import GamepadState
 
         state = GamepadState(1, 0, (), (0.0, 0.0), (0.0, 0.0), 0.0, 0.0)
@@ -1189,17 +1395,20 @@ class AimPaneTests(unittest.TestCase):
         pane._schedule = lambda _now: None
         pane.dimension.set("3d")
         pane.mode.set("shooting")
-        pane._reset()
+        pane._save_settings(AimSettings(fullscreen=False, window_size="800x450"))
         pane.device_key = "device"
         pane.output_ready = True
         pane._start()
-        pane._advance_countdown(pane.countdown_until)
+        started = pane.countdown_until
+        pane._advance_countdown(started)
+        pane.last_frame = pane.next_frame = started
         pane.shooting.yaw = math.atan2(2, 8)
-        pane._tick()
-        state = GamepadState(2, 0, (), (0.0, 0.0), (0.0, 0.0), 0.0, 1.0)
-        for _ in range(2):
-            pane.next_frame = 0.0
+        with patch("gamepad_aim.time.perf_counter", return_value=started):
             pane._tick()
+        state = GamepadState(2, 0, (), (0.0, 0.0), (0.0, 0.0), 0.0, 1.0)
+        for offset in (0.01, 0.02):
+            with patch("gamepad_aim.time.perf_counter", return_value=started + offset):
+                pane._tick()
         self.assertEqual((pane.shooting.hits, pane.shooting.shots), (1, 1))
 
     def test_space_used_to_start_a_round_does_not_also_fire(self):
@@ -1304,7 +1513,7 @@ class AimPaneTests(unittest.TestCase):
         history = AimHistory(None)
         pane = AimTestPane(self.root, str, lambda: None, history=history)
         pane.dimension.set("2d")
-        pane._save_settings(AimSettings(target_count=1))
+        pane._save_settings(AimSettings(fullscreen=False, target_count=1))
 
         def finish(miss):
             pane._start()
@@ -1322,10 +1531,8 @@ class AimPaneTests(unittest.TestCase):
             hint_x, hint_y = pane.canvas.coords(pane.finish_hint_item)
             self.assertEqual(hint_x, pane.size[0] / 2)
             self.assertGreater(hint_y, pane.canvas.bbox(pane.countdown_item)[3])
-            outlines = pane.canvas.find_withtag("finish_outline")
-            self.assertEqual(len(outlines), 16)
-            self.assertTrue(all(pane.canvas.itemcget(item, "fill") == pane.canvas["background"]
-                                for item in outlines))
+            self.assertFalse(pane.canvas.find_withtag("finish_outline"))
+            self.assertFalse(any(pane._ball_bounds))
             self.assertEqual(pane.status.get(), "")
 
         finish(True)
@@ -1333,10 +1540,37 @@ class AimPaneTests(unittest.TestCase):
         finish(False)
         self.assertTrue(any(improved and "↑" in text for text, improved in pane.change_parts))
         self.assertTrue(any(improved and "↓" in text for text, improved in pane.change_parts))
-        pane._save_settings(AimSettings(target_count=1, seed=17))
+        pane._save_settings(AimSettings(fullscreen=False, target_count=1, seed=17))
         finish(False)
         self.assertEqual(pane.change_parts, (("同基準尚無紀錄", None),))
         self.assertEqual(len(history.records), 3)
+
+    def test_all_modes_clear_targets_at_completion(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_settings import AimSettings
+
+        pane = AimTestPane(self.root, str, lambda: None)
+        settings = AimSettings(fullscreen=False, window_size="800x450", target_seconds=1)
+        for dimension in ("2d", "3d"):
+            for mode in ("tracking", "shooting", "timed-shooting"):
+                with self.subTest(dimension=dimension, mode=mode):
+                    pane.dimension.set(dimension)
+                    pane.mode.set(mode)
+                    pane._save_settings(settings)
+                    pane._start()
+                    pane._advance_countdown(pane.countdown_until)
+                    self.assertTrue(any(pane._ball_bounds))
+                    test = pane._round()
+                    if mode != "tracking":
+                        test.advance_time(test.duration)
+                    elif dimension == "3d":
+                        test.advance((0, 0), test.duration)
+                    else:
+                        test.advance(test.duration, *pane.size, pane._cursor_top())
+                    pane._check_finish()
+                    self.assertTrue(pane.finished)
+                    self.assertFalse(any(pane._ball_bounds))
+                    self.assertFalse(pane.canvas.find_withtag("finish_outline"))
 
     def test_mouse_shot_after_timeout_cannot_be_scored_between_ticks(self):
         from gamepad_aim import AimTestPane
@@ -1344,7 +1578,7 @@ class AimPaneTests(unittest.TestCase):
 
         pane = AimTestPane(self.root, str, lambda: None)
         pane.dimension.set("2d")
-        pane._save_settings(AimSettings(target_count=1, target_seconds=1))
+        pane._save_settings(AimSettings(fullscreen=False, target_count=1, target_seconds=1))
         pane._start()
         begun = pane.countdown_until
         pane._advance_countdown(begun)
@@ -1354,6 +1588,61 @@ class AimPaneTests(unittest.TestCase):
         self.assertTrue(pane.finished)
         self.assertEqual((pane.cursor.hits, pane.cursor.shots, pane.cursor.elapsed), (0, 0, 1))
 
+    def test_expired_point_round_is_saved_when_leaving_before_the_next_tick(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_settings import AimSettings
+
+        for action in ("close", "restart", "focus", "resize", "destroy"):
+            with self.subTest(action=action):
+                frame = tk.Frame(self.root)
+                pane = AimTestPane(frame, str, lambda: None)
+                pane.dimension.set("2d")
+                pane._save_settings(AimSettings(fullscreen=False, window_size="800x450", target_seconds=1))
+                pane._start()
+                start = pane.countdown_until
+                pane._advance_countdown(start)
+                pane._advance_point_clock(start + 0.99)
+
+                with patch("gamepad_aim.time.perf_counter", return_value=start + 1.001):
+                    if action == "close":
+                        pane.close_test()
+                    elif action == "restart":
+                        pane._start()
+                    elif action == "focus":
+                        with patch.object(pane.window, "focus_displayof", return_value=None):
+                            pane._view_lost_focus(SimpleNamespace(widget=pane._view))
+                    elif action == "resize":
+                        pane._resize(SimpleNamespace(widget=pane._view, width=900, height=500))
+                    else:
+                        pane.window.destroy()
+
+                record, = pane.history.records
+                self.assertEqual(record["metrics"]["seconds"], 1)
+                self.assertEqual(record["metrics"]["hits"], 0)
+                pane.close_test()
+                self.assertEqual(len(pane.history.records), 1)
+                frame.destroy()
+
+    def test_destroying_the_test_window_saves_the_last_hit_once(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_settings import AimSettings
+
+        pane = AimTestPane(self.root, str, lambda: None)
+        pane.dimension.set("2d")
+        pane._save_settings(AimSettings(fullscreen=False, window_size="800x450", target_count=1))
+        pane._start()
+        start = pane.countdown_until
+        pane._advance_countdown(start)
+        pane.cursor.x, pane.cursor.y, _ = pane.cursor.target(*pane.size, pane._cursor_top())
+        pane._shoot(start + 0.05)
+        self.assertTrue(pane.cursor.completed)
+        self.assertFalse(pane.history.records)
+
+        pane.window.destroy()
+
+        record, = pane.history.records
+        self.assertEqual(record["metrics"]["hits"], 1)
+
     def test_2d_point_drills_play_miss_feedback_only_for_a_counted_shot(self):
         from gamepad_aim import AimTestPane
         from gamepad_aim_settings import AimSettings
@@ -1361,7 +1650,7 @@ class AimPaneTests(unittest.TestCase):
         feedback = Mock()
         pane = AimTestPane(self.root, str, lambda: None, feedback=feedback)
         pane.dimension.set("2d")
-        pane._save_settings(AimSettings(window_size="800x450"))
+        pane._save_settings(AimSettings(fullscreen=False, window_size="800x450"))
         for mode in ("shooting", "timed-shooting"):
             with self.subTest(mode=mode):
                 feedback.reset_mock()
@@ -1398,7 +1687,7 @@ class AimPaneTests(unittest.TestCase):
         frame.pack()
         pane = AimTestPane(frame, str, lambda: None)
         pane.dimension.set("2d")
-        pane._save_settings(AimSettings(window_size="800x450"))
+        pane._save_settings(AimSettings(fullscreen=False, window_size="800x450"))
         self.root.deiconify()
         self.root.update()
         self.root.after_idle(frame.pack_forget)
@@ -1418,7 +1707,7 @@ class AimPaneTests(unittest.TestCase):
         frame.pack()
         pane = AimTestPane(frame, str, lambda: ("controller", state))
         pane.dimension.set("2d")
-        pane._save_settings(AimSettings(window_size="800x450"))
+        pane._save_settings(AimSettings(fullscreen=False, window_size="800x450"))
         self.root.deiconify()
         self.root.update()
         pane.start_button.focus_force()
@@ -1441,7 +1730,7 @@ class AimPaneTests(unittest.TestCase):
 
         pane = AimTestPane(self.root, str, lambda: None)
         pane.dimension.set("2d")
-        pane._save_settings(AimSettings(window_size="800x450", target_count=1))
+        pane._save_settings(AimSettings(fullscreen=False, window_size="800x450", target_count=1))
         pane._start()
         pane._advance_countdown(pane.countdown_until)
         pane.cursor.x, pane.cursor.y, _ = pane.cursor.target(*pane.size, pane._cursor_top())
@@ -1483,7 +1772,7 @@ class AimPaneTests(unittest.TestCase):
         self.root.deiconify()
         self.root.update()
         pane.dimension.set("2d")
-        pane._save_settings(AimSettings(window_size="800x450"))
+        pane._save_settings(AimSettings(fullscreen=False, window_size="800x450"))
         pane._start()
         self.root.update()
         self.assertIs(pane.canvas.focus_displayof(), pane.canvas)
@@ -1518,24 +1807,118 @@ class AimPaneTests(unittest.TestCase):
         pane.canvas.event_generate("<KeyRelease-space>")
         self.assertEqual((pane.cursor.hits, pane.cursor.shots), (1, 1))
 
-    def test_3d_space_does_not_score_after_output_changes_between_polls(self):
+    def test_3d_mouse_can_turn_and_hit_without_a_controller(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_settings import AimSettings
+
+        pane = AimTestPane(self.root, str, lambda: None)
+        pane._save_settings(AimSettings(fullscreen=False, window_size="800x450"))
+        self.assertFalse(pane.start_button.instate(["disabled"]))
+        pane._start()
+        started = pane.countdown_until
+        view = pane._view
+        left, top = view.winfo_rootx(), view.winfo_rooty()
+        x, y = pane.size[0] // 2, pane.size[1] // 2
+        center = left + x, top + y
+        event = SimpleNamespace(x=x, y=y)
+        with (patch.object(view, "winfo_pointerxy", return_value=center) as pointer,
+              patch.object(view, "focus_displayof", return_value=view),
+              patch.object(view, "winfo_containing", return_value=view),
+              patch("gamepad_aim._warp_mouse", return_value=True) as warp):
+            pane._mouse_move(event, started - 1)
+            warp.assert_not_called()
+            pane._advance_countdown(started)
+            pointer.return_value = center[0] + 70, center[1]
+            pane._mouse_move(event, started + 0.01)
+            yaw = pane.scene.yaw
+            self.assertGreater(yaw, 0)
+            warp.assert_called_once_with(*center)
+            pointer.return_value = center
+            pane._mouse_move(event, started + 0.02)
+            self.assertEqual(pane.scene.yaw, yaw)
+            pane._toggle_mouse_look(event)
+            self.assertEqual(view.cget("cursor"), "")
+            pointer.return_value = center[0] + 50, center[1]
+            self.assertFalse(pane._mouse_move(event, started + 0.021))
+            pane._mouse_click(event)
+            self.assertEqual(pane.shooting.shots, 0)
+            pane._toggle_mouse_look(event)
+            self.assertEqual(view.cget("cursor"), "none")
+            pane.scene.yaw = math.atan2(2, 8)
+            pointer.return_value = center[0] + 70, center[1]
+            with patch("gamepad_aim.time.perf_counter", return_value=started + 0.03):
+                pane._mouse_click(event)
+            self.assertAlmostEqual(pane.scene.yaw, math.atan2(2, 8))
+        self.assertEqual((pane.shooting.hits, pane.shooting.shots), (1, 1))
+
+    def test_3d_mouse_reentry_reanchors_without_turning(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_settings import AimSettings
+
+        pane = AimTestPane(self.root, str, lambda: None)
+        pane._save_settings(AimSettings(fullscreen=False, window_size="800x450"))
+        self.root.deiconify()
+        self.root.update()
+        pane._start()
+        self.root.update()
+        view = pane._view
+        started = pane.countdown_until
+        left, top = view.winfo_rootx(), view.winfo_rooty()
+        center = left + pane.size[0] // 2, top + pane.size[1] // 2
+        with (
+            patch.object(view, "winfo_pointerxy", return_value=center) as pointer,
+            patch.object(view, "focus_displayof", return_value=view),
+            patch.object(view, "winfo_containing", return_value=view),
+            patch("gamepad_aim._warp_mouse", return_value=True) as warp,
+        ):
+            pane._advance_countdown(started)
+            view.event_generate("<Leave>")
+            self.assertIsNone(pane._mouse_position)
+            pointer.return_value = left + 10, center[1]
+            pane._mouse_move(SimpleNamespace(x=10, y=pane.size[1] // 2), started + 0.01)
+
+            self.assertEqual(pane.scene.yaw, 0.0)
+            warp.assert_called_once_with(*center)
+            pointer.return_value = center[0] + 10, center[1]
+            pane._mouse_move(
+                SimpleNamespace(x=pane.size[0] // 2 + 10, y=pane.size[1] // 2),
+                started + 0.02,
+            )
+            self.assertGreater(pane.scene.yaw, 0.0)
+
+    def test_3d_mouse_priority_and_stick_replacement_keep_round_running(self):
         from gamepad_aim import AimTestPane
         from gamepad_aim_settings import AimSettings
 
         state = SimpleNamespace(right=(0, 0), buttons=(), right_trigger=0)
         output = ("original", state)
         pane = AimTestPane(self.root, str, lambda: output)
-        pane._save_settings(AimSettings(window_size="800x450", target_count=1))
+        pane._save_settings(AimSettings(fullscreen=False, window_size="800x450"))
         pane.device_key = "original"
         pane.output_ready = True
         pane._start()
-        pane._advance_countdown(pane.countdown_until)
+        started = pane.countdown_until
+        pane._advance_countdown(started)
+        pane._schedule = lambda _now: None
+        pane.last_frame = pane.next_frame = started
+        pane._mouse_priority_until = started + 0.05
         pane.scene.yaw = math.atan2(2, 8)
-        pane._space_down(None)
+        yaw = pane.scene.yaw
+        state.right, state.right_trigger = (0.5, 0), 1
         output = ("replacement", state)
-
-        pane._space_shot(None)
-
-        self.assertTrue(pane.interrupted)
+        with patch("gamepad_aim.time.perf_counter", return_value=started + 0.02):
+            pane._tick()
+        self.assertTrue(pane.shooting.running)
+        self.assertEqual(pane.scene.yaw, yaw)
         self.assertEqual(pane.shooting.shots, 0)
-        self.assertFalse(pane.history.records)
+        with patch("gamepad_aim.time.perf_counter", return_value=started + 0.08):
+            pane._tick()
+        self.assertGreater(pane.scene.yaw, yaw)
+        self.assertEqual(pane.shooting.shots, 0)
+        output = None
+        pane.scene.yaw = yaw
+        with patch("gamepad_aim.time.perf_counter", return_value=started + 0.1):
+            pane._tick()
+            pane._space_down(None)
+            pane._space_shot(None)
+        self.assertEqual((pane.shooting.hits, pane.shooting.shots), (1, 1))

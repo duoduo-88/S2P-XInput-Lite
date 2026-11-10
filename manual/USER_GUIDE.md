@@ -650,7 +650,9 @@ reports coverage, roundness error, and maximum radius.
 - After the displayed line catches the latest maxima and no sector expands for
   one second, the capture locks and stops redrawing to avoid idle rendering
   overhead.
-- Toggle **Shape**, change the source/settings, or select **Clear** to begin a new capture.
+- Toggle **Shape** off and back on, or change the source or settings to start a new capture.
+- **Reset** clears the current measurements and restores the defaults for that row.
+  Enable **Shape** again to start a new shape capture.
 
 ### 9.4 Buttons and triggers
 
@@ -762,11 +764,11 @@ the left. The right side contains scrollable **License Agreement** and
 
 #### Choose and run a drill
 
-In **2D Mode**, the mouse and right stick move the same reticle and take over
-automatically as you use them. Shoot with left-click, RT, or Space. In **3D Mode**,
-right-stick output turns the camera, and RT or Space fires. Stick values set
-reticle or camera speed proportionally. **3D Mode → Targets** is selected by
-default.
+In **2D Mode**, the mouse and right stick move the same reticle. In **3D Mode**,
+they turn the camera. The mouse takes over as you move it, and the right stick
+resumes after mouse movement pauses. Shoot with left-click, RT, or Space in
+either mode. Stick values set reticle or camera speed proportionally.
+**3D Mode → Targets** is selected by default.
 
 | Drill | 2D Mode | 3D Mode |
 |---|---|---|
@@ -777,17 +779,19 @@ default.
 Tracking runs for the configured duration. In Targets, a hit advances to the
 next target. The round ends at the configured hit count or optional time limit. Timed Targets starts
 with two targets. Each stays until hit and is replaced after a brief delay.
-The timer ends the round and the score shows the total hits.
+When 3D targets overlap, the shot hits the first ball surface along the
+crosshair ray. The timer ends the round and the score shows the total hits.
 
 Select **Start**, press Enter, or press controller START. Scoring starts after
 the 3, 2, 1 countdown. Use the top-right **Restart** button, Enter, or START to
 run the drill again. Use **Close**, Esc, or controller B to return to Gamepad
 Tester. A fullscreen test also closes when you switch away, restoring the
-previous display mode.
+previous display mode. During a 3D round, right-click to release the pointer
+for the window controls. Right-click in the play area again to resume mouse aim.
 
 #### Test settings and performance
 
-- In windowed mode, **Auto (Highest)** fits the test window, including its title bar,
+- **Fullscreen** is enabled by default. In windowed mode, **Auto (Highest)** fits the test window, including its title bar,
   to the current monitor's work area above or beside the Windows taskbar.
   In **Fullscreen**, **Auto (Highest)** uses the highest resolution Windows validates on
   that monitor. You can select a specific size for either mode.
@@ -800,6 +804,10 @@ previous display mode.
 - Adjust the reticle's color and size in any drill. The 2D target diameter is a
   percentage of the viewport's shorter edge. The depth and horizontal and
   vertical spread sliders control placement in 3D Targets and Timed Targets.
+- **Darken distant targets** is enabled by default. It uses the drill's target
+  distance range, so the nearest target is brightest and farther targets
+  become darker while remaining visible against the background. Turn it off
+  to display outlines on the 3D balls.
 - Tracking changes the target color and gives light feedback while you stay on
   it. In Targets and Timed Targets, the reticle changes color when on target.
   Hits trigger a short burst, sound, and vibration on a supported controller.
@@ -807,11 +815,12 @@ previous display mode.
   or use the sound checkbox to mute the cues. Select **Restore Defaults** and
   save to reset the test settings.
 
-The lower-right **Draw FPS** readout measures frames drawn by the test. **GPU**
-identifies hardware-accelerated Direct2D drawing. **Tk** identifies the fallback renderer.
-Drawing targets the monitor's refresh rate up to 500 FPS. **Update Hz** measures
-how often the test reads the selected gamepad, up to 500 Hz. Use **Report Rate
-Test** for measurements of device report intervals.
+The lower-right **D2D submits** or **Tk updates** counter measures the test's
+draw rate. The target follows the monitor's current refresh rate. **Input**
+shows the source report rate when the device provides enough information, and
+**Simulation** shows the measured simulation rate. The second line shows mean,
+P95 and P99 frame intervals and the share that exceeded the target interval.
+Use **Report Rate Test** to measure device report intervals.
 
 #### Read and compare results
 

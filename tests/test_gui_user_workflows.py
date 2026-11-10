@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import shutil
 import sys
 import tempfile
@@ -15,6 +16,7 @@ import config_gui
 import config_utils
 import mapping_layers
 import console_i18n
+from direction_deadzones import CUSTOM_DEADZONE_KEY
 
 
 class GUIUserWorkflowTests(unittest.TestCase):
@@ -104,16 +106,21 @@ class GUIUserWorkflowTests(unittest.TestCase):
         self.gui.lf_strength_var.set("0.37")
         self.gui.left_deadzone_var.set("0.07")
         self.gui.button_vars["A"].set("KEYBOARD:CTRL+A")
+        zones = '{"4WAY":[[5,20],[0,0],[0,0],[0,0]]}'
+        self.gui.stick_direction_custom_deadzone_vars["LEFT"].set(zones)
         self.assertTrue(self.gui.has_unsaved_changes())
         self.assertTrue(self.gui.save_current_profile(show_message=False))
         self.assertFalse(self.gui.has_unsaved_changes())
         self.gui.apply_selected_profile("Action")
         self.assertEqual(self.gui.active_profile, "Action")
         self.assertFalse(self.gui.has_unsaved_changes())
+        self.assertEqual(self.gui.stick_direction_custom_deadzone_vars["LEFT"].get(), "")
         self.gui.apply_selected_profile("General")
         self.assertEqual(float(self.gui.lf_strength_var.get()), 0.37)
         self.assertEqual(float(self.gui.left_deadzone_var.get()), 0.07)
         self.assertEqual(self.gui.button_vars["A"].get(), "KEYBOARD:CTRL+A")
+        self.assertTrue(self.gui.config.has_option("stick_direction_left", CUSTOM_DEADZONE_KEY))
+        self.assertTrue(self.gui.stick_direction_custom_deadzone_vars["LEFT"].get())
         self.assertFalse(self.gui.has_unsaved_changes())
         with patch.object(config_gui.simpledialog, "askstring", return_value="My Profile"):
             self.assertTrue(self.gui.save_profile_as())
@@ -124,6 +131,7 @@ class GUIUserWorkflowTests(unittest.TestCase):
         self.assertEqual(self.gui.active_profile, "My Profile")
         self.assertEqual(float(self.gui.lf_strength_var.get()), 0.37)
         self.assertEqual(self.gui.button_vars["A"].get(), "KEYBOARD:CTRL+A")
+        self.assertTrue(self.gui.stick_direction_custom_deadzone_vars["LEFT"].get())
         self.assertFalse(self.gui.has_unsaved_changes())
         self.pump()
 
@@ -242,6 +250,111 @@ class GUIUserWorkflowTests(unittest.TestCase):
         self.assertNotIn(layer_id, [layer["id"] for layer in self.gui.mapping_layers])
         self.assertFalse(self.gui.has_unsaved_changes())
         self.pump()
+
+    def test_save_keeps_layer_changed_on_disk_before_folder_watcher_runs(self):
+        self.gui.lf_strength_var.set("0.42")
+        self.gui.mapping_layers[0]["activation_buttons"] = ["B"]
+        layer_path = self.layers / "mouse.json"
+        external = json.loads(layer_path.read_text(encoding="utf-8"))
+        external["layer"]["activation_buttons"] = ["X", "Y"]
+        layer_path.write_text(json.dumps(external), encoding="utf-8")
+        disk_layer = layer_path.read_bytes()
+        disk_config = self.config_path.read_bytes()
+
+        with patch.object(config_gui.messagebox, "showerror") as error:
+            self.assertFalse(self.gui.save_current_profile(show_message=False))
+
+        error.assert_called_once()
+        self.assertEqual(layer_path.read_bytes(), disk_layer)
+        self.assertEqual(self.config_path.read_bytes(), disk_config)
+        self.assertEqual(self.gui.mapping_layers[0]["activation_buttons"], ["B"])
+        with patch.object(config_gui.messagebox, "askyesno", return_value=True):
+            self.gui.sync_mapping_layer_directory()
+        self.assertEqual(self.gui.mapping_layers[0]["activation_buttons"], ["X", "Y"])
+        self.assertTrue(self.gui.save_current_profile(show_message=False))
+
+    def test_failed_save_requires_reloading_a_new_external_layer_before_retry(self):
+        self.gui.lf_strength_var.set("0.42")
+        external = json.loads((self.layers / "mouse.json").read_text(encoding="utf-8"))
+        external["layer"]["id"] = "external-layer"
+        external_path = self.layers / "External.json"
+
+        def fail_after_external_write(*_args, **_kwargs):
+            external_path.write_text(json.dumps(external), encoding="utf-8")
+            raise OSError("forced profile write failure")
+
+        with patch.object(config_gui.messagebox, "showerror"):
+            with patch.object(config_gui, "save_profile", side_effect=fail_after_external_write):
+                self.assertFalse(self.gui.save_current_profile(show_message=False))
+            self.assertTrue(external_path.exists())
+            self.assertFalse(self.gui.save_current_profile(show_message=False))
+
+        self.assertEqual(json.loads(external_path.read_text(encoding="utf-8")), external)
+
+    def test_failed_save_reads_an_external_config_without_rewriting_it(self):
+        self.gui.lf_strength_var.set("0.42")
+        external = b"[gui]\nactive_profile = Alpha\n"
+
+        def fail_after_external_write(*_args, **_kwargs):
+            self.config_path.write_bytes(external)
+            raise OSError("forced profile write failure")
+
+        with (
+            patch.object(config_gui.messagebox, "showerror"),
+            patch.object(config_gui, "save_profile", side_effect=fail_after_external_write),
+        ):
+            self.assertFalse(self.gui.save_current_profile(show_message=False))
+
+        self.assertEqual(self.config_path.read_bytes(), external)
+        self.assertEqual(float(self.gui.lf_strength_var.get()), 0.42)
+
+    def test_save_rejects_external_config_edits_during_layer_writes(self):
+        self.gui.lf_strength_var.set("0.42")
+        self.gui.mapping_layers[0]["activation_buttons"] = ["B"]
+        layer_path = self.layers / "mouse.json"
+        original_layer = layer_path.read_bytes()
+        profile_path = self.profiles / "General.ini"
+        original_profile = profile_path.read_bytes()
+        external = self.config_path.read_bytes() + b"\n[gyro.EXTERNAL]\nbias = 0.1, 0.2, 0.3\n"
+        save_layers = config_gui.save_layers
+
+        def save_layers_then_edit_config(*args, **kwargs):
+            result = save_layers(*args, **kwargs)
+            self.config_path.write_bytes(external)
+            return result
+
+        with (
+            patch.object(config_gui, "save_layers", side_effect=save_layers_then_edit_config),
+            patch.object(config_gui.messagebox, "showerror"),
+        ):
+            self.assertFalse(self.gui.save_current_profile(show_message=False))
+
+        self.assertEqual(self.config_path.read_bytes(), external)
+        self.assertEqual(profile_path.read_bytes(), original_profile)
+        self.assertEqual(layer_path.read_bytes(), original_layer)
+        self.assertEqual(self.gui.mapping_layers[0]["activation_buttons"], ["B"])
+
+    def test_save_does_not_copy_a_concurrent_config_edit_into_the_profile(self):
+        self.gui.lf_strength_var.set("0.42")
+        profile_path = self.profiles / "General.ini"
+        original_profile = profile_path.read_bytes()
+        external_config = config_utils.load_config(self.config_path, persist=False)
+        external_config.set("rumble", "lf_strength", "0.91")
+        write = config_utils.SettingsFileChanges.write_config
+
+        def write_then_edit_config(changes, config, path):
+            write(changes, config, path)
+            config_utils.atomic_write_config(external_config, path)
+
+        with (
+            patch.object(config_utils.SettingsFileChanges, "write_config", write_then_edit_config),
+            patch.object(config_gui.messagebox, "showerror"),
+        ):
+            self.assertFalse(self.gui.save_current_profile(show_message=False))
+
+        self.assertEqual(profile_path.read_bytes(), original_profile)
+        self.assertEqual(config_utils.load_config(self.config_path, persist=False).get("rumble", "lf_strength"), "0.91")
+        self.assertEqual(float(self.gui.lf_strength_var.get()), 0.42)
 
     def test_cancel_close_then_save_close_and_reopen(self):
         self.gui.lf_strength_var.set("0.44")

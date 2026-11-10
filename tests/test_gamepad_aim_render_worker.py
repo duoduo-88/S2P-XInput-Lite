@@ -55,7 +55,9 @@ class AimRenderWorkerTests(unittest.TestCase):
         self.assertTrue(worker.submit(self.frame(1, pose)))
         self.assertTrue(entered.wait(2))
         self.assertTrue(worker.submit(self.frame(2, pose)))
-        self.assertTrue(worker.submit(self.frame(3, pose)))
+        self.assertTrue(worker.submit(AimRenderFrame(
+            (640, 360), pose, ((3, 0, 1, "#ffffff"),), ball_outlines=False,
+        )))
         self.assertEqual(worker.drain(), ((), None))
         released_at = time.perf_counter()
         release.set()
@@ -69,6 +71,7 @@ class AimRenderWorkerTests(unittest.TestCase):
         self.assertLessEqual(released_at, completed[0])
         self.assertLessEqual(completed[0], completed[1])
         self.assertEqual([parts["balls"][0][0] for parts in calls], [1, 3])
+        self.assertEqual([parts["ball_outlines"] for parts in calls], [True, False])
         self.assertEqual(projected, [pose])
         self.assertIs(calls[0]["lines"], calls[1]["lines"])
         self.assertEqual(len(set(threads)), 1)

@@ -14,6 +14,7 @@ class AimRenderFrame:
     fragments: tuple = ()
     overlays: tuple = ()
     labels: tuple = ()
+    ball_outlines: bool = True
 
 
 class AimRenderWorker:
@@ -90,6 +91,7 @@ class AimRenderWorker:
                 renderer.draw(
                     *frame.size, lines=lines, balls=frame.balls, reticle=frame.reticle,
                     fragments=frame.fragments, overlays=frame.overlays, labels=frame.labels,
+                    ball_outlines=frame.ball_outlines,
                 )
                 with self._condition:
                     self._completed.append(perf_counter())

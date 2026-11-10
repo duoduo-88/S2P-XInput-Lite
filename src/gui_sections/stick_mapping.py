@@ -1,6 +1,8 @@
-import math
 import tkinter as tk
 from tkinter import ttk
+
+from direction_deadzones import CUSTOM_DEADZONE_KEY
+from gui_sections.direction_deadzone import DirectionDeadzonePreview
 from readable_combobox import MappingCombobox
 
 def build_stick_mapping_section(gui, mapping_notebook):
@@ -308,13 +310,17 @@ def build_stick_mapping_section(gui, mapping_notebook):
         direction_settings_frame.columnconfigure(1, weight=1)
         mouse_settings_frame.columnconfigure(1, weight=1)
 
-        preview = tk.Canvas(
-            direction_settings_frame,
-            width=88,
-            height=88,
-            bg="#ffffff",
-            highlightthickness=1,
-            highlightbackground="#a8a8a8",
+        shape_var = gui.left_output_shape_var if side == "LEFT" else gui.right_output_shape_var
+        preview = DirectionDeadzonePreview(
+            direction_settings_frame, gui, side,
+            {
+                "mode": gui.stick_direction_mode_vars[side],
+                "direction_deadzone": gui.stick_direction_deadzone_vars[side],
+                CUSTOM_DEADZONE_KEY: gui.stick_direction_custom_deadzone_vars[side],
+                "trigger_threshold": gui.stick_direction_trigger_vars[side],
+                "release_threshold": gui.stick_direction_release_vars[side],
+            },
+            shape_var,
         )
         preview.grid(row=0, column=0, padx=(2, 5))
         direction_controls = ttk.Frame(direction_settings_frame)
@@ -341,7 +347,7 @@ def build_stick_mapping_section(gui, mapping_notebook):
                 width=4,
                 anchor="e",
             ).grid(row=row, column=0, padx=(0, 4), pady=2)
-            ttk.Scale(
+            scale = ttk.Scale(
                 direction_controls,
                 from_=minimum,
                 to=maximum,
@@ -349,14 +355,18 @@ def build_stick_mapping_section(gui, mapping_notebook):
                 command=command,
                 orient="horizontal",
                 length=120,
-            ).grid(
+            )
+            scale.grid(
                 row=row, column=1, padx=4, pady=2, sticky="ew"
             )
             value_label = ttk.Label(
                 direction_controls, width=5, anchor="w"
             )
             value_label.grid(row=row, column=2, padx=(3, 0), pady=2)
-            value_labels.append((value_label, variable, formatter))
+            if row == 0:
+                preview.attach_slider(scale, value_label)
+            else:
+                value_labels.append((value_label, variable, formatter))
             gui.bind_slider_value_editor(
                 value_label,
                 variable,
@@ -367,6 +377,7 @@ def build_stick_mapping_section(gui, mapping_notebook):
                 step=step,
                 number_format=number_format,
                 setter=command,
+                on_disabled_click=preview.open_editor if row == 0 else None,
             )
 
         def snap_trigger(value):
@@ -560,120 +571,7 @@ def build_stick_mapping_section(gui, mapping_notebook):
 
         def draw_direction_preview(*args):
             del args
-            preview.delete("all")
-            # Tk adds the highlight border outside the configured Canvas
-            # size. Centre against the actual rendered widget instead of
-            # the nominal 88 px content width, which otherwise makes every
-            # ring look about one pixel too far left/up.
-            border = float(preview.cget("highlightthickness")) + float(
-                preview.cget("borderwidth")
-            )
-            fallback_width = float(preview.cget("width")) + border * 2.0
-            fallback_height = float(preview.cget("height")) + border * 2.0
-            width = max(float(preview.winfo_width()), fallback_width)
-            height = max(float(preview.winfo_height()), fallback_height)
-            center_x = width / 2.0
-            center_y = height / 2.0
-            radius = min(width, height) / 2.0 - 8.0
-            mode = gui.stick_direction_mode_vars[side].get().strip()
-            deadzone = max(
-                0.0,
-                min(
-                    20.0,
-                    safe_float(gui.stick_direction_deadzone_vars[side], 5.0),
-                ),
-            )
-            boundary_step = 90.0 if mode == "4WAY" else 45.0
-            first_boundary = 45.0 if mode == "4WAY" else 22.5
-            boundary_count = 4 if mode == "4WAY" else 8
-            shape_steps = max(
-                0,
-                min(10, int(round(gui.left_output_shape_var.get()
-                                  if side == "LEFT"
-                                  else gui.right_output_shape_var.get()))),
-            )
-            shape_blend = shape_steps / 10.0
-
-            def output_edge_point(angle_degrees):
-                angle = math.radians(angle_degrees)
-                direction_x = math.cos(angle)
-                direction_y = math.sin(angle)
-                square_scale = 1.0 / max(
-                    abs(direction_x), abs(direction_y), 1e-9
-                )
-                edge_scale = (
-                    1.0 - shape_blend
-                    + square_scale * shape_blend
-                )
-                return (
-                    center_x + radius * direction_x * edge_scale,
-                    center_y - radius * direction_y * edge_scale,
-                )
-
-            # 方向死區是角度區域，不會在單位圓處終止。將扇形畫到
-            # 目前圓形／方形混合後的實際外緣，和執行時判定一致。
-            if deadzone > 0.0:
-                for index in range(boundary_count):
-                    boundary = first_boundary + index * boundary_step
-                    sector_points = [center_x, center_y]
-                    for sample in range(13):
-                        angle = (
-                            boundary - deadzone
-                            + deadzone * 2.0 * sample / 12.0
-                        )
-                        sector_points.extend(output_edge_point(angle))
-                    preview.create_polygon(
-                        *sector_points,
-                        fill="#f3caca",
-                        outline="",
-                    )
-            preview.create_line(
-                center_x - radius, center_y,
-                center_x + radius, center_y,
-                fill="#b0b0b0"
-            )
-            preview.create_line(
-                center_x, center_y - radius,
-                center_x, center_y + radius,
-                fill="#b0b0b0"
-            )
-            trigger = max(
-                0.0,
-                min(1.0, safe_float(gui.stick_direction_trigger_vars[side], 0.60)),
-            )
-            release = max(
-                0.0,
-                min(trigger, safe_float(gui.stick_direction_release_vars[side], 0.50)),
-            )
-            for value, color, dash in (
-                (trigger, "#2878c8", ()),
-                (release, "#666666", (3, 2)),
-            ):
-                ring = radius * value
-                preview.create_oval(
-                    center_x - ring,
-                    center_y - ring,
-                    center_x + ring,
-                    center_y + ring,
-                    outline=color,
-                    width=2,
-                    dash=dash,
-                )
-            boundary_points = []
-            for sample in range(121):
-                boundary_points.extend(
-                    output_edge_point(360.0 * sample / 120.0)
-                )
-            preview.create_line(
-                *boundary_points,
-                fill="#333333",
-                width=2,
-            )
-            preview.create_oval(
-                center_x - 2, center_y - 2,
-                center_x + 2, center_y + 2,
-                fill="#333333", outline=""
-            )
+            preview.redraw()
 
             for label, variable, formatter in value_labels:
                 label.configure(
@@ -695,18 +593,12 @@ def build_stick_mapping_section(gui, mapping_notebook):
             gui.stick_direction_trigger_vars[side],
             gui.stick_direction_release_vars[side],
             gui.stick_direction_deadzone_vars[side],
+            gui.stick_direction_custom_deadzone_vars[side],
             gui.stick_mouse_speed_vars[side],
             gui.stick_mouse_deadzone_vars[side],
-            gui.left_output_shape_var
-            if side == "LEFT"
-            else gui.right_output_shape_var,
+            shape_var,
         ):
             variable.trace_add("write", draw_direction_preview)
-        preview.bind(
-            "<Configure>",
-            lambda _event: draw_direction_preview(),
-            add="+",
-        )
 
         # =========================
         # 4 向 / 8 向顯示切換

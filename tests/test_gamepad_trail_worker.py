@@ -153,7 +153,12 @@ class TrailPlotWorkerTests(unittest.TestCase):
         plot._bitmap_worker_key = None
         plot._bitmap_worker_sequence = -1
         plot._bitmap_worker_force_reset = False
-        plot._bitmap_presented = False
+        plot._bitmap_worker_disabled = False
+        plot.zoom, plot.pan_x, plot.pan_y = 1.0, 0.0, 0.0
+        plot.trail_color = "#1976d2"
+        plot._bitmap_scanlines = None
+        plot._bitmap_expiry_heap = []
+        plot._bitmap_last_processed_sequence = -1
         surface = SimpleNamespace(
             pixels=(ctypes.c_uint32 * (PLOT_SIZE * PLOT_SIZE))(),
             invalidate=Mock(),
@@ -168,15 +173,21 @@ class TrailPlotWorkerTests(unittest.TestCase):
         worker.submit.side_effect = lambda side, key, style, samples, now, **options: requested.append(
             (side, key, tuple(samples))
         )
-        config = (100, 1.0, 0.0, 0.0, 2.5)
+        plot._trail_surface = Mock(return_value=surface)
+        plot.owner = SimpleNamespace(
+            _trail_raster_worker=worker,
+            sample_display_percent_var=Mock(get=Mock(return_value=100)),
+            trail_length_var=Mock(get=Mock(return_value=2.5)),
+        )
 
-        plot._draw_worker_bitmap(worker, surface, history, config, 1.0)
+        self.assertTrue(plot._draw_trail_bitmap(history, 1.0))
+        self.assertFalse(plot._bitmap_worker_disabled)
         self.assertEqual(surface.pixels[5 * PLOT_SIZE], first_pixel)
         surface.invalidate.assert_called_once_with(0, 5, 1, 6)
 
         history.reset()
         history.add(0.4, 0.6, 2.0, False)
-        plot._draw_worker_bitmap(worker, surface, history, config, 2.0)
+        self.assertTrue(plot._draw_trail_bitmap(history, 2.0))
         self.assertEqual(surface.pixels[5 * PLOT_SIZE], 0)
         surface.invalidate.assert_called_with(0, 0, PLOT_SIZE, PLOT_SIZE)
         self.assertNotEqual(requested[0][1], requested[1][1])

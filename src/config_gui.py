@@ -46,7 +46,10 @@ from esp32_detection import (
     find_esp32_firmware,
     find_esp32_port,
 )
+from dialog_layout import startup_banner_geometry
+from direction_deadzones import CUSTOM_DEADZONE_KEY
 from firmware_flash_guard import FlashProbeError, probe_esp32_flash_size
+from gamepad_aim_display import DISPLAY_RESTORE_RETRY_MS
 from standalone_profile import (
     StandaloneTransferError,
     compile_standalone_profile,
@@ -60,6 +63,7 @@ from config_utils import (
     DEFAULT_CONFIG_PATH,
     PROFILE_DIR,
     PROFILE_SECTIONS,
+    SettingsFileChanges,
     apply_profile,
     atomic_write_config,
     atomic_write_bytes,
@@ -90,7 +94,7 @@ from idle_disconnect import (
 )
 from localization import translate_text
 from tooltip_layout import wrap_tooltip_text
-from readable_combobox import MappingCombobox, mapping_target_label
+from readable_combobox import MappingCombobox, bind_popdown_tooltip, mapping_target_label
 from console_i18n import localized_print as print, set_current_language
 from mapping_layers import (
     LAYER_DIR,
@@ -123,6 +127,7 @@ from gui_settings import (
     collect_gui_settings,
     config_settings_bundle,
 )
+from gui_sections.direction_deadzone import DirectionDeadzonePreview
 from gui_sections import (
     build_main_layout,
     build_stick_section,
@@ -820,7 +825,7 @@ class ToolTip:
 
         y = (
             self.widget.winfo_rooty()
-            + 25
+            + max(25, self.widget.winfo_height() + 5)
         )
 
         # 使用 Windows 工作區，而不是整個螢幕範圍。
@@ -1851,24 +1856,9 @@ class StartupOverlay:
             fill="#4a4a4a",
         )
 
-        if bounds is None:
-            bounds = (
-                0,
-                0,
-                max(width, int(root.winfo_screenwidth())),
-                max(height, int(root.winfo_screenheight())),
-            )
-        if center_rect is None:
-            center_rect = bounds
-        bounds_x, bounds_y, bounds_width, bounds_height = bounds
-        center_x, center_y, center_width, center_height = center_rect
-        x = center_x + (center_width - width) // 2
-        y = center_y + (center_height - height) // 2
-        max_x = bounds_x + max(0, bounds_width - width)
-        max_y = bounds_y + max(0, bounds_height - height)
-        x = min(max(bounds_x, x), max_x)
-        y = min(max(bounds_y, y), max_y)
-        self.window.geometry(f"{width}x{height}+{x}+{y}")
+        self.window.geometry(startup_banner_geometry(
+            root, width, height, center_rect=center_rect, bounds=bounds,
+        ))
         self.window.update_idletasks()
         self.window.deiconify()
         self.window.lift()
@@ -3120,6 +3110,7 @@ class ConfigGUI:
         self.stick_direction_trigger_vars = {}
         self.stick_direction_release_vars = {}
         self.stick_direction_deadzone_vars = {}
+        self.stick_direction_custom_deadzone_vars = {}
         self.stick_mouse_speed_vars = {}
         self.stick_mouse_deadzone_vars = {}
         self.stick_analog_direction_vars = {}
@@ -3141,6 +3132,9 @@ class ConfigGUI:
                     "direction_deadzone",
                     fallback=legacy_direction_deadzone,
                 )
+            )
+            self.stick_direction_custom_deadzone_vars[side] = tk.StringVar(
+                value=self.config.get(section_name, CUSTOM_DEADZONE_KEY, fallback=""),
             )
             self.stick_mouse_speed_vars[side] = tk.StringVar(
                 value=self.config.get(
@@ -3507,22 +3501,23 @@ class ConfigGUI:
     def _bind_combobox_popdown_mousewheel_guard(self, widget):
         """Scroll the open list without committing a value or scrolling its parent."""
         try:
-            popdown = self.root.tk.call(
+            call = widget.tk.call
+            popdown = call(
                 "ttk::combobox::PopdownWindow",
                 str(widget),
             )
             listbox = f"{popdown}.f.l"
-            scroll_script = self.root.tk.call("bind", "Listbox", "<MouseWheel>")
+            scroll_script = call("bind", "Listbox", "<MouseWheel>")
             if not scroll_script:
                 return
             # Reuse Tk's platform-specific list scrolling, then stop propagation
             # so the wheel cannot also scroll the settings page behind the popup.
             # The native Listbox wheel binding never commits a Combobox choice.
-            self.root.tk.call(
+            call(
                 "bind",
                 listbox,
                 "<MouseWheel>",
-                f"{scroll_script}\nbreak",
+                f"+{scroll_script}\nbreak",
             )
         except (AttributeError, tk.TclError):
             # Some Tk themes use a different native popup implementation.
@@ -6135,7 +6130,6 @@ class ConfigGUI:
             "Scale", "Spinbox",
         }:
             if widget_class == "TCombobox":
-                self._bind_combobox_popdown_mousewheel_guard(widget)
                 self._bind_combobox_overflow_tooltip(widget)
             widget_name = str(widget)
             if widget_name not in self._parameter_wheel_bound_widgets:
@@ -6209,6 +6203,8 @@ class ConfigGUI:
         widget_name = str(widget)
         if widget_name in self._combobox_overflow_bound_widgets:
             return
+        bind_popdown_tooltip(widget)
+        self._bind_combobox_popdown_mousewheel_guard(widget)
         tooltip = ToolTip(
             widget,
             getattr(widget, "full_text", widget.get),
@@ -6297,15 +6293,20 @@ class ConfigGUI:
         if binding is None:
             return None
         variable, saved_value, system_default = binding
-        menu = tk.Menu(self.root, tearoff=False)
+        return self.popup_parameter_reset_menu(event, variable.set, saved_value, system_default)
+
+    def popup_parameter_reset_menu(self, event, setter, saved_value, system_default):
+        if self.parameter_widget_is_disabled(event.widget):
+            return "break"
+        menu = tk.Menu(event.widget.winfo_toplevel(), tearoff=False)
         menu.add_command(
             label=self.tr("還原上次儲存"),
-            command=lambda: variable.set(saved_value),
+            command=lambda: setter(saved_value),
         )
         menu.add_separator()
         menu.add_command(
             label=self.tr("還原系統預設"),
-            command=lambda: variable.set(system_default),
+            command=lambda: setter(system_default),
         )
         try:
             menu.tk_popup(event.x_root, event.y_root)
@@ -6643,7 +6644,7 @@ class ConfigGUI:
             (
                 loaded_layers,
                 managed_paths,
-                _layer_scan_complete,
+                scan_complete,
             ) = load_layers(
                 self.config,
                 base_buttons,
@@ -6652,6 +6653,9 @@ class ConfigGUI:
                 LAYER_DIR,
                 return_metadata=True,
             )
+            previous_paths = getattr(self, "_layer_managed_paths", set())
+            if not scan_complete and set(previous_paths) - managed_paths:
+                raise ValueError("映射層資料夾包含無法驗證的 S2P JSON 檔案。")
         except (ValueError, TypeError, configparser.Error) as exc:
             self._mapping_layer_load_error = str(exc)
             self._layer_folder_snapshot = new_snapshot
@@ -6671,7 +6675,7 @@ class ConfigGUI:
         self._layer_managed_paths = managed_paths
         self._mapping_layer_load_error = None
         self._layer_disk_baseline = json.loads(json.dumps(self.mapping_layers))
-        self._layer_folder_snapshot = self._capture_layer_folder_snapshot()
+        self._layer_folder_snapshot = new_snapshot
         self._external_layers_pending_apply = True
         self.refresh_mapping_layer_rows()
 
@@ -6999,25 +7003,13 @@ class ConfigGUI:
                 self.tr("系統預設是唯讀方案；請使用「另存新方案」。"),
             )
             return False
-        if (
-            self.profile_file_fingerprint(self.active_profile)
-            != getattr(self, "_active_profile_content_baseline", None)
-        ):
+        expected_profile_fingerprint = self.profile_file_fingerprint(self.active_profile)
+        if expected_profile_fingerprint != getattr(self, "_active_profile_content_baseline", None):
             self._external_active_profile_changed = True
         conflict_result = self.resolve_external_active_profile_conflict()
         if conflict_result != "overwrite":
             return conflict_result == "reloaded"
-        expected_profile_fingerprint = self.profile_file_fingerprint(
-            self.active_profile
-        )
-        snapshot = None
-
-        def capture_before_write():
-            nonlocal snapshot
-            snapshot = self.capture_settings_bundle(self.active_profile)
-            # The profile is the final atomic commit, so earlier rollback
-            # never owns external changes to that file.
-            snapshot.pop(profile_path(self.active_profile, PROFILE_DIR), None)
+        changes = SettingsFileChanges()
 
         try:
             with config_file_lock():
@@ -7029,10 +7021,8 @@ class ConfigGUI:
                         self.tr("方案檔案在儲存前再次變更，請重新操作。")
                     )
                 try:
-                    if not self.save_config(show_confirmation=False, before_write=capture_before_write):
-                        if snapshot is not None:
-                            self.restore_settings_bundle(snapshot)
-                            self.refresh_saved_settings_baseline()
+                    if not self.save_config(show_confirmation=False, changes=changes):
+                        self._restore_failed_settings_save(changes)
                         return False
                     if (
                         self.profile_file_fingerprint(self.active_profile)
@@ -7041,13 +7031,12 @@ class ConfigGUI:
                         raise ValueError(
                             self.tr("方案檔案在儲存期間再次變更，已取消儲存。")
                         )
+                    changes.check_unchanged(CONFIG_PATH)
                     _path, saved_fingerprint = save_profile(
                         self.config, self.active_profile, PROFILE_DIR, return_fingerprint=True,
                     )
                 except (OSError, configparser.Error, ValueError):
-                    if snapshot is not None:
-                        self.restore_settings_bundle(snapshot)
-                        self.refresh_saved_settings_baseline()
+                    self._restore_failed_settings_save(changes)
                     raise
             self._active_profile_content_baseline = saved_fingerprint
             self._external_active_profile_changed = (
@@ -7073,41 +7062,25 @@ class ConfigGUI:
             )
             return False
 
-    def capture_settings_bundle(self, profile_name):
-        """Capture every file that one Save/Apply operation may replace."""
-        paths = {CONFIG_PATH, profile_path(profile_name, PROFILE_DIR)}
-        paths.update(LAYER_DIR.glob("*.json"))
-        used_names = set()
-        for index, layer in enumerate(self.mapping_layers):
-            base = validate_layer_name(
-                layer.get("name", f"Layer {index + 1}")
-            )
-            candidate = base
-            suffix = 2
-            while candidate.casefold() in used_names:
-                candidate = f"{base} ({suffix})"
-                suffix += 1
-            used_names.add(candidate.casefold())
-            paths.add(LAYER_DIR / f"{candidate}.json")
-        return {
-            Path(path): (Path(path).read_bytes() if Path(path).exists() else None)
-            for path in paths
-        }
-
-    @staticmethod
-    def restore_settings_bundle(snapshot):
-        """Restore a failed bundle commit, including created/deleted layers."""
-        for path, data in snapshot.items():
-            path = Path(path)
-            if data is None:
-                if path.exists():
-                    path.unlink()
-            else:
-                atomic_write_bytes(data, path)
+    def _restore_failed_settings_save(self, changes):
+        if not changes:
+            return
+        snapshot = getattr(self, "_layer_folder_snapshot", {})
+        written_layers = {path.name for path in changes.paths if path.parent == LAYER_DIR}
+        preserved = changes.restore()
+        self.refresh_saved_settings_baseline()
+        current = getattr(self, "_layer_folder_snapshot", {})
+        external_changes = any(
+            snapshot.get(name) != current.get(name)
+            for name in (snapshot.keys() | current.keys()) - written_layers
+        )
+        if external_changes or any(path.parent == LAYER_DIR for path in preserved):
+            # Let the watcher reconcile edits we did not roll back.
+            self._layer_folder_snapshot = snapshot
 
     def refresh_saved_settings_baseline(self):
         """Refresh disk comparisons without discarding working GUI values."""
-        self.config = load_config(CONFIG_PATH)
+        self.config = load_config(CONFIG_PATH, persist=False)
         base_buttons, base_sticks = self._mapping_layer_file_defaults()
         (
             self._layer_disk_baseline,
@@ -7177,7 +7150,7 @@ class ConfigGUI:
         )
         if name is None:
             return False
-        snapshot = None
+        changes = SettingsFileChanges()
         previous_active = self.active_profile
         try:
             name = validate_profile_name(name)
@@ -7188,43 +7161,36 @@ class ConfigGUI:
                 ),
                 None,
             )
-            if is_protected_profile(existing or name):
+            name = existing or name
+            if is_protected_profile(name):
                 raise PermissionError(
                     self.tr("System Default 是保留名稱，不能覆寫。")
                 )
-            if existing and not messagebox.askyesno(
+            expected_profile_fingerprint = self.profile_file_fingerprint(name)
+            if (existing or expected_profile_fingerprint is not None) and not messagebox.askyesno(
                 self.tr("覆蓋方案"),
                 self.tr("同名方案已存在，確定要覆蓋嗎？")
             ):
                 return False
-            name = existing or name
-            expected_profile_fingerprint = self.profile_file_fingerprint(name)
-
-            def capture_before_write():
-                nonlocal snapshot
-                snapshot = self.capture_settings_bundle(name)
-                snapshot.pop(profile_path(name, PROFILE_DIR), None)
-
             with config_file_lock():
+                if self.profile_file_fingerprint(name) != expected_profile_fingerprint:
+                    raise ValueError(self.tr("方案檔案在儲存前再次變更，請重新操作。"))
                 try:
-                    if not self.save_config(show_confirmation=False, before_write=capture_before_write):
-                        if snapshot is not None:
-                            self.restore_settings_bundle(snapshot)
-                            self.refresh_saved_settings_baseline()
+                    if not self.save_config(show_confirmation=False, changes=changes):
+                        self._restore_failed_settings_save(changes)
                         return False
                     self.config.set("gui", "active_profile", name)
-                    atomic_write_config(self.config, CONFIG_PATH)
+                    changes.write_config(self.config, CONFIG_PATH)
                     if self.profile_file_fingerprint(name) != expected_profile_fingerprint:
                         raise ValueError(
                             self.tr("方案檔案在儲存期間再次變更，已取消儲存。")
                         )
+                    changes.check_unchanged(CONFIG_PATH)
                     _path, saved_fingerprint = save_profile(
                         self.config, name, PROFILE_DIR, return_fingerprint=True,
                     )
                 except (OSError, configparser.Error, ValueError):
-                    if snapshot is not None:
-                        self.restore_settings_bundle(snapshot)
-                        self.refresh_saved_settings_baseline()
+                    self._restore_failed_settings_save(changes)
                     raise
             self.active_profile = name
             self._active_profile_content_baseline = saved_fingerprint
@@ -8334,6 +8300,7 @@ class ConfigGUI:
         number_format=".2f",
         allowed_values=None,
         setter=None,
+        on_disabled_click=None,
     ):
         """Edit on click, or scrub a value by dragging its text."""
 
@@ -8364,6 +8331,7 @@ class ConfigGUI:
             allowed_values=allowed_values,
             setter=setter,
             click_command=open_editor,
+            on_disabled_click=on_disabled_click,
         )
 
     def bind_numeric_scrubber(
@@ -8378,8 +8346,10 @@ class ConfigGUI:
         allowed_values=None,
         setter=None,
         click_command=None,
+        on_disabled_click=None,
+        text_entry=False,
     ):
-        """Bind four-direction drag adjustment to a numeric text widget."""
+        """Bind drag adjustment, preserving native clicks and horizontal motion on entries."""
         pixels_per_step = 8
         state = {
             "start_x": 0,
@@ -8396,6 +8366,8 @@ class ConfigGUI:
             )
             state["interaction_enabled"] = interaction_enabled
             if not interaction_enabled:
+                if on_disabled_click is not None:
+                    on_disabled_click()
                 return "break"
             try:
                 start_value = float(variable.get())
@@ -8408,20 +8380,20 @@ class ConfigGUI:
                 "last_steps": 0,
                 "dragged": False,
             })
-            return "break"
+            return None if text_entry else "break"
 
         def drag(event):
             if not state.get("interaction_enabled", False):
                 return "break"
             delta_x = event.x_root - state["start_x"]
             delta_y = event.y_root - state["start_y"]
-            distance = delta_x if abs(delta_x) >= abs(delta_y) else -delta_y
+            distance = delta_x if text_entry or abs(delta_x) >= abs(delta_y) else -delta_y
             step_count = int(distance / pixels_per_step)
-            if step_count == 0:
+            if step_count == 0 and not text_entry:
                 return "break"
-            state["dragged"] = True
             if step_count == state["last_steps"]:
                 return "break"
+            state["dragged"] = True
             state["last_steps"] = step_count
             numeric = scrub_numeric_value(
                 state["start_value"],
@@ -8442,7 +8414,7 @@ class ConfigGUI:
                 return "break"
             if not state["dragged"] and click_command is not None:
                 click_command()
-            return "break"
+            return None if text_entry else "break"
 
         widget.bind("<ButtonPress-1>", begin)
         widget.bind("<B1-Motion>", drag)
@@ -8824,7 +8796,15 @@ class ConfigGUI:
             except (AttributeError, BrokenPipeError, OSError, ValueError):
                 pass
             try:
-                process.wait(timeout=max(0.0, float(timeout)))
+                timeout = max(0.0, float(timeout))
+                try:
+                    process.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    closing_event = getattr(self, "_gamepad_test_closing_event", None)
+                    if timeout == 0.0 or closing_event is None or not closing_event.is_set():
+                        raise
+                    # A responsive child may still be restoring its display mode.
+                    process.wait(timeout=sum(DISPLAY_RESTORE_RETRY_MS) / 1000)
             except subprocess.TimeoutExpired:
                 try:
                     process.terminate()
@@ -9282,7 +9262,8 @@ class ConfigGUI:
             # rebuild the non-client frame after controls have been laid out.
             if window.state() in ("withdrawn", "iconic"):
                 window.deiconify()
-            window.wait_visibility()
+            if not window.winfo_viewable():
+                window.wait_visibility()
             self._clamp_child_to_work_area(window)
             window.grab_set()
             (focus_widget or window).focus_set()
@@ -9329,6 +9310,7 @@ class ConfigGUI:
         """Copy the currently visible base mappings into one layer payload."""
         sticks = {}
         for side in ("LEFT", "RIGHT"):
+            custom = self.stick_direction_custom_deadzone_vars[side].get()
             sticks[side.lower()] = {
                 "mode": self.stick_direction_mode_vars[side].get(),
                 "direction_deadzone": self.stick_direction_deadzone_vars[side].get(),
@@ -9342,6 +9324,8 @@ class ConfigGUI:
                     for direction, variable in self.stick_direction_vars[side].items()
                 },
             }
+            if custom:
+                sticks[side.lower()][CUSTOM_DEADZONE_KEY] = custom
         return {
             "buttons": {
                 name.lower(): variable.get()
@@ -9852,6 +9836,7 @@ class ConfigGUI:
                 "direction_deadzone": tk.DoubleVar(
                     value=float(source.get("direction_deadzone", 5))
                 ),
+                CUSTOM_DEADZONE_KEY: tk.StringVar(dialog, value=source.get(CUSTOM_DEADZONE_KEY, "")),
                 "trigger_threshold": tk.DoubleVar(
                     value=float(source.get("trigger_threshold", 0.60))
                 ),
@@ -9967,13 +9952,10 @@ class ConfigGUI:
             mouse_settings = ttk.Frame(settings_host)
             analog_settings = ttk.Frame(settings_host)
 
-            preview = tk.Canvas(
-                direction_settings,
-                width=88,
-                height=88,
-                bg="#ffffff",
-                highlightthickness=1,
-                highlightbackground="#a8a8a8",
+            preview = DirectionDeadzonePreview(
+                direction_settings, self, side, variables,
+                self.left_output_shape_var if side == "LEFT" else self.right_output_shape_var,
+                saved_settings=source,
             )
             preview.grid(row=0, column=0, padx=(2, 5))
             direction_controls = ttk.Frame(direction_settings)
@@ -10038,6 +10020,8 @@ class ConfigGUI:
                 )
                 value_label.grid(row=slider_row, column=2, padx=(4, 0), pady=2)
                 value_labels[key] = value_label
+                if key == "direction_deadzone":
+                    preview.attach_slider(scale, value_label)
                 self.bind_slider_value_editor(
                     value_label,
                     variables[key],
@@ -10050,6 +10034,7 @@ class ConfigGUI:
                     setter=lambda numeric, current_key=key, snap=snap_layer_value: snap(
                         current_key, numeric
                     ),
+                    on_disabled_click=preview.open_editor if key == "direction_deadzone" else None,
                 )
                 bind_editor_parameter_reset(
                     value_label,
@@ -10208,7 +10193,6 @@ class ConfigGUI:
 
             def draw_preview(
                 *_args,
-                current_side=side,
                 current_variables=variables,
                 current_preview=preview,
                 current_value_labels=value_labels,
@@ -10220,84 +10204,9 @@ class ConfigGUI:
                 value_labels = current_value_labels
                 mouse_speed_value = current_mouse_speed_value
                 mouse_deadzone_value = current_mouse_deadzone_value
-                preview.delete("all")
-                width = max(float(preview.winfo_width()), 90.0)
-                height = max(float(preview.winfo_height()), 90.0)
-                center_x = width / 2.0
-                center_y = height / 2.0
-                radius = min(width, height) / 2.0 - 9.0
-                mode = variables["mode"].get()
-                deadzone = max(
-                    0.0, min(20.0, safe_value(variables["direction_deadzone"], 5.0))
-                )
-                boundary_step = 90.0 if mode == "4WAY" else 45.0
-                first_boundary = 45.0 if mode == "4WAY" else 22.5
-                boundary_count = 4 if mode == "4WAY" else 8
-                shape_steps = (
-                    self.left_output_shape_var.get()
-                    if current_side == "LEFT"
-                    else self.right_output_shape_var.get()
-                )
-                shape_blend = max(0.0, min(10.0, float(shape_steps))) / 10.0
-
-                def edge_point(angle_degrees):
-                    angle = math.radians(angle_degrees)
-                    x_direction = math.cos(angle)
-                    y_direction = math.sin(angle)
-                    square_scale = 1.0 / max(
-                        abs(x_direction), abs(y_direction), 1e-9
-                    )
-                    edge_scale = 1.0 - shape_blend + square_scale * shape_blend
-                    return (
-                        center_x + radius * x_direction * edge_scale,
-                        center_y - radius * y_direction * edge_scale,
-                    )
-
-                if deadzone > 0.0:
-                    for boundary_index in range(boundary_count):
-                        boundary = first_boundary + boundary_index * boundary_step
-                        points = [center_x, center_y]
-                        for sample in range(13):
-                            angle = boundary - deadzone + deadzone * 2 * sample / 12
-                            points.extend(edge_point(angle))
-                        preview.create_polygon(*points, fill="#f3caca", outline="")
-                preview.create_line(
-                    center_x - radius, center_y,
-                    center_x + radius, center_y,
-                    fill="#b0b0b0",
-                )
-                preview.create_line(
-                    center_x, center_y - radius,
-                    center_x, center_y + radius,
-                    fill="#b0b0b0",
-                )
-                trigger = max(
-                    0.0, min(1.0, safe_value(variables["trigger_threshold"], 0.60))
-                )
-                release = max(
-                    0.0,
-                    min(trigger, safe_value(variables["release_threshold"], 0.50)),
-                )
-                for value, color, dash in (
-                    (trigger, "#2878c8", ()),
-                    (release, "#666666", (3, 2)),
-                ):
-                    ring = radius * value
-                    preview.create_oval(
-                        center_x - ring, center_y - ring,
-                        center_x + ring, center_y + ring,
-                        outline=color, width=2, dash=dash,
-                    )
-                outline = []
-                for sample in range(121):
-                    outline.extend(edge_point(360.0 * sample / 120.0))
-                preview.create_line(*outline, fill="#333333", width=2)
-                preview.create_oval(
-                    center_x - 2, center_y - 2,
-                    center_x + 2, center_y + 2,
-                    fill="#333333", outline="",
-                )
-                value_labels["direction_deadzone"].configure(text=f"{deadzone:.0f}°")
+                preview.redraw()
+                trigger = max(0.0, min(1.0, safe_value(variables["trigger_threshold"], 0.60)))
+                release = max(0.0, min(trigger, safe_value(variables["release_threshold"], 0.50)))
                 value_labels["trigger_threshold"].configure(text=f"{trigger * 100:.0f}%")
                 value_labels["release_threshold"].configure(text=f"{release * 100:.0f}%")
                 mouse_speed_value.configure(
@@ -10381,6 +10290,7 @@ class ConfigGUI:
             stick_mode_updaters[side] = update_mode
             for variable in (
                 variables["direction_deadzone"],
+                variables[CUSTOM_DEADZONE_KEY],
                 variables["trigger_threshold"],
                 variables["release_threshold"],
                 variables["mouse_speed"],
@@ -10418,6 +10328,9 @@ class ConfigGUI:
                 variables = stick_vars[side]
                 for key, variable in variables.items():
                     if key == "mode":
+                        continue
+                    if key == CUSTOM_DEADZONE_KEY:
+                        variable.set(source.get(key, ""))
                         continue
                     fallback = 900 if key == "mouse_speed" else (
                         0.05 if key == "mouse_deadzone" else (
@@ -10529,6 +10442,7 @@ class ConfigGUI:
                 working[f"stick_{side.lower()}"] = {
                     key: editor_stick_value(side, key, variable)
                     for key, variable in stick_vars[side].items()
+                    if key != CUSTOM_DEADZONE_KEY or variable.get()
                 }
             self.mapping_layers[current_index] = working
             self.persist_mapping_layer_files()
@@ -10588,6 +10502,9 @@ class ConfigGUI:
             variable.set(defaults.get(section, direction.lower()))
         self.stick_direction_deadzone_vars[side].set(
             defaults.get(section, "direction_deadzone")
+        )
+        self.stick_direction_custom_deadzone_vars[side].set(
+            defaults.get(section, CUSTOM_DEADZONE_KEY, fallback="")
         )
         self.stick_direction_trigger_vars[side].set(
             defaults.get(section, "trigger_threshold")
@@ -11962,7 +11879,13 @@ class ConfigGUI:
         self._stop_system_tray()
         self.root.destroy()
 
-    def save_config(self, show_confirmation=True, *, before_write=None):
+    def save_config(self, show_confirmation=True, *, changes=None):
+        expected_layers = getattr(self, "_layer_folder_snapshot", None)
+
+        def prepare_layer_write():
+            if expected_layers is not None and self._capture_layer_folder_snapshot() != expected_layers:
+                raise ValueError("映射層檔案在儲存前已變更。請重新載入後再試。")
+
         try:
             if self._mapping_layer_load_error:
                 raise ValueError(
@@ -12005,6 +11928,8 @@ class ConfigGUI:
             # 手動陀螺儀校正由正在執行的連接程式寫入。
             # 儲存 GUI 設定前先合併磁碟最新版，避免覆蓋剛完成的
             # [gyro] / [gyro.<controller>] 校正資料。
+            if changes is not None:
+                changes.watch(CONFIG_PATH)
             self.config = load_config(CONFIG_PATH, persist=False)
 
             # Save and dirty-state detection now consume the exact same bundle.
@@ -12021,16 +11946,20 @@ class ConfigGUI:
                 self.mapping_layers,
                 LAYER_DIR,
                 deletable_paths=getattr(self, "_layer_managed_paths", ()),
-                before_write=before_write,
+                before_write=prepare_layer_write,
+                changes=changes,
             )
 
-            atomic_write_config(self.config, CONFIG_PATH)
+            write = changes.write_config if changes is not None else atomic_write_config
+            write(self.config, CONFIG_PATH)
 
             # 重新載入剛剛實際寫入的設定與映射層。映射層編輯器的
             # DoubleVar 會產生 float，而 JSON 載入後會標準化為字串；
             # 若只更新基準、不重載工作資料，內容雖相同仍會被型別差異
             # 誤判為尚未儲存。
-            self.config = load_config(CONFIG_PATH)
+            self.config = load_config(CONFIG_PATH, persist=False)
+            if changes is not None:
+                changes.check_unchanged(CONFIG_PATH)
             base_buttons = dict(self.config.items("buttons"))
             base_sticks = {
                 side: dict(self.config.items(f"stick_direction_{side}"))

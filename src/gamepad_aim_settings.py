@@ -12,6 +12,7 @@ from config_utils import atomic_write_bytes, config_file_lock
 from dialog_layout import center_child_dialog
 from gamepad_aim_display import available_resolutions, highest_resolution
 from gamepad_aim_model import TIMED_MODES, TRACKING_MODES
+from readable_combobox import ReadableCombobox
 from tooltip_layout import HoverTip
 
 
@@ -60,11 +61,12 @@ class AimSettings:
     reticle_color: str = "#edf4fc"
     target_color: str = "#57dab1"
     window_size: str = ""
-    fullscreen: bool = False
+    fullscreen: bool = True
     reticle_on_target_color: str = "#ff456f"
     target_on_target_color: str = "#f3d678"
     timed_shooting_seconds: int = 30
     fullscreen_size: str = ""
+    depth_shading: bool = True
 
     @classmethod
     def load(cls, path):
@@ -85,7 +87,7 @@ class AimSettings:
             value = data.get(key)
             if isinstance(value, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", value):
                 values[key] = value.lower()
-        for key in ("sound", "fullscreen"):
+        for key in ("sound", "fullscreen", "depth_shading"):
             if type(data.get(key)) is bool:
                 values[key] = data[key]
         if _valid_resolution(data.get("window_size")):
@@ -108,8 +110,11 @@ class AimSettings:
         seconds = self.timed_shooting_seconds if timed else self.target_seconds
         if tracking:
             seconds = self.tracking_seconds
+        version = 4 if timed else 1
+        if mode == "timed-shooting":
+            version = 5  # Overlapping balls score by ray intersection depth.
         basis = {
-            "version": 4 if timed else 1,
+            "version": version,
             "mode": mode,
             "targets": 0 if timed or tracking else self.target_count,
             "seconds": seconds,
@@ -214,7 +219,7 @@ def show_aim_settings(parent, tr, current, apply):
     window_size = tk.StringVar(dialog, current.window_size or auto_size)
     fullscreen_size = tk.StringVar(dialog, current.fullscreen_size or auto_size)
     fullscreen = tk.BooleanVar(dialog, current.fullscreen)
-    size_picker = ttk.Combobox(display, textvariable=window_size, width=11, state="readonly")
+    size_picker = ReadableCombobox(display, textvariable=window_size, width=11, state="readonly")
     size_picker.pack(side="left")
     try:
         fullscreen_sizes = tuple(size for size in available_resolutions(parent.winfo_id()) if _valid_resolution(size))
@@ -249,7 +254,11 @@ def show_aim_settings(parent, tr, current, apply):
 
     sound = tk.BooleanVar(dialog, current.sound)
     ttk.Checkbutton(body, text=tr("命中與跟靶音效"), variable=sound).grid(
-        row=display_row + 1, column=0, columnspan=3, sticky="w", pady=6,
+        row=display_row + 1, column=0, sticky="w", pady=6,
+    )
+    depth_shading = tk.BooleanVar(dialog, current.depth_shading)
+    ttk.Checkbutton(body, text=tr("加深遠近效果"), variable=depth_shading).grid(
+        row=display_row + 1, column=1, columnspan=2, sticky="w", pady=6,
     )
     error = tk.StringVar(dialog)
     ttk.Label(body, textvariable=error, foreground="#b91c1c", wraplength=300).grid(
@@ -265,6 +274,7 @@ def show_aim_settings(parent, tr, current, apply):
         for key, button in swatches.items():
             set_color(key, button, getattr(defaults, key))
         sound.set(defaults.sound)
+        depth_shading.set(defaults.depth_shading)
         window_size.set(defaults.window_size or auto_size)
         fullscreen_size.set(defaults.fullscreen_size or auto_size)
         fullscreen.set(defaults.fullscreen)
@@ -298,7 +308,7 @@ def show_aim_settings(parent, tr, current, apply):
         try:
             apply(AimSettings(
                 **options, sound=sound.get(), window_size=selected_window_size, fullscreen=fullscreen.get(),
-                fullscreen_size=selected_fullscreen_size,
+                fullscreen_size=selected_fullscreen_size, depth_shading=depth_shading.get(),
             ))
         except OSError:
             error.set(tr("無法儲存測試設定。"))

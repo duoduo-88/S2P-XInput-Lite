@@ -5,6 +5,7 @@ This module deliberately contains no controller, ViGEm, threading, or I/O state.
 
 import math
 
+from direction_deadzones import CUSTOM_DEADZONE_KEY, zone_edges
 from mapping_targets import (
     validate_stick_direction_mode,
     validate_stick_setting_key,
@@ -22,6 +23,13 @@ _STICK_DIRECTION_NAMES = (
 def _normalize_stick_direction_mode(value, side):
     """Return a validated side-specific mode instead of silently falling back."""
     return validate_stick_direction_mode(value, side)
+
+
+def _compile_direction_zone_edges(settings):
+    mode = settings["mode"]
+    zones = settings[CUSTOM_DEADZONE_KEY].get(mode)
+    return zone_edges(mode, zones) if zones else ()
+
 
 def _compile_stick_direction_settings(raw_sides):
     """Normalize serialized left/right direction settings for the hot path."""
@@ -42,6 +50,7 @@ def _compile_stick_direction_settings(raw_sides):
             "trigger_threshold": settings["trigger_threshold"],
             "release_threshold": settings["release_threshold"],
             "direction_deadzone": settings["direction_deadzone"],
+            "direction_zone_edges": _compile_direction_zone_edges(settings),
             "mouse_speed": settings["mouse_speed"],
             "mouse_deadzone": settings["mouse_deadzone"],
             "analog_direction": settings["analog_direction"],
