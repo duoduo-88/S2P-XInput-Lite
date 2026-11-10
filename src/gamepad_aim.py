@@ -204,6 +204,7 @@ class AimTestPane:
         self._render_worker = None
         self._retired_render_view = None
         self._render_cleanup_job = None
+        self._start_after_render_cleanup = False
         self._render_stats_since = 0.0
         self._gpu_view = None
         self.gpu = None
@@ -462,9 +463,13 @@ class AimTestPane:
             self._sync_gpu()
         else:
             self._restore_display_after_close()
+            if self._start_after_render_cleanup:
+                self._start_after_render_cleanup = False
+                self._start()
 
     def _canvas_destroyed(self, _event):
         self.test_open = False
+        self._start_after_render_cleanup = False
         self._deactivate_input()
         self._cancel_tick()
         self._close_native_timer()
@@ -581,6 +586,9 @@ class AimTestPane:
         if (self.countdown_until is not None or self._awaiting_finish()
                 or (self.mode_is_3d and not self.output_ready)):
             return
+        if self._wait_for_render_cleanup():
+            self._start_after_render_cleanup = True
+            return
         self._reset()
         if not self.test_open:
             try:
@@ -660,8 +668,13 @@ class AimTestPane:
         if self.feedback is not None:
             self.feedback.stop()
 
+    def _wait_for_render_cleanup(self):
+        return self._retired_render_view is not None and (
+            self._fullscreen_mode is not None or self.settings.fullscreen
+        )
+
     def _open_test_window(self):
-        if self._retired_render_view is not None and (self._fullscreen_mode is not None or self.settings.fullscreen):
+        if self._wait_for_render_cleanup():
             return False  # Let Direct2D finish before changing the display mode again.
         if not self._restore_display_mode():
             raise OSError("Could not restore the previous display mode")
@@ -731,6 +744,7 @@ class AimTestPane:
         return True
 
     def close_test(self, _event=None):
+        self._start_after_render_cleanup = False
         if self._native_timer is not None:
             self._cancel_tick()
             self._close_native_timer()

@@ -36,6 +36,10 @@ jobs:
         shell: powershell
         run: .\scripts\build_runtime.ps1 -Python python
 
+      - name: Build native rendering kernels for regression tests
+        shell: powershell
+        run: .\native\build_gamepad_render_native.ps1
+
       - name: Compile Python sources
         run: python -m compileall -q src tests
 

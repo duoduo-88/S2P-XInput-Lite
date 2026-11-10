@@ -334,6 +334,39 @@ class AimPaneTests(unittest.TestCase):
         self.assertIsNot(pane._gpu_view, old_view)
         pane.close_test()
 
+    def test_fullscreen_start_during_renderer_shutdown_is_replayed_or_canceled(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_settings import AimSettings
+
+        for cancel in (False, True):
+            with self.subTest(cancel=cancel):
+                parent = tk.Frame(self.root)
+                pane = AimTestPane(parent, str, lambda: None)
+                pane.dimension.set("2d")
+                pane._save_settings(AimSettings(fullscreen=True, fullscreen_size="800x450"))
+                worker = SimpleNamespace(stopped=threading.Event())
+                old_view = tk.Frame(pane.window)
+                pane._retired_render_view = worker, old_view
+                pane._fullscreen_mode = Mock()
+                restore = pane._fullscreen_mode.close
+
+                with patch("gamepad_aim.activate_fullscreen_mode", return_value=Mock(bounds=(0, 0, 800, 450))) as mode:
+                    pane._start()
+                    self.assertFalse(pane.test_open)
+                    restore.assert_not_called()
+                    mode.assert_not_called()
+                    if cancel:
+                        pane.set_visible(False)
+                    worker.stopped.set()
+                    pane._reap_render_view()
+                    restore.assert_called_once()
+                    self.assertFalse(old_view.winfo_exists())
+                    self.assertEqual(pane.test_open, not cancel)
+                    self.assertEqual(pane.countdown_until is not None, not cancel)
+                    self.assertEqual(mode.call_count, 0 if cancel else 1)
+                    pane.close_test()
+                parent.destroy()
+
     def test_windows_pointer_can_score_with_no_gamepad(self):
         from gamepad_aim import AimTestPane
 

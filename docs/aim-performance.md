@@ -127,6 +127,18 @@ worker reduced long gaps at the cost of higher CPU time in this run. The
 offscreen tests measured successful Direct2D submissions. Physical 4K
 presentation, GPU utilization and input-to-display latency were unmeasured.
 
+The worker was also tested above the supported display targets, with five
+seconds per scene. The CPU column is process time relative to one logical
+core and can exceed 100% when threads run concurrently.
+
+| 4K stress target | 2D submissions/s | 3D submissions/s | P99 ms (2D / 3D) | CPU, one core (2D / 3D) |
+| ---: | ---: | ---: | ---: | ---: |
+| 750 | 742.92 | 741.94 | 2.84 / 2.90 | 87.52% / 94.69% |
+| 1,000 | 921.71 | 924.00 | 1.93 / 1.93 | 109.39% / 116.88% |
+
+These stress targets use the benchmark override. Normal runs follow the
+current display mode.
+
 The trail benchmark streamed approximately 10,000 synthetic samples/s for
 8.6 seconds, with five seconds of history per plot. The optimized run held
 50,085 samples per plot at its peak and received 86,090 sequential samples
