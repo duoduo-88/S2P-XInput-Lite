@@ -7,6 +7,8 @@ from ctypes import wintypes
 from itertools import count
 from math import prod
 from threading import RLock
+from tkinter import TclError
+from time import sleep
 
 
 _DWORD = ctypes.c_uint32
@@ -21,6 +23,7 @@ _GA_ROOT = 2
 _ERROR_ACCESS_DENIED = 5
 _MODE_LOCK = RLock()
 _ACTIVE_MODES = {}
+DISPLAY_RESTORE_RETRY_MS = (100, 250, 500, 1000)
 
 
 class _PointL(ctypes.Structure):
@@ -170,6 +173,19 @@ def fullscreen_monitor_bounds(hwnd: int) -> tuple[int, int, int, int]:
         return bounds
 
 
+def window_refresh_rate(window):
+    """Return the current mode of the monitor nearest the Tk window."""
+    try:
+        api = _WindowsDisplay()
+        _, device, _ = api.monitor(window.winfo_id())
+        rate = _current_mode(api, device).dmDisplayFrequency
+        if rate > 1:
+            return float(rate)
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError, TclError):
+        pass
+    return 60.0
+
+
 def available_resolutions(hwnd: int) -> tuple[str, ...]:
     """List usable resolutions without changing the owner monitor's mode."""
     with _MODE_LOCK:
@@ -195,6 +211,14 @@ def highest_resolution(resolutions):
     return max(resolutions, key=lambda size: prod(map(int, size.split("x"))), default="")
 
 
+class DisplayModeRestoreError(OSError):
+    """A fullscreen setup failed and its display session still needs restoring."""
+
+    def __init__(self, mode, message):
+        super().__init__(message)
+        self.mode = mode
+
+
 class TemporaryDisplayMode:
     """Own a temporary mode until the exact prior DEVMODE is restored."""
 
@@ -214,11 +238,37 @@ class TemporaryDisplayMode:
             result = self._api.change(self._device, self._original, 0)
             if result:
                 raise OSError(f"Cannot restore the display mode for {self._device} ({result})")
+            current = _current_mode(self._api, self._device)
+            if not _matches_desktop_mode(current, self._original):
+                raise OSError(f"The display mode for {self._device} has not been restored")
             self._unregister()
+
+    def _restore_at_exit(self):
+        for delay in DISPLAY_RESTORE_RETRY_MS:
+            try:
+                self.close()
+                return
+            except OSError:
+                sleep(delay / 1000)
+        self.close()
 
     def _unregister(self):
         del _ACTIVE_MODES[self._device]
-        atexit.unregister(self.close)
+        atexit.unregister(self._restore_at_exit)
+
+
+def _matches_desktop_mode(current, original):
+    return (
+        current.size == original.size
+        and current.dmBitsPerPel == original.dmBitsPerPel
+        and current.dmDisplayOrientation == original.dmDisplayOrientation
+        and current.dmDisplayFrequency == original.dmDisplayFrequency
+        and (current.dmDisplayFlags & _DM_INTERLACED) == (original.dmDisplayFlags & _DM_INTERLACED)
+        and (
+            not original.dmFields & _DM_POSITION
+            or (current.dmPosition.x, current.dmPosition.y) == (original.dmPosition.x, original.dmPosition.y)
+        )
+    )
 
 
 def _mode_priority(mode, current):
@@ -267,7 +317,7 @@ def activate_fullscreen_mode(hwnd: int, size: tuple[int, int]) -> TemporaryDispl
             raise OSError(f"{width}x{height} is not available on {device}")
 
         session = TemporaryDisplayMode(api, device, original, bounds)
-        atexit.register(session.close)
+        atexit.register(session._restore_at_exit)
         _ACTIVE_MODES[device] = session
         try:
             try:
@@ -289,7 +339,10 @@ def activate_fullscreen_mode(hwnd: int, size: tuple[int, int]) -> TemporaryDispl
             active_device, session.bounds = api.monitor_info(monitor)
             if active_device != device:
                 raise OSError(f"The monitor changed while applying the display mode for {device}")
-        except BaseException:
-            session.close()
+        except BaseException as setup_error:
+            try:
+                session.close()
+            except OSError as restore_error:
+                raise DisplayModeRestoreError(session, str(restore_error)) from setup_error
             raise
         return session

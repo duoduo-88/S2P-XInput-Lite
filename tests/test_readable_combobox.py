@@ -3,11 +3,12 @@ import tkinter as tk
 from tkinter import ttk
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from readable_combobox import MappingCombobox, mapping_target_label
+from readable_combobox import MappingCombobox, ReadableCombobox, mapping_target_label
 from config_gui import ConfigGUI
 
 
@@ -103,6 +104,89 @@ class ReadableComboboxTests(unittest.TestCase):
         field.destroy()
         self.assertLess(len(variable.trace_info()), before)
         variable.set("KEYBOARD:2")
+
+    def test_native_open_list_fits_longest_row_and_scrollbar(self):
+        text = "Linear Mouse Wheel"
+        combo = ttk.Combobox(
+            self.root, values=("4WAY", text, "Linear Xbox RT"),
+            width=6, height=2, state="readonly",
+        )
+        combo.current(0)
+        combo.pack()
+        gui = object.__new__(ConfigGUI)
+        gui._combobox_overflow_bound_widgets = set()
+        gui._combobox_overflow_tooltips = {}
+        gui._bind_combobox_overflow_tooltip(combo)
+        self.root.deiconify()
+        self.root.update()
+        field_width = combo.winfo_width()
+        call = self.root.tk.call
+        popup = call("ttk::combobox::PopdownWindow", str(combo))
+        listbox = f"{popup}.f.l"
+
+        call("ttk::combobox::Post", str(combo))
+        self.root.update()
+
+        x, _y, text_width, _height = call(listbox, "bbox", 1)
+        self.assertGreaterEqual(call("winfo", "width", listbox), x + text_width + 1)
+        self.assertGreater(call("winfo", "width", popup), field_width)
+        self.assertEqual(combo.winfo_width(), field_width)
+        self.assertEqual(combo.get(), "4WAY")
+        self.assertEqual(str(call("grab", "current", popup)), popup)
+        call("ttk::combobox::Unpost", str(combo))
+
+    def test_hover_reveals_only_clipped_open_list_rows(self):
+        for combo_class in (ttk.Combobox, MappingCombobox, ReadableCombobox):
+            with self.subTest(combo_class=combo_class.__name__):
+                self._check_open_list_hover(combo_class)
+
+    def _check_open_list_hover(self, combo_class):
+        text = "Linear Mouse Wheel"
+        variable = tk.StringVar(self.root, value="4WAY")
+        combo = combo_class(
+            self.root, textvariable=variable, values=("4WAY", text),
+            width=6, state="readonly",
+        )
+        combo.pack()
+        if combo_class is not ReadableCombobox:
+            gui = object.__new__(ConfigGUI)
+            gui._combobox_overflow_bound_widgets = set()
+            gui._combobox_overflow_tooltips = {}
+            gui._bind_combobox_overflow_tooltip(combo)
+        tk_call = self.root.tk.call
+        popup = tk_call("ttk::combobox::PopdownWindow", str(combo))
+        listbox = f"{popup}.f.l"
+        tk_call("ttk::combobox::ConfigureListbox", str(combo))
+        tk_call("wm", "geometry", popup, "84x40+200+200")
+        with patch("readable_combobox.fullscreen_monitor_bounds", return_value=(200, 0, 284, 600)):
+            tk_call("wm", "deiconify", popup)
+            self.root.update()
+        # On Windows, Tk's grab routes synthetic Motion using the real cursor.
+        tk_call("grab", "release", popup)
+
+        def hover(index):
+            _x, y, _width, height = tk_call(listbox, "bbox", index)
+            tk_call("event", "generate", listbox, "<Motion>", "-x", 8, "-y", y + height // 2)
+            self.root.update_idletasks()
+            return [
+                child.cget("text")
+                for window in combo.winfo_children()
+                if isinstance(window, tk.Toplevel)
+                for child in window.winfo_children()
+            ]
+
+        self.assertEqual(hover(0), [])
+        self.assertEqual(hover(1), [text])
+        self.assertEqual(variable.get(), "4WAY")
+        self.assertEqual(str(tk_call("focus")), listbox)
+        tk_call("event", "generate", listbox, "<MouseWheel>", "-delta", -120)
+        self.assertEqual(combo.winfo_children(), [])
+        self.assertEqual(hover(0), [])
+        self.assertEqual(hover(1), [text])
+        tk_call("ttk::combobox::Unpost", str(combo))
+        self.root.update()
+        self.assertEqual(combo.winfo_children(), [])
+        combo.destroy()
 
     def test_open_list_wheel_scrolls_without_committing_or_scrolling_parent(self):
         for combo_class in (ttk.Combobox, MappingCombobox):

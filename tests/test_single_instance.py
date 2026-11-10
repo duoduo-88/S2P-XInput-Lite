@@ -44,6 +44,35 @@ class SingleInstanceTests(unittest.TestCase):
         instance.notify_existing.assert_called_once_with()
         instance.close.assert_called_once_with()
 
+    def test_tester_exits_even_if_window_cleanup_raises(self):
+        instance = Mock(is_primary=True, error=None)
+        root = Mock()
+        tester = Mock()
+        tester.close.side_effect = OSError("renderer cleanup failed")
+
+        def run_close_callback():
+            event, callback = tester.window.protocol.call_args.args
+            self.assertEqual(event, "WM_DELETE_WINDOW")
+            # Tk reports callback exceptions and relies on quit to exit mainloop.
+            with self.assertRaisesRegex(OSError, "renderer cleanup failed"):
+                callback()
+            root.quit.assert_called_once_with()
+            root.destroy.assert_called_once_with()
+
+        root.mainloop.side_effect = run_close_callback
+        with (
+            patch.object(gamepad_test_app.tk, "Tk", return_value=root),
+            patch.object(gamepad_test_app.sys, "argv", ["GamepadTester"]),
+            patch.object(gamepad_test_app, "configure_windows_taskbar_identity"),
+            patch.object(gamepad_test_app, "apply_root_icon"),
+            patch.object(gamepad_test_app, "GamepadTestHost"),
+            patch.object(gamepad_test_app, "GamepadTestStartupOverlay"),
+            patch.object(gamepad_test_app, "GamepadTestWindow", return_value=tester),
+        ):
+            self.assertTrue(gamepad_test_app.main(instance=instance))
+
+        instance.close.assert_called_once_with()
+
     def test_tk_window_is_restored_focused_and_not_left_topmost(self):
         window = Mock()
         window.winfo_exists.return_value = True

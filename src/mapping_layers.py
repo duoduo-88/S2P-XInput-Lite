@@ -10,9 +10,7 @@ from __future__ import annotations
 
 import configparser
 import json
-import os
 import re
-import tempfile
 import uuid
 from pathlib import Path
 
@@ -26,6 +24,7 @@ from config_utils import (
     profile_path,
     read_profile,
 )
+from direction_deadzones import CUSTOM_DEADZONE_KEY, format_custom_zones, parse_custom_zones
 from mapping_targets import (
     validate_button_source,
     validate_button_target,
@@ -119,15 +118,24 @@ def _clean_mapping(mapping, fallback):
 def _clean_stick_settings(settings, fallback):
     source = settings if isinstance(settings, dict) else {}
     result = dict(fallback)
-    result.update({
-        str(key).strip().lower(): str(value).strip()
-        for key, value in source.items()
-        if str(key).strip().lower() in fallback
-    })
+    result.pop(CUSTOM_DEADZONE_KEY, None)
+    for key, value in source.items():
+        key = str(key).strip().lower()
+        if key == CUSTOM_DEADZONE_KEY:
+            result[key] = value
+        elif key in fallback:
+            result[key] = str(value).strip()
+    _canonicalize_custom_deadzone(result)
     result["mode"] = result.get("mode", "4WAY").upper()
     for direction in STICK_DIRECTIONS:
         result[direction] = result.get(direction, "NONE").upper()
     return result
+
+
+def _canonicalize_custom_deadzone(stick):
+    zones = parse_custom_zones(stick.pop(CUSTOM_DEADZONE_KEY, None))
+    if zones:
+        stick[CUSTOM_DEADZONE_KEY] = format_custom_zones(zones)
 
 
 def validate_layer_mapping_targets(layer):
@@ -213,10 +221,11 @@ def normalize_layers(raw_layers, base_buttons, base_sticks, valid_buttons):
                         f"映射層「{name}」按鍵 {str(source_name).upper()} 無效：{exc}"
                     ) from exc
 
+        normalized_sticks = {}
         for side in STICK_SIDES:
             raw_stick_settings = raw.get(f"stick_{side}", {})
             if not isinstance(raw_stick_settings, dict):
-                continue
+                raw_stick_settings = {}
             for setting_name, setting_value in raw_stick_settings.items():
                 try:
                     normalized_setting = validate_stick_setting_key(setting_name)
@@ -230,6 +239,10 @@ def normalize_layers(raw_layers, base_buttons, base_sticks, valid_buttons):
                     raise ValueError(
                         f"映射層「{name}」{side.upper()} 搖桿欄位無效：{exc}"
                     ) from exc
+            try:
+                normalized_sticks[f"stick_{side}"] = _clean_stick_settings(raw_stick_settings, base_sticks[side])
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(f"映射層「{name}」{side.upper()} 逐區方向死區格式無效。") from exc
 
         normalized_layer = {
             "id": layer_id,
@@ -240,53 +253,30 @@ def normalize_layers(raw_layers, base_buttons, base_sticks, valid_buttons):
             "activation_buttons": buttons,
             "mode": mode,
             "buttons": _clean_mapping(raw.get("buttons"), base_buttons),
-            "stick_left": _clean_stick_settings(
-                raw.get("stick_left"), base_sticks["left"]
-            ),
-            "stick_right": _clean_stick_settings(
-                raw.get("stick_right"), base_sticks["right"]
-            ),
+            **normalized_sticks,
         }
         validate_layer_mapping_targets(normalized_layer)
         result.append(normalized_layer)
     return result
 
 
-def _atomic_write_json(path, payload):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temp_name = tempfile.mkstemp(
-        prefix=path.name + ".",
-        suffix=".tmp",
-        dir=str(path.parent),
-        text=True,
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temp_name, path)
-    except Exception:
-        try:
-            os.unlink(temp_name)
-        except OSError:
-            pass
-        raise
-
-
 def _layer_payload(layer):
     validate_layer_mapping_targets(layer)
+    snapshot = {
+        key: value
+        for key, value in layer.items()
+        if key not in ("name", "enabled") and not str(key).startswith("_")
+    }
+    for side in STICK_SIDES:
+        key = f"stick_{side}"
+        if CUSTOM_DEADZONE_KEY in snapshot.get(key, {}):
+            stick = dict(snapshot[key])
+            _canonicalize_custom_deadzone(stick)
+            snapshot[key] = stick
     return {
         "format": LAYER_FILE_FORMAT,
         "version": LAYER_FILE_VERSION,
-        "layer": {
-            key: value
-            for key, value in layer.items()
-            if key not in ("name", "enabled")
-            and not str(key).startswith("_")
-        },
+        "layer": snapshot,
     }
 
 
@@ -301,7 +291,7 @@ def _unique_filename(name, used):
     return candidate
 
 
-def save_layers(config, layers, layer_dir=LAYER_DIR, deletable_paths=None, *, before_write=None):
+def save_layers(config, layers, layer_dir=LAYER_DIR, deletable_paths=None, *, before_write=None, changes=None):
     """Atomically store every layer as one JSON file and remove legacy INI data."""
     directory = Path(layer_dir)
     directory.mkdir(parents=True, exist_ok=True)
@@ -314,7 +304,7 @@ def save_layers(config, layers, layer_dir=LAYER_DIR, deletable_paths=None, *, be
     for existing_path in directory.glob("*.json"):
         try:
             records = _raw_layers_from_json(existing_path, strict=True)
-        except (UnmanagedLayerFile, OSError, TypeError, json.JSONDecodeError):
+        except (UnmanagedLayerFile, OSError, TypeError, json.JSONDecodeError, RecursionError):
             # Ordinary or damaged JSON is not owned by this application.
             # Leave it untouched and let the user manage it explicitly.
             unmanaged_names.add(existing_path.stem.casefold())
@@ -367,15 +357,17 @@ def save_layers(config, layers, layer_dir=LAYER_DIR, deletable_paths=None, *, be
     for order, layer in enumerate(layers):
         filename = _unique_filename(layer.get("name", f"Layer {order + 1}"), used_names)
         path = directory / f"{filename}.json"
-        prepared.append((path, _layer_payload(layer)))
+        payload = json.dumps(_layer_payload(layer), ensure_ascii=False, indent=2) + "\n"
+        prepared.append((path, payload.encode("utf-8")))
         desired_paths.add(path.resolve())
 
     # Reject malformed payloads and directory conflicts before the caller
     # assumes rollback ownership of files that have not been written yet.
     if before_write is not None:
         before_write()
+    write = changes.write_bytes if changes is not None else atomic_write_bytes
     for path, payload in prepared:
-        _atomic_write_json(path, payload)
+        write(payload, path)
 
     deletable = (
         managed_existing
@@ -388,7 +380,10 @@ def save_layers(config, layers, layer_dir=LAYER_DIR, deletable_paths=None, *, be
         except OSError:
             resolved = path.absolute()
         if resolved not in desired_paths and resolved in deletable:
-            path.unlink()
+            if changes is None:
+                path.unlink()
+            else:
+                changes.delete(path)
 
     if config is not None:
         config.remove_section(LAYER_SECTION)
@@ -591,7 +586,10 @@ def import_layers_file(path, base_buttons, base_sticks, valid_buttons):
     if source.suffix.casefold() == ".ini":
         records = _raw_layers_from_ini(source)
     else:
-        records = _raw_layers_from_json(source)
+        try:
+            records = _raw_layers_from_json(source)
+        except RecursionError as exc:
+            raise ValueError("映射層設定格式不正確。") from exc
     raw_layers = [raw for _order, raw in sorted(records, key=lambda item: item[0])]
     layers = normalize_layers(raw_layers, base_buttons, base_sticks, valid_buttons)
     if not layers:
@@ -615,7 +613,7 @@ def _read_layer_directory(layer_dir):
             # A readable non-S2P JSON is unrelated and does not make the scan
             # ambiguous.
             continue
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        except (OSError, ValueError, TypeError, RecursionError):
             # A transient read/parse failure must not look like a deletion.
             scan_complete = False
             continue

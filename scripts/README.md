@@ -28,6 +28,10 @@ setup.py, while PyBluez is built at an exact commit. The firmware script uses
 ESP-IDF 5.5.4 and verifies that all three compiled images match the bundled
 firmware byte for byte.
 
+For a source checkout, run `.\native\build_gamepad_render_native.ps1` without
+arguments to install the optional Windows rendering kernels next to the
+Gamepad Tester source. Release packaging includes this DLL automatically.
+
 ## Release package
 
 ```powershell
@@ -46,6 +50,10 @@ The ZIP root contains only `S2P-XInput-Lite.exe`, `GamepadTester.exe`,
 `app/SHA256SUMS.txt` covers the whole package with paths relative to the ZIP
 installation root. Launcher metadata records portable layout 2 to reject old
 same-version launchers. Settings import accepts both `src/` and `app/src/`.
+
+The ZIP includes both current manuals and their screenshots for offline use.
+Its READMEs load the demo GIFs from GitHub. Archived screenshots and dependency
+test suites are excluded from the ZIP.
 
 For a quick local packaging check after all build outputs already exist:
 

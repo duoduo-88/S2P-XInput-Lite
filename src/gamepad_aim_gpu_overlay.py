@@ -29,6 +29,8 @@ def capture_overlay(canvas, items):
 
 
 def _rgb(canvas, color):
+    if len(color) == 7 and color.startswith("#"):
+        return color.lower()
     return "#" + "".join(f"{channel >> 8:02x}" for channel in canvas.winfo_rgb(color))
 
 

@@ -15,6 +15,7 @@ if str(SRC) not in sys.path:
 
 from config_utils import (  # noqa: E402
     DEFAULT_CONFIG_PATH,
+    SettingsFileChanges,
     atomic_write_config,
     load_config,
 )
@@ -279,9 +280,9 @@ class SettingsImportTests(unittest.TestCase):
             plan = self.scan(source, destination)
             destination_config = destination / "src" / "config.ini"
             locked = {"value": False}
-            original_snapshot = settings_import_module._snapshot
-            original_restore = settings_import_module._restore
-            original_writer = settings_import_module.atomic_write_config
+            original_snapshot = SettingsFileChanges._original
+            original_restore = SettingsFileChanges.restore
+            original_writer = SettingsFileChanges.write_config
             events = []
 
             @contextmanager
@@ -293,27 +294,27 @@ class SettingsImportTests(unittest.TestCase):
                 finally:
                     locked["value"] = False
 
-            def observed_snapshot(paths):
+            def observed_snapshot(changes, path):
                 self.assertTrue(locked["value"])
                 events.append("snapshot")
-                return original_snapshot(paths)
+                return original_snapshot(changes, path)
 
-            def observed_restore(snapshot):
+            def observed_restore(changes):
                 self.assertTrue(locked["value"])
                 events.append("restore")
-                return original_restore(snapshot)
+                return original_restore(changes)
 
-            def fail_final_config(config, path):
+            def fail_final_config(changes, config, path):
                 self.assertTrue(locked["value"])
                 if Path(path) == destination_config:
                     raise OSError("simulated final config failure")
-                return original_writer(config, path)
+                return original_writer(changes, config, path)
 
             with (
                 patch.object(settings_import_module, "config_file_lock", observed_lock),
-                patch.object(settings_import_module, "_snapshot", observed_snapshot),
-                patch.object(settings_import_module, "_restore", observed_restore),
-                patch.object(settings_import_module, "atomic_write_config", fail_final_config),
+                patch.object(SettingsFileChanges, "_original", observed_snapshot),
+                patch.object(SettingsFileChanges, "restore", observed_restore),
+                patch.object(SettingsFileChanges, "write_config", fail_final_config),
             ):
                 with self.assertRaises(OSError):
                     self.apply(plan, destination)
@@ -477,14 +478,14 @@ class SettingsImportTests(unittest.TestCase):
             current.set("gyro.NEW_CONTROLLER", "bias", "0.1, 0.2, 0.3")
             atomic_write_config(current, path)
             before = path.read_bytes()
-            original_writer = settings_import_module.atomic_write_config
+            original_writer = SettingsFileChanges.write_config
 
-            def fail_final_config(config, destination_path):
+            def fail_final_config(changes, config, destination_path):
                 if Path(destination_path) == path:
                     raise OSError("simulated final config failure")
-                return original_writer(config, destination_path)
+                return original_writer(changes, config, destination_path)
 
-            with patch.object(settings_import_module, "atomic_write_config", fail_final_config):
+            with patch.object(SettingsFileChanges, "write_config", fail_final_config):
                 with self.assertRaises(OSError):
                     self.apply(plan, destination)
             self.assertEqual(path.read_bytes(), before)
@@ -516,16 +517,67 @@ class SettingsImportTests(unittest.TestCase):
             destination_config = destination / "src" / "config.ini"
             config_before = destination_config.read_bytes()
             plan = self.scan(source, destination)
-            original_writer = settings_import_module.atomic_write_config
+            original_writer = SettingsFileChanges.write_config
 
-            def fail_final_config(config, path):
+            def fail_final_config(changes, config, path):
                 if Path(path) == destination_config:
                     raise OSError("simulated config write failure")
-                return original_writer(config, path)
+                return original_writer(changes, config, path)
 
-            with patch.object(settings_import_module, "atomic_write_config", fail_final_config):
+            with patch.object(SettingsFileChanges, "write_config", fail_final_config):
                 with self.assertRaises(OSError):
                     self.apply(plan, destination)
             self.assertEqual(destination_config.read_bytes(), config_before)
+            self.assertFalse((destination / "src" / "profiles" / "Imported.ini").exists())
+            self.assertFalse((destination / "src" / "layers" / "mouse.json").exists())
+
+    def test_import_rollback_keeps_external_edits_after_a_partial_write(self):
+        temporary, source, destination = self.make_installations()
+        with temporary:
+            self.write_source_config(source)
+            self.write_profile(source / "src" / "profiles", "Imported", "0.77")
+            self.copy_layer(source)
+            plan = self.scan(source, destination)
+            config_path = destination / "src" / "config.ini"
+            imported = destination / "src" / "profiles" / "Imported.ini"
+            write = SettingsFileChanges.write_config
+
+            def fail_after_external_edits(changes, config, path):
+                if Path(path) != config_path:
+                    return write(changes, config, path)
+                self.assertTrue(imported.exists())
+                imported.write_bytes(b"external edit to imported profile")
+                config_path.write_bytes(b"external config edit")
+                raise OSError("simulated config write failure")
+
+            with patch.object(SettingsFileChanges, "write_config", fail_after_external_edits):
+                with self.assertRaises(OSError):
+                    self.apply(plan, destination)
+
+            self.assertEqual(imported.read_bytes(), b"external edit to imported profile")
+            self.assertEqual(config_path.read_bytes(), b"external config edit")
+            self.assertFalse((destination / "src" / "layers" / "mouse.json").exists())
+
+    def test_import_rejects_external_config_edits_before_its_final_write(self):
+        temporary, source, destination = self.make_installations()
+        with temporary:
+            self.write_source_config(source)
+            self.write_profile(source / "src" / "profiles", "Imported", "0.77")
+            self.copy_layer(source)
+            plan = self.scan(source, destination)
+            config_path = destination / "src" / "config.ini"
+            external = config_path.read_bytes() + b"\n[gyro.EXTERNAL]\nbias = 0.1, 0.2, 0.3\n"
+            save_layers = settings_import_module.save_layers
+
+            def save_layers_then_edit_config(*args, **kwargs):
+                result = save_layers(*args, **kwargs)
+                config_path.write_bytes(external)
+                return result
+
+            with patch.object(settings_import_module, "save_layers", save_layers_then_edit_config):
+                with self.assertRaises(OSError):
+                    self.apply(plan, destination)
+
+            self.assertEqual(config_path.read_bytes(), external)
             self.assertFalse((destination / "src" / "profiles" / "Imported.ini").exists())
             self.assertFalse((destination / "src" / "layers" / "mouse.json").exists())

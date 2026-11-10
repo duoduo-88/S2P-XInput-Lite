@@ -13,6 +13,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from direction_deadzones import CUSTOM_DEADZONE_KEY, format_custom_zones, parse_custom_zones
+
 
 DEFAULT_CONFIG_PATH = Path(__file__).with_name("profiles") / "System Default.ini"
 
@@ -145,6 +147,9 @@ STICK_DIRECTION_SCHEMA = {
     "trigger_threshold": _float("觸發門檻", "trigger threshold", 0.10, 1.0, 2),
     "release_threshold": _float("放開門檻", "release threshold", 0.0, 0.97, 2),
     "direction_deadzone": _float("方向死區", "direction deadzone", 0.0, 20.0),
+    CUSTOM_DEADZONE_KEY: SettingSpec(
+        "angular_deadzones", "逐區死區", "individual direction deadzones", formatter=format_custom_zones,
+    ),
     "mouse_speed": _float("游標速度", "pointer speed", 100.0, 3000.0),
     "mouse_deadzone": _float("滑鼠中心死區", "pointer center deadzone", 0.0, 0.30, 2),
     "analog_direction": _enum("類比輸入方向", "analog input direction", "UP", "DOWN", "LEFT", "RIGHT"),
@@ -252,6 +257,8 @@ def _parse_one(spec: SettingSpec, value: Any) -> Any:
         return parsed
     if spec.kind == "output_shape":
         return _parse_output_shape(value)
+    if spec.kind == "angular_deadzones":
+        return parse_custom_zones(value)
     return str(value)
 
 
@@ -309,7 +316,7 @@ def normalize_section_values(
                     f"{spec.label_zh}的數值格式不正確。",
                     f"Invalid value format for {spec.label_en}.",
                 ) from None
-            parsed = _parse_one(spec, defaults[key])
+            parsed = _parse_one(spec, defaults.get(key) if key == CUSTOM_DEADZONE_KEY else defaults[key])
 
         if spec.choices and parsed not in spec.choices:
             if strict:
@@ -461,7 +468,10 @@ def write_section_settings(
         config.add_section(section)
     for key in SECTION_SCHEMAS[section]:
         if key in values:
-            config.set(section, key, format_setting_value(section, key, values[key]))
+            if key == CUSTOM_DEADZONE_KEY and not values[key]:
+                config.remove_option(section, key)
+            else:
+                config.set(section, key, format_setting_value(section, key, values[key]))
 
 
 def validate_config_sections(
@@ -494,6 +504,9 @@ def normalize_config_in_place(
             config.add_section(section)
             changed = True
         for key, value in values.items():
+            if key == CUSTOM_DEADZONE_KEY and not value:
+                changed |= config.remove_option(section, key)
+                continue
             formatted = format_setting_value(section, key, value)
             if config.get(section, key, fallback=None) != formatted:
                 config.set(section, key, formatted)

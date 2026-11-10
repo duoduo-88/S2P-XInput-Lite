@@ -20,9 +20,8 @@ from update_manager import parse_version
 from config_utils import (
     CONFIG_PATH,
     PROFILE_DIR,
+    SettingsFileChanges,
     apply_profile,
-    atomic_write_bytes,
-    atomic_write_config,
     config_file_lock,
     is_protected_profile,
     list_profiles,
@@ -287,19 +286,6 @@ def scan_settings_import(source_root, *, config_path=CONFIG_PATH, profile_dir=PR
     )
 
 
-def _snapshot(paths):
-    return {Path(path): (Path(path).read_bytes() if Path(path).exists() else None) for path in paths}
-
-
-def _restore(snapshot):
-    for path, data in snapshot.items():
-        if data is None:
-            if path.exists():
-                path.unlink()
-        else:
-            atomic_write_bytes(data, path)
-
-
 def _fallback_active(current_active, profile_dir):
     names = list_profiles(profile_dir)
     by_name = {name.casefold(): name for name in names}
@@ -308,7 +294,7 @@ def _fallback_active(current_active, profile_dir):
 
 def apply_settings_import(plan: ImportPlan, *, profile_conflict="skip", layer_conflict="skip",
                           config_path=CONFIG_PATH, profile_dir=PROFILE_DIR, layer_dir=LAYER_DIR):
-    """Commit a reviewed plan with atomic file writes and full rollback."""
+    """Commit a reviewed plan and undo writes that still belong to this import."""
     if profile_conflict not in ("overwrite", "skip") or layer_conflict not in ("overwrite", "skip"):
         raise ValueError("conflict policy must be 'overwrite' or 'skip'")
 
@@ -319,6 +305,8 @@ def apply_settings_import(plan: ImportPlan, *, profile_conflict="skip", layer_co
         # The connector can save calibrations while the preview is open. Merge
         # the reviewed source values into the current destination, not its old
         # preview snapshot, and keep the plan unchanged for retries.
+        changes = SettingsFileChanges()
+        changes.watch(config_path)
         candidate = load_config(config_path, persist=False)
         current_active = candidate.get(
             "gui", "active_profile", fallback=plan.current_active_profile
@@ -383,22 +371,13 @@ def apply_settings_import(plan: ImportPlan, *, profile_conflict="skip", layer_co
         state_layers, _stale = apply_layer_state(candidate, desired_layers)
         store_layer_state(candidate, state_layers)
 
-        paths = {
-            Path(config_path),
-            *[profile_path(name, profile_dir) for name in profiles_to_write],
-        }
-        paths.update(Path(path) for path in managed_paths)
-        paths.update(
-            Path(layer_dir) / f"{layer['name']}.json" for layer in desired_layers
-        )
-        snapshot = _snapshot(paths)
         try:
             for name, profile in profiles_to_write.items():
-                atomic_write_config(profile, profile_path(name, profile_dir))
-            save_layers(candidate, desired_layers, layer_dir, deletable_paths=managed_paths)
-            atomic_write_config(candidate, config_path)
+                changes.write_config(profile, profile_path(name, profile_dir))
+            save_layers(candidate, desired_layers, layer_dir, deletable_paths=managed_paths, changes=changes)
+            changes.write_config(candidate, config_path)
         except Exception:
-            _restore(snapshot)
+            changes.restore()
             raise
     return ImportResult(
         plan.source_root, active, tuple(profiles_to_write), tuple(profiles_skipped),

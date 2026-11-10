@@ -1,6 +1,15 @@
 """Traditional Chinese / English text used by the settings GUI."""
 
 EN_TEXT = {
+    "點擊放大方向死區雷達圖。": "Click to enlarge the direction deadzone radar.",
+    "拖曳紅色死區以旋轉。外圈的 0–90% 是死區佔相鄰方向夾角的比例。":
+        "Drag the red deadzones to rotate them. The outer 0–90% fields set each width relative to the gap between adjacent directions.",
+    "統一死區": "Uniform deadzone",
+    "使用統一死區": "Use uniform deadzone",
+    "方向死區設定已變更。請重新開啟雷達圖再編輯。":
+        "Direction deadzone settings changed. Reopen the radar to edit them.",
+    "統一死區須為 0–20°。觸發須為 10–100%，放開須至少比觸發低 3 個百分點。":
+        "Uniform deadzone must be 0–20°. Activation must be 10–100%, and release must be at least 3 percentage points lower.",
     "瞄準設定": "Aim Settings",
     "測試設定": "Test Settings",
     "開始": "Start",
@@ -20,14 +29,14 @@ EN_TEXT = {
     "無法儲存測試設定。": "Could not save test settings.",
     "按 Enter 或手把 START 開始測試。": "Press Enter or controller START to begin.",
     "測試已中斷。按 Enter 或手把 START 重新開始。": "Test interrupted. Press Enter or controller START to restart.",
-    "測試已中斷。請選擇有搖桿輸出的手把，再按 Enter 或 START。":
-        "Test interrupted. Select a gamepad with stick output, then press Enter or START.",
     "瞄準測試說明": "Aim Test Help",
-    "跟槍模式用右搖桿輸出轉動視角，盡量讓準心留在移動的靶上。跟靶率是準心在靶上的時間比例。":
-        "In Tracking, use right-stick output to keep the reticle on the moving target. "
+    "3D 模式可用滑鼠或右搖桿轉動視角，依輸入自動接手。"
+    "跟槍時盡量讓準心留在移動的靶上。跟靶率是準心在靶上的時間比例。":
+        "In 3D, turn the camera with either the mouse or the right stick. "
+        "The active input takes over automatically. In Tracking, keep the reticle on the moving target. "
         "The on-target percentage measures how long the reticle stayed on the target.",
-    "點靶模式用右搖桿輸出瞄準，按 RT 或空白鍵射擊。按 Enter 或手把 START 可開始或重測。":
-        "In Targets, aim with right-stick output and shoot with RT or Space. "
+    "點靶時按滑鼠左鍵、RT 或空白鍵射擊。按 Enter 或手把 START 可開始或重測。":
+        "In Targets, left-click or press RT or Space to shoot. "
         "Press Enter or controller START to start or retry.",
     "同設定的紀錄須使用相同的模式、畫面尺寸、出靶種子、震動與音效。"
     "也會比對該模式的靶數、秒數、靶心大小、遠近與出靶範圍。"
@@ -60,6 +69,7 @@ EN_TEXT = {
     "出靶種子（0 為固定配置）": "Layout seed (0 for fixed layout)",
     "重新抽靶": "Randomize",
     "3D 點靶遠近差異": "3D target depth variation",
+    "加深遠近效果": "Darken distant targets",
     "3D 點靶水平範圍": "3D target horizontal spread",
     "3D 點靶垂直範圍": "3D target vertical spread",
     "震動強度": "Vibration strength",
@@ -118,13 +128,20 @@ EN_TEXT = {
     "開始跟槍": "Start Tracking",
     "開始點靶": "Start Targets",
     "開始限時點靶": "Start Timed Targets",
+    "D2D 提交": "D2D submits",
+    "Tk 更新": "Tk updates",
+    "{renderer} {fps:.0f} FPS · 輸入 {source} · 模擬 {sim:.0f} Hz":
+        "{renderer} {fps:.0f} FPS · Input {source} · Sim {sim:.0f} Hz",
+    "平均 {mean:.2f} ms · P95 {p95:.2f} · P99 {p99:.2f} · 超時 {late:.0f}%":
+        "Mean {mean:.2f} ms · P95 {p95:.2f} · P99 {p99:.2f} · Late {late:.0f}%",
     "繪圖 {fps:.0f} FPS": "Draw {fps:.0f} FPS",
     "繪圖 {fps:.0f} FPS　更新 {hz:.0f} Hz": "Draw {fps:.0f} FPS   Update {hz:.0f} Hz",
-    "請選擇有搖桿輸出的手把。": "Select a gamepad with stick output.",
     "測試已中斷，請重新開始。": "Test interrupted. Start a new round.",
-    "用右搖桿輸出轉動視角，追蹤移動球靶。": "Use right-stick output to turn and follow the moving target.",
-    "用右搖桿輸出瞄準球靶，按 RT 或空白鍵射擊。":
-        "Use right-stick output to aim. Press RT or Space to shoot.",
+    "用滑鼠或右搖桿轉動視角，追蹤移動球靶。": "Turn with the mouse or right stick to follow the moving target.",
+    "按右鍵釋放游標。": "Right-click to release the pointer.",
+    "游標已釋放。按右鍵繼續用滑鼠瞄準。": "Pointer released. Right-click to resume mouse aim.",
+    "用滑鼠或右搖桿轉動視角，按左鍵、RT 或空白鍵射擊。":
+        "Turn with the mouse or right stick. Left-click or press RT or Space to shoot.",
     "移動 Windows 游標，按滑鼠左鍵點靶。": "Move the Windows cursor and left-click to hit targets.",
     "2D 模式可直接用滑鼠或右搖桿移動準心，依輸入自動接手。按左鍵、RT 或空白鍵點靶。":
         "In 2D, move the reticle with either the mouse or the right stick. "
@@ -734,6 +751,8 @@ EN_TEXT = {
         "X sets the input position and must remain ordered between adjacent points.\nY sets the output strength at that position. Input precision is 0.001.",
     "映射未完成": "Mapping Incomplete",
     "映射層載入失敗": "Mapping Layer Load Failed",
+    "映射層資料夾包含無法驗證的 S2P JSON 檔案。":
+        "The mapping-layer folder contains an S2P JSON file that could not be validated.",
     "映射層檔案包含無法使用的設定。介面仍可開啟，但修正檔案前將禁止儲存／套用。":
         "A mapping-layer file contains an unusable setting. The UI will remain available, but Save/Apply is disabled until the file is corrected.",
     "映射層檔案包含無法使用的設定。介面會保留目前內容，修正檔案後將自動重新載入。":
@@ -844,6 +863,8 @@ EN_TEXT = {
     "無法開啟存放映射層的資料夾：":
         "Could not open the mapping-layer folder:",
     "映射層資料夾已變更": "Mapping Layer Folder Changed",
+    "映射層檔案在儲存前已變更。請重新載入後再試。":
+        "The mapping-layer files changed before saving. Reload them and try again.",
     "映射層已變更": "Mapping Layer Changed",
     "此映射層已被變更或刪除。請重新開啟此操作後再試。":
         "This mapping layer was changed or deleted. Reopen this action and try again.",

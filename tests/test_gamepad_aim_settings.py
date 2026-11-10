@@ -45,6 +45,10 @@ class AimSettingsTests(unittest.TestCase):
         size_picker = next(child for child in controls if isinstance(child, ttk.Combobox))
         fullscreen = next(child for child in controls
                           if isinstance(child, ttk.Checkbutton) and child.cget("text") == "全螢幕")
+        shading = next(child for child in body.winfo_children()
+                       if isinstance(child, ttk.Checkbutton) and child.cget("text") == "加深遠近效果")
+        self.assertTrue(shading.instate(["selected"]))
+        shading.invoke()
         self.assertEqual(size_picker.cget("values"), ("自動（最高）", *supported))
         self.assertEqual(size_picker.get(), "1920x1080")
         self.assertTrue(size_picker.instate(["readonly", "!disabled"]))
@@ -69,14 +73,14 @@ class AimSettingsTests(unittest.TestCase):
         self.assertTrue(dialog.winfo_exists())
         buttons["恢復預設"].invoke()
         self.assertEqual(saved, [])
+        self.assertTrue(shading.instate(["selected"]))
         self.assertEqual(size_picker.get(), "自動（最高）")
         self.assertTrue(size_picker.instate(["readonly", "!disabled"]))
-        self.assertTrue(fullscreen.instate(["!selected"]))
-        fullscreen.invoke()
-        self.assertEqual(size_picker.get(), "自動（最高）")
+        self.assertTrue(fullscreen.instate(["selected"]))
         size_picker.set("1706x960")
+        shading.invoke()
         buttons["儲存"].invoke()
-        self.assertEqual(saved, [AimSettings(fullscreen=True, fullscreen_size="1706x960")])
+        self.assertEqual(saved, [AimSettings(fullscreen=True, fullscreen_size="1706x960", depth_shading=False)])
 
         with patch("gamepad_aim_settings.available_resolutions", side_effect=OSError):
             dialog = show_aim_settings(owner, str, AimSettings(fullscreen=True), saved.append)
@@ -110,6 +114,17 @@ class AimSettingsTests(unittest.TestCase):
         self.assertNotIn("reticle_size", custom.basis("cursor-mouse", (700, 500)))
         self.assertNotIn("target_size_2d", custom.basis("shooting", (700, 500)))
 
+    def test_depth_shading_keeps_the_comparison_basis_and_new_3d_hit_order_separates_it(self):
+        from gamepad_aim_history import AimHistory
+        from gamepad_aim_settings import AimSettings
+
+        current = AimSettings().basis("timed-shooting", (800, 450))
+        unshaded = AimSettings(depth_shading=False).basis("timed-shooting", (800, 450))
+        self.assertEqual(current, unshaded)
+        history = AimHistory(None)
+        history.add(dict(current, version=4), {"hits": 5})
+        self.assertFalse(history.has_matching_record(current))
+
     def test_unified_2d_bases_use_drill_durations_and_target_size(self):
         from gamepad_aim_settings import AimSettings
 
@@ -135,7 +150,7 @@ class AimSettingsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "aim.json"
             settings = AimSettings(
-                target_count=16, depth=82, target_color="#ff8800", sound=False,
+                target_count=16, depth=82, target_color="#ff8800", sound=False, depth_shading=False,
                 window_size="1706x960", fullscreen=True,
                 reticle_on_target_color="#ff4775", target_on_target_color="#ddf095",
             )
@@ -150,7 +165,9 @@ class AimSettingsTests(unittest.TestCase):
             path.write_text('{"seed": 54}', encoding="utf-8")
             legacy = AimSettings.load(path)
             self.assertEqual((legacy.seed, legacy.window_size, legacy.fullscreen),
-                             (54, "", False))
+                             (54, "", True))
+            path.write_text('{"fullscreen": false, "window_size": "960x540"}', encoding="utf-8")
+            self.assertEqual(AimSettings.load(path), AimSettings(fullscreen=False, window_size="960x540"))
             path.write_text('{"fullscreen": true, "window_size": "1920x1080"}', encoding="utf-8")
             self.assertEqual(AimSettings.load(path).fullscreen_size, "1920x1080")
 

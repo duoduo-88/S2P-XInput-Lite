@@ -8,7 +8,7 @@ import sys
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -404,6 +404,59 @@ class RawHidProbeTests(unittest.TestCase):
         self.assertAlmostEqual(
             snapshot["effective_ratio"], 249.0 / 999.0
         )
+
+    def test_analysis_keeps_reader_until_its_stop_succeeds(self):
+        for attribute in ("_stream", "_fallback"):
+            with self.subTest(reader=attribute):
+                client = RawHidAnalysisClient()
+                reader = Mock(stop=Mock(side_effect=(False, True)))
+                client._thread = Mock(is_alive=Mock(return_value=False))
+                setattr(client, attribute, reader)
+
+                self.assertFalse(client.stop(timeout=0.1))
+                self.assertIs(getattr(client, attribute), reader)
+                with patch("raw_hid_probe.RawHidStreamClient") as new_reader:
+                    self.assertFalse(client.start("hid-path", 1.0))
+                new_reader.assert_not_called()
+                self.assertTrue(client.stop(timeout=0.1))
+                self.assertIsNone(getattr(client, attribute))
+
+    def test_analysis_waits_for_stream_to_stop_before_starting_fallback(self):
+        client = RawHidAnalysisClient()
+        stream = Mock(stop=Mock(return_value=False))
+        with patch("raw_hid_probe.RawHidProbeClient") as fallback:
+            fallback.return_value.start.return_value = False
+            client._run_timing_fallback(stream, "hid-path", 1.0)
+        fallback.assert_not_called()
+        self.assertEqual(client.read_snapshot()["state"], "error")
+
+    def test_analysis_reports_fallback_start_error(self):
+        client = RawHidAnalysisClient()
+        stream = Mock(stop=Mock(return_value=True))
+        fallback = Mock(
+            start=Mock(return_value=False),
+            read_snapshot=Mock(return_value={"state": "idle"}),
+        )
+        with patch("raw_hid_probe.RawHidProbeClient", return_value=fallback):
+            client._run_timing_fallback(stream, "hid-path", 1.0)
+        self.assertEqual(client.read_snapshot()["state"], "error")
+
+    def test_cancelled_analysis_exposes_terminal_state_while_fallback_is_stopping(self):
+        client = RawHidAnalysisClient()
+        stream = Mock(stop=Mock(return_value=True))
+        fallback = Mock(
+            stop=Mock(return_value=False),
+            read_snapshot=Mock(return_value={"state": "running"}),
+        )
+
+        def start_fallback(*_args):
+            client._stop.set()
+            return True
+
+        fallback.start.side_effect = start_fallback
+        with patch("raw_hid_probe.RawHidProbeClient", return_value=fallback):
+            client._run_timing_fallback(stream, "hid-path", 1.0)
+        self.assertEqual(client.read_snapshot()["state"], "stopped")
 
     def test_analysis_detects_regular_four_report_repeats(self):
         tracker = _StickUpdateTracker()

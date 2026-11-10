@@ -10,6 +10,7 @@ from __future__ import annotations
 import configparser
 from typing import Any, Mapping
 
+from direction_deadzones import CUSTOM_DEADZONE_KEY
 from settings_schema import (
     SECTION_SCHEMAS,
     format_setting_value,
@@ -110,6 +111,7 @@ def _stick_direction_values(gui, side: str) -> dict[str, Any]:
         "trigger_threshold": _value(gui.stick_direction_trigger_vars[side]),
         "release_threshold": _value(gui.stick_direction_release_vars[side]),
         "direction_deadzone": _value(gui.stick_direction_deadzone_vars[side]),
+        CUSTOM_DEADZONE_KEY: _value(gui.stick_direction_custom_deadzone_vars[side]),
         "mouse_speed": _value(gui.stick_mouse_speed_vars[side]),
         "mouse_deadzone": _value(gui.stick_mouse_deadzone_vars[side]),
         "analog_direction": _value(gui.stick_analog_direction_vars[side]),

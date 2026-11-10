@@ -11,8 +11,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import config_gui
 from config_gui import ConfigGUI
 from config_utils import (
-    DEFAULT_CONFIG_PATH, atomic_write_config, load_config, read_profile, save_profile,
+    DEFAULT_CONFIG_PATH, SettingsFileChanges, atomic_write_config, load_config, read_profile, save_profile,
 )
+from mapping_layers import save_layers
 from settings_schema import SettingValidationError
 
 
@@ -62,10 +63,9 @@ class ProfileSaveSafetyTests(unittest.TestCase):
                     self.gui._external_active_profile_changed = False
                     self.gui._active_profile_content_baseline = self.gui.profile_file_fingerprint("Alpha")
 
-                    def save_settings(**kwargs):
-                        kwargs["before_write"]()
-                        self.config_path.write_bytes(b"partially saved config")
-                        self.layer_path.write_bytes(b"partially saved layer")
+                    def save_settings(*, changes, **_kwargs):
+                        changes.write_bytes(b"partially saved config", self.config_path)
+                        changes.write_bytes(b"partially saved layer", self.layer_path)
                         if mutation == "edit":
                             self.profile_path.write_bytes(b"external profile contents")
                         else:
@@ -86,9 +86,8 @@ class ProfileSaveSafetyTests(unittest.TestCase):
     def test_profile_write_failure_restores_settings(self):
         original_profile = self.profile_path.read_bytes()
 
-        def save_settings(**kwargs):
-            kwargs["before_write"]()
-            self.config_path.write_bytes(b"partially saved config")
+        def save_settings(*, changes, **_kwargs):
+            changes.write_bytes(b"partially saved config", self.config_path)
             return True
 
         self.gui.save_config = save_settings
@@ -97,11 +96,25 @@ class ProfileSaveSafetyTests(unittest.TestCase):
         self.assertEqual(self.config_path.read_bytes(), self.original_config)
         self.assertEqual(self.profile_path.read_bytes(), original_profile)
 
+    def test_save_confirmation_does_not_authorize_a_newer_profile_version(self):
+        self.gui.root = None
+        self.gui.save_config = Mock(return_value=True)
+        self.profile_path.write_bytes(b"version shown when opening confirmation")
+
+        def confirm_overwrite(*_args, **_kwargs):
+            self.profile_path.write_bytes(b"newer external profile")
+            return False  # Keep the GUI version in the conflict prompt.
+
+        with patch.object(config_gui.messagebox, "askyesnocancel", side_effect=confirm_overwrite):
+            self.assertFalse(self.gui.save_current_profile(show_message=False))
+
+        self.gui.save_config.assert_not_called()
+        self.assertEqual(self.profile_path.read_bytes(), b"newer external profile")
+
     def test_successful_save_updates_profile_and_its_loaded_baseline(self):
-        def save_settings(**kwargs):
-            kwargs["before_write"]()
+        def save_settings(*, changes, **_kwargs):
             self.gui.config.set("rumble", "lf_strength", "0.77")
-            atomic_write_config(self.gui.config, self.config_path)
+            changes.write_config(self.gui.config, self.config_path)
             return True
 
         self.gui.save_config = save_settings
@@ -133,10 +146,9 @@ class ProfileSaveSafetyTests(unittest.TestCase):
                         self.gui.profile_names.remove("Target")
                     self.layer_path.write_bytes(b"original layer")
 
-                    def save_settings(**kwargs):
-                        kwargs["before_write"]()
-                        self.config_path.write_bytes(b"partially saved config")
-                        self.layer_path.write_bytes(b"partially saved layer")
+                    def save_settings(*, changes, **_kwargs):
+                        changes.write_bytes(b"partially saved config", self.config_path)
+                        changes.write_bytes(b"partially saved layer", self.layer_path)
                         if mutation == "delete":
                             target.unlink()
                         else:
@@ -160,13 +172,31 @@ class ProfileSaveSafetyTests(unittest.TestCase):
                         self.assertTrue(target.exists())
                         self.assertEqual(target.read_bytes(), b"external target contents")
 
+    def test_save_as_confirmation_protects_a_newer_unlisted_target(self):
+        target = self.prepare_save_as()
+        self.gui.profile_names.remove("Target")
+        self.gui.save_config = Mock(return_value=True)
+
+        def confirm_overwrite(*_args, **_kwargs):
+            target.write_bytes(b"newer external target")
+            return True
+
+        with (
+            patch.object(config_gui.simpledialog, "askstring", return_value="Target"),
+            patch.object(config_gui.messagebox, "askyesno", side_effect=confirm_overwrite) as confirm,
+        ):
+            self.assertFalse(self.gui.save_profile_as())
+
+        confirm.assert_called_once()
+        self.gui.save_config.assert_not_called()
+        self.assertEqual(target.read_bytes(), b"newer external target")
+
     def test_save_as_profile_commit_failure_restores_settings(self):
         target = self.prepare_save_as()
         before = target.read_bytes()
 
-        def save_settings(**kwargs):
-            kwargs["before_write"]()
-            self.config_path.write_bytes(b"partially saved config")
+        def save_settings(*, changes, **_kwargs):
+            changes.write_bytes(b"partially saved config", self.config_path)
             return True
 
         self.gui.save_config = save_settings
@@ -184,10 +214,9 @@ class ProfileSaveSafetyTests(unittest.TestCase):
         target = self.prepare_save_as()
         original_profile = self.profile_path.read_bytes()
 
-        def save_settings(**kwargs):
-            kwargs["before_write"]()
+        def save_settings(*, changes, **_kwargs):
             self.gui.config.set("rumble", "lf_strength", "0.77")
-            atomic_write_config(self.gui.config, self.config_path)
+            changes.write_config(self.gui.config, self.config_path)
             return True
 
         self.gui.save_config = save_settings
@@ -208,22 +237,23 @@ class ProfileSaveSafetyTests(unittest.TestCase):
             with self.subTest(fail_write=fail_write):
                 target = self.prepare_save_as()
 
-                def save_settings(**kwargs):
-                    kwargs["before_write"]()
-                    self.config_path.write_bytes(b"partially saved config")
+                def save_settings(*, changes, **_kwargs):
+                    changes.write_bytes(b"partially saved config", self.config_path)
                     return True
 
-                def write_config(config, path):
+                real_write = SettingsFileChanges.write_config
+
+                def write_config(changes, config, path):
                     target.write_bytes(b"external change during config commit")
                     if fail_write:
                         raise OSError("forced final config error")
-                    atomic_write_config(config, path)
+                    real_write(changes, config, path)
 
                 self.gui.save_config = save_settings
                 with (
                     patch.object(config_gui.simpledialog, "askstring", return_value="Target"),
                     patch.object(config_gui.messagebox, "askyesno", return_value=True),
-                    patch.object(config_gui, "atomic_write_config", side_effect=write_config),
+                    patch.object(SettingsFileChanges, "write_config", autospec=True, side_effect=write_config),
                 ):
                     self.assertFalse(self.gui.save_profile_as())
                 self.assertEqual(target.read_bytes(), b"external change during config commit")
@@ -237,8 +267,7 @@ class ProfileSaveSafetyTests(unittest.TestCase):
                 self.gui.language = language
                 self.gui.tr = lambda text: config_gui.translate_text(text, language)
 
-                def save_settings(**kwargs):
-                    kwargs["before_write"]()
+                def save_settings(**_kwargs):
                     target.write_bytes(b"external target")
                     return True
 
@@ -332,6 +361,58 @@ class ProfileSaveSafetyTests(unittest.TestCase):
             self.assertTrue(self.gui.save_current_profile(show_message=False))
         self.assertEqual(read_profile("Alpha", self.profiles).get("rumble", "lf_strength"), "0.77")
 
+    def test_failed_save_preserves_external_layer_edits_and_rolls_back_its_own_changes(self):
+        def layer(name):
+            return {
+                "id": name.lower(), "name": name, "mode": "HOLD",
+                "activation_buttons": ["A"], "buttons": {},
+                "stick_left": {"mode": "4WAY"}, "stick_right": {"mode": "4WAY"},
+            }
+
+        self.gui._layer_managed_paths = set(save_layers(
+            None, [layer(name) for name in ("Revised", "Deleted", "Recreated")], self.layers,
+        ))
+        revised = self.layers / "Revised.json"
+        deleted = self.layers / "Deleted.json"
+        recreated = self.layers / "Recreated.json"
+        new = self.layers / "New.json"
+        original_deleted = deleted.read_bytes()
+        self.gui.mapping_layers = [{**layer("Revised"), "activation_buttons": ["B"]}, layer("New")]
+        self.gui._layer_folder_snapshot = self.gui._capture_layer_folder_snapshot()
+        self.gui._mapping_layer_load_error = None
+        self.gui._find_pending_custom_mappings = Mock(return_value=[])
+        self.gui._find_invalid_mapping_targets = Mock(return_value=[])
+        self.gui.refresh_mapping_layer_rows = Mock()
+        self.gui.build_parameter_default_registry = Mock()
+        bundle = {
+            "sections": {"rumble": {"lf_strength": "0.77"}},
+            "buttons": {}, "direction_mappings": {"left": {}, "right": {}},
+            "gyro_activation_buttons": ["ZL"], "gyro_stabilization_buttons": [],
+            "gyro_tilt_recenter_button": "NONE",
+        }
+
+        def fail_profile_save(*_args, **_kwargs):
+            self.assertTrue(new.exists())
+            self.assertFalse(deleted.exists())
+            self.assertFalse(recreated.exists())
+            self.layer_path.write_bytes(b"external unrelated edit")
+            revised.write_bytes(b"external edit after save")
+            recreated.write_bytes(b"external recreation")
+            raise OSError("forced profile write failure")
+
+        with (
+            patch.object(config_gui, "collect_gui_settings", return_value=bundle),
+            patch.object(config_gui, "save_profile", side_effect=fail_profile_save),
+        ):
+            self.assertFalse(self.gui.save_current_profile(show_message=False))
+
+        self.assertEqual(self.layer_path.read_bytes(), b"external unrelated edit")
+        self.assertEqual(revised.read_bytes(), b"external edit after save")
+        self.assertEqual(recreated.read_bytes(), b"external recreation")
+        self.assertEqual(deleted.read_bytes(), original_deleted)
+        self.assertFalse(new.exists())
+        self.assertEqual(self.config_path.read_bytes(), self.original_config)
+
     def test_saved_profile_remains_successful_when_list_refresh_fails(self):
         for action in ("save_current_profile", "save_profile_as"):
             for language in ("en", "zh"):
@@ -345,10 +426,9 @@ class ProfileSaveSafetyTests(unittest.TestCase):
                     self.gui.refresh_profile_list = Mock(side_effect=OSError("temporarily unavailable"))
                     self.gui._profile_folder_snapshot = self.gui._capture_profile_folder_snapshot()
 
-                    def save_settings(**kwargs):
-                        kwargs["before_write"]()
+                    def save_settings(*, changes, **_kwargs):
                         self.gui.config.set("rumble", "lf_strength", "0.77")
-                        atomic_write_config(self.gui.config, self.config_path)
+                        changes.write_config(self.gui.config, self.config_path)
                         return True
 
                     self.gui.save_config = save_settings
@@ -398,10 +478,9 @@ class ProfileSaveSafetyTests(unittest.TestCase):
                 self.gui._external_active_profile_changed = False
                 written = []
 
-                def save_settings(**kwargs):
-                    kwargs["before_write"]()
+                def save_settings(*, changes, **_kwargs):
                     self.gui.config.set("rumble", "lf_strength", "0.77")
-                    atomic_write_config(self.gui.config, self.config_path)
+                    changes.write_config(self.gui.config, self.config_path)
                     return True
 
                 def commit_then_external_edit(config, name, directory, **kwargs):

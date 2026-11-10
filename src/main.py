@@ -163,7 +163,7 @@ def main():
     stage_status = status_publisher.stage
     publish_status()
 
-    config = load_config(CONFIG_PATH)
+    config = load_config(CONFIG_PATH, persist=False)
     set_language_from_config(config)
 
     print("========================================")
@@ -175,7 +175,7 @@ def main():
     # Start with the legacy profile.  Once the controller is identified, the
     # matching per-device profile is loaded by on_connected().
     try:
-        custom_stick_cal = load_stick_calibration(config)
+        load_stick_calibration(config)
         baudrate = config.getint(
             "serial",
             "baudrate",
@@ -246,11 +246,21 @@ def main():
     audio_haptics = None
     test_telemetry = None
     try:
-        xinput = XInputController(
-            config,
-            custom_stick_cal,
-            layer_state_config_path=CONFIG_PATH,
-        )
+        with config_file_lock():
+            # Detection may outlast a GUI save. Refresh before reading the
+            # layer directory, while retaining the baud rate used to probe it.
+            config = load_config(CONFIG_PATH)
+            if config.getint("serial", "baudrate", fallback=2_000_000) != baudrate:
+                raise ValueError(tr(
+                    "偵測期間序列傳輸速率已變更，請重新啟動連線。",
+                    "Serial baud rate changed during detection. Restart the connection.",
+                ))
+            xinput = XInputController(
+                config,
+                load_stick_calibration(config),
+                layer_state_config_path=CONFIG_PATH,
+            )
+        set_language_from_config(config)
         try:
             test_telemetry = SharedTestTelemetry()
             xinput.set_test_telemetry(test_telemetry)
@@ -566,32 +576,6 @@ def main():
 
     def reload_runtime_settings():
         """Hot-swap gameplay settings without replacing either connection."""
-        previous_config = config
-        previous_xinput = xinput
-        previous_audio = audio_haptics
-        previous_calibration = previous_xinput.cal
-
-        new_config = load_config(CONFIG_PATH)
-        # Parse connection-owned values but reject changes that need a real
-        # transport restart instead of silently pretending they were applied.
-        new_baudrate = new_config.getint(
-            "serial", "baudrate", fallback=2_000_000
-        )
-        if new_baudrate != baudrate:
-            raise ValueError(
-                "serial baudrate changed; restart the connection to apply it"
-            )
-
-        calibration_states = (
-            previous_xinput.get_gyro_calibration_status(),
-            previous_xinput.get_accelerometer_calibration_status(),
-            previous_xinput.get_magnetometer_calibration_status(),
-        )
-        if any(item.get("state") == "running" for item in calibration_states):
-            raise ValueError(
-                "calibration is running; finish or cancel it before applying settings"
-            )
-
         def replace_settings():
             nonlocal config, xinput, audio_haptics, previous_audio
             try:
@@ -609,7 +593,7 @@ def main():
                     previous_audio.reconfigure(new_config)
             except Exception:
                 previous_xinput.reconfigure(
-                    previous_config, previous_calibration
+                    previous_config, previous_calibration, mapping_layers=previous_layers,
                 )
                 apply_runtime_calibration(previous_xinput, previous_config)
                 xinput = previous_xinput
@@ -638,13 +622,35 @@ def main():
                     ).strip().upper() in ("AUDIO", "MIX")
                 )
 
-        if not input_dispatcher.run_exclusive(
-            replace_settings,
-            timeout=1.0,
-        ):
-            raise TimeoutError(
-                "Input processing did not quiesce for settings reload."
+        # Keep the INI and layer JSON reads in the same save generation.
+        with config_file_lock():
+            previous_config = config
+            previous_xinput = xinput
+            previous_audio = audio_haptics
+            previous_calibration = previous_xinput.cal
+            previous_layers = previous_xinput.mapping_layers
+
+            new_config = load_config(CONFIG_PATH)
+            new_baudrate = new_config.getint("serial", "baudrate", fallback=2_000_000)
+            if new_baudrate != baudrate:
+                raise ValueError(
+                    "serial baudrate changed; restart the connection to apply it"
+                )
+
+            calibration_states = (
+                previous_xinput.get_gyro_calibration_status(),
+                previous_xinput.get_accelerometer_calibration_status(),
+                previous_xinput.get_magnetometer_calibration_status(),
             )
+            if any(item.get("state") == "running" for item in calibration_states):
+                raise ValueError(
+                    "calibration is running; finish or cancel it before applying settings"
+                )
+
+            if not input_dispatcher.run_exclusive(replace_settings, timeout=1.0):
+                raise TimeoutError(
+                    "Input processing did not quiesce for settings reload."
+                )
 
     def on_connected():
         nonlocal last_status_stage

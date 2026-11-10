@@ -180,6 +180,7 @@ class GuiPersistenceTests(unittest.TestCase):
             patch.object(config_gui.tk, "Toplevel", return_value=window),
             patch.object(config_gui.tk, "PhotoImage", return_value=image) as photo,
             patch.object(config_gui.tk, "Canvas", return_value=canvas),
+            patch("dialog_layout.fullscreen_monitor_bounds", return_value=(-1920, -120, 0, 960)),
         ):
             result = config_gui.show_startup_window(root)
 
@@ -192,7 +193,7 @@ class GuiPersistenceTests(unittest.TestCase):
             canvas.create_text.call_args.kwargs["text"],
             f"v{config_gui.VERSION} Starting...",
         )
-        window.geometry.assert_called_once_with("600x340+660+370")
+        window.geometry.assert_called_once_with("600x340+-1260+250")
         self.assertLess(
             window.method_calls.index(call.withdraw()),
             window.method_calls.index(call.deiconify()),
@@ -320,6 +321,27 @@ class GuiPersistenceTests(unittest.TestCase):
         self.assertIs(gui.stick_direction_mode_vars["LEFT"], original_mode_var)
         self.assertEqual(original_mode_var.get(), "4WAY")
         self.assertEqual(observations, [(False, "4WAY")])
+
+    def test_layer_folder_change_during_reload_is_seen_on_next_scan(self):
+        gui = object.__new__(config_gui.ConfigGUI)
+        gui.config = None
+        gui.mapping_layers = gui._layer_disk_baseline = []
+        gui._layer_folder_snapshot = {"Layer.json": (1, 1, 50)}
+        first = {"Layer.json": (1, 2, 51)}
+        newer = {"Layer.json": (1, 3, 52)}
+        gui._capture_layer_folder_snapshot = Mock(side_effect=(first, newer, newer, newer))
+        gui._mapping_layer_file_defaults = Mock(return_value=({}, {}))
+        gui.refresh_mapping_layer_rows = Mock()
+        first_layers = [{"id": "layer", "activation_buttons": ["A"]}]
+        newer_layers = [{"id": "layer", "activation_buttons": ["B"]}]
+        with patch.object(config_gui, "load_layers", side_effect=(
+            (first_layers, set(), True), (newer_layers, set(), True),
+        )) as load:
+            gui.sync_mapping_layer_directory()
+            gui.sync_mapping_layer_directory()
+
+        self.assertEqual(load.call_count, 2)
+        self.assertEqual(gui.mapping_layers, newer_layers)
 
     def test_reentrant_main_window_close_is_ignored(self):
         gui = object.__new__(config_gui.ConfigGUI)
@@ -706,6 +728,23 @@ class GuiPersistenceTests(unittest.TestCase):
         process.terminate.assert_called_once_with()
         self.assertEqual(process.wait.call_count, 2)
 
+    def test_acknowledged_tester_shutdown_has_time_for_display_recovery(self):
+        from gamepad_aim_display import DISPLAY_RESTORE_RETRY_MS
+
+        gui = object.__new__(config_gui.ConfigGUI)
+        process = Mock()
+        process.poll.return_value = None
+        process.wait.side_effect = (config_gui.subprocess.TimeoutExpired("tester", 1.5), 0)
+        gui.gamepad_test_process = process
+        gui._gamepad_test_closing_event = Mock(is_set=Mock(return_value=True))
+
+        self.assertTrue(gui._close_gamepad_test_process())
+
+        process.terminate.assert_not_called()
+        self.assertGreaterEqual(
+            process.wait.call_args.kwargs["timeout"], sum(DISPLAY_RESTORE_RETRY_MS) / 1000,
+        )
+
     def test_gamepad_tester_hard_timeout_keeps_process_for_later_reap(self):
         gui = object.__new__(config_gui.ConfigGUI)
         process = Mock()
@@ -993,37 +1032,23 @@ class GuiPersistenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             config_path = root / "config.ini"
-            profile_dir = root / "profiles"
-            layer_dir = root / "layers"
-            profile_dir.mkdir()
-            layer_dir.mkdir()
-            profile_path = profile_dir / "General.ini"
-            old_layer = layer_dir / "Old.json"
+            old_layer = root / "Old.json"
+            new_layer = root / "New.json"
             config_path.write_bytes(b"old config")
-            profile_path.write_bytes(b"old profile")
             old_layer.write_bytes(b"old layer")
 
-            gui = object.__new__(config_gui.ConfigGUI)
-            gui.mapping_layers = [{"name": "New"}]
-            with (
-                patch.object(config_gui, "CONFIG_PATH", config_path),
-                patch.object(config_gui, "PROFILE_DIR", profile_dir),
-                patch.object(config_gui, "LAYER_DIR", layer_dir),
-            ):
-                snapshot = gui.capture_settings_bundle("General")
-                config_path.write_bytes(b"new config")
-                profile_path.write_bytes(b"new profile")
-                old_layer.unlink()
-                (layer_dir / "New.json").write_bytes(b"new layer")
-                external = layer_dir / "External.json"
-                external.write_bytes(b"external race")
-
-                gui.restore_settings_bundle(snapshot)
+            changes = config_gui.SettingsFileChanges()
+            changes.write_bytes(b"new config", config_path)
+            changes.write_bytes(b"newer config", config_path)
+            changes.delete(old_layer)
+            changes.write_bytes(b"new layer", new_layer)
+            external = root / "External.json"
+            external.write_bytes(b"external race")
+            changes.restore()
 
             self.assertEqual(config_path.read_bytes(), b"old config")
-            self.assertEqual(profile_path.read_bytes(), b"old profile")
             self.assertEqual(old_layer.read_bytes(), b"old layer")
-            self.assertFalse((layer_dir / "New.json").exists())
+            self.assertFalse(new_layer.exists())
             self.assertEqual(external.read_bytes(), b"external race")
 
     def test_active_profile_rename_rolls_back_when_config_write_fails(self):

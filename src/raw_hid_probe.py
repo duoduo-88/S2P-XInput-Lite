@@ -947,10 +947,15 @@ class RawHidAnalysisClient:
     def available(self):
         return self.executable.is_file()
 
+    @property
+    def has_reader(self):
+        """Keep ownership until the worker and its native readers are stopped."""
+        return self._thread is not None
+
     def start(self, device_path, duration_seconds):
         duration_seconds = max(1.0, min(300.0, float(duration_seconds)))
         with self._lifecycle_lock:
-            if self._thread is not None and self._thread.is_alive():
+            if self.has_reader:
                 return False
             self._stop.clear()
             self._device_path = str(device_path)
@@ -985,15 +990,21 @@ class RawHidAnalysisClient:
         self, stream, device_path, duration_seconds, ignored_reports=0
     ):
         """Run the original finite timing probe when streaming cannot start."""
-        stream.stop(timeout=0.5)
+        if not stream.stop(timeout=0.5):
+            self._finish_error(2)
+            return
+        if self._stop.is_set():
+            with self._lock:
+                self._snapshot.update(state="stopped", remaining_ms=0.0)
+            return
         fallback = RawHidProbeClient(
             executable=self.executable,
             process_factory=self.process_factory,
         )
-        self._fallback = fallback
         if not fallback.start(device_path, duration_seconds):
             self._finish_error(2)
             return
+        self._fallback = fallback
         while not self._stop.is_set():
             snapshot = fallback.read_snapshot()
             snapshot.update({
@@ -1303,16 +1314,6 @@ class RawHidAnalysisClient:
             self._snapshot["remaining_ms"] = 0.0
 
     def read_snapshot(self):
-        fallback = self._fallback
-        if fallback is not None:
-            snapshot = fallback.read_snapshot()
-            snapshot.update({
-                "axes_available": False,
-                "effective_rate_hz": 0.0,
-                "effective_ratio": 0.0,
-                "activity_sufficient": False,
-            })
-            return snapshot
         with self._lock:
             snapshot = dict(self._snapshot)
             snapshot["histogram_counts"] = tuple(
@@ -1321,26 +1322,26 @@ class RawHidAnalysisClient:
             return snapshot
 
     def stop(self, timeout=1.0):
-        self._stop.set()
-        fallback = self._fallback
-        if fallback is not None:
-            fallback.stop(timeout=timeout)
-        stream = self._stream
-        if stream is not None:
-            stream.stop(timeout=min(0.5, max(0.0, float(timeout))))
-        thread = self._thread
-        if (
-            thread is not None
-            and thread.is_alive()
-            and thread is not threading.current_thread()
-        ):
-            thread.join(timeout=max(0.0, float(timeout)))
+        timeout = max(0.0, float(timeout))
         with self._lifecycle_lock:
-            alive = bool(thread is not None and thread.is_alive())
-            if not alive:
-                self._thread = None
-                self._stream = None
+            self._stop.set()
+            # The worker can still switch to the timing reader until it exits.
+            thread = self._thread
+            if thread is not None and thread.is_alive():
+                if thread is threading.current_thread():
+                    return False
+                thread.join(timeout=timeout)
+                if thread.is_alive():
+                    return False
+            if self._fallback is not None:
+                if not self._fallback.stop(timeout=timeout):
+                    return False
                 self._fallback = None
-        return not alive
+            if self._stream is not None:
+                if not self._stream.stop(timeout=min(0.5, timeout)):
+                    return False
+                self._stream = None
+            self._thread = None
+            return True
 
     close = stop

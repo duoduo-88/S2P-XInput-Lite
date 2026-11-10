@@ -113,7 +113,8 @@ foreach ($requiredBuild in @(
     (Join-Path $launcherOutput "GamepadTester.exe"),
     $launcherMetadataPath,
     (Join-Path $nativeOutput "raw_hid_probe.exe"),
-    (Join-Path $nativeOutput "raw_hid_stream_probe.exe")
+    (Join-Path $nativeOutput "raw_hid_stream_probe.exe"),
+    (Join-Path $nativeOutput "gamepad_render_native.dll")
 )) {
     if (-not (Test-Path -LiteralPath $requiredBuild -PathType Leaf)) {
         throw "Required build output is missing: $requiredBuild"
@@ -189,6 +190,14 @@ foreach ($name in @(
         -RelativePath $name `
         -DestinationRoot $packageRoot
 }
+
+$demoImageBase = "https://raw.githubusercontent.com/duoduo-88/S2P-XInput-Lite/v0.7.15/image"
+foreach ($name in @("README.md", "README_zh-TW.md")) {
+    $readmePath = Join-Path $packageRoot $name
+    $readme = Get-Content -LiteralPath $readmePath -Raw -Encoding utf8
+    $readme = $readme -replace 'src="image/(GUI|test)\.gif"', ('src="{0}/$1.gif"' -f $demoImageBase)
+    Set-Content -LiteralPath $readmePath -Value $readme -Encoding utf8 -NoNewline
+}
 Copy-CuratedTree `
     -SourceRoot (Join-Path $repoRoot "third_party") `
     -RelativeRoot "third_party" `
@@ -215,12 +224,7 @@ Copy-CuratedTree `
 Copy-CuratedTree `
     -SourceRoot (Join-Path $repoRoot "image") `
     -RelativeRoot "image" `
-    -Extensions @(".png", ".jpg", ".jpeg", ".gif", ".ico") `
-    -DestinationRoot $packageRoot
-Copy-CuratedTree `
-    -SourceRoot (Join-Path $repoRoot "manual\assets\annotated") `
-    -RelativeRoot "manual\assets\annotated" `
-    -Extensions @(".png") `
+    -Extensions @(".png", ".jpg", ".jpeg", ".ico") `
     -DestinationRoot $packageRoot
 Copy-CuratedTree `
     -SourceRoot (Join-Path $repoRoot "manual\assets\v0.7.14") `
@@ -280,10 +284,25 @@ foreach ($name in @(
         -DestinationRoot $packageRoot
 }
 
+$packagedRuntime = Join-Path $packageRoot "runtime"
 Copy-Item `
     -LiteralPath $runtimeOutput `
-    -Destination (Join-Path $packageRoot "runtime") `
+    -Destination $packagedRuntime `
     -Recurse
+
+# Prune only the staged copies of dependency test suites.
+$runtimeTestDirectories = @(
+    Join-Path $packagedRuntime "Lib\tkinter\test"
+    Join-Path $packagedRuntime "Lib\site-packages\importlib_resources\tests"
+    Get-ChildItem -LiteralPath (Join-Path $packagedRuntime "Lib\site-packages\numpy") `
+        -Directory -Filter "tests" -Recurse | Select-Object -ExpandProperty FullName
+)
+foreach ($testDirectory in ($runtimeTestDirectories | Sort-Object -Descending)) {
+    if (Test-Path -LiteralPath $testDirectory -PathType Container) {
+        Assert-BuildPath (Resolve-Path -LiteralPath $testDirectory).Path
+        Remove-Item -LiteralPath $testDirectory -Recurse -Force
+    }
+}
 Copy-ReleaseFile `
     -Source (Join-Path $launcherOutput "S2P-XInput-Lite.exe") `
     -RelativePath "S2P-XInput-Lite.exe" `
@@ -303,6 +322,10 @@ Copy-ReleaseFile `
 Copy-ReleaseFile `
     -Source (Join-Path $nativeOutput "raw_hid_stream_probe.exe") `
     -RelativePath "src\raw_hid_stream_probe.exe" `
+    -DestinationRoot $packageRoot
+Copy-ReleaseFile `
+    -Source (Join-Path $nativeOutput "gamepad_render_native.dll") `
+    -RelativePath "src\gamepad_render_native.dll" `
     -DestinationRoot $packageRoot
 
 Get-ChildItem -LiteralPath $packageRoot -Directory -Recurse -Force |
