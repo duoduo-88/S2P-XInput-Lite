@@ -63,9 +63,8 @@ standalone. On Windows, Bridge mode provides XInput through ViGEmBus.
   worker. The plot's FPS tracks visible updates,
   while Report Rate Test measures input reports. [Stick plots guide](manual/USER_GUIDE.md#92-stick-plots)
 - **Aim Test** offers Tracking, Targets, and Timed Targets in both 2D
-  and 3D. Background Direct2D drawing follows the active monitor's refresh rate.
-  Test your gyro mapping with the right-stick output Windows receives
-  and compare completed rounds with your best result under the same conditions. [Aim Test guide](manual/USER_GUIDE.md#99-aim-test)
+  and 3D. Compare completed rounds with your best result under the same
+  conditions. [Aim Test guide](manual/USER_GUIDE.md#99-aim-test)
 - Built-in ESP32 diagnostics with timed tests, a clear pass/warn/fail verdict,
   and exportable text reports
 - Startup update notifications plus a manual check and shared automatic-check
@@ -82,6 +81,23 @@ standalone. On Windows, Bridge mode provides XInput through ViGEmBus.
   shared four-level battery display on the UI and controller player LEDs
 
 Detailed setting descriptions are available from the `?` buttons in the application.
+
+### Aim Test and Directional Deadzone Demos
+
+Simple targets, a wireframe grid, and brief hit feedback keep rendering light.
+Aim Test uses the selected S2P bridge output or physical controller input
+available through Windows. It adds no response curves, deadzones, or aim assist.
+Direct2D targets the active monitor's current refresh rate.
+
+![3D Aim Test demonstration](https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.8.0/aim.gif)
+
+In the directional deadzone editor, drag each red sector to rotate it and enter
+its width as a percentage of the angle between adjacent directions.
+
+<p>
+  <img src="https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.8.0/directional-deadzone-8way.png" alt="8-way directional deadzone editor" width="45%">
+  <img src="https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.8.0/directional-deadzone-4way.png" alt="4-way directional deadzone editor with individually adjusted widths" width="45%">
+</p>
 
 ## Requirements
 
