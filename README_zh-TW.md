@@ -71,8 +71,7 @@ Release 頁面供手動下載；程式不會自動下載、執行或覆蓋任何
   顯示回報筆數、P50／P95／P99、間隔統計與時間軸
 - **搖桿軌跡** 由原生背景執行緒繪製所選來源的取樣。
   搖桿圖的 FPS 統計有變化的畫面更新，回報率量測分頁則統計輸入回報。[搖桿圖手冊](manual/USER_GUIDE_zh-TW.md#92-搖桿圖)
-- **瞄準測試** 在 2D 和 3D 各提供跟槍、點靶與限時點靶。背景 Direct2D 繪圖跟隨目前螢幕的更新率。可用 Windows 收到的右搖桿
-  輸出測試陀螺儀映射，並與相同測試條件下的歷史最佳成績比較。[瞄準測試手冊](manual/USER_GUIDE_zh-TW.md#99-瞄準測試)
+- **瞄準測試** 在 2D 和 3D 各提供跟槍、點靶與限時點靶，並可與相同測試條件下的歷史最佳成績比較。[瞄準測試手冊](manual/USER_GUIDE_zh-TW.md#99-瞄準測試)
 - 內建 ESP32 診斷頁：支援定時測試、通過／警告／失敗判定及匯出文字報告
 - 關於頁：提供專案與贊助連結、軟體許可協議及第三方程式聲明
 - 完整遊戲設定檔，可一起切換搖桿、陀螺儀、震動、音訊觸覺與映射設定
@@ -83,6 +82,21 @@ Release 頁面供手動下載；程式不會自動下載、執行或覆蓋任何
 - 依完整實測放電曲線估算電量百分比，並在介面及控制器玩家燈共用四級電量顯示
 
 應用程式內各設定旁的 `?` 按鈕提供詳細說明。
+
+### 瞄準測試與方向死區展示
+
+瞄準測試採用簡單靶標、線框網格和短暫命中回饋，降低繪圖負擔。可選擇 S2P 橋接後的輸出，
+或 Windows 讀取的實體手把輸入。測試不額外套用反應曲線或死區，也無輔助瞄準。
+Direct2D 以測試所在螢幕目前的更新率為繪圖目標。
+
+![3D 瞄準測試展示](https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.8.0/aim.gif)
+
+方向死區編輯器可拖曳紅色區域調整角度，並以相鄰方向夾角的百分比設定每區寬度。
+
+<p>
+  <img src="https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.8.0/directional-deadzone-8way.png" alt="8 向方向死區編輯器" width="45%">
+  <img src="https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.8.0/directional-deadzone-4way.png" alt="4 向方向死區編輯器，可個別調整寬度" width="45%">
+</p>
 
 ## 匯入設定
 
