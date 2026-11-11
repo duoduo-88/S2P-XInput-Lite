@@ -6893,10 +6893,12 @@ class GamepadTestWindow:
         else:
             native_device = None
         previous_device = getattr(self, "_aim_selected_device", None)
+        previous_selection = (previous_device.key, previous_device.index) if previous_device is not None else None
+        selection = (device.key, device.index) if device is not None else None
         self._aim_selected_device = device
         self._aim_native_device = native_device
         self.native_sampler.set_device(native_device)
-        if aim_active and device != previous_device:
+        if aim_active and selection != previous_selection:
             self._aim_raw_rate_sample = None
             self.native_sampler.set_aim_capture(True)
 

@@ -2,9 +2,9 @@
 
 [English](README.md) · [使用手冊](manual/USER_GUIDE_zh-TW.md) · [English Guide](manual/USER_GUIDE.md)
 
-**[已發佈的 Windows ZIP（v0.7.15）](https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.7.15/S2P-XInput-Lite-v0.7.15.zip)**
+**[Windows ZIP（v0.8.0）](https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.8.0/S2P-XInput-Lite-v0.8.0.zip)**
 
-**目前準備中的版本為 v0.8.0。** [v0.8.0 更新說明](RELEASE_NOTES_v0.8.0.md)
+[v0.8.0 更新說明](RELEASE_NOTES_v0.8.0.md)
 
 完整解壓縮後，直接開啟根目錄的兩個 EXE：
 
@@ -26,14 +26,12 @@
 
 S2P-XInput-Lite 可在 Windows 為 Switch 2 Pro Controller 提供 XInput 相容控制器輸出，支援 USB 有線、ESP32-S3 USB 橋接器及 Windows 原生 BLE。
 
-[v0.7.15 發佈說明](https://github.com/duoduo-88/S2P-XInput-Lite/releases/tag/v0.7.15) ·
+[歷史版本](https://github.com/duoduo-88/S2P-XInput-Lite/releases) ·
 [原始碼](https://github.com/duoduo-88/S2P-XInput-Lite/tree/main) ·
 [最新正式版本](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 
-**v0.7.14** 隨附 **S2P-FW 1.0.7**，ESP32 僅保留 CDC Bridge 與 Android USB HID
-獨立模式，移除實體 USB XInput／Auto。Windows 桌面仍可在 Bridge 模式經
-ViGEmBus 輸出 XInput，保留映射、震動與音訊震動。v0.7.14 已正式發佈；
-新韌體實機驗證仍待完成，詳見
+隨附的 **S2P-FW 1.0.7** 支援 CDC Bridge 與 Android USB HID 獨立模式。
+Windows 桌面可在 Bridge 模式透過 ViGEmBus 輸出 XInput。
 [USB 模式、救援與驗證清單](docs/usb-hid-standardization.md)。
 
 程式可在啟動時檢查新版本，也可在手把測試程式的「關於」頁手動檢查、
@@ -61,6 +59,7 @@ Release 頁面供手動下載；程式不會自動下載、執行或覆蓋任何
 - 全域 Mapping Layer 檔案：支援按住／切換啟用、個別按鍵與搖桿覆寫、匯入／匯出，以及各設定檔獨立保存啟用狀態與順序
 - 每支控制器獨立的搖桿校正，以及每次連線時的陀螺儀零偏初始化
 - 搖桿曲線、死區、平滑、穩定化與輸出形狀調整
+- `4WAY` 與 `8WAY` 方向映射提供雷達圖，可逐一調整方向死區
 - USB、ESP32 與原生 BLE 共用一致的 XInput 至 HD Rumble 2 轉換，包含 latest-only 節流、優先停止訊框及音訊震動
 - 可將相容設定檔寫入 ESP32，以 Android USB HID 獨立模式運作，不必保持 Windows
   程式開啟；手把組合鍵及兩種模式均提供的 CDC 可用於救援
@@ -70,9 +69,9 @@ Release 頁面供手動下載；程式不會自動下載、執行或覆蓋任何
   連線與 ESP32 診斷資訊。亦可測試其他 XInput、WinMM 及 Raw HID 手把，
   但這些裝置不會提供 S2P 專屬遙測，因此部分資訊會缺少；回報率頁面仍可
   顯示回報筆數、P50／P95／P99、間隔統計與時間軸
-- **搖桿軌跡（v0.8.0）** 透過 Windows 原生 Canvas 加速呈現所選來源的真實取樣。
+- **搖桿軌跡** 由原生背景執行緒繪製所選來源的取樣。
   搖桿圖的 FPS 統計有變化的畫面更新，回報率量測分頁則統計輸入回報。[搖桿圖手冊](manual/USER_GUIDE_zh-TW.md#92-搖桿圖)
-- **瞄準測試（v0.8.0）** 在 2D 和 3D 各提供跟槍、點靶與限時點靶。可用 Windows 收到的右搖桿
+- **瞄準測試** 在 2D 和 3D 各提供跟槍、點靶與限時點靶。背景 Direct2D 繪圖跟隨目前螢幕的更新率。可用 Windows 收到的右搖桿
   輸出測試陀螺儀映射，並與相同測試條件下的歷史最佳成績比較。[瞄準測試手冊](manual/USER_GUIDE_zh-TW.md#99-瞄準測試)
 - 內建 ESP32 診斷頁：支援定時測試、通過／警告／失敗判定及匯出文字報告
 - 關於頁：提供專案與贊助連結、軟體許可協議及第三方程式聲明

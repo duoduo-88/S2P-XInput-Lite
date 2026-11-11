@@ -460,6 +460,7 @@ class AimTestPane:
         self._gpu_overlay = None
         self.grid_pose = None
         self.next_draw = 0.0
+        self._reset_frame_stats(time.perf_counter(), clear_display=True)
         self._frame_dirty = True
 
     def _stop_gpu(self, *, restore=True):
@@ -487,6 +488,8 @@ class AimTestPane:
             self._place_view()
             if had_focus:
                 self._view.focus_set()
+            if self.test_open:
+                self._reset_frame_stats(time.perf_counter(), clear_display=True)
         self._gpu_overlay = None
         self.grid_pose = None
         self.next_draw = 0.0
@@ -692,14 +695,14 @@ class AimTestPane:
             return
         self.countdown_until = None
         self._display_countdown(None)
-        self.trigger_pressed = True
+        state = self._sim_state
+        self.trigger_pressed = state is None or (state.right_trigger or 0) >= 0.5
         self.round_basis = self.settings.basis(self._mode_key(), self.size)
         if not self.mode_is_3d:
             self.round_basis["target_top"] = self._cursor_top()
         self.round_started_at = now
         self._simulated_at = now
         self._reset_frame_stats(now)
-        self.fps_started = now
         self._round().start()
         if self.mode_is_3d:
             position = self._view.winfo_pointerxy()
@@ -713,6 +716,8 @@ class AimTestPane:
         self.space_pressed = self.space_armed = False
         self._mouse_position = None
         if self.countdown_until is not None or self.scene.running or self.cursor.running:
+            if self._render_worker is not None:
+                self._render_worker.discard_pending()
             self.countdown_until = None
             self._display_countdown(None)
             self.scene.running = self.cursor.running = False
@@ -794,9 +799,8 @@ class AimTestPane:
             self._view.focus_force()
             self._playfield_margin = VIEW_MARGIN + self.close_button.winfo_reqheight()
             self.draws = 0
-            self.fps_text.set("")
-            self.fps_started = self.next_draw = time.perf_counter()
-            self._reset_frame_stats(self.fps_started)
+            self.next_draw = time.perf_counter()
+            self._reset_frame_stats(self.next_draw, clear_display=True)
             self._layout_hud()
         except BaseException:
             self.close_test()
@@ -869,7 +873,7 @@ class AimTestPane:
         if rate != self.display_hz:
             self.display_hz = rate
             self.next_draw = now + refresh_interval(rate)
-            self._reset_frame_stats(now)
+            self._reset_frame_stats(now, clear_display=True)
             self._frame_dirty = True
             self._wake_tick()
 
@@ -956,6 +960,8 @@ class AimTestPane:
     def _check_finish(self, *, skip_animation=False):
         if not self._awaiting_finish() or (self.hit_effect is not None and not skip_animation):
             return
+        if self._render_worker is not None:
+            self._render_worker.discard_pending()
         parts = self._store_result()
         self.finished = True
         self.canvas.itemconfigure(self.countdown_item, font=("Segoe UI", 32, "bold"))
@@ -1408,9 +1414,15 @@ class AimTestPane:
             self._draw_hit_effect(now)
             self._frame_dirty = True
 
-    def _reset_frame_stats(self, now):
+    def _reset_frame_stats(self, now, *, clear_display=False):
+        if self._render_worker is not None:
+            self._render_worker.discard_pending()
         self._render_stats_since = now
+        self.fps_started = now
         self._frame_stats.reset(now)
+        if clear_display:
+            self.fps_text.set("")
+            self._update_hud()
 
     def _record_submission(self, completed):
         self.draws += 1

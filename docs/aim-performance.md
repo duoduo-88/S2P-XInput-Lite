@@ -158,3 +158,22 @@ benchmark and display mode for the baseline and candidate runs.
 .\runtime\python.exe -B .\scripts\benchmark_gamepad_trails.py --source C:\path\to\base --seconds 8.6
 .\runtime\python.exe -B .\scripts\benchmark_gamepad_trails.py --seconds 8.6
 ```
+
+## Window lifecycle test
+
+A 30-minute run opened and closed Gamepad Tester 30 times on a Windows
+desktop at 180 Hz. Each cycle alternated a synthetic 10,000 Hz stick stream
+with a seeded 2D or 3D tracking scene. All 30 Direct2D targets were released.
+After warm-up, process private memory sampled after closing ranged from
+80.54 to 84.35 MiB. No Python workers or Tk timers were recorded after any
+close.
+
+Twenty-five aim sessions produced timing measurements, with median
+submissions of 176.88/s in 2D and 176.99/s in 3D. Five sessions were
+interrupted. The highest per-session P99 frame interval was 10.96 ms.
+Seven trail intervals had a combined 4,489 reports missing by sequence.
+Another interval exposed a transient shared-memory counter rewind.
+
+After the counter fix, all 240,310 reports received in the three measured
+intervals of a one-minute rerun were consecutive, with zero ring drops.
+The rerun covers the sequence fix under short synthetic load.

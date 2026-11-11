@@ -49,6 +49,7 @@ class SharedTestTelemetry:
         self._last_publish_ns = 0
         self._last_read_sequence = None
         self._last_read_value = None
+        self._last_trail_sequence = 0
         self._initialize_header()
 
     def _initialize_header(self):
@@ -155,15 +156,17 @@ class SharedTestTelemetry:
         # Commit the slot sequence and global sequence only after its payload is
         # complete. Readers validate the slot sequence before accepting it.
         struct.pack_into("<Q", self._mapping, offset, sequence)
-        struct.pack_into(
-            "<Q", self._mapping, _TRAIL_SEQUENCE_OFFSET, sequence
-        )
+        # pack_into zero-fills its destination before packing. Prepare the
+        # counter in private memory so a reader keeps seeing a published value.
+        self._mapping[_TRAIL_SEQUENCE_OFFSET:_TRAIL_SEQUENCE_OFFSET + 8] = struct.pack("<Q", sequence)
         return sequence
 
     def latest_trail_sequence(self):
-        return struct.unpack_from(
+        sequence = struct.unpack_from(
             "<Q", self._mapping, _TRAIL_SEQUENCE_OFFSET
         )[0]
+        self._last_trail_sequence = max(self._last_trail_sequence, sequence)
+        return self._last_trail_sequence
 
     def read_trail_samples(self, after_sequence=0):
         """Return unseen original reports, newest sequence and overwrite count."""
@@ -171,7 +174,7 @@ class SharedTestTelemetry:
         newest = self.latest_trail_sequence()
         after_sequence = max(0, int(after_sequence or 0))
         if newest <= after_sequence:
-            return [], newest, 0
+            return [], after_sequence, 0
         first_available = max(1, newest - _TRAIL_CAPACITY + 1)
         first_requested = after_sequence + 1
         dropped = max(0, first_available - first_requested)

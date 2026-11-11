@@ -102,6 +102,51 @@ class AimRenderWorkerTests(unittest.TestCase):
         self.assertEqual(drawn, [1])
         self.assertTrue(closed.is_set())
 
+    def test_reset_invalidates_a_scene_already_taken_by_the_worker(self):
+        for stage in ("projection", "draw"):
+            with self.subTest(stage=stage):
+                entered, release, fresh, finish = (threading.Event() for _ in range(4))
+                drawn = []
+
+                def wait_at_reset():
+                    entered.set()
+                    if not release.wait(2):
+                        raise RuntimeError("test did not unblock the old scene")
+
+                def project_room(*_pose):
+                    if stage == "projection":
+                        wait_at_reset()
+                    return ()
+
+                def draw(_width, _height, **parts):
+                    number = parts["balls"][0][0]
+                    drawn.append(number)
+                    if number == 1 and stage == "draw":
+                        wait_at_reset()
+                    if number == 2:
+                        fresh.set()
+                        if not finish.wait(2):
+                            raise RuntimeError("test did not unblock the new scene")
+
+                worker = self.make_worker(
+                    lambda *_: SimpleNamespace(draw=draw, close=lambda: None),
+                    project_room,
+                )
+                try:
+                    worker.submit(self.frame(1, (640, 360, 0.1, 0.2)))
+                    self.assertTrue(entered.wait(2))
+                    worker.discard_pending()
+                    worker.submit(self.frame(2))
+                    release.set()
+                    self.assertTrue(fresh.wait(2))
+                    self.assertEqual(drawn, [2] if stage == "projection" else [1, 2])
+                    self.assertEqual(worker.drain(), ((), None))
+                finally:
+                    release.set()
+                    finish.set()
+                    worker.close()
+                    self.assertTrue(worker.stopped.wait(2))
+
     def test_init_and_draw_failures_are_observable_and_release_the_renderer(self):
         for initialization in (True, False):
             with self.subTest(initialization=initialization):

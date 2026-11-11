@@ -403,12 +403,16 @@ class AimPaneTests(unittest.TestCase):
         self.assertTrue(any(pane.canvas.coords(pane.hit_particles[0])))
         self.assertEqual(pane.canvas.cget("cursor"), "none")
 
-    def test_threaded_gpu_failure_restores_canvas_without_counting_failed_draw(self):
+    def test_threaded_gpu_failure_starts_fresh_tk_frame_statistics(self):
         from gamepad_aim import AimTestPane
         from gamepad_aim_settings import AimSettings
 
+        first_draw = threading.Event()
+
         def draw(_width, _height, **_parts):
-            raise OSError("worker device lost")
+            if first_draw.is_set():
+                raise OSError("worker device lost")
+            first_draw.set()
 
         renderer = SimpleNamespace(draw=draw, close=Mock())
         pane = AimTestPane(
@@ -418,6 +422,13 @@ class AimPaneTests(unittest.TestCase):
         pane._save_settings(AimSettings(fullscreen=False, window_size="800x450"))
         pane._open_test_window()
         worker = pane._render_worker
+        pane.countdown_until = time.perf_counter()
+        pane._advance_countdown(pane.countdown_until)
+        round_basis = pane.round_basis
+        pane.fps_text.set("D2D 提交 180 FPS")
+        pane._draw_if_due(time.perf_counter())
+        self.assertTrue(first_draw.wait(2))
+        pane.next_draw = 0.0
         pane._draw_if_due(time.perf_counter())
         self.assertTrue(worker.stopped.wait(2))
         pane._collect_render_results()
@@ -426,10 +437,14 @@ class AimPaneTests(unittest.TestCase):
         self.assertIsNone(pane.gpu)
         self.assertIs(pane._view, pane.canvas)
         self.assertIsNone(pane._gpu_view)
-        self.assertEqual(pane.draws, 0)
+        self.assertTrue(pane.cursor.running)
+        self.assertIs(pane.round_basis, round_basis)
+        self.assertEqual(pane._frame_stats.frames, 0)
+        self.assertEqual(pane.fps_text.get(), "")
         renderer.close.assert_called_once()
         pane._draw_if_due(time.perf_counter())
-        self.assertEqual(pane.draws, 1)
+        self.assertEqual(pane._frame_stats.frames, 1)
+        self.assertEqual(pane._frame_stats.intervals, [])
         pane.close_test()
 
     def test_reopen_does_not_reuse_a_view_with_an_inflight_submission(self):
@@ -664,6 +679,68 @@ class AimPaneTests(unittest.TestCase):
         pane._simulate_tick(100.02)
         self.assertEqual(pane.cursor.shots, 2)
         self.assertIsNone(pane._source_hz)
+
+    def test_countdown_arms_first_buffered_rt_press_only_if_trigger_is_released(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_settings import AimSettings
+
+        released = SimpleNamespace(buttons=(), right=(0.0, 0.0), right_trigger=0.0)
+        pressed = SimpleNamespace(buttons=(), right=(0.0, 0.0), right_trigger=1.0)
+        for baseline in (released, pressed):
+            with self.subTest(baseline=baseline.right_trigger):
+                frame = tk.Frame(self.root)
+                self.addCleanup(frame.destroy)
+                pane = AimTestPane(frame, str, lambda: None, read_input=lambda: None)
+                pane.dimension.set("2d")
+                pane._save_settings(AimSettings(fullscreen=False))
+                pane._sim_state = baseline
+                pane.countdown_until = 100
+                pane._advance_countdown(100)
+                pane._input_events.append((100.01, pressed))
+                pane._simulate_tick(100.01)
+                self.assertEqual(pane.cursor.shots, 0 if baseline is pressed else 1)
+                pane._input_events.extend(((100.02, released), (100.03, pressed)))
+                pane._simulate_tick(100.03)
+                self.assertEqual(pane.cursor.shots, 1 if baseline is pressed else 2)
+
+    def test_buffered_disconnect_clears_old_input_and_held_rt_requires_release(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_settings import AimSettings
+
+        moving = SimpleNamespace(buttons=(), right=(0.5, 0.0), right_trigger=0.0)
+        released = SimpleNamespace(buttons=(), right=(0.0, 0.0), right_trigger=0.0)
+        pressed = SimpleNamespace(buttons=(), right=(0.0, 0.0), right_trigger=1.0)
+        output = ("original", moving, ((100.01, moving),), None)
+        pane = AimTestPane(self.root, str, lambda: None, read_input=lambda: output)
+        pane.dimension.set("2d")
+        pane._save_settings(AimSettings(fullscreen=False))
+        pane.countdown_until = 100
+        pane._advance_countdown(100)
+
+        pane._sample_input(100.02)
+        pane._simulate_tick(100.02)
+        position = pane.cursor.x
+        self.assertGreater(position, pane.size[0] / 2)
+
+        output = ("original", pressed, ((100.04, pressed),), None)
+        pane._sample_input(100.04)
+        output = None
+        pane._sample_input(100.05)
+        pane._simulate_tick(100.05)
+        self.assertTrue(pane.cursor.running)
+        self.assertEqual(pane.cursor.shots, 0)
+        self.assertEqual(pane.cursor.x, position)
+
+        output = ("reconnected", pressed, ((100.06, pressed),), None)
+        pane._sample_input(100.06)
+        pane._simulate_tick(100.06)
+        self.assertEqual(pane.cursor.shots, 0)
+
+        output = ("reconnected", pressed, ((100.07, released), (100.08, pressed)), None)
+        pane._sample_input(100.08)
+        pane._simulate_tick(100.08)
+        self.assertEqual(pane.cursor.shots, 1)
+        self.assertEqual(pane.cursor.x, position)
 
     def test_3d_keyboard_shot_uses_buffered_input_identity(self):
         from gamepad_aim import AimTestPane

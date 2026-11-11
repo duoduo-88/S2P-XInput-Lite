@@ -208,6 +208,10 @@ Copy-ReleaseFile `
     -RelativePath (Split-Path -Leaf $releaseNotes) `
     -DestinationRoot $packageRoot
 Copy-ReleaseFile `
+    -Source (Join-Path $repoRoot "docs\aim-performance.md") `
+    -RelativePath "docs\aim-performance.md" `
+    -DestinationRoot $packageRoot
+Copy-ReleaseFile `
     -Source (Join-Path $repoRoot "docs\bridge-host-shutdown.md") `
     -RelativePath "docs\bridge-host-shutdown.md" `
     -DestinationRoot $packageRoot

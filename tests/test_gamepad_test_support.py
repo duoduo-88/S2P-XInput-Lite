@@ -78,7 +78,7 @@ from localization import translate_text
 from stick_processing import apply_output_shape
 from raw_hid_probe import RawHidDevice
 import test_telemetry
-from test_telemetry import SharedTestTelemetry, TELEMETRY_SIZE
+from test_telemetry import SharedTestTelemetry, TELEMETRY_SIZE, _TRAIL_SEQUENCE_OFFSET
 
 
 class DiagnosticDeviceSelectionTests(unittest.TestCase):
@@ -350,6 +350,27 @@ class SharedTelemetryTests(unittest.TestCase):
             self.assertEqual(samples[0]["sequence"], 9)
         finally:
             channel.close()
+
+    def test_trail_reader_does_not_rewind_during_shared_sequence_write(self):
+        mapping = mmap.mmap(-1, TELEMETRY_SIZE)
+        channel = SharedTestTelemetry(mapping=mapping)
+        self.addCleanup(channel.close)
+        zero = (0.0, 0.0)
+        for stamp in range(1, 521):
+            channel.write_trail_sample(stamp, zero, zero, zero, zero, zero)
+        _, cursor, _ = channel.read_trail_samples()
+
+        # Simulate another process observing the destination between
+        # struct.pack_into's zero-fill and its write of the new counter.
+        struct.pack_into("<Q", mapping, _TRAIL_SEQUENCE_OFFSET, 0)
+        self.assertEqual(channel.read_trail_samples(cursor), ([], cursor, 0))
+        self.assertEqual(channel.latest_trail_sequence(), cursor)
+
+        struct.pack_into("<Q", mapping, _TRAIL_SEQUENCE_OFFSET, cursor)
+        channel.write_trail_sample(521, zero, zero, zero, zero, zero)
+        samples, newest, dropped = channel.read_trail_samples(cursor)
+        self.assertEqual([sample["sequence"] for sample in samples], [521])
+        self.assertEqual((newest, dropped), (521, 0))
 
     def test_trail_slot_is_invalidated_before_wrapped_payload_write(self):
         mapping = mmap.mmap(-1, TELEMETRY_SIZE)

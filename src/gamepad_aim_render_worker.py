@@ -24,6 +24,7 @@ class AimRenderWorker:
         self._condition = Condition()
         self._pending = None
         self._completed = []
+        self._generation = 0
         self._closed = False
         self._error = None
         self.stopped = Event()
@@ -48,7 +49,9 @@ class AimRenderWorker:
 
     def discard_pending(self):
         with self._condition:
+            self._generation += 1
             self._pending = None
+            self._completed.clear()
 
     def close(self):
         # DXGI may send a synchronous window message from the rendering
@@ -78,6 +81,7 @@ class AimRenderWorker:
                     if self._closed:
                         return
                     frame, self._pending = self._pending, None
+                    generation = self._generation
                 if frame.room_pose != pose:
                     pose = frame.room_pose
                     if pose is None:
@@ -86,15 +90,19 @@ class AimRenderWorker:
                         if project_room is None:
                             from gamepad_aim_projection import project_room
                         lines = project_room(*pose)
-                if self._closed:
-                    return
+                with self._condition:
+                    if self._closed:
+                        return
+                    if generation != self._generation:
+                        continue
                 renderer.draw(
                     *frame.size, lines=lines, balls=frame.balls, reticle=frame.reticle,
                     fragments=frame.fragments, overlays=frame.overlays, labels=frame.labels,
                     ball_outlines=frame.ball_outlines,
                 )
                 with self._condition:
-                    self._completed.append(perf_counter())
+                    if generation == self._generation:
+                        self._completed.append(perf_counter())
         except Exception as error:
             self._fail(error)
         finally:

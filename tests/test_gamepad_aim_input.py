@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -82,6 +83,50 @@ class AimInputRoutingTests(unittest.TestCase):
         window._selected_device = lambda: device
         window.latest_telemetry = {}
         return window
+
+    def test_refreshing_device_metadata_preserves_queued_rt_release(self):
+        device = GamepadDevice("xinput:0", "xinput", 0, "Controller", True)
+        window = self.make_window(device)
+        window._selected_device = lambda: device
+        window._set_aim_input_active(True)
+        sampler = window.native_sampler
+        window.backend.read_state.return_value = state(1, rt=1)
+        sampler._poll_once()
+        original_key, _, _, _ = window._read_aim_input()
+
+        released = state(2)
+        window.backend.read_state.return_value = released
+        sampler._poll_once()
+        device = replace(device, name="Renamed controller")
+        window._configure_native_sampler()
+
+        key, latest, pending, _ = window._read_aim_input()
+        self.assertEqual(key, original_key)
+        self.assertEqual(latest, released)
+        self.assertEqual([value for _, value in pending], [released])
+
+    def test_switching_raw_selection_discards_queued_edges_on_same_windows_device(self):
+        raw = GamepadDevice("raw:1", "raw_hid", 1, "Raw 1", False)
+        native = GamepadDevice("xinput:0", "xinput", 0, "Controller", True)
+        window = self.make_window(raw)
+        window._selected_device = lambda: raw
+        window._native_device_for_raw_hid = lambda: native
+        window._read_aim_raw_report_rate = lambda: None
+        window._set_aim_input_active(True)
+        sampler = window.native_sampler
+        sampler._poll_once()
+        original_key, _, _, _ = window._read_aim_input()
+
+        pressed = state(2, rt=1)
+        window.backend.read_state.return_value = pressed
+        sampler._poll_once()
+        raw = replace(raw, key="raw:2", index=2, name="Raw 2")
+        window._configure_native_sampler()
+
+        key, latest, pending, _ = window._read_aim_input()
+        self.assertNotEqual(key, original_key)
+        self.assertEqual(latest, pressed)
+        self.assertEqual(pending, ())
 
     def test_bridge_samples_final_xinput_in_worker_only_while_aim_visible(self):
         device = GamepadDevice("s2p", "s2p", 2, "Bridge", True)

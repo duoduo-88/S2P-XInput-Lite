@@ -87,6 +87,11 @@ $expectedName = "S2P-XInput-Lite-v$versionSlug"
 if ((Split-Path -Leaf $PackageDirectory) -ne $expectedName) {
     throw "Package directory name does not match version: expected $expectedName."
 }
+$startHere = Get-Content -LiteralPath (Join-Path $PackageDirectory "START_HERE.txt") -Raw -Encoding utf8
+if (-not $startHere.StartsWith("S2P-XInput-Lite v$version") -or
+    -not $startHere.Contains("app\RELEASE_NOTES_v$versionSlug.md")) {
+    throw "START_HERE.txt must match the packaged release version."
+}
 
 $required = @(
     "S2P-XInput-Lite.exe",
@@ -96,6 +101,8 @@ $required = @(
     "LICENSE",
     "README.md",
     "README_zh-TW.md",
+    "RELEASE_NOTES_v$versionSlug.md",
+    "docs\aim-performance.md",
     "docs\bridge-host-shutdown.md",
     "docs\usb-hid-standardization.md",
     "image\icon.ico",

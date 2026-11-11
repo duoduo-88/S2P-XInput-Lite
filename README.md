@@ -2,9 +2,9 @@
 
 [繁體中文](README_zh-TW.md) · [User Guide](manual/USER_GUIDE.md) · [繁體中文使用手冊](manual/USER_GUIDE_zh-TW.md)
 
-**[Published Windows ZIP (v0.7.15)](https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.7.15/S2P-XInput-Lite-v0.7.15.zip)**
+**[Windows ZIP (v0.8.0)](https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.8.0/S2P-XInput-Lite-v0.8.0.zip)**
 
-**v0.8.0 is the working version.** [v0.8.0 release notes](RELEASE_NOTES_v0.8.0.md)
+[v0.8.0 release notes](RELEASE_NOTES_v0.8.0.md)
 
 Extract the entire ZIP, then open one of the two EXEs in its main folder:
 
@@ -26,15 +26,13 @@ Support files are grouped in **app/**. Keep that folder beside both EXEs.
 
 S2P-XInput-Lite provides XInput-compatible controller output for a Switch 2 Pro Controller on Windows. It supports wired USB, an ESP32-S3 USB bridge, and native Windows BLE.
 
-[v0.7.15 release notes](https://github.com/duoduo-88/S2P-XInput-Lite/releases/tag/v0.7.15) ·
+[Release history](https://github.com/duoduo-88/S2P-XInput-Lite/releases) ·
 [Source](https://github.com/duoduo-88/S2P-XInput-Lite/tree/main) ·
 [Latest published release](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 
-**v0.7.14** with **S2P-FW 1.0.7** simplifies ESP32 operation to CDC Bridge
-and Android USB HID standalone. Physical USB XInput and Auto modes are removed;
-Windows desktop XInput through ViGEmBus remains available in Bridge mode.
-The v0.7.14 release includes S2P-FW 1.0.7. Physical hardware validation for
-the new firmware remains pending; see [USB modes, recovery and validation](docs/usb-hid-standardization.md).
+The bundled **S2P-FW 1.0.7** supports CDC Bridge and Android USB HID
+standalone. On Windows, Bridge mode provides XInput through ViGEmBus.
+[USB modes, recovery and validation](docs/usb-hid-standardization.md)
 
 > This is an independent, unofficial community project. It is not affiliated with, endorsed by, sponsored by, or certified by Nintendo, Microsoft, Espressif Systems, Apple, or Google.
 >
@@ -49,6 +47,7 @@ the new firmware remains pending; see [USB modes, recovery and validation](docs/
 - Global mapping-layer files with hold/toggle activation, per-layer button and stick overrides, import/export, and per-profile enabled/order state
 - Per-controller stick calibration and connection-time gyro zero-bias initialization
 - Stick curves, deadzones, smoothing, stabilization, and output-shape adjustment
+- Per-direction angular deadzones with a radar editor for `4WAY` and `8WAY` stick mapping
 - Consistent XInput-to-HD Rumble 2 conversion across USB, ESP32, and native BLE, with latest-only pacing, priority stop frames, and audio-reactive vibration
 - ESP32 profile writing for Android USB HID standalone operation without the
   Windows application, with controller chords and CDC available for recovery
@@ -60,11 +59,12 @@ the new firmware remains pending; see [USB modes, recovery and validation](docs/
   tested, but S2P-specific telemetry is unavailable, so some information will
   be missing. The report-rate page still shows report count, P50/P95/P99
   intervals, distribution statistics, and a timeline.
-- **Stick trails (v0.8.0)** render actual reports from the selected source with
-  faster native Windows Canvas drawing. The plot's FPS tracks visible updates,
+- **Stick trails** rasterize reports from the selected source on a native background
+  worker. The plot's FPS tracks visible updates,
   while Report Rate Test measures input reports. [Stick plots guide](manual/USER_GUIDE.md#92-stick-plots)
-- **Aim Test (v0.8.0)** offers Tracking, Targets, and Timed Targets in both 2D
-  and 3D. Test your gyro mapping with the right-stick output Windows receives
+- **Aim Test** offers Tracking, Targets, and Timed Targets in both 2D
+  and 3D. Background Direct2D drawing follows the active monitor's refresh rate.
+  Test your gyro mapping with the right-stick output Windows receives
   and compare completed rounds with your best result under the same conditions. [Aim Test guide](manual/USER_GUIDE.md#99-aim-test)
 - Built-in ESP32 diagnostics with timed tests, a clear pass/warn/fail verdict,
   and exportable text reports

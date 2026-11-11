@@ -254,6 +254,13 @@ Choose **Shortcut** to record a keyboard or mouse input. Labels use short names 
 - **DZ / Trig / Rel** — Direction deadzone, trigger threshold, and release threshold.
 - **Independent sticks** — The left and right sticks can be configured and reset separately.
 
+In `4WAY` or `8WAY`, click the direction diagram to open the radar editor.
+Drag a red sector to rotate its gap. The nearby field sets its full width as
+0–90% of the angle between adjacent directions. For example, 20% in `8WAY`
+is a 9° gap. The main control shows **SET** for custom gaps. Select
+**Use uniform deadzone** in the editor to return to one setting for all gaps
+in that mode. Confirm the edit, then select **Save/Apply** in the main window.
+
 > [!TIP]
 > Keep **Trig** above **Rel**. The resulting hysteresis prevents repeated activation when the stick rests on a direction boundary.
 
@@ -635,8 +642,8 @@ The trail uses the reports received from the selected source. It draws each
 selected sample at its recorded position and merges overlapping pixels. The
 corner FPS counter measures plot updates that change the image. Use **Report
 Rate Test** to measure reports from a selected Raw HID interface. On supported
-Windows runtimes, the trail uses native Canvas composition and falls back to
-Tk image tiles if needed.
+Windows runtimes, a native background worker rasterizes the points for Canvas
+composition. The plot falls back to Tk image tiles if needed.
 
 ### 9.3 Output-shape capture
 
@@ -783,7 +790,8 @@ When 3D targets overlap, the shot hits the first ball surface along the
 crosshair ray. The timer ends the round and the score shows the total hits.
 
 Select **Start**, press Enter, or press controller START. Scoring starts after
-the 3, 2, 1 countdown. Use the top-right **Restart** button, Enter, or START to
+the 3, 2, 1 countdown. If RT was held during the countdown, release it before
+pressing it to shoot. Use the top-right **Restart** button, Enter, or START to
 run the drill again. Use **Close**, Esc, or controller B to return to Gamepad
 Tester. A fullscreen test also closes when you switch away, restoring the
 previous display mode. During a 3D round, right-click to release the pointer
