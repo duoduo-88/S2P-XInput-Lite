@@ -370,6 +370,231 @@ class GuiOperationSerializationTests(unittest.TestCase):
         )
         self.assertNotIn("startupinfo", options)
 
+    def test_calibration_cancels_pending_connector_restart(self):
+        gui = self.make_gui()
+        gui.prepare_hidhide_before_start = Mock(return_value=True)
+        gui._schedule_main_start(config_gui.Path("main.py"), 500)
+        with patch.object(config_gui.subprocess, "Popen", return_value=_AliveProcess()) as popen:
+            gui.run_calibration()
+            gui.root.run_all()
+        self.assertEqual([config_gui.Path(call.args[0][1]).name for call in popen.call_args_list], ["calibration.py"])
+        self.assertIsNone(gui.main_process)
+        self.assertIsNotNone(gui.calibration_process)
+        self.assertEqual(gui.root.active_job_count, 0)
+
+    def test_connector_cannot_start_during_pending_or_running_calibration(self):
+        for pending in (False, True):
+            with self.subTest(pending=pending):
+                gui = self.make_gui()
+                gui.prepare_hidhide_before_start = Mock(return_value=True)
+                if pending:
+                    gui._schedule_calibration_start(config_gui.Path("calibration.py"), 500)
+                else:
+                    gui.calibration_process = _AliveProcess()
+                with patch.object(config_gui.subprocess, "Popen") as popen:
+                    self.assertFalse(gui.start_main(config_gui.Path("main.py")))
+                popen.assert_not_called()
+                gui.prepare_hidhide_before_start.assert_not_called()
+
+    def test_calibration_start_rechecks_for_a_running_connector(self):
+        gui = self.make_gui()
+        gui.main_process = _AliveProcess()
+        with patch.object(config_gui.subprocess, "Popen") as popen:
+            self.assertFalse(gui._start_calibration_process(config_gui.Path("calibration.py")))
+        popen.assert_not_called()
+
+    def test_connector_rechecks_state_after_the_hidhide_prompt(self):
+        for change in ("connector", "calibration", "pending_calibration", "closing"):
+            with self.subTest(change=change):
+                gui = self.make_gui()
+
+                def prepare():
+                    if change == "closing":
+                        gui._close_in_progress = True
+                    elif change == "pending_calibration":
+                        gui._schedule_calibration_start(config_gui.Path("calibration.py"), 500)
+                    else:
+                        setattr(gui, "main_process" if change == "connector" else "calibration_process", _AliveProcess())
+                    return True
+
+                gui.prepare_hidhide_before_start = prepare
+                with patch.object(config_gui.subprocess, "Popen") as popen:
+                    self.assertFalse(gui.start_main(config_gui.Path("main.py")))
+                popen.assert_not_called()
+
+    def test_connector_can_start_after_calibration_exits(self):
+        gui = self.make_gui()
+        gui.calibration_process = Mock()
+        gui.calibration_process.poll.return_value = 0
+        gui.prepare_hidhide_before_start = Mock(return_value=True)
+        with patch.object(config_gui.subprocess, "Popen", return_value=_AliveProcess()) as popen:
+            self.assertTrue(gui.start_main(config_gui.Path("main.py")))
+        popen.assert_called_once()
+
+    def test_calibration_can_start_after_connector_exits(self):
+        gui = self.make_gui()
+        gui.main_process = Mock()
+        gui.main_process.poll.return_value = 0
+        with patch.object(config_gui.subprocess, "Popen", return_value=_AliveProcess()) as popen:
+            gui.run_calibration()
+        popen.assert_called_once()
+        self.assertEqual(config_gui.Path(popen.call_args.args[0][1]).name, "calibration.py")
+        self.assertIsNotNone(gui.calibration_process)
+        self.assertEqual(gui.root.active_job_count, 0)
+
+    def test_firmware_operation_blocks_connector_and_calibration_launches(self):
+        for state in ("detecting", "flashing"):
+            for action in ("connector", "calibration", "calibration_callback"):
+                with self.subTest(state=state, action=action):
+                    gui = self.make_gui()
+                    gui.prepare_hidhide_before_start = Mock(return_value=True)
+                    gui._flash_operation_active = state == "detecting"
+                    gui.flash_process = _AliveProcess() if state == "flashing" else None
+                    with (
+                        patch.object(config_gui.subprocess, "Popen", return_value=_AliveProcess()) as popen,
+                        patch.object(config_gui.messagebox, "showinfo"),
+                    ):
+                        if action == "connector":
+                            self.assertFalse(gui.start_main(config_gui.Path("main.py")))
+                        elif action == "calibration":
+                            gui.run_calibration()
+                        else:
+                            self.assertFalse(gui._start_calibration_process(config_gui.Path("calibration.py")))
+                    popen.assert_not_called()
+
+    def test_calibration_blocks_firmware_probe_and_flash(self):
+        for pending in (False, True):
+            with self.subTest(pending=pending):
+                gui = self.make_gui()
+                if pending:
+                    gui._schedule_calibration_start(config_gui.Path("calibration.py"), 500)
+                else:
+                    gui.calibration_process = _AliveProcess()
+                gui.inspect_esp32_firmware = Mock(return_value=(None, False))
+                gui.confirm_firmware_flash = Mock(return_value=True)
+                gui.stop_main_process = Mock()
+                gui.detect_flash_port = Mock()
+                gui.get_serial_ports = Mock(return_value=set())
+                with patch.object(config_gui.messagebox, "showinfo"):
+                    gui.flash_firmware()
+                gui.inspect_esp32_firmware.assert_not_called()
+                gui.detect_flash_port.assert_not_called()
+                self.assertFalse(gui._flash_operation_active)
+
+    def test_flash_claims_port_before_the_version_confirmation(self):
+        gui = self.make_gui()
+        gui.prepare_hidhide_before_start = Mock(return_value=True)
+        gui.inspect_esp32_firmware = Mock(return_value=(None, False))
+
+        def confirm(_firmware):
+            gui.start_main(config_gui.Path("main.py"))
+            gui.run_calibration()
+            return False
+
+        gui.confirm_firmware_flash = confirm
+        with (
+            patch.object(config_gui.subprocess, "Popen", return_value=_AliveProcess()) as popen,
+            patch.object(config_gui.messagebox, "showinfo"),
+        ):
+            gui.flash_firmware()
+        popen.assert_not_called()
+        self.assertFalse(gui._flash_operation_active)
+
+    def test_flash_cancels_pending_connector_restart(self):
+        gui = self.make_gui()
+        gui.prepare_hidhide_before_start = Mock(return_value=True)
+        gui.inspect_esp32_firmware = Mock(return_value=(None, False))
+        gui.confirm_firmware_flash = Mock(return_value=True)
+        gui.stop_main_process = Mock()
+        gui.detect_flash_port = Mock()
+        gui.get_serial_ports = Mock(return_value=set())
+        gui._schedule_main_start(config_gui.Path("main.py"), 500)
+        with (
+            patch.object(config_gui.subprocess, "Popen", return_value=_AliveProcess()) as popen,
+            patch.object(config_gui.messagebox, "showinfo"),
+        ):
+            gui.flash_firmware()
+            self.assertIsNone(gui._main_start_job)
+            gui.root.run_all()
+        popen.assert_not_called()
+        gui.detect_flash_port.assert_called_once()
+
+    def test_canceling_flash_restores_a_pending_connector_restart(self):
+        gui = self.make_gui()
+        gui.prepare_hidhide_before_start = Mock(return_value=True)
+        gui.inspect_esp32_firmware = Mock(return_value=(None, False))
+        gui.confirm_firmware_flash = Mock(return_value=False)
+        gui._schedule_main_start(config_gui.Path("main.py"), 500)
+        original_job = gui._main_start_job
+        with (
+            patch.object(config_gui.subprocess, "Popen", return_value=_AliveProcess()) as popen,
+            patch.object(config_gui.messagebox, "showinfo"),
+        ):
+            gui.flash_firmware()
+            self.assertFalse(gui._flash_operation_active)
+            self.assertNotEqual(gui._main_start_job, original_job)
+            self.assertEqual(gui.root.active_job_count, 1)
+            gui.root.run_all()
+        popen.assert_called_once()
+
+    def test_invalidated_flash_probe_or_confirmation_cannot_continue(self):
+        for phase in ("probe", "confirmation"):
+            with self.subTest(phase=phase):
+                gui = self.make_gui()
+                gui.stop_main_process = Mock()
+                gui.detect_flash_port = Mock()
+
+                def probe():
+                    if phase == "probe":
+                        gui._finish_flash_operation()
+                    return None, False
+
+                def confirm(_firmware):
+                    if phase == "confirmation":
+                        gui._finish_flash_operation()
+                    return True
+
+                gui.inspect_esp32_firmware = probe
+                gui.confirm_firmware_flash = Mock(side_effect=confirm)
+                gui.flash_firmware()
+                gui.detect_flash_port.assert_not_called()
+                gui.stop_main_process.assert_not_called()
+                self.assertFalse(gui._flash_operation_active)
+                if phase == "probe":
+                    gui.confirm_firmware_flash.assert_not_called()
+
+    def test_flash_probe_error_releases_launch_guards(self):
+        gui = self.make_gui()
+        gui.inspect_esp32_firmware = Mock(side_effect=RuntimeError("forced probe error"))
+        with self.assertRaisesRegex(RuntimeError, "forced probe error"):
+            gui.flash_firmware()
+        self.assertFalse(gui._flash_operation_active)
+        gui.prepare_hidhide_before_start = Mock(return_value=True)
+        with patch.object(config_gui.subprocess, "Popen", return_value=_AliveProcess()) as popen:
+            self.assertTrue(gui.start_main(config_gui.Path("main.py")))
+        popen.assert_called_once()
+
+    def test_busy_operation_notices_follow_selected_language(self):
+        for language in ("en", "zh"):
+            for busy in ("firmware", "calibration"):
+                with self.subTest(language=language, busy=busy):
+                    gui = self.make_gui()
+                    gui.tr = lambda text: config_gui.translate_text(text, language)
+                    if busy == "firmware":
+                        gui._flash_operation_active = True
+                    else:
+                        gui.calibration_process = _AliveProcess()
+                    with patch.object(config_gui.messagebox, "showinfo") as notice:
+                        if busy == "firmware":
+                            gui.run_calibration()
+                        else:
+                            gui.flash_firmware()
+                    message = " ".join(notice.call_args.args)
+                    if language == "en":
+                        self.assertNotRegex(message, r"[\u4e00-\u9fff]")
+                    else:
+                        self.assertRegex(message, r"[\u4e00-\u9fff]")
+
 
 if __name__ == "__main__":
     unittest.main()

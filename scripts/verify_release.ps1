@@ -87,6 +87,11 @@ $expectedName = "S2P-XInput-Lite-v$versionSlug"
 if ((Split-Path -Leaf $PackageDirectory) -ne $expectedName) {
     throw "Package directory name does not match version: expected $expectedName."
 }
+$startHere = Get-Content -LiteralPath (Join-Path $PackageDirectory "START_HERE.txt") -Raw -Encoding utf8
+if (-not $startHere.StartsWith("S2P-XInput-Lite v$version") -or
+    -not $startHere.Contains("app\RELEASE_NOTES_v$versionSlug.md")) {
+    throw "START_HERE.txt must match the packaged release version."
+}
 
 $required = @(
     "S2P-XInput-Lite.exe",
@@ -96,6 +101,8 @@ $required = @(
     "LICENSE",
     "README.md",
     "README_zh-TW.md",
+    "RELEASE_NOTES_v$versionSlug.md",
+    "docs\aim-performance.md",
     "docs\bridge-host-shutdown.md",
     "docs\usb-hid-standardization.md",
     "image\icon.ico",
@@ -126,6 +133,7 @@ $required = @(
     "src\requirements-binary.txt",
     "src\raw_hid_probe.exe",
     "src\raw_hid_stream_probe.exe",
+    "src\gamepad_render_native.dll",
     "src\profiles\System Default.ini",
     "esp32s3\firmware\bootloader.bin",
     "esp32s3\firmware\partition-table.bin",
@@ -349,6 +357,9 @@ if (
 $runtimePython = Join-Path $ApplicationDirectory "runtime\python.exe"
 $importCheck = (
     "import config_gui, gamepad_test_window, main; " +
+    "from gamepad_render_native import load_render_library; " +
+    "native = load_render_library(); " +
+    "assert native is not None and native.aim_project_room and native.s2p_trail_update; " +
     "print('release import smoke test passed')"
 )
 & $runtimePython -B -c $importCheck

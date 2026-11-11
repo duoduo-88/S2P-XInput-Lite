@@ -60,6 +60,28 @@ def strict_payload(layer_id):
 
 
 class MappingLayerTests(unittest.TestCase):
+    def test_invalid_later_payload_is_rejected_before_any_layer_write(self):
+        with tempfile.TemporaryDirectory() as directory:
+            invalid = layer("invalid", ["GL"])
+            invalid["buttons"] = {"a": "KEYBOARD:NOT_A_KEY"}
+            write_started = []
+            with self.assertRaises(ValueError):
+                save_layers(
+                    None, [layer("valid", ["GL"]), invalid], directory,
+                    before_write=lambda: write_started.append(True),
+                )
+            self.assertEqual(list(Path(directory).glob("*.json")), [])
+            self.assertEqual(write_started, [])
+
+    def test_before_write_hook_runs_before_deleting_the_last_layer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "Old.json"
+            path.write_text(json.dumps(strict_payload("old")), encoding="utf-8")
+            observed = []
+            save_layers(None, [], directory, before_write=lambda: observed.append(path.read_bytes()))
+            self.assertEqual(len(observed), 1)
+            self.assertFalse(path.exists())
+
     def test_normalization_fills_complete_mapping_and_round_trips_unicode(self):
         with tempfile.TemporaryDirectory() as directory:
             config = configparser.ConfigParser()

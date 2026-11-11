@@ -28,6 +28,10 @@ setup.py, while PyBluez is built at an exact commit. The firmware script uses
 ESP-IDF 5.5.4 and verifies that all three compiled images match the bundled
 firmware byte for byte.
 
+For a source checkout, run `.\native\build_gamepad_render_native.ps1` without
+arguments to install the optional Windows rendering kernels next to the
+Gamepad Tester source. Release packaging includes this DLL automatically.
+
 ## Release package
 
 ```powershell
@@ -47,6 +51,10 @@ The ZIP root contains only `S2P-XInput-Lite.exe`, `GamepadTester.exe`,
 installation root. Launcher metadata records portable layout 2 to reject old
 same-version launchers. Settings import accepts both `src/` and `app/src/`.
 
+The ZIP includes both current manuals and their screenshots for offline use.
+Its READMEs load the demo GIFs from GitHub. Archived screenshots and dependency
+test suites are excluded from the ZIP.
+
 For a quick local packaging check after all build outputs already exist:
 
 ```powershell
@@ -59,10 +67,10 @@ For a quick local packaging check after all build outputs already exist:
 Use `-SkipTests` or `-SkipFirmwareBuild` only for local diagnostics, not for
 an official release.
 
-## v0.7.14 firmware and evidence
+## Bundled firmware and verification
 
-The desktop version is 0.7.14 and bundled firmware is S2P-FW 1.0.7; protocol
-s2p_bridge 1.0.0 and the existing profile schema remain. ESP-IDF 5.5.4 builds
+Desktop v0.8.0 bundles S2P-FW 1.0.7 with protocol `s2p_bridge 1.0.0`.
+ESP-IDF 5.5.4 builds
 use reproducible-build configuration with esp_tinyusb 1.7.6~2 and tinyusb 0.19.0~3.
 Synchronize bootloader, partition table and application from the same build before
 byte-for-byte verification; firmware hashes belong in
@@ -74,7 +82,6 @@ alone does not verify S2P identity. Record actual automated/build/package result
 and skips, and retain the [hardware checklist](../docs/usb-hid-standardization.md).
 All hardware checks remain pending; local package verification and mock Windows
 tests do not demonstrate physical input, ViGEmBus, rumble or audio operation.
-The v0.7.14 release includes the verified firmware and descriptor evidence.
 
 By default `build_firmware.ps1` builds and verifies against the existing bundle.
 When deliberately updating the bundle from the current source, maintainers run:

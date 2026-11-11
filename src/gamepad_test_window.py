@@ -14,6 +14,7 @@ import tkinter as tk
 import webbrowser
 import zlib
 from collections import deque
+from ctypes import wintypes
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from tkinter import ttk, filedialog, font as tkfont, messagebox
@@ -26,11 +27,22 @@ from diagnostic_session import (
     read_controller_status,
 )
 from command_queue import enqueue_controller_command
+from config_utils import CONFIG_PATH
+from gamepad_aim import AimTestPane
+from gamepad_aim_display import window_refresh_rate
+from gamepad_aim_feedback import AimFeedback
+from gamepad_aim_gpu import Direct2DAimRenderer
+from gamepad_aim_history import AimHistory
+from gamepad_trail_canvas import TrailCanvasSurface
+from gamepad_trail_photo import TrailPhotoUploader
+from gamepad_trail_worker import TrailRasterWorker, TrailStyle
 from gamepad_devices import (
     GamepadDevice,
     NativeGamepadSampler,
     WindowsGamepadBackend,
+    XINPUT_BUTTON_NAMES,
     find_s2p_hid_firmware,
+    xinput_packet_delta,
 )
 from gyro_processing import _apply_gyro_response_curve
 from raw_hid_probe import (
@@ -38,10 +50,11 @@ from raw_hid_probe import (
     RawHidStreamClient,
     enumerate_raw_hid_gamepads,
 )
+from readable_combobox import ReadableCombobox
 from switch2_input import SWITCH_BUTTONS
 from support_log import format_support_log
 from test_telemetry import SharedTestTelemetry
-from tooltip_layout import wrap_tooltip_text
+from tooltip_layout import HoverTip
 from update_manager import (
     UpdateCheckError,
     automatic_update_checks_enabled,
@@ -57,10 +70,10 @@ PLOT_SIZE = 320
 PLOT_CENTER = PLOT_SIZE / 2
 PLOT_RADIUS = 146
 SHAPE_BIN_COUNT = 72
-TRAIL_TILE_SIZE = 40
+TRAIL_TILE_SIZE = 64
 MAX_CANVAS_TRAIL_ITEMS = 2000
 TRIGGER_EVENT_THRESHOLD = 30.0 / 255.0
-SWITCH_RAW_HID_BUTTONS = tuple(SWITCH_BUTTONS.items())
+SWITCH_RAW_HID_BUTTONS = tuple((mask, name) for name, mask in SWITCH_BUTTONS.items())
 SHAPE_TRACE_REFRESH_HZ = 60.0
 SHAPE_CAPTURE_SETTLE_SECONDS = 1.0
 TRAIL_COLOR = "#1976D2"
@@ -87,6 +100,44 @@ GITHUB_URL = "https://github.com/duoduo-88/S2P-XInput-Lite/tree/main"
 SPONSOR_URL = "https://ko-fi.com/duoduo88"
 CONTROLLER_STATUS_PATH = Path(__file__).with_name("controller_status.json")
 GAMEPAD_TESTER_TITLE = f"{APP_NAME} v{VERSION} GamepadTester"
+
+
+class _ProcessPowerThrottlingState(ctypes.Structure):
+    _fields_ = (
+        ("version", wintypes.ULONG),
+        ("control_mask", wintypes.ULONG),
+        ("state_mask", wintypes.ULONG),
+    )
+
+
+def _honor_high_resolution_timer():
+    """Keep Windows 11 from ignoring the tester's 1 ms timer request."""
+    power_throttling = 4  # ProcessPowerThrottling
+    ignore_timer = 0x4  # PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION
+    try:
+        kernel = ctypes.WinDLL("kernel32")
+        kernel.GetCurrentProcess.restype = wintypes.HANDLE
+        get_info = kernel.GetProcessInformation
+        set_info = kernel.SetProcessInformation
+        for function in (get_info, set_info):
+            function.argtypes = (wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD)
+            function.restype = wintypes.BOOL
+        process = kernel.GetCurrentProcess()
+        previous = _ProcessPowerThrottlingState(1, 0, 0)
+        size = ctypes.sizeof(previous)
+        if not get_info(process, power_throttling, ctypes.byref(previous), size):
+            return None
+        if previous.control_mask & ignore_timer and not previous.state_mask & ignore_timer:
+            return None
+        current = _ProcessPowerThrottlingState(
+            previous.version, previous.control_mask | ignore_timer,
+            previous.state_mask & ~ignore_timer,
+        )
+        if set_info(process, power_throttling, ctypes.byref(current), size):
+            return lambda: set_info(process, power_throttling, ctypes.byref(previous), size)
+    except (AttributeError, OSError):
+        pass
+    return None
 
 
 def _gyro_mapping_enabled(gyro):
@@ -207,77 +258,15 @@ XINPUT_OUTPUT_BUTTONS = (
 )
 
 
-class HoverTip:
-    """Tooltip matching the settings UI's native question-mark help."""
-
-    def __init__(self, widget, text, wraplength=320):
-        self.widget = widget
-        self.text = text
-        self.wraplength = max(160, int(wraplength))
-        self._window = None
-        widget.bind("<Enter>", self.show, add="+")
-        widget.bind("<Leave>", self.hide, add="+")
-
-    def show(self, _event=None):
-        if self._window is not None:
-            return
-        try:
-            text = self.text() if callable(self.text) else self.text
-            owner = self.widget.winfo_toplevel()
-            tip = tk.Toplevel(owner)
-            tip.withdraw()
-            tip.overrideredirect(True)
-            tip.transient(owner)
-            screen_width = self.widget.winfo_screenwidth()
-            screen_height = self.widget.winfo_screenheight()
-            effective_wrap = min(
-                self.wraplength,
-                max(160, screen_width - 32),
-            )
-            label = tk.Label(
-                tip,
-                text="",
-                justify="left",
-                relief="solid",
-                borderwidth=1,
-                padx=8,
-                pady=6,
-                wraplength=0,
-            )
-            label_font = tkfont.Font(font=label.cget("font"))
-            label.configure(text=wrap_tooltip_text(
-                text,
-                effective_wrap,
-                label_font.measure,
-            ))
-            label.pack()
-            tip.update_idletasks()
-            width = tip.winfo_reqwidth()
-            height = tip.winfo_reqheight()
-            x = self.widget.winfo_rootx() + 25
-            y = self.widget.winfo_rooty() + 25
-            x = max(5, min(x, screen_width - width - 5))
-            y = max(5, min(y, screen_height - height - 5))
-            tip.geometry(f"+{x}+{y}")
-            tip.deiconify()
-            self._window = tip
-        except tk.TclError:
-            self._window = None
-
-    def hide(self, _event=None):
-        if self._window is not None:
-            try:
-                self._window.destroy()
-            except tk.TclError:
-                pass
-            self._window = None
-
-
 def display_refresh_rate(window=None):
     """Read the refresh rate for a Tk window's current display."""
     try:
         user32 = ctypes.windll.user32
         gdi32 = ctypes.windll.gdi32
+        user32.GetDC.argtypes = (wintypes.HWND,)
+        user32.GetDC.restype = wintypes.HDC
+        gdi32.GetDeviceCaps.argtypes = (wintypes.HDC, ctypes.c_int)
+        user32.ReleaseDC.argtypes = (wintypes.HWND, wintypes.HDC)
         window_handle = (
             int(window.winfo_id()) if window is not None else 0
         )
@@ -288,14 +277,15 @@ def display_refresh_rate(window=None):
             refresh_rate = int(gdi32.GetDeviceCaps(device_context, 116))
         finally:
             user32.ReleaseDC(window_handle, device_context)
-        if 30 <= refresh_rate <= 500:
-            return float(refresh_rate)
+        if refresh_rate >= 30:
+            return min(500.0, float(refresh_rate))
     except (
         AttributeError,
         OSError,
         RuntimeError,
         TypeError,
         ValueError,
+        ctypes.ArgumentError,
         tk.TclError,
     ):
         pass
@@ -457,6 +447,7 @@ class StickHistory:
     # allocating per-report UI objects.
     trail: deque = field(default_factory=lambda: deque(maxlen=65536))
     next_sequence: int = 0
+    trail_generation: int = 0
     shape_target: list = field(
         default_factory=lambda: [0.0] * SHAPE_BIN_COUNT
     )
@@ -485,13 +476,14 @@ class StickHistory:
     def add(self, x, y, now, record_shape):
         x = clamp_unit(x)
         y = clamp_unit(y)
-        radius = min(1.5, math.hypot(x, y))
         sequence = self.next_sequence
         self.next_sequence += 1
         self.trail.append((float(now), x, y, sequence))
-        if record_shape and not self.shape_frozen:
-            self.maximum_radius = max(self.maximum_radius, radius)
-        if record_shape and not self.shape_frozen and radius > 0.03:
+        if not record_shape or self.shape_frozen:
+            return
+        radius = min(1.5, math.hypot(x, y))
+        self.maximum_radius = max(self.maximum_radius, radius)
+        if radius > 0.03:
             angle = math.atan2(y, x) % (2.0 * math.pi)
             center_bin = int(
                 angle / (2.0 * math.pi) * SHAPE_BIN_COUNT
@@ -598,6 +590,7 @@ class StickHistory:
     def reset(self):
         self.trail.clear()
         self.next_sequence = 0
+        self.trail_generation += 1
         self.shape_target[:] = [0.0] * SHAPE_BIN_COUNT
         self.shape_display[:] = [0.0] * SHAPE_BIN_COUNT
         self.shape_target_angles[:] = [
@@ -642,9 +635,17 @@ class StickPlot:
         self._trail_selected_sequences = deque()
         self._trail_last_processed_sequence = -1
         self._trail_render_percent = None
-        # Transparent tiles keep high-rate report count independent from the
-        # Canvas item count while avoiding full 320x320 PNG updates.
+        # Compose the trail in one native Canvas item when available.
+        # Transparent tiles provide a bounded fallback.
         self._bitmap_enabled = True
+        self._bitmap_native_enabled = True
+        self._bitmap_surface = None
+        self._bitmap_worker_view = None
+        self._bitmap_worker_key = None
+        self._bitmap_worker_sequence = -1
+        self._bitmap_worker_force_reset = False
+        self._bitmap_worker_disabled = False
+        self._bitmap_uploader = TrailPhotoUploader()
         self._bitmap_photo = None
         self._bitmap_item = None
         self._bitmap_scanlines = None
@@ -686,7 +687,7 @@ class StickPlot:
         self.header.grid(row=0, column=0, sticky="ew", pady=(0, 4))
         self.header.columnconfigure(0, weight=1)
         self.source_var = tk.StringVar(value=tr("合成結果"))
-        self.source_combo = ttk.Combobox(
+        self.source_combo = ReadableCombobox(
             self.header,
             textvariable=self.source_var,
             state="readonly",
@@ -1123,7 +1124,7 @@ class StickPlot:
                 0, 0, 0, 0,
                 outline=GYRO_ACTIVE_COLOR,
                 width=2,
-                tags="dynamic",
+                tags=("dynamic", "trail_foreground"),
             )
             self._dynamic_deadzone_item = item
         coordinates = (
@@ -1242,7 +1243,7 @@ class StickPlot:
             if requested_count > MAX_CANVAS_TRAIL_ITEMS
             else 1
         )
-        selection_key = (display_percent, cap_stride)
+        selection_key = (history.trail_generation, display_percent, cap_stride)
 
         def selected_for_canvas(sample):
             sequence = sample[3]
@@ -1353,6 +1354,67 @@ class StickPlot:
                     self._trail_free_items.append(expired_item)
         self._trail_last_processed_sequence = newest_sequence
 
+    def _trail_surface(self, has_samples):
+        surface = getattr(self, "_bitmap_surface", None)
+        if surface is not None:
+            if not surface.failed:
+                return surface
+            surface.close()
+            self._bitmap_surface = self._bitmap_item = None
+            self._bitmap_render_config = None
+            self._bitmap_native_enabled = False
+        if not has_samples or not getattr(self, "_bitmap_native_enabled", False):
+            return None
+        try:
+            surface = TrailCanvasSurface(self.canvas, PLOT_SIZE, PLOT_SIZE)
+        except (OSError, RuntimeError, tk.TclError):
+            self._bitmap_native_enabled = False
+            return None
+        self._bitmap_surface = surface
+        self._bitmap_worker_view = object()
+        self._bitmap_item = surface.item
+        self.canvas.addtag_withtag("trail_bitmap", surface.item)
+        foreground = self.canvas.find_withtag("trail_foreground")
+        if foreground:
+            self.canvas.tag_lower(surface.item, foreground[0])
+        self._bitmap_render_config = None
+        return surface
+
+    def _draw_worker_bitmap(self, worker, surface, history, render_config, now):
+        trail = history.trail
+        view = self._bitmap_worker_view
+        key = (view, id(history), render_config)
+        previous = self._bitmap_worker_key
+        reset = previous != key or self._bitmap_worker_force_reset
+        if reset:
+            self._bitmap_worker_sequence = -1
+            self._bitmap_worker_force_reset = False
+            self._bitmap_worker_key = key
+            _generation, percent, zoom, pan_x, pan_y, length = render_config
+            self._bitmap_worker_style = TrailStyle(percent, length, PLOT_CENTER, PLOT_RADIUS, zoom, pan_x, pan_y)
+            if previous is not None and previous[0] is view:
+                ctypes.memset(surface.pixels, 0, ctypes.sizeof(surface.pixels))
+                surface.invalidate(0, 0, PLOT_SIZE, PLOT_SIZE)
+                self._bitmap_presented = True
+            samples = trail
+        else:
+            samples = []
+            for sample in reversed(trail):
+                if sample[3] <= self._bitmap_worker_sequence:
+                    break
+                samples.append(sample)
+            samples.reverse()
+        if samples:
+            self._bitmap_worker_sequence = samples[-1][3]
+
+        worker.submit(self.side, key, self._bitmap_worker_style, samples, now, full_trail=trail)
+        frame = worker.take(self.side)
+        if frame is not None:
+            offset = frame.bounds[1] * PLOT_SIZE * ctypes.sizeof(ctypes.c_uint32)
+            ctypes.memmove(ctypes.addressof(surface.pixels) + offset, frame.rows, len(frame.rows))
+            surface.invalidate(*frame.bounds)
+            self._bitmap_presented = True
+
     def _draw_trail_bitmap(self, history, now=None):
         now = time.perf_counter() if now is None else float(now)
         self._bitmap_presented = False
@@ -1369,6 +1431,7 @@ class StickPlot:
         )
         newest_sequence = trail[-1][3] if trail else -1
         render_config = (
+            history.trail_generation,
             display_percent,
             self.zoom,
             self.pan_x,
@@ -1376,6 +1439,17 @@ class StickPlot:
             trail_length,
         )
         try:
+            surface = self._trail_surface(bool(trail))
+            worker = getattr(self.owner, "_trail_raster_worker", None)
+            if surface is not None and worker is not None and not self._bitmap_worker_disabled:
+                try:
+                    self._draw_worker_bitmap(worker, surface, history, render_config, now)
+                    return True
+                except (OSError, RuntimeError, TypeError, ValueError):
+                    worker.discard(self.side)
+                    self._bitmap_worker_disabled = True
+                    self._bitmap_render_config = None
+            pixels = surface.pixels if surface is not None else None
             pixel_count = PLOT_SIZE * PLOT_SIZE
             row_stride = 1 + PLOT_SIZE * 4
             tile_photos = getattr(self, "_bitmap_tile_photos", None)
@@ -1402,15 +1476,36 @@ class StickPlot:
                 or newest_sequence
                 < self._bitmap_last_processed_sequence
             )
-            dirty_tiles = set()
+            if (
+                not rebuild
+                and newest_sequence == self._bitmap_last_processed_sequence
+                and (
+                    not self._bitmap_expiry_heap
+                    or self._bitmap_expiry_heap[0][0] > now
+                )
+            ):
+                return True
+            dirty_tiles = {}
+
+            def mark_dirty(tile_key, x, y):
+                bounds = dirty_tiles.get(tile_key)
+                dirty_tiles[tile_key] = (
+                    (x, y, x + 1, y + 1) if bounds is None else (
+                        min(x, bounds[0]), min(y, bounds[1]),
+                        max(x + 1, bounds[2]), max(y + 1, bounds[3]),
+                    )
+                )
             if rebuild:
-                if tile_items or self._bitmap_item is not None:
+                if pixels is not None:
+                    ctypes.memset(pixels, 0, ctypes.sizeof(pixels))
+                elif tile_items or self._bitmap_item is not None:
                     self.canvas.delete("trail_bitmap")
                 tile_photos.clear()
                 tile_items.clear()
                 tile_live_counts.clear()
                 self._bitmap_photo = None
-                self._bitmap_item = None
+                if surface is None:
+                    self._bitmap_item = None
                 self._bitmap_scanlines[:] = (
                     b"\x00" * len(self._bitmap_scanlines)
                 )
@@ -1444,27 +1539,17 @@ class StickPlot:
                     >= display_percent
                 ):
                     continue
-                point_x, point_y = self._view_point(x, y)
                 expiry = float(time_value) + trail_length
                 if expiry <= now:
                     continue
-                minimum_x = max(
-                    0, int(math.floor(point_x - radius))
-                )
-                maximum_x = min(
-                    PLOT_SIZE - 1,
-                    int(math.ceil(point_x + radius)),
-                )
-                minimum_y = max(
-                    0, int(math.floor(point_y - radius))
-                )
-                maximum_y = min(
-                    PLOT_SIZE - 1,
-                    int(math.ceil(point_y + radius)),
-                )
-                for pixel_y in range(minimum_y, maximum_y + 1):
+                point_x, point_y = self._view_point(x, y)
+                center_x, center_y = math.floor(point_x), math.floor(point_y)
+                # More distant pixel centers are at least 1.5 px away.
+                xs = range(max(0, center_x - 1), min(PLOT_SIZE, center_x + 2))
+                ys = range(max(0, center_y - 1), min(PLOT_SIZE, center_y + 2))
+                for pixel_y in ys:
                     delta_y = (pixel_y + 0.5) - point_y
-                    for pixel_x in range(minimum_x, maximum_x + 1):
+                    for pixel_x in xs:
                         delta_x = (pixel_x + 0.5) - point_x
                         if (
                             delta_x * delta_x + delta_y * delta_y
@@ -1495,6 +1580,8 @@ class StickPlot:
                     pixel_y * row_stride + 1 + pixel_x * 4
                 )
                 if self._bitmap_scanlines[rgba_index + 3]:
+                    if pixels is not None:
+                        pixels[pixel_index] = 0
                     self._bitmap_scanlines[
                         rgba_index:rgba_index + 4
                     ] = b"\x00\x00\x00\x00"
@@ -1505,13 +1592,14 @@ class StickPlot:
                     tile_live_counts[tile_key] = max(
                         0, tile_live_counts.get(tile_key, 1) - 1
                     )
-                    dirty_tiles.add(tile_key)
+                    mark_dirty(tile_key, pixel_x, pixel_y)
 
             color = tuple(
                 int(self.trail_color[index:index + 2], 16)
                 for index in (1, 3, 5)
             ) + (255,)
             color_bytes = bytes(color)
+            native_color = 0xFF000000 | int(self.trail_color[1:], 16) if pixels is not None else 0
             for pixel_index, expiry in frame_pixels.items():
                 if expiry <= self._bitmap_pixel_expiry[pixel_index]:
                     continue
@@ -1523,6 +1611,8 @@ class StickPlot:
                 pixel_y, pixel_x = divmod(pixel_index, PLOT_SIZE)
                 rgba_index = pixel_y * row_stride + 1 + pixel_x * 4
                 if not self._bitmap_scanlines[rgba_index + 3]:
+                    if pixels is not None:
+                        pixels[pixel_index] = native_color
                     self._bitmap_scanlines[
                         rgba_index:rgba_index + 4
                     ] = color_bytes
@@ -1533,7 +1623,7 @@ class StickPlot:
                     tile_live_counts[tile_key] = (
                         tile_live_counts.get(tile_key, 0) + 1
                     )
-                    dirty_tiles.add(tile_key)
+                    mark_dirty(tile_key, pixel_x, pixel_y)
 
             live_pixels = sum(tile_live_counts.values())
             if len(self._bitmap_expiry_heap) > max(
@@ -1548,7 +1638,21 @@ class StickPlot:
                 ]
                 heapq.heapify(self._bitmap_expiry_heap)
 
-            for tile_key in dirty_tiles:
+            if surface is not None:
+                if rebuild:
+                    surface.invalidate(0, 0, PLOT_SIZE, PLOT_SIZE)
+                elif dirty_tiles:
+                    surface.invalidate(
+                        min(box[0] for box in dirty_tiles.values()),
+                        min(box[1] for box in dirty_tiles.values()),
+                        max(box[2] for box in dirty_tiles.values()),
+                        max(box[3] for box in dirty_tiles.values()),
+                    )
+                self._bitmap_presented = rebuild or bool(dirty_tiles)
+                return True
+
+            foreground = None
+            for tile_key, bounds in dirty_tiles.items():
                 tile_x, tile_y = tile_key
                 item = tile_items.get(tile_key)
                 if tile_live_counts.get(tile_key, 0) <= 0:
@@ -1565,21 +1669,9 @@ class StickPlot:
                 top = tile_y * TRAIL_TILE_SIZE
                 width = min(TRAIL_TILE_SIZE, PLOT_SIZE - left)
                 height = min(TRAIL_TILE_SIZE, PLOT_SIZE - top)
-                bitmap_data = encode_rgba_png_region(
-                    PLOT_SIZE,
-                    self._bitmap_scanlines,
-                    left,
-                    top,
-                    width,
-                    height,
-                )
                 photo = tile_photos.get(tile_key)
-                if photo is None:
-                    photo = tk.PhotoImage(
-                        master=self.canvas,
-                        data=bitmap_data,
-                        format="png",
-                    )
+                photo = self._update_trail_photo(photo, row_stride, left, top, width, height, bounds)
+                if item is None:
                     tile_photos[tile_key] = photo
                     item = self.canvas.create_image(
                         left,
@@ -1589,14 +1681,15 @@ class StickPlot:
                         tags="trail_bitmap",
                     )
                     tile_items[tile_key] = item
-                else:
-                    photo.configure(data=bitmap_data, format="png")
+                    if foreground is None:
+                        foreground = self.canvas.find_withtag("trail_foreground")
+                    if foreground:
+                        self.canvas.tag_lower(item, foreground[0])
 
             if tile_items:
                 first_key = next(iter(tile_items))
                 self._bitmap_item = tile_items[first_key]
                 self._bitmap_photo = tile_photos[first_key]
-                self.canvas.tag_raise("trail_bitmap")
             else:
                 self._bitmap_item = None
                 self._bitmap_photo = None
@@ -1610,20 +1703,42 @@ class StickPlot:
             ValueError,
             tk.TclError,
         ):
-            # An older Tk build without PNG PhotoImage support remains usable.
-            if self._bitmap_item is not None:
+            # Release bitmap resources before returning to Canvas dots.
+            surface = getattr(self, "_bitmap_surface", None)
+            if surface is not None:
+                surface.close()
+            elif self._bitmap_item is not None or getattr(self, "_bitmap_tile_items", None):
                 try:
                     self.canvas.delete("trail_bitmap")
                 except tk.TclError:
                     pass
             self._bitmap_item = None
             self._bitmap_photo = None
+            self._bitmap_surface = None
             self._bitmap_tile_photos = {}
             self._bitmap_tile_items = {}
             self._bitmap_tile_live_counts = {}
             self._bitmap_enabled = False
             self._bitmap_render_config = None
             return False
+
+    def _update_trail_photo(self, photo, stride, left, top, width, height, bounds):
+        uploader = getattr(self, "_bitmap_uploader", None)
+        if uploader is not None:
+            if photo is None:
+                photo = tk.PhotoImage(master=self.canvas, width=width, height=height)
+            x, y, right, bottom = bounds
+            if uploader.upload(
+                photo, self._bitmap_scanlines, stride, x, y, right - x, bottom - y,
+                dest_x=x - left, dest_y=y - top,
+            ):
+                return photo
+            self._bitmap_uploader = None
+        data = encode_rgba_png_region(PLOT_SIZE, self._bitmap_scanlines, left, top, width, height)
+        if photo is None:
+            return tk.PhotoImage(master=self.canvas, data=data, format="png")
+        photo.configure(data=data, format="png")
+        return photo
 
     def _static_signature(self, side_data, telemetry, is_s2p):
         """Only include configuration data, never the live stick samples."""
@@ -1681,6 +1796,7 @@ class StickPlot:
 
     def _draw_static(self, side_data, telemetry, is_s2p):
         self.canvas.delete("all")
+        self._bitmap_surface = None
         self._trail_bucket_items = {}
         self._trail_bucket_coords = {}
         self._trail_free_items = []
@@ -1742,8 +1858,6 @@ class StickPlot:
             self._draw_static(side_data, telemetry, is_s2p)
             self._static_key = static_key
             frame_changed = True
-            if self._bitmap_item is not None:
-                self.canvas.tag_raise("trail_bitmap", "static")
         now = time.perf_counter()
         # Redraw the measured envelope at up to 60 FPS only while its data is
         # changing. Once settled, keeping the tester open emits no trace Canvas
@@ -1790,10 +1904,7 @@ class StickPlot:
             self._draw_trail(history, now)
             frame_changed = bool(history.trail) or frame_changed
         if trace_redrawn and self._bitmap_item is not None:
-            # Animated physical-stick colour bands are recreated after the
-            # raster item. Restore the intended bands -> trail -> live-dot
-            # stacking order only on those 30 Hz overlay frames.
-            self.canvas.tag_raise("trail_bitmap")
+            self.canvas.tag_lower("trace", "trail_bitmap")
         gyro = telemetry.get("gyro") or {}
         show_dynamic_deadzone = bool(is_s2p and (
             (
@@ -1828,7 +1939,7 @@ class StickPlot:
                 0, 0, 0, 0,
                 fill=self.trail_color,
                 outline="",
-                tags="dynamic",
+                tags=("dynamic", "trail_foreground"),
             )
             self._dot_item = dot_item
         dot_coords = (
@@ -2069,7 +2180,7 @@ class StickPlot:
                 anchor="ne",
                 fill="#777777",
                 font=("Segoe UI", 8),
-                tags="fps",
+                tags=("fps", "trail_foreground"),
             )
         elif text != self._fps_text:
             self.canvas.itemconfigure(self._fps_item, text=text)
@@ -2083,8 +2194,15 @@ class GamepadTestWindow:
         self.gui = gui
         self.root = gui.root
         self.window = None
+        self._trail_raster_worker = None
         self.test_notebook = None
         self.input_tab = None
+        self.aim_tab = None
+        self.aim_pane = None
+        self._aim_input_active = False
+        self._aim_selected_device = None
+        self._aim_native_device = None
+        self._aim_raw_rate_sample = None
         self.rumble_tab = None
         self.high_rate_tab = None
         self.diagnostic_tab = None
@@ -2096,6 +2214,9 @@ class GamepadTestWindow:
             enable_s2p_mobile_hid=False
         )
         self.native_sampler = None
+        self._aim_raw_pair = None
+        self._aim_bridge_packet = None
+        self._aim_bridge_generation = 0
         self.telemetry = None
         self.latest_telemetry = {}
         self.latest_diagnostic_input = {}
@@ -2109,7 +2230,7 @@ class GamepadTestWindow:
         )
         self.raw_hid_probe = RawHidAnalysisClient()
         self.raw_hid_stream = RawHidStreamClient()
-        self.raw_hid_stream_enabled_var = tk.BooleanVar(value=True)
+        self.raw_hid_stream_enabled_var = tk.BooleanVar()
         self.raw_hid_stream_toggle = None
         self.raw_hid_stream_status_var = tk.StringVar(value="")
         self._raw_hid_stream_path = None
@@ -2117,6 +2238,7 @@ class GamepadTestWindow:
         self._raw_hid_stream_dropped = 0
         self._raw_hid_stream_latest_axes = None
         self._raw_hid_stream_latest_sample = None
+        self._nintendo_winmm_candidate_key = None
         self._nintendo_winmm_pair_key = None
         self._nintendo_winmm_pair_score = 0
         self.raw_hid_devices = {}
@@ -2153,15 +2275,13 @@ class GamepadTestWindow:
         self._raw_hid_countdown_cancelled = False
         self._raw_hid_last_distribution = None
         self._raw_hid_chart_data = ((), 0, 0.0, 0.0, 0.0)
-        self.shape_enabled_var = tk.BooleanVar(value=False)
-        self._shape_capture_signature = None
-        self.show_gyro_legend_var = tk.BooleanVar(value=True)
-        self.sample_display_percent_var = tk.DoubleVar(value=100.0)
-        self.sample_display_percent_text = tk.StringVar(value="100%")
-        self.trail_length_var = tk.DoubleVar(value=2.5)
-        self.trail_length_text = tk.StringVar(
-            value=self.gui.tr("{seconds:.1f} 秒").format(seconds=2.5)
-        )
+        self.shape_enabled_var = tk.BooleanVar()
+        self.show_gyro_legend_var = tk.BooleanVar()
+        self.sample_display_percent_var = tk.DoubleVar()
+        self.sample_display_percent_text = tk.StringVar()
+        self.trail_length_var = tk.DoubleVar()
+        self.trail_length_text = tk.StringVar()
+        self._restore_input_monitor_defaults()
         self.histories = {
             "left": StickHistory(),
             "right": StickHistory(),
@@ -2195,7 +2315,9 @@ class GamepadTestWindow:
         self._last_consumed_token = None
         self._last_trail_sequence = 0
         self._trail_overwrite_count = 0
+        self._s2p_time_offset = None
         self._raw_hid_resume_after_measurement = False
+        self._raw_hid_cleanup_retry_at = 0.0
         self._button_events = {}
         self._recent_events = deque(maxlen=8)
         self._last_state = None
@@ -2208,6 +2330,7 @@ class GamepadTestWindow:
         self._window_motion_until = 0.0
         self._last_window_geometry = None
         self._high_resolution_timer_active = False
+        self._restore_timer_policy = None
         self._window_icon = None
         self._about_logo = None
         self._about_fonts = ()
@@ -2309,6 +2432,10 @@ class GamepadTestWindow:
         self._last_shape_advance_at = self._next_frame_at
         window = self._create_hidden_window(self.root)
         self.window = window
+        self._trail_raster_worker = TrailRasterWorker.open(
+            PLOT_SIZE, PLOT_SIZE,
+            {"left": 0xFF000000 | int(TRAIL_COLOR[1:], 16), "right": 0xFF000000 | int(RIGHT_TRAIL_COLOR[1:], 16)},
+        )
         window.title(GAMEPAD_TESTER_TITLE)
         self._apply_window_icon(window)
         # Keep the tester layout and its two high-refresh canvases at the
@@ -2323,8 +2450,58 @@ class GamepadTestWindow:
         initial_height = min(720, max(660, screen_height - 80))
         window.protocol("WM_DELETE_WINDOW", self.close)
         window.bind("<Configure>", self._on_window_configure, add="+")
+        window.bind("<Destroy>", self._on_trail_window_destroyed, add="+")
 
+        self._build_content(window)
+        self._refresh_devices(force=True)
+        self._update_raw_hid_availability()
+        # The first telemetry frame is published only after read_latest() has
+        # established the reader heartbeat. Continue scanning at a low rate so
+        # controllers that connect later appear without a manual refresh.
+        self._device_refresh_job = window.after(
+            300, self._refresh_devices_after_telemetry
+        )
+        self._schedule_poll()
+        window.update_idletasks()
+        root_width = self.root.winfo_width()
+        root_height = self.root.winfo_height()
+        if (
+            self.root.winfo_viewable()
+            and root_width > 100
+            and root_height > 100
+        ):
+            x = self.root.winfo_rootx() + (
+                root_width - initial_width
+            ) // 2
+            y = self.root.winfo_rooty() + (
+                root_height - initial_height
+            ) // 2
+        else:
+            # The standalone tester's host root is intentionally withdrawn
+            # and reports a 1x1 geometry at (0, 0). Centre on the display
+            # instead of mistaking that hidden host for the settings window.
+            x = (screen_width - initial_width) // 2
+            y = (screen_height - initial_height) // 2
+        x = max(0, min(screen_width - initial_width, x))
+        y = max(0, min(screen_height - initial_height, y))
+        self._reveal_positioned_window(
+            window,
+            f"{initial_width}x{initial_height}+{x}+{y}",
+        )
+        if (
+            getattr(self.gui, "allow_automatic_update_prompt", False)
+            and self.automatic_update_checks_var.get()
+            and not self._automatic_update_check_started
+        ):
+            self._automatic_update_check_started = True
+            window.after(
+                1400,
+                lambda: self.check_for_updates(manual=False),
+            )
+
+    def _build_content(self, window):
         content = ttk.Frame(window, padding=12)
+        self._content = content
         content.pack(fill="both", expand=True)
         content.columnconfigure(0, weight=1)
         content.rowconfigure(1, weight=1)
@@ -2335,7 +2512,7 @@ class GamepadTestWindow:
         ttk.Label(selector, text=self.gui.tr("測試手把")).grid(
             row=0, column=0, sticky="w", padx=(0, 6)
         )
-        self.device_combo = ttk.Combobox(
+        self.device_combo = ReadableCombobox(
             selector,
             textvariable=self.selected_device_var,
             state="readonly",
@@ -2347,11 +2524,17 @@ class GamepadTestWindow:
         )
         self.device_refresh_button = ttk.Button(
             selector,
-            text=self.gui.tr("重新整理"),
-            width=8,
+            text="↻",
+            width=3,
             command=self._request_device_refresh,
         )
         self.device_refresh_button.grid(row=0, column=2, padx=(5, 0))
+        HoverTip(self.device_refresh_button, self.gui.tr("重新整理"))
+        self.language_button = ttk.Button(
+            selector, text="中" if self.gui.language == "en" else "En", width=3,
+            command=self._toggle_language,
+        )
+        self.language_button.grid(row=0, column=3, padx=(4, 0))
         self.status_label = None
         # Per-radar presentation FPS is rendered in each plot's upper-right
         # corner, leaving this header's spare width for device selection.
@@ -2360,17 +2543,20 @@ class GamepadTestWindow:
         notebook = ttk.Notebook(content)
         notebook.grid(row=1, column=0, sticky="nsew")
         input_tab = ttk.Frame(notebook, padding=(8, 6))
+        aim_tab = ttk.Frame(notebook, padding=(10, 8, 10, 2))
         rumble_tab = ttk.Frame(notebook, padding=(10, 8))
         high_rate_tab = ttk.Frame(notebook, padding=(10, 8))
         diagnostic_tab = ttk.Frame(notebook, padding=(10, 8))
         about_tab = ttk.Frame(notebook, padding=(10, 8))
         self.test_notebook = notebook
         self.input_tab = input_tab
+        self.aim_tab = aim_tab
         self.rumble_tab = rumble_tab
         self.high_rate_tab = high_rate_tab
         self.diagnostic_tab = diagnostic_tab
         self.about_tab = about_tab
         notebook.add(input_tab, text=f" {self.gui.tr('輸入監看')} ")
+        notebook.add(aim_tab, text=f" {self.gui.tr('瞄準測試')} ")
         notebook.add(rumble_tab, text=f" {self.gui.tr('震動測試')} ")
         notebook.add(high_rate_tab, text=f" {self.gui.tr('回報率量測')} ")
         notebook.add(
@@ -2405,8 +2591,8 @@ class GamepadTestWindow:
         display_controls.columnconfigure(8, weight=1)
         ttk.Button(
             display_controls,
-            text=self.gui.tr("清除"),
-            command=self.clear_measurements,
+            text=self.gui.tr("重設"),
+            command=self.reset_input_monitor,
         ).grid(row=0, column=0, padx=(0, 7))
         ttk.Checkbutton(
             display_controls,
@@ -2613,55 +2799,51 @@ class GamepadTestWindow:
             )
         self.event_tree.grid(row=0, column=0, sticky="nsew")
 
+        self.aim_pane = AimTestPane(
+            aim_tab, self.gui.tr, self._read_aim_output,
+            display_hz=window_refresh_rate,
+            read_input=self._read_aim_input,
+            set_input_active=self._set_aim_input_active,
+            settings_path=CONFIG_PATH.with_name("aim_settings.json"),
+            history=AimHistory(CONFIG_PATH.with_name("aim_history.json")),
+            feedback=AimFeedback(window, self._set_aim_rumble),
+            gpu_renderer=Direct2DAimRenderer,
+            render_in_worker=True,
+        )
         self._build_rumble_tab(rumble_tab)
         self._build_high_rate_tab(high_rate_tab)
         self._build_diagnostic_tab(diagnostic_tab)
         self._build_about_tab(about_tab)
-        self._refresh_devices(force=True)
-        self._update_raw_hid_availability()
-        # The first telemetry frame is published only after read_latest() has
-        # established the reader heartbeat. Continue scanning at a low rate so
-        # controllers that connect later appear without a manual refresh.
-        self._device_refresh_job = window.after(
-            300, self._refresh_devices_after_telemetry
-        )
-        self._schedule_poll()
-        window.update_idletasks()
-        root_width = self.root.winfo_width()
-        root_height = self.root.winfo_height()
-        if (
-            self.root.winfo_viewable()
-            and root_width > 100
-            and root_height > 100
-        ):
-            x = self.root.winfo_rootx() + (
-                root_width - initial_width
-            ) // 2
-            y = self.root.winfo_rooty() + (
-                root_height - initial_height
-            ) // 2
-        else:
-            # The standalone tester's host root is intentionally withdrawn
-            # and reports a 1x1 geometry at (0, 0). Centre on the display
-            # instead of mistaking that hidden host for the settings window.
-            x = (screen_width - initial_width) // 2
-            y = (screen_height - initial_height) // 2
-        x = max(0, min(screen_width - initial_width, x))
-        y = max(0, min(screen_height - initial_height, y))
-        self._reveal_positioned_window(
-            window,
-            f"{initial_width}x{initial_height}+{x}+{y}",
-        )
-        if (
-            getattr(self.gui, "allow_automatic_update_prompt", False)
-            and self.automatic_update_checks_var.get()
-            and not self._automatic_update_check_started
-        ):
-            self._automatic_update_check_started = True
-            window.after(
-                1400,
-                lambda: self.check_for_updates(manual=False),
-            )
+
+    def _toggle_language(self):
+        window = self.window
+        if window is None or window.grab_current() is not None:
+            return
+        if (self.aim_pane.test_open or self.diagnostic_session.running
+                or self._raw_hid_measurement_active()):
+            messagebox.showinfo(self.gui.tr("手把測試"), self.gui.tr("請先結束目前的測試再切換語言。"), parent=window)
+            return
+        language = "zh" if self.gui.language == "en" else "en"
+        try:
+            self.gui.set_tester_language(language)
+        except OSError:
+            messagebox.showerror(self.gui.tr("儲存失敗"), self.gui.tr("無法儲存手把測試語言。"), parent=window)
+            return
+        tab = self.test_notebook.index("current")
+        def aim_mode_vars():
+            pane = self.aim_pane
+            return pane.dimension, pane.mode
+
+        aim_modes = tuple(choice.get() for choice in aim_mode_vars())
+        self._content.destroy()
+        self._last_event_input_signature = self._last_rumble_notice = None
+        self._build_content(window)
+        for choice, value in zip(aim_mode_vars(), aim_modes):
+            choice.set(value)
+        self.aim_pane._reset()
+        self.test_notebook.select(tab)
+        self._refresh_devices(refresh_controls=True)
+        self.language_button.focus_set()
 
     def _retry_native_sampler_start(self, sampler):
         """Restart after a previous sampler generation finishes winding down."""
@@ -2693,7 +2875,7 @@ class GamepadTestWindow:
         ttk.Label(
             controls, text=self.gui.tr("量測秒數")
         ).grid(row=0, column=0, padx=(0, 5))
-        self.raw_hid_duration_combo = ttk.Combobox(
+        self.raw_hid_duration_combo = ReadableCombobox(
             controls,
             textvariable=self.raw_hid_duration_var,
             values=("5", "10", "30", "60"),
@@ -2853,10 +3035,11 @@ class GamepadTestWindow:
         analysis_label.bind("<Configure>", fit_analysis_wrap)
         self._draw_raw_hid_chart((), 0, 0.0, 0.0, 0.0)
 
+    def _raw_hid_measurement_active(self):
+        return self._raw_hid_pending_start is not None or self.raw_hid_probe.has_reader
+
     def _update_raw_hid_availability(self):
-        if self.raw_hid_probe.read_snapshot().get("state") in {
-            "opening", "running"
-        }:
+        if self._raw_hid_measurement_active():
             return
         selected = self._selected_device()
         is_raw_hid = selected is not None and selected.kind == "raw_hid"
@@ -2878,22 +3061,26 @@ class GamepadTestWindow:
 
     def _on_raw_hid_stream_changed(self):
         self.clear_measurements()
+        if self._raw_hid_measurement_active():
+            self._raw_hid_resume_after_measurement = self.raw_hid_stream_enabled_var.get()
+            return
         self._sync_raw_hid_stream()
 
     def _stop_raw_hid_stream(self):
-        stopped = self.raw_hid_stream.stop()
-        if stopped:
-            self._raw_hid_stream_path = None
-            self._raw_hid_stream_sequence = 0
-            self._raw_hid_stream_latest_axes = None
-            self._raw_hid_stream_latest_sample = None
-        return stopped
+        # Detach the input immediately, even if the helper cannot exit yet.
+        self._raw_hid_stream_path = None
+        self._raw_hid_stream_sequence = 0
+        self._raw_hid_stream_latest_axes = None
+        self._raw_hid_stream_latest_sample = None
+        self._nintendo_winmm_candidate_key = None
+        self._nintendo_winmm_pair_key = None
+        self._nintendo_winmm_pair_score = 0
+        return self.raw_hid_stream.stop()
 
     def _sync_raw_hid_stream(self):
         """Own one Raw HID stream for the selected collection or proven mirror."""
         if self.window is None:
             return
-        probe_state = self.raw_hid_probe.read_snapshot().get("state")
         selected = self._selected_device()
         is_selected_raw_hid = selected is not None and selected.kind == "raw_hid"
         has_nintendo_raw_hid = any(
@@ -2906,7 +3093,7 @@ class GamepadTestWindow:
             and has_nintendo_raw_hid
         )
         enabled = (
-            probe_state not in {"opening", "running"}
+            not self._raw_hid_measurement_active()
             and (
                 (is_selected_raw_hid and self.raw_hid_stream_enabled_var.get())
                 # A physical Nintendo controller can expose more than one
@@ -2926,7 +3113,7 @@ class GamepadTestWindow:
         else:
             device = None
         path = device.path if device is not None else None
-        if path == self._raw_hid_stream_path and self.raw_hid_stream.active:
+        if enabled and path is not None and path == self._raw_hid_stream_path and self.raw_hid_stream.active:
             status = self.raw_hid_stream.status()
             if status.get("state") == "running":
                 self.raw_hid_stream_status_var.set(
@@ -2961,40 +3148,51 @@ class GamepadTestWindow:
         )
 
     @staticmethod
-    def _merge_cached_raw_hid_sample(sample, cached):
-        """Keep native buttons while holding Raw HID axes/controls between reports."""
+    def _merge_cached_raw_hid_sample(sample, cached, *, prefer_raw_buttons=False):
+        """Overlay only controls the Raw HID stream has actually reported."""
         if cached is None:
             return sample
         if sample is None:
-            return dict(cached)
-        merged = dict(sample)
-        for key in ("left", "right", "triggers", "token"):
+            merged = {
+                "left": (0.0, 0.0),
+                "right": (0.0, 0.0),
+                "buttons": (),
+                "buttons_mask": 0,
+                "source_rate_hz": None,
+                "rate_is_independent": True,
+                "mappings": [],
+                "linear_triggers": [],
+                "layer": "原始輸入",
+            }
+        else:
+            merged = dict(sample)
+        for key in ("left", "right", "token", "_fresh_raw_left"):
             if key in cached:
                 merged[key] = cached[key]
+        native_triggers = tuple(merged.get("triggers") or ()) + (0.0, 0.0)
+        raw_triggers = cached.get("triggers", (None, None))
+        merged["triggers"] = tuple(
+            native if raw is None else raw for raw, native in zip(raw_triggers, native_triggers)
+        )
+        if "buttons" in cached and (prefer_raw_buttons or not merged.get("buttons")):
+            merged["buttons"] = cached["buttons"]
+            merged["buttons_mask"] = cached["buttons_mask"]
         return merged
 
     def _consume_raw_hid_stream(self, sample, record_trail=True):
-        if record_trail:
-            samples, newest, dropped = self.raw_hid_stream.read_samples(
-                self._raw_hid_stream_sequence,
-                include_axes=True,
-                include_controls=True,
-                include_buttons=True,
-            )
-        else:
-            latest, newest, dropped = self.raw_hid_stream.read_latest(
-                self._raw_hid_stream_sequence
-            )
-            samples = (
-                () if latest is None else (latest + (0x0F,),)
-            )
+        samples, newest, dropped = self.raw_hid_stream.read_samples(
+            self._raw_hid_stream_sequence,
+            maximum=None,
+            include_axes=True,
+            include_controls=True,
+            include_buttons=True,
+        )
         self._raw_hid_stream_sequence = newest
         self._raw_hid_stream_dropped += dropped
+        cached = getattr(self, "_raw_hid_stream_latest_sample", None)
+        is_nintendo = "VID_057E&PID_2069" in str(getattr(self, "_raw_hid_stream_path", "")).upper()
         if not samples:
-            cached = getattr(
-                self, "_raw_hid_stream_latest_sample", None
-            )
-            return self._merge_cached_raw_hid_sample(sample, cached), False
+            return self._merge_cached_raw_hid_sample(sample, cached, prefer_raw_buttons=is_nintendo), False
         if record_trail:
             record_shape = self.shape_enabled_var.get()
             for item in samples:
@@ -3015,94 +3213,68 @@ class GamepadTestWindow:
             item for item in reversed(samples)
             if item[4] & 0x0C == 0x0C
         ), None)
-        if left_sample is None and right_sample is None:
-            cached = getattr(
-                self, "_raw_hid_stream_latest_sample", None
-            )
-            return self._merge_cached_raw_hid_sample(sample, cached), False
-        previous_axes = getattr(
-            self, "_raw_hid_stream_latest_axes", None
-        )
-        left = (
-            left_sample[1]
-            if left_sample is not None
-            else previous_axes[0] if previous_axes is not None
-            else (0.0, 0.0)
-        )
-        right = (
-            right_sample[2]
-            if right_sample is not None
-            else previous_axes[1] if previous_axes is not None
-            else (0.0, 0.0)
-        )
-        sequence = max(
-            item[3] for item in (left_sample, right_sample)
-            if item is not None
-        )
-        self._raw_hid_stream_latest_axes = (left, right)
-        if sample is None:
-            sample = {
-                "buttons": (),
-                "buttons_mask": 0,
-                "triggers": (0.0, 0.0),
-                "source_rate_hz": None,
-                "rate_is_independent": True,
-                "mappings": [],
-                "linear_triggers": [],
-                "layer": "原始輸入",
-            }
-        else:
-            sample = dict(sample)
-        trigger_values = list(sample.get("triggers") or (0.0, 0.0))
-        trigger_values = (trigger_values + [0.0, 0.0])[:2]
-        for index, trigger_mask in enumerate((0x10, 0x20)):
-            trigger_sample = next((
+        trigger_samples = tuple(
+            next((
                 item for item in reversed(samples)
-                if len(item) > 5 and int(item[4]) & trigger_mask
-            ), None)
-            if trigger_sample is not None:
-                trigger_values[index] = trigger_sample[5][index]
+                if len(item) > 5 and item[4] & trigger_mask
+            ), None) for trigger_mask in (0x10, 0x20)
+        )
+        # The current helpers publish button masks on complete stick reports.
+        # An unrelated report with a zero mask does not release those buttons.
         button_sample = next((
             item for item in reversed(samples)
-            if len(item) > 6
+            if len(item) > 6 and item[4] & 0x0F == 0x0F
         ), None)
-        is_nintendo_raw_hid = "VID_057E&PID_2069" in str(
-            getattr(self, "_raw_hid_stream_path", "")
-        ).upper()
-        if (
-            button_sample is not None
-            and (is_nintendo_raw_hid or sample.get("buttons") in (None, ()))
-        ):
-            buttons_mask = int(button_sample[6])
-            sample["buttons_mask"] = buttons_mask
-            sample["buttons"] = tuple(
-                name for name, mask in SWITCH_RAW_HID_BUTTONS
-                if buttons_mask & mask
+        sequence = max((
+            item[3] for item in (left_sample, right_sample, *trigger_samples, button_sample)
+            if item is not None
+        ), default=None)
+        if sequence is None:
+            return self._merge_cached_raw_hid_sample(sample, cached, prefer_raw_buttons=is_nintendo), False
+
+        raw = dict(cached or {})
+        if left_sample is not None:
+            raw["left"] = left_sample[1]
+        if right_sample is not None:
+            raw["right"] = right_sample[2]
+        if left_sample is not None or right_sample is not None:
+            self._raw_hid_stream_latest_axes = (
+                raw.get("left", (0.0, 0.0)), raw.get("right", (0.0, 0.0)),
             )
-        sample.update({
-            "left": left,
-            "right": right,
-            "triggers": tuple(trigger_values),
-            "token": ("raw_hid", sequence),
-        })
-        self._raw_hid_stream_latest_sample = dict(sample)
-        return sample, True
+        trigger_values = list(raw.get("triggers", (None, None)))
+        digital_trigger_sequence = -1
+        if button_sample is not None:
+            buttons_mask = int(button_sample[6])
+            button_names = SWITCH_RAW_HID_BUTTONS if is_nintendo else XINPUT_BUTTON_NAMES
+            raw["buttons_mask"] = buttons_mask
+            raw["buttons"] = tuple(
+                name for mask, name in button_names if buttons_mask & mask
+            )
+            if is_nintendo:
+                trigger_values = [float(bool(buttons_mask & SWITCH_BUTTONS[name])) for name in ("ZL", "ZR")]
+                digital_trigger_sequence = button_sample[3]
+        for index, trigger_sample in enumerate(trigger_samples):
+            if trigger_sample is not None and trigger_sample[3] >= digital_trigger_sequence:
+                trigger_values[index] = trigger_sample[5][index]
+        raw["triggers"] = tuple(trigger_values)
+        raw["token"] = ("raw_hid", sequence)
+        raw["_fresh_raw_left"] = left_sample is not None
+        self._raw_hid_stream_latest_sample = raw
+        return self._merge_cached_raw_hid_sample(sample, raw, prefer_raw_buttons=is_nintendo), True
 
     def _discard_pending_monitor_samples(self):
         """Advance every input queue without recording hidden-tab movement."""
-        if self.raw_hid_stream.active:
-            _latest, newest, dropped = self.raw_hid_stream.read_latest(
-                self._raw_hid_stream_sequence
-            )
-            self._raw_hid_stream_sequence = newest
-            self._raw_hid_stream_dropped += dropped
+        self._last_consumed_token = None
+        if self._raw_hid_stream_path is not None and self.raw_hid_stream.active:
+            sample, _fresh = self._consume_raw_hid_stream(None, record_trail=False)
+            if sample is not None:
+                self._last_consumed_token = sample["token"]
         if self.native_sampler is not None:
             self.native_sampler.read_snapshot()
         self._baseline_trail_sequence()
-        self._last_consumed_token = None
 
     def _update_raw_hid_stream_status(self):
-        if not self.raw_hid_stream_enabled_var.get():
+        if self._raw_hid_stream_path is None or not self.raw_hid_stream_enabled_var.get():
             return
         status = self.raw_hid_stream.status()
         state = status.get("state")
@@ -3211,6 +3383,8 @@ class GamepadTestWindow:
         )
 
     def _start_raw_hid_measurement(self):
+        if self._raw_hid_measurement_active():
+            return
         self._update_raw_hid_availability()
         device = self._selected_raw_hid_device()
         if device is None:
@@ -3268,13 +3442,18 @@ class GamepadTestWindow:
         self._update_raw_hid_measurement()
 
     def _resume_actual_sampling_after_measurement(self):
-        if not getattr(self, "_raw_hid_resume_after_measurement", False):
+        if not (self.raw_hid_probe.has_reader or self._raw_hid_resume_after_measurement):
             return False
-        self._raw_hid_resume_after_measurement = False
-        # Ensure the finite measurement no longer owns the HID handle before
-        # reopening it for continuous trajectory sampling.
-        self.raw_hid_probe.stop(timeout=0.1)
-        self._sync_raw_hid_stream()
+        if time.monotonic() < self._raw_hid_cleanup_retry_at:
+            return False
+        if not self.raw_hid_probe.stop(timeout=0.1):
+            # Retry cleanup outside the fast polling cadence.
+            self._raw_hid_cleanup_retry_at = time.monotonic() + 0.25
+            return False
+        self._raw_hid_cleanup_retry_at = 0.0
+        if self._raw_hid_resume_after_measurement:
+            self._raw_hid_resume_after_measurement = False
+            self._sync_raw_hid_stream()
         return True
 
     def _cancel_raw_hid_countdown(self):
@@ -3313,26 +3492,20 @@ class GamepadTestWindow:
         # also covers a stream process that was still shutting down when the
         # user pressed Start.
         if not self._stop_raw_hid_stream():
-            self._raw_hid_resume_after_measurement = False
-            self.raw_hid_state_var.set(
-                self.gui.tr("Raw HID 介面仍被實際採樣占用")
+            error = "Raw HID 介面仍被實際採樣占用"
+        elif not self.raw_hid_probe.start(device_path, duration):
+            error = "Raw HID 量測器無法啟動"
+        else:
+            self._raw_hid_countdown_cancelled = False
+            self.raw_hid_remaining_var.set(
+                self.gui.tr("{seconds:.1f} 秒").format(seconds=duration)
             )
-            self.raw_hid_remaining_var.set(self.gui.tr("量測失敗"))
-            self._set_raw_hid_controls_active(False)
+            self.raw_hid_state_var.set(self.gui.tr("正在開啟 Raw HID 介面..."))
             return
-        if not self.raw_hid_probe.start(device_path, duration):
-            self._raw_hid_resume_after_measurement = False
-            self.raw_hid_state_var.set(
-                self.gui.tr("Raw HID 量測器無法啟動")
-            )
-            self.raw_hid_remaining_var.set(self.gui.tr("量測失敗"))
-            self._set_raw_hid_controls_active(False)
-            return
-        self._raw_hid_countdown_cancelled = False
-        self.raw_hid_remaining_var.set(
-            self.gui.tr("{seconds:.1f} 秒").format(seconds=duration)
-        )
-        self.raw_hid_state_var.set(self.gui.tr("正在開啟 Raw HID 介面..."))
+        self.raw_hid_state_var.set(self.gui.tr(error))
+        self.raw_hid_remaining_var.set(self.gui.tr("量測失敗"))
+        self._set_raw_hid_controls_active(False)
+        self._resume_actual_sampling_after_measurement()
 
     @staticmethod
     def _format_interval_us(value):
@@ -3479,14 +3652,9 @@ class GamepadTestWindow:
         self.raw_hid_analysis_var.set(
             self._raw_hid_analysis_text(snapshot)
         )
-        self._set_raw_hid_controls_active(
-            state in {"opening", "running"}
-        )
-        if (
-            state in {"complete", "stopped", "error"}
-            and getattr(self, "_raw_hid_resume_after_measurement", False)
-        ):
+        if state in {"complete", "stopped", "error"}:
             self._resume_actual_sampling_after_measurement()
+        self._set_raw_hid_controls_active(self._raw_hid_measurement_active())
 
     @staticmethod
     def _raw_hid_effective_rate_visible(snapshot):
@@ -3728,6 +3896,8 @@ class GamepadTestWindow:
             self._high_resolution_timer_active = result == 0
         except (AttributeError, OSError):
             self._high_resolution_timer_active = False
+        if self._high_resolution_timer_active:
+            self._restore_timer_policy = _honor_high_resolution_timer()
 
     def _disable_high_resolution_timer(self):
         if not self._high_resolution_timer_active:
@@ -3736,6 +3906,9 @@ class GamepadTestWindow:
             ctypes.windll.winmm.timeEndPeriod(1)
         except (AttributeError, OSError):
             pass
+        if self._restore_timer_policy is not None:
+            self._restore_timer_policy()
+            self._restore_timer_policy = None
         self._high_resolution_timer_active = False
 
     @staticmethod
@@ -4380,7 +4553,7 @@ class GamepadTestWindow:
         ttk.Label(controls, text=self.gui.tr("診斷時間")).grid(
             row=0, column=3, padx=(0, 5)
         )
-        ttk.Combobox(
+        ReadableCombobox(
             controls,
             textvariable=self.diagnostic_duration_var,
             values=("30", "60", "120"),
@@ -5834,7 +6007,8 @@ class GamepadTestWindow:
             return
         current = time.perf_counter()
         frame_interval = self._frame_interval
-        if self._active_test_tab() == "high_rate":
+        if self._active_test_tab() in ("high_rate", "aim"):
+            # The aim pane has its own render and input deadlines.
             frame_interval = max(frame_interval, 1.0 / 60.0)
         if current < self._window_motion_until:
             # A Canvas redraw competes with Windows' move/resize loop. Keep
@@ -5860,6 +6034,8 @@ class GamepadTestWindow:
             selected = notebook.select()
         except tk.TclError:
             return "input"
+        if selected == str(getattr(self, "aim_tab", None)):
+            return "aim"
         if self.high_rate_tab is not None and selected == str(
             self.high_rate_tab
         ):
@@ -5880,7 +6056,15 @@ class GamepadTestWindow:
         # Drain at the event boundary. A fast away-and-back switch can happen
         # before the next background poll and must not replay hidden movement.
         self._discard_pending_monitor_samples()
-        if self._active_test_tab() == "high_rate":
+        worker = getattr(self, "_trail_raster_worker", None)
+        if worker is not None:
+            worker.discard()
+            for plot in self.plots.values():
+                plot._bitmap_worker_force_reset = True
+        active_tab = self._active_test_tab()
+        if active_tab != "aim" and getattr(self, "aim_pane", None) is not None:
+            self.aim_pane.close_test()
+        if active_tab == "high_rate":
             self._raw_hid_last_distribution = None
         self._sync_raw_hid_stream()
 
@@ -5916,9 +6100,6 @@ class GamepadTestWindow:
         if self.window is None or not self.window.winfo_exists():
             return
         now = time.perf_counter()
-        # DiagnosticSession measures duration with monotonic time. Keep this
-        # clock domain separate from high-refresh presentation scheduling.
-        self._poll_diagnostic(time.monotonic())
         monitor_visible = self._active_test_tab() == "input"
         telemetry = self.telemetry.read_latest() if self.telemetry else {}
         telemetry = telemetry or {}
@@ -5928,10 +6109,22 @@ class GamepadTestWindow:
         sample = None
         consumed_trail = False
         is_s2p = device is not None and device.kind == "s2p"
+        use_raw_hid = (
+            device is not None and not is_s2p
+            and self._raw_hid_stream_path is not None and self.raw_hid_stream.active
+        )
+        pair_candidate = use_raw_hid and device.kind == "winmm"
+        candidate_key = device.key if pair_candidate else None
+        if candidate_key != self._nintendo_winmm_candidate_key:
+            self._nintendo_winmm_candidate_key = candidate_key
+            self._nintendo_winmm_pair_key = None
+            self._nintendo_winmm_pair_score = 0
+        pair_confirmed = pair_candidate and self._nintendo_winmm_pair_key == candidate_key
+        use_raw_trail = use_raw_hid and (not pair_candidate or pair_confirmed)
         self._sync_shape_capture_context(device, is_s2p)
         if is_s2p and self._telemetry_is_fresh(self.latest_telemetry):
             sample = self._sample_from_telemetry(self.latest_telemetry)
-        elif device is not None:
+        elif device is not None and not is_s2p:
             if self.native_sampler is not None:
                 native_state, native_samples, native_rate = (
                     self.native_sampler.read_snapshot()
@@ -5944,7 +6137,7 @@ class GamepadTestWindow:
                 sample = self._sample_from_native(
                     device, native_state, native_rate
                 )
-                if monitor_visible and not self.raw_hid_stream.active:
+                if monitor_visible and not use_raw_trail:
                     for sample_time, queued_state in native_samples:
                         self._consume_sample(
                             self._sample_from_native(
@@ -5954,48 +6147,17 @@ class GamepadTestWindow:
                             sample_time,
                         )
                     consumed_trail = bool(native_samples)
-        if (
-            not is_s2p
-            and device is not None
-            and self.raw_hid_stream.active
-        ):
-            pair_candidate = (
-                device.kind == "winmm"
-                and any(
-                    (raw.vendor_id, raw.product_id) == (0x057E, 0x2069)
-                    for raw in self.raw_hid_devices.values()
-                )
-            )
-            if (
-                pair_candidate
-                and getattr(self, "_nintendo_winmm_pair_key", None)
-                not in {None, device.key}
-            ):
-                self._nintendo_winmm_pair_key = None
-                self._nintendo_winmm_pair_score = 0
-            pair_confirmed = (
-                getattr(self, "_nintendo_winmm_pair_key", None)
-                == device.key
-            )
+        if use_raw_hid:
             native_sample = sample
             sample, raw_consumed = self._consume_raw_hid_stream(
-                sample,
-                record_trail=(
-                    monitor_visible and (not pair_candidate or pair_confirmed)
-                ),
+                sample, record_trail=monitor_visible and use_raw_trail,
             )
             if pair_candidate and not pair_confirmed:
-                native_left = tuple((native_sample or {}).get("left") or ())
-                raw_left = tuple((sample or {}).get("left") or ())
-                if len(native_left) == len(raw_left) == 2:
-                    dot = (
-                        float(native_left[0]) * float(raw_left[0])
-                        + float(native_left[1]) * float(raw_left[1])
-                    )
-                    if dot >= 0.35:
-                        self._nintendo_winmm_pair_score = getattr(
-                            self, "_nintendo_winmm_pair_score", 0
-                        ) + 1
+                if native_sample is not None and raw_consumed and sample["_fresh_raw_left"]:
+                    native_x, native_y = native_sample["left"]
+                    raw_x, raw_y = sample["left"]
+                    if native_x * raw_x + native_y * raw_y >= 0.35:
+                        self._nintendo_winmm_pair_score += 1
                     else:
                         self._nintendo_winmm_pair_score = 0
                     if self._nintendo_winmm_pair_score >= 6:
@@ -6018,6 +6180,10 @@ class GamepadTestWindow:
                 "left": list(sample.get("left") or (0.0, 0.0)),
                 "right": list(sample.get("right") or (0.0, 0.0)),
             }
+        else:
+            self.latest_diagnostic_input = {}
+        # The diagnostic uses the just-read input and its own monotonic clock.
+        self._poll_diagnostic(time.monotonic())
         if sample is not None:
             sample_token = sample.get("token")
             if is_s2p and self.telemetry is not None:
@@ -6157,17 +6323,27 @@ class GamepadTestWindow:
         return float(value[0]), float(value[1])
 
     def _consume_sample(self, sample, is_s2p, now):
+        if is_s2p:
+            now = self._s2p_sample_time(sample["token"], now)
         for side in ("left", "right"):
             x, y = self._selected_xy(side, sample, is_s2p)
             self.histories[side].add(
                 x, y, now, self.shape_enabled_var.get()
             )
 
+    def _s2p_sample_time(self, timestamp_ns, now):
+        # Bridge timestamps use the shared monotonic clock. Keep one offset for
+        # the trail so delayed UI polls cannot make old reports appear newer.
+        if not timestamp_ns:
+            return now
+        offset = getattr(self, "_s2p_time_offset", None)
+        if offset is None:
+            offset = time.perf_counter() - time.monotonic_ns() * 1e-9
+            self._s2p_time_offset = offset
+        return min(now, timestamp_ns * 1e-9 + offset)
+
     def _consume_s2p_trail_samples(self, samples, now):
         """Add every unseen bridge report, including reports between frames."""
-        newest_timestamp_ns = max(
-            int(item.get("timestamp_ns", 0) or 0) for item in samples
-        )
         gyro = self.latest_telemetry.get("gyro") or {}
         gyro_target = (
             gyro.get("target")
@@ -6178,15 +6354,14 @@ class GamepadTestWindow:
             else None
         )
         record_shape = self.shape_enabled_var.get()
+        sources = tuple(
+            (side, _selected_plot_source(self.plots[side]), self.histories[side])
+            for side in ("left", "right")
+        )
         for item in samples:
             timestamp_ns = int(item.get("timestamp_ns", 0) or 0)
-            age = max(
-                0.0,
-                (newest_timestamp_ns - timestamp_ns) / 1_000_000_000.0,
-            )
-            sample_time = now - age
-            for side in ("left", "right"):
-                source = _selected_plot_source(self.plots[side])
+            sample_time = self._s2p_sample_time(timestamp_ns, now)
+            for side, source, history in sources:
                 if source == "實體搖桿":
                     values = item.get(f"physical_{side}") or (0.0, 0.0)
                 elif source == "陀螺儀":
@@ -6197,9 +6372,7 @@ class GamepadTestWindow:
                     )
                 else:
                     values = item.get(f"final_{side}") or (0.0, 0.0)
-                self.histories[side].add(
-                    values[0], values[1], sample_time, record_shape
-                )
+                history.add(values[0], values[1], sample_time, record_shape)
 
     def _draw_plots(self, is_s2p, update_details=True):
         telemetry = self.latest_telemetry if is_s2p else {}
@@ -6240,7 +6413,7 @@ class GamepadTestWindow:
             self.histories[side].add(
                 x,
                 y,
-                time.perf_counter(),
+                self._s2p_sample_time(int(self.latest_telemetry["timestamp_ns"]), time.perf_counter()),
                 self.shape_enabled_var.get(),
             )
         self._shape_capture_signature = self._current_shape_capture_signature(
@@ -6324,17 +6497,111 @@ class GamepadTestWindow:
         self.stop_rumble()
         self.clear_measurements()
         self._configure_source_controls()
-        self._last_consumed_token = None
-        self._baseline_trail_sequence()
         self._configure_native_sampler()
         self._update_raw_hid_availability()
 
     def _selected_device(self):
         return self.devices.get(self.selected_device_var.get())
 
+    def _set_aim_input_active(self, active):
+        if active == getattr(self, "_aim_input_active", False):
+            return
+        self._aim_input_active = active
+        self._aim_raw_rate_sample = None
+        sampler = self.native_sampler
+        if sampler is None:
+            return
+        if not active:
+            sampler.set_aim_capture(False)
+        self._configure_native_sampler()
+        if active:
+            sampler.set_aim_capture(True)
+
+    def _read_aim_input(self):
+        """Drain distinct Windows output states and report the source rate separately."""
+        sampler = self.native_sampler
+        device = self._aim_selected_device
+        native = self._aim_native_device
+        if sampler is None or device is None or native is None or not self._aim_input_active:
+            return None
+        state, generation, samples = sampler.read_aim_snapshot(native)
+        if state is None:
+            return None
+        source_rate = None
+        if device.kind == "s2p":
+            telemetry = self.latest_telemetry
+            if telemetry.get("xinput_slot") != device.index or not self._telemetry_is_fresh(telemetry):
+                return None
+            source_rate = telemetry.get("source_rate_hz")
+        elif device.kind == "raw_hid":
+            source_rate = self._read_aim_raw_report_rate()
+        # Generation changes on disconnect and packet-counter resets. The
+        # pane then establishes a fresh button baseline for the new device.
+        return (device.key, device.index, native.key, generation), state, samples, source_rate
+
+    def _read_aim_raw_report_rate(self):
+        now = time.perf_counter()
+        previous = self._aim_raw_rate_sample
+        if previous is not None and now - previous[0] < 0.5:
+            return previous[2]
+        raw_device = self._selected_raw_hid_device()
+        count = None
+        if raw_device is not None and raw_device.path == self._raw_hid_stream_path:
+            status = self.raw_hid_stream.status()
+            if status.get("state") == "running":
+                count = status.get("raw_reports")
+        rate = None
+        if previous is not None and count is not None and previous[1] is not None and count >= previous[1]:
+            rate = (count - previous[1]) / (now - previous[0])
+        self._aim_raw_rate_sample = now, count, rate
+        return rate
+
+    def _read_aim_output(self):
+        device = self._selected_device()
+        if device is None:
+            return None
+        key = device.key, device.index
+        if device.kind == "raw_hid":
+            pair = self._aim_raw_pair
+            if pair is None or pair[0] != device.key:
+                return None
+            device = pair[1]
+            key += (device.key, device.index)
+        if device.kind == "s2p":
+            telemetry = self.latest_telemetry
+            slot = telemetry.get("xinput_slot")
+            if (
+                not isinstance(slot, int)
+                or not 0 <= slot <= 3
+                or slot != device.index
+                or not self._telemetry_is_fresh(telemetry)
+            ):
+                self._aim_bridge_packet = None
+                return None
+            # Read the Windows output of the paired virtual device. Telemetry
+            # identifies its slot without supplying any aiming axis values.
+            state = self.backend.read_state(replace(device, kind="xinput"))
+            previous = self._aim_bridge_packet
+            if state is None:
+                self._aim_bridge_packet = None
+                return None
+            packet = state.packet_number
+            # A reset between reads starts a fresh button baseline.
+            if (previous is not None and previous[0] == slot
+                    and xinput_packet_delta(previous[1], packet) > 0x7FFFFFFF):
+                self._aim_bridge_generation += 1
+            self._aim_bridge_packet = slot, packet
+            key += (self._aim_bridge_generation,)
+        elif self.native_sampler is not None:
+            state, generation = self.native_sampler.read_latest_with_generation(device)
+            key += (generation,)
+        else:
+            state = self.backend.read_state(device)
+        return (key, state) if state is not None else None
+
     def _request_device_refresh(self):
         """Safely replace device snapshots after a physical hot-plug."""
-        if self._device_refresh_in_progress:
+        if self._device_refresh_in_progress or self._raw_hid_measurement_active():
             return
         self._device_refresh_in_progress = True
         if self.device_refresh_button is not None:
@@ -6358,22 +6625,15 @@ class GamepadTestWindow:
                 and self.window is not None
                 and self.window.winfo_exists()
             ):
-                probe_state = self.raw_hid_probe.read_snapshot().get("state")
                 self.device_refresh_button.configure(
-                    state=(
-                        "disabled"
-                        if probe_state in {"opening", "running"}
-                        else "normal"
-                    )
+                    state="disabled" if self._raw_hid_measurement_active() else "normal"
                 )
 
-    def _refresh_devices(self, force=False):
-        probe_state = self.raw_hid_probe.read_snapshot().get("state")
-        should_enumerate = (
-            (force or not self._device_enumeration_initialized)
-            and probe_state not in {"opening", "running"}
-        )
-        if should_enumerate:
+    def _refresh_devices(self, force=False, *, refresh_controls=False):
+        if self._raw_hid_measurement_active():
+            self._set_raw_hid_controls_active(True)
+            return
+        if force or not self._device_enumeration_initialized:
             self.raw_hid_devices = {
                 device.key: device
                 for device in enumerate_raw_hid_gamepads()
@@ -6447,17 +6707,25 @@ class GamepadTestWindow:
             for device in devices
         ]
         mapping = build_device_display_mapping(devices)
+        bridge_slot_changed = (
+            previous_device is not None
+            and previous_device.kind == "s2p"
+            and any(
+                device.key == previous_device_key and device.index != previous_device.index
+                for device in mapping.values()
+            )
+        )
         current_keys = {device.key for device in self.devices.values()}
         new_keys = {device.key for device in mapping.values()}
         if (
             not force
+            and not refresh_controls
+            and not bridge_slot_changed
             and new_keys == current_keys
             and tuple(mapping) == tuple(self.devices)
         ):
             self.devices = mapping
-            self._set_raw_hid_controls_active(
-                probe_state in {"opening", "running"}
-            )
+            self._set_raw_hid_controls_active(False)
             return
         self.devices = mapping
         names = tuple(mapping)
@@ -6482,7 +6750,6 @@ class GamepadTestWindow:
             and not getattr(self, "_device_selection_explicit", False)
         ):
             next_name = new_s2p_name
-            self.clear_measurements()
         elif previous_name is not None:
             next_name = previous_name
         elif names:
@@ -6493,14 +6760,13 @@ class GamepadTestWindow:
             self._device_selection_explicit = False
         next_device = mapping.get(next_name)
         next_device_key = next_device.key if next_device is not None else None
-        if previous_device_key != next_device_key:
+        if previous_device_key != next_device_key or bridge_slot_changed:
             self.stop_rumble()
+            self.clear_measurements()
         self.selected_device_var.set(next_name)
         self._configure_source_controls()
         self._configure_native_sampler()
-        self._set_raw_hid_controls_active(
-            probe_state in {"opening", "running"}
-        )
+        self._set_raw_hid_controls_active(False)
         self._sync_raw_hid_stream()
 
     def _refresh_devices_after_telemetry(self):
@@ -6609,16 +6875,32 @@ class GamepadTestWindow:
         return None
 
     def _configure_native_sampler(self):
+        self._aim_raw_pair = None
         if self.native_sampler is None:
             return
         device = self._selected_device()
+        aim_active = getattr(self, "_aim_input_active", False)
         if device is not None and device.kind in {"xinput", "winmm"}:
             native_device = device
         elif device is not None and device.kind == "raw_hid":
             native_device = self._native_device_for_raw_hid()
+            if native_device is not None:
+                self._aim_raw_pair = device.key, native_device
+        elif aim_active and device is not None and device.kind == "s2p" and 0 <= device.index <= 3:
+            # The bridge still uses its own telemetry for the monitor. Only
+            # the visible aim tab needs its final Windows output sampled.
+            native_device = replace(device, key=f"s2p-aim:{device.index}", kind="xinput")
         else:
             native_device = None
+        previous_device = getattr(self, "_aim_selected_device", None)
+        previous_selection = (previous_device.key, previous_device.index) if previous_device is not None else None
+        selection = (device.key, device.index) if device is not None else None
+        self._aim_selected_device = device
+        self._aim_native_device = native_device
         self.native_sampler.set_device(native_device)
+        if aim_active and selection != previous_selection:
+            self._aim_raw_rate_sample = None
+            self.native_sampler.set_aim_capture(True)
 
     def _sync_connection_status(self, sample):
         """Mirror the settings UI's connection summary in the tester header."""
@@ -6630,7 +6912,7 @@ class GamepadTestWindow:
         device = self._selected_device()
         if device is not None and device.kind == "raw_hid":
             stream_status = self.raw_hid_stream.status()
-            connected = stream_status.get("state") in {"opening", "running"}
+            connected = self._raw_hid_stream_path is not None and stream_status.get("state") in {"opening", "running"}
             set_status(
                 self.gui.tr("● 已連線" if connected else "● 未連線"),
                 "#138A36" if connected else "#777777",
@@ -6833,9 +7115,32 @@ class GamepadTestWindow:
         for row in rows[:6]:
             self.event_tree.insert("", "end", values=row)
 
+    def _restore_input_monitor_defaults(self):
+        self.shape_enabled_var.set(False)
+        self._shape_capture_signature = None
+        self.show_gyro_legend_var.set(True)
+        self.raw_hid_stream_enabled_var.set(True)
+        self.trail_length_var.set(2.5)
+        self._update_trail_length_text()
+        self.sample_display_percent_var.set(100.0)
+        self._update_sample_display_percent()
+
+    def reset_input_monitor(self):
+        sampling_enabled = self.raw_hid_stream_enabled_var.get()
+        self._restore_input_monitor_defaults()
+        if sampling_enabled != self.raw_hid_stream_enabled_var.get():
+            self._on_raw_hid_stream_changed()
+        else:
+            self.clear_measurements()
+
     def clear_measurements(self):
         for history in self.histories.values():
             history.reset()
+        self._s2p_time_offset = None
+        self._last_consumed_token = None
+        self._last_event_input_signature = None
+        if getattr(self, "native_sampler", None) is not None:
+            self.native_sampler.read_snapshot()
         self._button_events.clear()
         self._recent_events.clear()
         self._baseline_trail_sequence()
@@ -6844,6 +7149,7 @@ class GamepadTestWindow:
         )
         self._raw_hid_stream_dropped = 0
         self._raw_hid_stream_latest_axes = None
+        self._raw_hid_stream_latest_sample = None
 
     def _update_rumble_availability(self, device):
         supported = bool(device and device.supports_rumble)
@@ -6888,11 +7194,22 @@ class GamepadTestWindow:
             return None
         if device.kind == "s2p":
             slot = self.latest_telemetry.get("xinput_slot")
-            return int(slot) if isinstance(slot, int) and 0 <= slot <= 3 else None
+            # Keep a running test tied to the device snapshot that selected
+            # it, including silent template gaps with no active motor output.
+            return int(slot) if (
+                isinstance(slot, int) and 0 <= slot <= 3 and slot == device.index
+            ) else None
         return device.index if device.kind == "xinput" else None
 
     def _set_rumble(self, left, right, slot=None):
         slot = self._rumble_target() if slot is None else slot
+        active_slot = getattr(self, "_active_rumble_slot", None)
+        if active_slot is not None and slot != active_slot:
+            # Telemetry can change between periodic device refreshes. Stop
+            # the previous output before a scheduled tick can move its test
+            # to another controller and replace our only record of that slot.
+            self.stop_rumble()
+            return False
         if slot is None:
             return False
         left = max(0.0, min(1.0, float(left)))
@@ -7069,7 +7386,26 @@ class GamepadTestWindow:
         for layer_left, layer_right in self._rumble_layers.values():
             left += layer_left
             right += layer_right
-        self._set_rumble(left, right)
+        return self._set_rumble(left, right)
+
+    def _set_aim_rumble(self, left, right):
+        previous = self._rumble_layers.get("aim")
+        active_slot = getattr(self, "_active_rumble_slot", None)
+        if left or right:
+            self._rumble_layers["aim"] = (left, right)
+        elif self._rumble_layers.pop("aim", None) is None:
+            return True
+        applied = self._apply_rumble_mix()
+        if not applied:
+            if previous is not None and (
+                "aim" in self._rumble_layers
+                or (active_slot is not None and active_slot == self._active_rumble_slot)
+            ):
+                # A failed same-slot release still owns the old pulse.
+                self._rumble_layers["aim"] = previous
+            else:
+                self._rumble_layers.pop("aim", None)
+        return applied
 
     def _set_rumble_layer(self, layer_id, left, right):
         if layer_id not in self._rumble_layers:
@@ -7185,7 +7521,21 @@ class GamepadTestWindow:
             self._rumble_jobs[layer_id] = []
             self._play_rumble_pattern(name, layer_id)
 
+    def _close_trail_worker(self):
+        worker = getattr(self, "_trail_raster_worker", None)
+        if worker is not None:
+            self._trail_raster_worker = None
+            worker.close()
+
+    def _on_trail_window_destroyed(self, event):
+        if event.widget is self.window:
+            self._close_trail_worker()
+
     def close(self):
+        self._close_trail_worker()
+        if getattr(self, "aim_pane", None) is not None:
+            self.aim_pane.set_visible(False)
+            self.aim_pane = None
         if self.diagnostic_session.running:
             self.diagnostic_session.stop("window_closed")
         self.diagnostic_reader.stop(timeout=0.5)
@@ -7219,6 +7569,7 @@ class GamepadTestWindow:
         self._device_refresh_job = None
         self._disable_high_resolution_timer()
         if self.native_sampler is not None:
+            self.native_sampler.set_device(None)
             if self.native_sampler.stop():
                 self.native_sampler = None
         try:

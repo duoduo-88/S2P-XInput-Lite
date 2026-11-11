@@ -1,6 +1,8 @@
 import configparser
 import contextlib
 import ctypes
+import hashlib
+import io
 import json
 import math
 import os
@@ -457,28 +459,18 @@ def store_accelerometer_calibration(
         )
 
 
-def atomic_write_config(config, path=CONFIG_PATH):
+def _config_bytes(config):
+    output = io.StringIO(newline="")
+    config.write(output)
+    return output.getvalue().encode("utf-8")
+
+
+def atomic_write_config(config, path=CONFIG_PATH, *, return_fingerprint=False):
     """Write ConfigParser data in the same directory, then atomically replace."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temp_name = tempfile.mkstemp(
-        prefix=path.name + ".",
-        suffix=".tmp",
-        dir=str(path.parent),
-        text=True,
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
-            config.write(handle)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temp_name, path)
-    except Exception:
-        try:
-            os.unlink(temp_name)
-        except OSError:
-            pass
-        raise
+    data = _config_bytes(config)
+    atomic_write_bytes(data, path)
+    if return_fingerprint:
+        return hashlib.sha256(data).hexdigest()
 
 
 def atomic_write_bytes(data, path):
@@ -500,6 +492,80 @@ def atomic_write_bytes(data, path):
         except OSError:
             pass
         raise
+
+
+class SettingsFileChanges:
+    """Track completed file changes and restore only versions this save wrote."""
+
+    def __init__(self):
+        self._files = {}
+        self._watched = {}
+
+    def __bool__(self):
+        return bool(self._files)
+
+    @property
+    def paths(self):
+        return self._files.keys()
+
+    @staticmethod
+    def _read(path):
+        try:
+            return path.read_bytes()
+        except FileNotFoundError:
+            return None
+
+    def watch(self, path):
+        """Remember the input version before preparing a replacement."""
+        path = Path(path)
+        self._watched[path] = self._read(path)
+
+    def check_unchanged(self, path):
+        self._original(Path(path))
+
+    def _original(self, path):
+        current = self._read(path)
+        original, expected = self._files.get(path, (current, self._watched.get(path, current)))
+        if current != expected:
+            raise OSError(f"File changed during save: {path.name}")
+        return original
+
+    def write_bytes(self, data, path):
+        path = Path(path)
+        original = self._original(path)
+        atomic_write_bytes(data, path)
+        self._files[path] = original, data
+
+    def write_config(self, config, path):
+        self.write_bytes(_config_bytes(config), path)
+
+    def delete(self, path):
+        path = Path(path)
+        original = self._original(path)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return
+        self._files[path] = original, None
+
+    def restore(self):
+        preserved = set()
+        errors = []
+        files, self._files = self._files, {}
+        for path, (original, written) in reversed(files.items()):
+            try:
+                if self._read(path) != written:
+                    preserved.add(path)
+                elif original != written:
+                    if original is None:
+                        path.unlink()
+                    else:
+                        atomic_write_bytes(original, path)
+            except OSError as error:
+                errors.append(error)
+        if errors:
+            raise errors[0]
+        return preserved
 
 
 @contextlib.contextmanager
@@ -632,12 +698,16 @@ def replace_profile_sections(target, source, sections):
     return target
 
 
-def save_profile(config, name, profile_dir=PROFILE_DIR):
+def save_profile(config, name, profile_dir=PROFILE_DIR, *, return_fingerprint=False):
     """Atomically save the gameplay subset of config as a named profile."""
     if is_protected_profile(name):
         raise PermissionError("System Default 是唯讀方案，不能覆寫。")
     path = profile_path(name, profile_dir)
-    atomic_write_config(build_profile(config), path)
+    profile = build_profile(config)
+    if return_fingerprint:
+        fingerprint = atomic_write_config(profile, path, return_fingerprint=True)
+        return path, fingerprint
+    atomic_write_config(profile, path)
     return path
 
 
@@ -842,12 +912,16 @@ def ensure_bundled_profiles(config, profile_dir=PROFILE_DIR):
     return []
 
 
-def read_profile(name, profile_dir=PROFILE_DIR):
-    """Read a profile and fill absent gameplay keys from System Default."""
+def read_profile(name, profile_dir=PROFILE_DIR, *, return_fingerprint=False):
+    """Read one snapshot and fill absent gameplay keys from System Default.
+
+    Optional fingerprints describe the bytes parsed, even if an external
+    writer replaces the profile before the caller finishes applying it.
+    """
     path = profile_path(name, profile_dir)
+    data = path.read_bytes()
     profile = configparser.ConfigParser()
-    if not profile.read(path, encoding="utf-8"):
-        raise FileNotFoundError(path)
+    profile.read_file(io.StringIO(data.decode("utf-8"), newline=None), source=str(path))
     defaults = configparser.ConfigParser()
     if not defaults.read(DEFAULT_CONFIG_PATH, encoding="utf-8"):
         raise FileNotFoundError(DEFAULT_CONFIG_PATH)
@@ -868,6 +942,8 @@ def read_profile(name, profile_dir=PROFILE_DIR):
         )),
         strict=True,
     )
+    if return_fingerprint:
+        return profile, hashlib.sha256(data).hexdigest()
     return profile
 
 

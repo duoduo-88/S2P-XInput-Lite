@@ -15,6 +15,7 @@ if str(SRC) not in sys.path:
 
 from config_utils import (  # noqa: E402
     DEFAULT_CONFIG_PATH,
+    SettingsFileChanges,
     atomic_write_config,
     load_config,
 )
@@ -27,6 +28,27 @@ import settings_import as settings_import_module  # noqa: E402
 
 
 class SettingsImportTests(unittest.TestCase):
+    def test_source_profiles_with_invalid_mappings_are_rejected_without_writes(self):
+        for payload in (
+            "[buttons]\na = CUSTOM_KEYBOARD\n",
+            "[buttons]\nunknown_button = A\n",
+            "[stick_direction_left]\nup = MOUSE:LEFT\n",
+        ):
+            with self.subTest(payload=payload):
+                temporary, source, destination = self.make_installations()
+                with temporary:
+                    self.write_source_config(source)
+                    (source / "src" / "profiles" / "Imported.ini").write_text(payload, encoding="utf-8")
+                    self.write_profile(destination / "src" / "profiles", "Imported", "0.22")
+                    path = destination / "src" / "config.ini"
+                    before = path.read_bytes()
+                    target = destination / "src" / "profiles" / "Imported.ini"
+                    profile_before = target.read_bytes()
+                    with self.assertRaises(SettingsImportError):
+                        self.scan(source, destination)
+                    self.assertEqual(path.read_bytes(), before)
+                    self.assertEqual(target.read_bytes(), profile_before)
+
     def test_clean_package_root_imports_config_profiles_and_layers(self):
         temporary, source, destination = self.make_installations()
         with temporary:
@@ -258,9 +280,9 @@ class SettingsImportTests(unittest.TestCase):
             plan = self.scan(source, destination)
             destination_config = destination / "src" / "config.ini"
             locked = {"value": False}
-            original_snapshot = settings_import_module._snapshot
-            original_restore = settings_import_module._restore
-            original_writer = settings_import_module.atomic_write_config
+            original_snapshot = SettingsFileChanges._original
+            original_restore = SettingsFileChanges.restore
+            original_writer = SettingsFileChanges.write_config
             events = []
 
             @contextmanager
@@ -272,27 +294,27 @@ class SettingsImportTests(unittest.TestCase):
                 finally:
                     locked["value"] = False
 
-            def observed_snapshot(paths):
+            def observed_snapshot(changes, path):
                 self.assertTrue(locked["value"])
                 events.append("snapshot")
-                return original_snapshot(paths)
+                return original_snapshot(changes, path)
 
-            def observed_restore(snapshot):
+            def observed_restore(changes):
                 self.assertTrue(locked["value"])
                 events.append("restore")
-                return original_restore(snapshot)
+                return original_restore(changes)
 
-            def fail_final_config(config, path):
+            def fail_final_config(changes, config, path):
                 self.assertTrue(locked["value"])
                 if Path(path) == destination_config:
                     raise OSError("simulated final config failure")
-                return original_writer(config, path)
+                return original_writer(changes, config, path)
 
             with (
                 patch.object(settings_import_module, "config_file_lock", observed_lock),
-                patch.object(settings_import_module, "_snapshot", observed_snapshot),
-                patch.object(settings_import_module, "_restore", observed_restore),
-                patch.object(settings_import_module, "atomic_write_config", fail_final_config),
+                patch.object(SettingsFileChanges, "_original", observed_snapshot),
+                patch.object(SettingsFileChanges, "restore", observed_restore),
+                patch.object(SettingsFileChanges, "write_config", fail_final_config),
             ):
                 with self.assertRaises(OSError):
                     self.apply(plan, destination)
@@ -334,6 +356,158 @@ class SettingsImportTests(unittest.TestCase):
 
             self.assertFalse(locked["value"])
 
+    def test_import_preserves_destination_updates_made_during_preview(self):
+        temporary, source, destination = self.make_installations()
+        with temporary:
+            self.write_source_config(source)
+            self.write_profile(source / "src" / "profiles", "Imported", "0.77")
+            path = destination / "src" / "config.ini"
+            current = load_config(path, persist=False)
+            current.add_section("gyro.PAD02")
+            current.set("gyro.PAD02", "bias", "0.0, 0.0, 0.0")
+            atomic_write_config(current, path)
+            plan = self.scan(source, destination)
+            current = load_config(path, persist=False)
+            current.add_section("gyro.NEW_CONTROLLER")
+            current.set("gyro.NEW_CONTROLLER", "bias", "0.1, 0.2, 0.3")
+            current.set("gyro.PAD02", "bias", "0.4, 0.5, 0.6")
+            current.add_section("gyro.PAD01")
+            current.set("gyro.PAD01", "bias", "9.0, 9.0, 9.0")
+            current.set("gui", "automatic_update_checks", "false")
+            current.set("serial", "port", "COM77")
+            atomic_write_config(current, path)
+            self.apply(plan, destination)
+            imported = load_config(path, persist=False)
+            self.assertEqual(imported.get("gyro.NEW_CONTROLLER", "bias", fallback=""), "0.1, 0.2, 0.3")
+            self.assertEqual(imported.get("gyro.PAD02", "bias"), "0.4, 0.5, 0.6")
+            self.assertFalse(imported.getboolean("gui", "automatic_update_checks"))
+            self.assertEqual(imported.get("serial", "port"), "COM77")
+            self.assertEqual(imported.get("gyro.PAD01", "bias"), "1.0, 2.0, 3.0")
+            self.assertEqual(imported.get("gui", "language"), "en")
+            self.assertEqual(imported.get("rumble", "lf_strength"), "0.77")
+
+    def test_import_keeps_reviewed_source_and_does_not_mutate_preview(self):
+        temporary, source, destination = self.make_installations()
+        with temporary:
+            self.write_source_config(source)
+            self.write_profile(source / "src" / "profiles", "Imported", "0.77")
+            plan = self.scan(source, destination)
+            preview = {section: dict(plan.config.items(section)) for section in plan.config.sections()}
+            self.write_source_config(source, language="zh")
+            self.apply(plan, destination)
+            imported = load_config(destination / "src" / "config.ini", persist=False)
+            self.assertEqual(imported.get("gui", "language"), "en")
+            self.assertEqual(
+                {section: dict(plan.config.items(section)) for section in plan.config.sections()},
+                preview,
+            )
+
+    def test_import_without_source_active_profile_preserves_latest_active_profile(self):
+        temporary, source, destination = self.make_installations()
+        with temporary:
+            self.write_source_config(source, active="Missing")
+            for name in ("General", "Fresh"):
+                self.write_profile(destination / "src" / "profiles", name, "0.50")
+            path = destination / "src" / "config.ini"
+            current = load_config(path, persist=False)
+            current.set("gui", "active_profile", "General")
+            atomic_write_config(current, path)
+            plan = self.scan(source, destination)
+            current.set("gui", "active_profile", "Fresh")
+            current.set("rumble", "lf_strength", "0.31")
+            atomic_write_config(current, path)
+            result = self.apply(plan, destination)
+            self.assertEqual(result.active_profile, "Fresh")
+            self.assertEqual(load_config(path, persist=False).get("gui", "active_profile"), "Fresh")
+            self.assertEqual(load_config(path, persist=False).get("rumble", "lf_strength"), "0.31")
+
+    def test_deleted_active_profile_fallback_loads_the_fallback_settings(self):
+        temporary, source, destination = self.make_installations()
+        with temporary:
+            self.write_source_config(source, active="Missing")
+            profiles = destination / "src" / "profiles"
+            self.write_profile(profiles, "General", "0.66")
+            self.write_profile(profiles, "Gone", "0.22")
+            path = destination / "src" / "config.ini"
+            current = load_config(path, persist=False)
+            current.set("gui", "active_profile", "Gone")
+            current.set("rumble", "lf_strength", "0.22")
+            atomic_write_config(current, path)
+            plan = self.scan(source, destination)
+            (profiles / "Gone.ini").unlink()
+            result = self.apply(plan, destination)
+            imported = load_config(path, persist=False)
+            self.assertEqual(result.active_profile, "General")
+            self.assertEqual(imported.get("gui", "active_profile"), "General")
+            self.assertEqual(imported.get("rumble", "lf_strength"), "0.66")
+            self.assertEqual(imported.get("gyro.PAD01", "bias"), "1.0, 2.0, 3.0")
+
+    def test_invalid_fallback_profile_cancels_import_before_any_writes(self):
+        temporary, source, destination = self.make_installations()
+        with temporary:
+            self.write_source_config(source, active="Missing")
+            self.write_profile(source / "src" / "profiles", "Imported", "0.77")
+            profiles = destination / "src" / "profiles"
+            self.write_profile(profiles, "General", "0.66")
+            path = destination / "src" / "config.ini"
+            current = load_config(path, persist=False)
+            current.set("gui", "active_profile", "Gone")
+            atomic_write_config(current, path)
+            plan = self.scan(source, destination)
+            before = path.read_bytes()
+            for payload in (
+                "[rumble]\nlf_strength = invalid\n",
+                "[buttons]\na = KEYBOARD:NOT_A_KEY\n",
+            ):
+                with self.subTest(payload=payload):
+                    (profiles / "General.ini").write_text(payload, encoding="utf-8")
+                    with self.assertRaises(ValueError):
+                        self.apply(plan, destination)
+                    self.assertEqual(path.read_bytes(), before)
+                    self.assertFalse((profiles / "Imported.ini").exists())
+
+    def test_failed_import_restores_latest_destination_not_preview_snapshot(self):
+        temporary, source, destination = self.make_installations()
+        with temporary:
+            self.write_source_config(source)
+            self.write_profile(source / "src" / "profiles", "Imported", "0.77")
+            plan = self.scan(source, destination)
+            path = destination / "src" / "config.ini"
+            current = load_config(path, persist=False)
+            current.add_section("gyro.NEW_CONTROLLER")
+            current.set("gyro.NEW_CONTROLLER", "bias", "0.1, 0.2, 0.3")
+            atomic_write_config(current, path)
+            before = path.read_bytes()
+            original_writer = SettingsFileChanges.write_config
+
+            def fail_final_config(changes, config, destination_path):
+                if Path(destination_path) == path:
+                    raise OSError("simulated final config failure")
+                return original_writer(changes, config, destination_path)
+
+            with patch.object(SettingsFileChanges, "write_config", fail_final_config):
+                with self.assertRaises(OSError):
+                    self.apply(plan, destination)
+            self.assertEqual(path.read_bytes(), before)
+            self.assertFalse((destination / "src" / "profiles" / "Imported.ini").exists())
+
+    def test_overwrite_active_profile_with_different_case_uses_imported_name(self):
+        temporary, source, destination = self.make_installations()
+        with temporary:
+            self.write_source_config(source, active="Missing")
+            self.write_profile(source / "src" / "profiles", "Imported", "0.77")
+            self.write_profile(destination / "src" / "profiles", "imported", "0.22")
+            path = destination / "src" / "config.ini"
+            current = load_config(path, persist=False)
+            current.set("gui", "active_profile", "imported")
+            atomic_write_config(current, path)
+            plan = self.scan(source, destination)
+            result = self.apply(plan, destination, profile_conflict="overwrite")
+            imported = load_config(path, persist=False)
+            self.assertEqual(result.active_profile, "Imported")
+            self.assertEqual(imported.get("gui", "active_profile"), "Imported")
+            self.assertEqual(imported.get("rumble", "lf_strength"), "0.77")
+
     def test_rollback_restores_config_profiles_and_layers_after_write_failure(self):
         temporary, source, destination = self.make_installations()
         with temporary:
@@ -343,16 +517,67 @@ class SettingsImportTests(unittest.TestCase):
             destination_config = destination / "src" / "config.ini"
             config_before = destination_config.read_bytes()
             plan = self.scan(source, destination)
-            original_writer = settings_import_module.atomic_write_config
+            original_writer = SettingsFileChanges.write_config
 
-            def fail_final_config(config, path):
+            def fail_final_config(changes, config, path):
                 if Path(path) == destination_config:
                     raise OSError("simulated config write failure")
-                return original_writer(config, path)
+                return original_writer(changes, config, path)
 
-            with patch.object(settings_import_module, "atomic_write_config", fail_final_config):
+            with patch.object(SettingsFileChanges, "write_config", fail_final_config):
                 with self.assertRaises(OSError):
                     self.apply(plan, destination)
             self.assertEqual(destination_config.read_bytes(), config_before)
+            self.assertFalse((destination / "src" / "profiles" / "Imported.ini").exists())
+            self.assertFalse((destination / "src" / "layers" / "mouse.json").exists())
+
+    def test_import_rollback_keeps_external_edits_after_a_partial_write(self):
+        temporary, source, destination = self.make_installations()
+        with temporary:
+            self.write_source_config(source)
+            self.write_profile(source / "src" / "profiles", "Imported", "0.77")
+            self.copy_layer(source)
+            plan = self.scan(source, destination)
+            config_path = destination / "src" / "config.ini"
+            imported = destination / "src" / "profiles" / "Imported.ini"
+            write = SettingsFileChanges.write_config
+
+            def fail_after_external_edits(changes, config, path):
+                if Path(path) != config_path:
+                    return write(changes, config, path)
+                self.assertTrue(imported.exists())
+                imported.write_bytes(b"external edit to imported profile")
+                config_path.write_bytes(b"external config edit")
+                raise OSError("simulated config write failure")
+
+            with patch.object(SettingsFileChanges, "write_config", fail_after_external_edits):
+                with self.assertRaises(OSError):
+                    self.apply(plan, destination)
+
+            self.assertEqual(imported.read_bytes(), b"external edit to imported profile")
+            self.assertEqual(config_path.read_bytes(), b"external config edit")
+            self.assertFalse((destination / "src" / "layers" / "mouse.json").exists())
+
+    def test_import_rejects_external_config_edits_before_its_final_write(self):
+        temporary, source, destination = self.make_installations()
+        with temporary:
+            self.write_source_config(source)
+            self.write_profile(source / "src" / "profiles", "Imported", "0.77")
+            self.copy_layer(source)
+            plan = self.scan(source, destination)
+            config_path = destination / "src" / "config.ini"
+            external = config_path.read_bytes() + b"\n[gyro.EXTERNAL]\nbias = 0.1, 0.2, 0.3\n"
+            save_layers = settings_import_module.save_layers
+
+            def save_layers_then_edit_config(*args, **kwargs):
+                result = save_layers(*args, **kwargs)
+                config_path.write_bytes(external)
+                return result
+
+            with patch.object(settings_import_module, "save_layers", save_layers_then_edit_config):
+                with self.assertRaises(OSError):
+                    self.apply(plan, destination)
+
+            self.assertEqual(config_path.read_bytes(), external)
             self.assertFalse((destination / "src" / "profiles" / "Imported.ini").exists())
             self.assertFalse((destination / "src" / "layers" / "mouse.json").exists())

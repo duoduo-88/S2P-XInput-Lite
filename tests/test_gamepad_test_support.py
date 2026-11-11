@@ -1,8 +1,10 @@
+import configparser
 import mmap
 import math
 import struct
 import sys
 import time
+import tkinter as tk
 import unittest
 import zlib
 from collections import deque
@@ -72,10 +74,11 @@ from gamepad_test_window import (
     raw_hid_test_device,
     shape_ease_amount,
 )
+from localization import translate_text
 from stick_processing import apply_output_shape
 from raw_hid_probe import RawHidDevice
 import test_telemetry
-from test_telemetry import SharedTestTelemetry, TELEMETRY_SIZE
+from test_telemetry import SharedTestTelemetry, TELEMETRY_SIZE, _TRAIL_SEQUENCE_OFFSET
 
 
 class DiagnosticDeviceSelectionTests(unittest.TestCase):
@@ -137,6 +140,132 @@ class DiagnosticDeviceSelectionTests(unittest.TestCase):
             GAMEPAD_TESTER_TITLE,
             f"S2P-XInput-Lite v{VERSION} GamepadTester",
         )
+
+
+class InputMonitorResetTests(unittest.TestCase):
+    def setUp(self):
+        root = tk.Tk()
+        self.addCleanup(root.destroy)
+        self.addCleanup(root.update_idletasks)
+        root.withdraw()
+        gui = SimpleNamespace(
+            root=root, language="en", tr=lambda text: translate_text(text, "en")
+        )
+        self.tester = GamepadTestWindow(gui)
+        self.tester._sync_raw_hid_stream = Mock()
+
+    def test_reset_button_restores_controls_and_clears_input_measurements(self):
+        tester = self.tester
+        with (
+            patch("gamepad_test_window.AimHistory"),
+            patch("gamepad_test_window.AimTestPane"),
+        ):
+            tester._build_content(tester.root)
+
+        tester.shape_enabled_var.set(True)
+        tester.show_gyro_legend_var.set(False)
+        tester.raw_hid_stream_enabled_var.set(False)
+        tester.trail_length_var.set(3.3)
+        tester.sample_display_percent_var.set(35.0)
+        tester._update_trail_length_text()
+        tester._update_sample_display_percent()
+        for history in tester.histories.values():
+            history.add(0.5, 0.5, 1.0, record_shape=True)
+        tester._button_events["A"] = object()
+        tester._shape_capture_signature = ("old",)
+
+        reset, = tester.raw_hid_stream_toggle.master.grid_slaves(row=0, column=0)
+        self.assertEqual(reset.cget("text"), "Reset")
+        reset.invoke()
+
+        self.assertFalse(tester.shape_enabled_var.get())
+        self.assertTrue(tester.show_gyro_legend_var.get())
+        self.assertTrue(tester.raw_hid_stream_enabled_var.get())
+        self.assertEqual(tester.trail_length_var.get(), 2.5)
+        self.assertEqual(tester.trail_length_text.get(), "2.5 s")
+        self.assertEqual(tester.sample_display_percent_var.get(), 100.0)
+        self.assertEqual(tester.sample_display_percent_text.get(), "100%")
+        self.assertIsNone(tester._shape_capture_signature)
+        self.assertFalse(tester._button_events)
+        for history in tester.histories.values():
+            self.assertFalse(history.trail)
+            self.assertFalse(history.covered_bins)
+        tester._sync_raw_hid_stream.assert_called_once_with()
+
+    def test_reset_defers_raw_hid_stream_until_rate_measurement_ends(self):
+        tester = self.tester
+        tester.raw_hid_probe = Mock()
+        for pending, state in ((("hid-path", 5), "idle"), (None, "running")):
+            with self.subTest(state=state):
+                tester._raw_hid_pending_start = pending
+                tester.raw_hid_probe.has_reader = state == "running"
+                tester.raw_hid_stream_enabled_var.set(False)
+                tester._raw_hid_resume_after_measurement = False
+
+                tester.reset_input_monitor()
+
+                self.assertTrue(tester.raw_hid_stream_enabled_var.get())
+                self.assertTrue(tester._raw_hid_resume_after_measurement)
+                tester._sync_raw_hid_stream.assert_not_called()
+
+    def test_periodic_device_refresh_keeps_controls_locked_during_countdown(self):
+        tester = self.tester
+        tester._device_enumeration_initialized = True
+        tester._raw_hid_pending_start = ("hid-path", 5.0)
+        tester._set_raw_hid_controls_active = Mock()
+        tester.device_combo = Mock()
+        tester.latest_telemetry = {"timestamp_ns": time.monotonic_ns(), "xinput_slot": 0}
+        tester.devices = {
+            "Raw Controller": GamepadDevice(
+                "raw_hid:pad", "raw_hid", 0, "Raw Controller", False,
+            )
+        }
+        tester.selected_device_var.set("Raw Controller")
+
+        tester._refresh_devices()
+
+        tester._set_raw_hid_controls_active.assert_called_once_with(True)
+        self.assertEqual(tester.selected_device_var.get(), "Raw Controller")
+        tester.device_combo.configure.assert_not_called()
+        with patch.object(tester, "_refresh_devices") as refresh:
+            tester._request_device_refresh()
+        refresh.assert_not_called()
+
+    def test_failed_measurement_start_restores_sampling_enabled_by_reset(self):
+        tester = self.tester
+        tester.window = Mock()
+        tester.raw_hid_probe = Mock(
+            start=Mock(return_value=False),
+            has_reader=False,
+        )
+        tester._raw_hid_pending_start = ("hid-path", 5.0)
+        tester.raw_hid_stream_enabled_var.set(False)
+
+        tester.reset_input_monitor()
+        tester._tick_raw_hid_countdown()
+
+        tester.raw_hid_probe.start.assert_called_once_with("hid-path", 5.0)
+        tester._sync_raw_hid_stream.assert_called_once_with()
+        self.assertFalse(tester._raw_hid_resume_after_measurement)
+
+    def test_completed_measurement_releases_reader_with_sampling_disabled(self):
+        tester = self.tester
+        tester.raw_hid_stream_enabled_var.set(False)
+        tester.raw_hid_probe = Mock(
+            has_reader=True, read_snapshot=Mock(return_value={"state": "complete"})
+        )
+        tester._set_raw_hid_controls_active = Mock()
+
+        def stop_reader(**_kwargs):
+            tester.raw_hid_probe.has_reader = False
+            return True
+
+        tester.raw_hid_probe.stop.side_effect = stop_reader
+        tester._update_raw_hid_measurement(redraw_chart=False)
+
+        tester.raw_hid_probe.stop.assert_called_once_with(timeout=0.1)
+        tester._set_raw_hid_controls_active.assert_called_once_with(False)
+        tester._sync_raw_hid_stream.assert_not_called()
 
 
 class SharedTelemetryTests(unittest.TestCase):
@@ -221,6 +350,27 @@ class SharedTelemetryTests(unittest.TestCase):
             self.assertEqual(samples[0]["sequence"], 9)
         finally:
             channel.close()
+
+    def test_trail_reader_does_not_rewind_during_shared_sequence_write(self):
+        mapping = mmap.mmap(-1, TELEMETRY_SIZE)
+        channel = SharedTestTelemetry(mapping=mapping)
+        self.addCleanup(channel.close)
+        zero = (0.0, 0.0)
+        for stamp in range(1, 521):
+            channel.write_trail_sample(stamp, zero, zero, zero, zero, zero)
+        _, cursor, _ = channel.read_trail_samples()
+
+        # Simulate another process observing the destination between
+        # struct.pack_into's zero-fill and its write of the new counter.
+        struct.pack_into("<Q", mapping, _TRAIL_SEQUENCE_OFFSET, 0)
+        self.assertEqual(channel.read_trail_samples(cursor), ([], cursor, 0))
+        self.assertEqual(channel.latest_trail_sequence(), cursor)
+
+        struct.pack_into("<Q", mapping, _TRAIL_SEQUENCE_OFFSET, cursor)
+        channel.write_trail_sample(521, zero, zero, zero, zero, zero)
+        samples, newest, dropped = channel.read_trail_samples(cursor)
+        self.assertEqual([sample["sequence"] for sample in samples], [521])
+        self.assertEqual((newest, dropped), (521, 0))
 
     def test_trail_slot_is_invalidated_before_wrapped_payload_write(self):
         mapping = mmap.mmap(-1, TELEMETRY_SIZE)
@@ -409,9 +559,7 @@ class GamepadMathTests(unittest.TestCase):
         )
         tester = object.__new__(GamepadTestWindow)
         tester.window = Mock()
-        tester.raw_hid_probe = SimpleNamespace(
-            read_snapshot=Mock(return_value={"state": "complete"})
-        )
+        tester.raw_hid_probe = SimpleNamespace(has_reader=False)
         tester.raw_hid_stream = stream
         tester.raw_hid_stream_enabled_var = Mock(
             get=Mock(return_value=True)
@@ -430,17 +578,32 @@ class GamepadMathTests(unittest.TestCase):
         )
         tester.gui = SimpleNamespace(tr=lambda text: text)
 
+        tester._raw_hid_pending_start = ("hid-path", 5.0)
+        tester._sync_raw_hid_stream()
+        stream.start.assert_not_called()
+
+        tester._raw_hid_pending_start = None
         tester._sync_raw_hid_stream()
 
         stream.start.assert_called_once_with("hid-path")
+
+        stream.active = True
+        stream.status = Mock(return_value={"state": "running"})
+        stream.stop.reset_mock()
+        tester.raw_hid_stream_enabled_var.get.return_value = False
+        tester._sync_raw_hid_stream()
+
+        stream.stop.assert_called_once_with()
+        self.assertIsNone(tester._raw_hid_stream_path)
 
     def test_tab_boundary_discards_every_pending_input_queue(self):
         tester = object.__new__(GamepadTestWindow)
         tester.raw_hid_stream = SimpleNamespace(
             active=True,
-            read_latest=Mock(return_value=(None, 19, 2)),
+            read_samples=Mock(return_value=((), 19, 2)),
         )
         tester._raw_hid_stream_sequence = 7
+        tester._raw_hid_stream_path = "hid-path"
         tester._raw_hid_stream_dropped = 3
         tester.native_sampler = Mock()
         tester.telemetry = Mock(
@@ -451,12 +614,34 @@ class GamepadMathTests(unittest.TestCase):
 
         tester._discard_pending_monitor_samples()
 
-        tester.raw_hid_stream.read_latest.assert_called_once_with(7)
+        tester.raw_hid_stream.read_samples.assert_called_once_with(
+            7, maximum=None, include_axes=True, include_controls=True, include_buttons=True,
+        )
         tester.native_sampler.read_snapshot.assert_called_once_with()
         self.assertEqual(tester._raw_hid_stream_sequence, 19)
         self.assertEqual(tester._raw_hid_stream_dropped, 5)
         self.assertEqual(tester._last_trail_sequence, 23)
         self.assertIsNone(tester._last_consumed_token)
+
+    def test_tab_boundary_keeps_raw_hid_release_without_replaying_hidden_motion(self):
+        tester = self.make_raw_monitor("raw_hid")
+        tester.native_sampler.read_snapshot.return_value = (None, (), None)
+        tester._raw_hid_stream_latest_sample = {"token": ("raw_hid", 1), "triggers": (None, 0.9)}
+        report = (9.9, (0.4, 0.5), (0.0, 0.0), 2)
+        tester.raw_hid_stream.read_latest.return_value = (report, 2, 0)
+        tester.raw_hid_stream.read_samples.side_effect = (
+            ((report + (0x23, (0.0, 0.0), 0),), 2, 0),
+            ((), 2, 0),
+        )
+
+        tester._discard_pending_monitor_samples()
+        self.assertEqual(tester._raw_hid_stream_latest_sample["triggers"][1], 0.0)
+        self.assertEqual(tester._last_consumed_token, ("raw_hid", 2))
+        with patch("gamepad_test_window.time.perf_counter", return_value=10.0):
+            tester._poll()
+
+        self.assertEqual(tester.latest_diagnostic_input["triggers"], [0.0, 0.0])
+        tester._consume_sample.assert_not_called()
 
     def test_unexpected_raw_hid_stop_updates_monitor_status(self):
         tester = object.__new__(GamepadTestWindow)
@@ -480,6 +665,7 @@ class GamepadMathTests(unittest.TestCase):
 
     def test_partial_raw_hid_axes_are_reported_without_disabling_stream(self):
         tester = object.__new__(GamepadTestWindow)
+        tester._raw_hid_stream_path = "hid-path"
         tester.raw_hid_stream_enabled_var = Mock(
             get=Mock(return_value=True)
         )
@@ -503,6 +689,7 @@ class GamepadMathTests(unittest.TestCase):
 
     def test_raw_hid_without_stick_axes_remains_rate_measurable(self):
         tester = object.__new__(GamepadTestWindow)
+        tester._raw_hid_stream_path = "hid-path"
         tester.raw_hid_stream_enabled_var = Mock(
             get=Mock(return_value=True)
         )
@@ -537,10 +724,119 @@ class GamepadMathTests(unittest.TestCase):
         self.assertIsNone(tester._raw_hid_stream_path)
         self.assertEqual(tester._raw_hid_stream_sequence, 0)
 
+    def test_clearing_measurements_does_not_replay_the_cached_raw_hid_report(self):
+        tester = object.__new__(GamepadTestWindow)
+        tester.histories = {}
+        tester.telemetry = None
+        tester._button_events = {}
+        tester._recent_events = []
+        tester.raw_hid_stream = SimpleNamespace(
+            status=lambda: {"latest_sequence": 9},
+            read_samples=Mock(return_value=((), 9, 0)),
+        )
+        tester._raw_hid_stream_latest_sample = {"right": (0.5, 0.0), "token": ("raw_hid", 9)}
+
+        tester.clear_measurements()
+        sample, consumed = tester._consume_raw_hid_stream(None)
+
+        self.assertIsNone(sample)
+        self.assertFalse(consumed)
+
+    def make_raw_monitor(self, kind):
+        tester = object.__new__(GamepadTestWindow)
+        tester.window = Mock()
+        tester.gui = SimpleNamespace(tr=str)
+        tester.telemetry = None
+        tester.latest_telemetry = {}
+        tester.raw_hid_devices = {"nintendo": SimpleNamespace(
+            vendor_id=0x057E, product_id=0x2069, path="nintendo-path",
+        )}
+        tester.raw_hid_stream = Mock(active=True, stop=Mock(return_value=False))
+        tester.raw_hid_stream_status_var = Mock()
+        tester._raw_hid_measurement_active = Mock(return_value=False)
+        tester._raw_hid_stream_path = "nintendo-path"
+        tester._nintendo_winmm_candidate_key = None
+        tester._raw_hid_stream_sequence = tester._raw_hid_stream_dropped = 0
+        tester._last_consumed_token = None
+        tester._last_shape_advance_at = tester._last_detail_refresh = 10.0
+        tester._window_motion_until = 0.0
+        tester.histories = {}
+        device = GamepadDevice(f"{kind}:1", kind, 1, "Selected controller", False)
+        tester._selected_device = Mock(return_value=device)
+        state = GamepadState(1, 0, (), (0.9, 0.0), (0.0, 0.0), 0.0, 0.0)
+        tester.native_sampler = Mock(read_snapshot=Mock(return_value=(state, ((9.9, state),), 125.0)))
+        tester._active_test_tab = Mock(return_value="input")
+        tester._monitor_presentation_allowed = Mock(return_value=False)
+        for name in (
+            "_poll_diagnostic", "_sync_shape_capture_context", "_consume_sample",
+            "_update_raw_hid_measurement", "_schedule_poll",
+        ):
+            setattr(tester, name, Mock())
+        return tester
+
+    def test_timed_out_raw_stream_cannot_feed_a_different_controller(self):
+        tester = self.make_raw_monitor("xinput")
+        tester._consume_raw_hid_stream = Mock(return_value=(None, False))
+
+        tester._sync_raw_hid_stream()
+        with patch("gamepad_test_window.time.perf_counter", return_value=10.0):
+            tester._poll()
+
+        tester.raw_hid_stream.stop.assert_called_once_with()
+        tester._consume_raw_hid_stream.assert_not_called()
+        self.assertEqual(tester._consume_sample.call_args.args[2], 9.9)
+
+    def test_winmm_pair_requires_new_raw_left_stick_reports(self):
+        tester = self.make_raw_monitor("winmm")
+        tester.shape_enabled_var = Mock(get=Mock(return_value=False))
+        tester.raw_hid_stream.read_latest.return_value = (None, 0, 0)
+        tester.raw_hid_stream.read_samples.return_value = ((), 0, 0)
+        device = tester._selected_device()
+
+        with patch("gamepad_test_window.time.perf_counter", return_value=10.0):
+            for _ in range(6):
+                tester._poll()
+            self.assertNotEqual(getattr(tester, "_nintendo_winmm_pair_key", None), device.key)
+
+            def deliver_report(sequence, axes):
+                report = (10.0, (0.9, 0.0), (0.0, 0.0), sequence)
+                tester.raw_hid_stream.read_latest.return_value = (report, sequence, 0)
+                tester.raw_hid_stream.read_samples.return_value = ((report + (axes,),), sequence, 0)
+                tester._poll()
+
+            deliver_report(1, 0x03)
+            tester.raw_hid_stream.read_latest.return_value = (None, 1, 0)
+            tester.raw_hid_stream.read_samples.return_value = ((), 1, 0)
+            for _ in range(6):
+                tester._poll()
+            for sequence in range(2, 8):
+                deliver_report(sequence, 0x0C)
+            self.assertNotEqual(getattr(tester, "_nintendo_winmm_pair_key", None), device.key)
+
+            for sequence in range(8, 13):
+                deliver_report(sequence, 0x03)
+            self.assertEqual(tester._nintendo_winmm_pair_key, device.key)
+
+    def test_diagnostic_reads_current_input_and_clears_it_on_disconnect(self):
+        tester = self.make_raw_monitor("xinput")
+        tester._raw_hid_stream_path = None
+        tester.latest_diagnostic_input = {}
+        diagnostic_inputs = []
+        tester._poll_diagnostic.side_effect = lambda _now: diagnostic_inputs.append(tester.latest_diagnostic_input)
+
+        with patch("gamepad_test_window.time.perf_counter", return_value=10.0):
+            tester._poll()
+            tester.native_sampler.read_snapshot.return_value = (None, (), None)
+            tester._poll()
+
+        self.assertEqual(diagnostic_inputs[0]["left"], [0.9, 0.0])
+        self.assertEqual(diagnostic_inputs[1], {})
+
     def test_completed_measurement_resumes_actual_sampling_once(self):
         tester = object.__new__(GamepadTestWindow)
         tester._raw_hid_resume_after_measurement = True
-        tester.raw_hid_probe = Mock()
+        tester._raw_hid_cleanup_retry_at = 0.0
+        tester.raw_hid_probe = Mock(has_reader=False, stop=Mock(return_value=True))
         tester._sync_raw_hid_stream = Mock()
 
         self.assertTrue(
@@ -550,6 +846,26 @@ class GamepadMathTests(unittest.TestCase):
             tester._resume_actual_sampling_after_measurement()
         )
         tester.raw_hid_probe.stop.assert_called_once_with(timeout=0.1)
+        tester._sync_raw_hid_stream.assert_called_once_with()
+
+    def test_measurement_stop_timeout_does_not_reopen_sampling_early(self):
+        tester = object.__new__(GamepadTestWindow)
+        tester._raw_hid_resume_after_measurement = True
+        tester._raw_hid_cleanup_retry_at = 0.0
+        tester.raw_hid_probe = Mock(
+            has_reader=True, stop=Mock(side_effect=(False, True))
+        )
+        tester._sync_raw_hid_stream = Mock()
+
+        with patch("gamepad_test_window.time.monotonic", return_value=10.0):
+            self.assertFalse(tester._resume_actual_sampling_after_measurement())
+            self.assertFalse(tester._resume_actual_sampling_after_measurement())
+
+        tester.raw_hid_probe.stop.assert_called_once_with(timeout=0.1)
+        tester._sync_raw_hid_stream.assert_not_called()
+        self.assertTrue(tester._raw_hid_resume_after_measurement)
+        with patch("gamepad_test_window.time.monotonic", return_value=11.0):
+            self.assertTrue(tester._resume_actual_sampling_after_measurement())
         tester._sync_raw_hid_stream.assert_called_once_with()
 
     def test_high_rate_measurement_follows_selected_device(self):
@@ -1162,9 +1478,8 @@ class GamepadMathTests(unittest.TestCase):
 
     def test_periodic_device_refresh_uses_cached_enumeration(self):
         tester = object.__new__(GamepadTestWindow)
-        tester.raw_hid_probe = Mock(
-            read_snapshot=Mock(return_value={"state": "idle"})
-        )
+        tester._raw_hid_pending_start = None
+        tester.raw_hid_probe = SimpleNamespace(has_reader=False)
         tester._device_enumeration_initialized = True
         tester._native_test_devices = ()
         tester.raw_hid_devices = {}
@@ -1185,6 +1500,7 @@ class GamepadMathTests(unittest.TestCase):
 
     def test_manual_refresh_quiesces_readers_and_contains_errors(self):
         tester = object.__new__(GamepadTestWindow)
+        tester._raw_hid_pending_start = None
         tester._device_refresh_in_progress = False
         tester.device_refresh_button = Mock()
         tester.stop_rumble = Mock()
@@ -1195,9 +1511,7 @@ class GamepadMathTests(unittest.TestCase):
         tester._sync_raw_hid_stream = Mock()
         tester.window = Mock()
         tester.window.winfo_exists.return_value = True
-        tester.raw_hid_probe = Mock(
-            read_snapshot=Mock(return_value={"state": "idle"})
-        )
+        tester.raw_hid_probe = SimpleNamespace(has_reader=False)
 
         tester._request_device_refresh()
 
@@ -1282,6 +1596,7 @@ class GamepadMathTests(unittest.TestCase):
                 "gamepad_test_app.tk.Canvas",
                 return_value=canvas,
             ),
+            patch("dialog_layout.fullscreen_monitor_bounds", return_value=(0, -1080, 1920, 0)),
         ):
             overlay = GamepadTestStartupOverlay(root, language="en")
 
@@ -1293,7 +1608,7 @@ class GamepadMathTests(unittest.TestCase):
             canvas.create_text.call_args.kwargs["text"],
             f"v{VERSION} Starting Gamepad Tester...",
         )
-        window.geometry.assert_called_once_with("600x340+660+370")
+        window.geometry.assert_called_once_with("600x340+660+-710")
         root.update.assert_called_once_with()
         overlay.destroy()
 
@@ -1311,12 +1626,29 @@ class GamepadMathTests(unittest.TestCase):
         setter.assert_called_once_with(GAMEPAD_TEST_APP_ID)
 
     def test_gamepad_test_accepts_explicit_parent_language(self):
-        with patch("gamepad_test_app.load_config") as load_config:
+        config = configparser.ConfigParser()
+        config.read_dict({"gui": {"language": "en"}})
+        with patch("gamepad_test_app.load_config", return_value=config):
             host = GamepadTestHost(Mock(), language="ZH")
 
         self.assertEqual(host.language, "zh")
         self.assertTrue(host.allow_automatic_update_prompt)
-        load_config.assert_not_called()
+
+    def test_tester_language_is_saved_separately_from_the_settings_language(self):
+        config = configparser.ConfigParser()
+        config.read_dict({"gui": {"language": "en", "gamepad_tester_language": "en"}})
+        with (
+            patch("gamepad_test_app.load_config", return_value=config),
+            patch("gamepad_test_app.config_file_lock"),
+            patch("gamepad_test_app.atomic_write_config") as save,
+        ):
+            host = GamepadTestHost(Mock(), language="zh")
+            self.assertEqual(host.language, "en")
+            host.set_tester_language("zh")
+        self.assertEqual(host.language, "zh")
+        self.assertEqual(config["gui"]["language"], "en")
+        self.assertEqual(config["gui"]["gamepad_tester_language"], "zh")
+        save.assert_called_once()
 
     def test_parent_gamepad_tester_can_disable_duplicate_update_prompt(self):
         host = GamepadTestHost(
@@ -1604,9 +1936,8 @@ class GamepadMathTests(unittest.TestCase):
             update_details=False,
         )
 
-        plot.canvas.tag_raise.assert_has_calls([
-            call("trail_bitmap"), call(9)
-        ])
+        plot.canvas.tag_lower.assert_called_once_with("trace", "trail_bitmap")
+        plot.canvas.tag_raise.assert_called_once_with(9)
         plot._last_trace_draw_at = 0.0
         plot.draw(
             history,
@@ -1867,6 +2198,12 @@ class GamepadMathTests(unittest.TestCase):
         plot._draw_trail(history, 9.0)
         plot.canvas.coords.assert_not_called()
 
+        history.reset()
+        for sequence in range(10):
+            history.add(-0.5, 0.0, 10.0 + sequence, record_shape=False)
+        plot._draw_trail(history, 19.0)
+        plot.canvas.coords.assert_called()
+
     def test_canvas_fallback_uniformly_caps_high_rate_history(self):
         plot = object.__new__(StickPlot)
         plot.trail_color = "#1976D2"
@@ -1913,6 +2250,7 @@ class GamepadMathTests(unittest.TestCase):
         )
         plot.canvas = Mock()
         plot.canvas.create_image.return_value = 9
+        plot.canvas.find_withtag.return_value = (8,)
         plot._bitmap_photo = None
         plot._bitmap_item = None
         plot._bitmap_scanlines = None
@@ -1937,14 +2275,28 @@ class GamepadMathTests(unittest.TestCase):
             plot._draw_trail_bitmap(history, now=9.0)
             bitmap_data = photo_factory.call_args.kwargs["data"]
             self.assertTrue(bitmap_data.startswith(b"\x89PNG\r\n\x1a\n"))
+            plot.canvas.tag_lower.assert_called_once_with(9, 8)
+            plot.canvas.reset_mock()
             plot._draw_trail_bitmap(history, now=9.0)
             photo.configure.assert_not_called()
+            plot.canvas.tag_raise.assert_not_called()
+            plot.canvas.tag_lower.assert_not_called()
 
             history.add(0.2, 0.1, 10.0, record_shape=False)
             plot._draw_trail_bitmap(history, now=10.0)
 
-        plot.canvas.create_image.assert_called_once()
+        photo_factory.assert_called_once()
         photo.configure.assert_called_once()
+
+        old_pixels = {index for index, expiry in enumerate(plot._bitmap_pixel_expiry) if expiry}
+        history.reset()
+        for sequence in range(11):
+            history.add(-0.5, -0.5, 10.1 + sequence / 100, record_shape=False)
+        with patch("gamepad_test_window.tk.PhotoImage", return_value=Mock()):
+            self.assertTrue(plot._draw_trail_bitmap(history, now=10.2))
+        new_pixels = {index for index, expiry in enumerate(plot._bitmap_pixel_expiry) if expiry}
+        self.assertTrue(new_pixels)
+        self.assertFalse(old_pixels & new_pixels)
 
     def test_bitmap_trail_deduplicates_high_rate_samples_per_pixel(self):
         plot = object.__new__(StickPlot)
@@ -1961,6 +2313,7 @@ class GamepadMathTests(unittest.TestCase):
         )
         plot.canvas = Mock()
         plot.canvas.create_image.return_value = 9
+        plot.canvas.find_withtag.return_value = ()
         plot._bitmap_photo = None
         plot._bitmap_item = None
         plot._bitmap_scanlines = None
@@ -1983,6 +2336,29 @@ class GamepadMathTests(unittest.TestCase):
             history.trail[-1][3],
         )
         self.assertLessEqual(len(plot._bitmap_expiry_heap), 16)
+
+    def test_native_trail_upload_uses_dirty_bounds_and_can_fall_back(self):
+        plot = object.__new__(StickPlot)
+        plot.canvas = Mock()
+        plot._bitmap_scanlines = bytearray((1 + PLOT_SIZE * 4) * PLOT_SIZE)
+        plot._bitmap_uploader = Mock()
+        plot._bitmap_uploader.upload.side_effect = [True, False]
+        uploader = plot._bitmap_uploader
+        photo = Mock()
+        stride = 1 + PLOT_SIZE * 4
+
+        with patch("gamepad_test_window.encode_rgba_png_region", return_value=b"png") as encode:
+            self.assertIs(plot._update_trail_photo(photo, stride, 40, 80, 40, 40, (42, 84, 45, 89)), photo)
+            uploader.upload.assert_called_once_with(
+                photo, plot._bitmap_scanlines, stride, 42, 84, 3, 5, dest_x=2, dest_y=4,
+            )
+            encode.assert_not_called()
+            self.assertIs(plot._update_trail_photo(photo, stride, 40, 80, 40, 40, (42, 84, 45, 89)), photo)
+
+        self.assertIsNone(plot._bitmap_uploader)
+        encode.assert_called_once_with(PLOT_SIZE, plot._bitmap_scanlines, 40, 80, 40, 40)
+        photo.configure.assert_called_once_with(data=b"png", format="png")
+
     def test_bitmap_merge_preserves_subpixel_footprint_union(self):
         plot = object.__new__(StickPlot)
         plot.trail_color = "#1976D2"
@@ -1997,6 +2373,7 @@ class GamepadMathTests(unittest.TestCase):
         )
         plot.canvas = Mock()
         plot.canvas.create_image.return_value = 9
+        plot.canvas.find_withtag.return_value = ()
         plot._bitmap_photo = None
         plot._bitmap_item = None
         plot._bitmap_scanlines = None
@@ -2057,7 +2434,7 @@ class GamepadMathTests(unittest.TestCase):
         plot._bitmap_pixel_expiry[0] = 1.0
         plot._bitmap_expiry_heap = [(1.0, 0)]
         plot._bitmap_last_processed_sequence = -1
-        plot._bitmap_render_config = (100, 1.0, 0.0, 0.0, 2.5)
+        plot._bitmap_render_config = (0, 100, 1.0, 0.0, 0.0, 2.5)
         plot._bitmap_tile_photos = LoggedPhotos({(0, 0): Mock()})
         plot._bitmap_tile_items = {(0, 0): 9}
         plot._bitmap_tile_live_counts = {(0, 0): 1}
@@ -2116,7 +2493,11 @@ class GamepadMathTests(unittest.TestCase):
             for index in range(4)
         ]
 
-        tester._consume_s2p_trail_samples(samples, now=10.0)
+        with (
+            patch("gamepad_test_window.time.perf_counter", return_value=10.0),
+            patch("gamepad_test_window.time.monotonic_ns", return_value=1_050_000_000),
+        ):
+            tester._consume_s2p_trail_samples(samples, now=10.0)
 
         self.assertEqual(len(tester.histories["left"].trail), 4)
         self.assertEqual(len(tester.histories["right"].trail), 4)
@@ -2127,14 +2508,17 @@ class GamepadMathTests(unittest.TestCase):
             tester.histories["right"].trail[-1][2], -0.3
         )
         self.assertAlmostEqual(
-            tester.histories["left"].trail[0][0], 9.97
+            tester.histories["left"].trail[0][0], 9.95
         )
+        # UI scheduling gaps must not shift the age of reports in the next batch.
+        tester._consume_s2p_trail_samples([{**samples[-1], "timestamp_ns": 1_040_000_000}], now=10.2)
+        self.assertAlmostEqual(tester.histories["left"].trail[-1][0], 9.99)
 
     def test_raw_hid_background_samples_do_not_enter_monitor_trail(self):
         tester = object.__new__(GamepadTestWindow)
         tester.raw_hid_stream = SimpleNamespace(
-            read_latest=Mock(return_value=(
-                (10.0, (0.5, -0.25), (0.0, 0.0), 7),
+            read_samples=Mock(return_value=(
+                ((10.0, (0.5, -0.25), (0.0, 0.0), 7, 0x0F),),
                 7,
                 0,
             ))
@@ -2155,6 +2539,39 @@ class GamepadMathTests(unittest.TestCase):
         self.assertEqual(sample["left"], (0.5, -0.25))
         self.assertEqual(len(tester.histories["left"].trail), 0)
         self.assertEqual(len(tester.histories["right"].trail), 0)
+
+    def test_raw_hid_background_sample_keeps_validity_and_controls(self):
+        tester = object.__new__(GamepadTestWindow)
+        report = (10.0, (0.0, 0.0), (0.4, 0.3), 7)
+        tester.raw_hid_stream = SimpleNamespace(
+            read_latest=Mock(return_value=(report, 7, 0)),
+            read_samples=Mock(return_value=((report + (0x2C, (0.0, 0.75), 0),), 7, 0)),
+        )
+        tester._raw_hid_stream_sequence = tester._raw_hid_stream_dropped = 0
+        tester._raw_hid_stream_latest_sample = {"left": (0.5, -0.25)}
+
+        sample, _consumed = tester._consume_raw_hid_stream(None, record_trail=False)
+
+        self.assertEqual(sample["left"], (0.5, -0.25))
+        self.assertEqual(sample["right"], (0.4, 0.3))
+        self.assertEqual(sample["triggers"], (0.0, 0.75))
+
+    def test_raw_hid_background_keeps_valid_controls_from_interleaved_reports(self):
+        tester = self.make_raw_monitor("raw_hid")
+        reports = (
+            (10.0, (0.0, 0.0), (0.0, 0.0), 1, 0x20, (0.0, 0.75), 0),
+            (10.1, (0.0, 0.0), (0.4, 0.3), 2, 0x0C, (0.0, 0.0), 0),
+        )
+
+        def read_reports(_sequence, *, maximum, **_kwargs):
+            return (reports if maximum is None else reports[-maximum:]), 2, 0
+
+        tester.raw_hid_stream.read_samples.side_effect = read_reports
+
+        sample, _consumed = tester._consume_raw_hid_stream(None, record_trail=False)
+
+        self.assertEqual(sample["right"], (0.4, 0.3))
+        self.assertEqual(sample["triggers"], (0.0, 0.75))
 
     def test_raw_hid_trail_ignores_invalid_axes_per_stick(self):
         tester = object.__new__(GamepadTestWindow)
@@ -2197,7 +2614,7 @@ class GamepadMathTests(unittest.TestCase):
 
         self.assertTrue(consumed)
         tester.raw_hid_stream.read_samples.assert_called_once_with(
-            0, include_axes=True, include_controls=True, include_buttons=True
+            0, maximum=None, include_axes=True, include_controls=True, include_buttons=True
         )
         self.assertEqual(len(tester.histories["left"].trail), 2)
         self.assertEqual(len(tester.histories["right"].trail), 1)
@@ -2208,13 +2625,13 @@ class GamepadMathTests(unittest.TestCase):
     def test_raw_hid_monitor_keeps_latest_details_between_reports(self):
         tester = object.__new__(GamepadTestWindow)
         tester.raw_hid_stream = SimpleNamespace(
-            read_latest=Mock(side_effect=(
+            read_samples=Mock(side_effect=(
                 (
-                    (10.0, (0.5, -0.25), (0.1, 0.2), 7),
+                    ((10.0, (0.5, -0.25), (0.1, 0.2), 7, 0x0F),),
                     7,
                     0,
                 ),
-                (None, 7, 0),
+                ((), 7, 0),
             ))
         )
         tester._raw_hid_stream_sequence = 0
@@ -2242,7 +2659,7 @@ class GamepadMathTests(unittest.TestCase):
     def test_raw_hid_cached_controls_do_not_flicker_against_native_sample(self):
         tester = object.__new__(GamepadTestWindow)
         tester.raw_hid_stream = SimpleNamespace(
-            read_latest=Mock(return_value=(None, 9, 0))
+            read_samples=Mock(return_value=((), 9, 0))
         )
         tester._raw_hid_stream_sequence = 9
         tester._raw_hid_stream_dropped = 0
@@ -2261,6 +2678,70 @@ class GamepadMathTests(unittest.TestCase):
         self.assertEqual(merged["buttons"], ("A",))
         self.assertEqual(merged["triggers"], (0.75, 0.25))
         self.assertEqual(merged["left"], (0.2, -0.1))
+
+    def test_raw_hid_trigger_only_reports_update_without_creating_trail_points(self):
+        tester = self.make_raw_monitor("raw_hid")
+        tester.histories = {side: StickHistory() for side in ("left", "right")}
+        tester.shape_enabled_var = Mock(get=Mock(return_value=False))
+        tester.raw_hid_stream.read_samples.side_effect = (
+            (((10.0, (0.4, 0.3), (0.0, 0.0), 1, 0x03, (0.0, 0.0), 0),), 1, 0),
+            (((10.1, (0.0, 0.0), (0.0, 0.0), 2, 0x10, (0.75, 0.0), 0),), 2, 0),
+            (((10.2, (0.0, 0.0), (0.0, 0.0), 3, 0x20, (0.0, 0.5), 0),), 3, 0),
+        )
+
+        tester._consume_raw_hid_stream(None)
+        pressed, consumed = tester._consume_raw_hid_stream(None)
+        combined, _ = tester._consume_raw_hid_stream(None)
+
+        self.assertTrue(consumed)
+        self.assertEqual(pressed["triggers"], (0.75, 0.0))
+        self.assertEqual(combined["triggers"], (0.75, 0.5))
+        self.assertEqual(combined["left"], (0.4, 0.3))
+        self.assertEqual(len(tester.histories["left"].trail), 1)
+        self.assertEqual(len(tester.histories["right"].trail), 0)
+
+    def test_raw_hid_cache_does_not_replace_live_native_trigger_fallback(self):
+        tester = self.make_raw_monitor("raw_hid")
+        tester.raw_hid_stream.read_samples.side_effect = (
+            (((10.0, (0.4, 0.3), (0.0, 0.0), 1, 0x13, (0.75, 0.0), 0),), 1, 0),
+            ((), 1, 0),
+        )
+
+        tester._consume_raw_hid_stream({"triggers": (0.0, 0.1)}, record_trail=False)
+        merged, _ = tester._consume_raw_hid_stream({"triggers": (0.0, 0.6)}, record_trail=False)
+
+        self.assertEqual(merged["triggers"], (0.75, 0.6))
+
+    def test_nintendo_raw_buttons_and_digital_triggers_hold_until_valid_release(self):
+        tester = self.make_raw_monitor("winmm")
+        tester._raw_hid_stream_path = r"\\?\HID#VID_057E&PID_2069"
+        stick = (0.4, 0.3)
+        tester.raw_hid_stream.read_samples.side_effect = (
+            (((10.0, stick, stick, 1, 0x2F, (0.0, 1.0), 0x88),), 1, 0),
+            ((), 1, 0),
+            (((10.1, stick, stick, 2, 0x00, (0.0, 0.0), 0),), 2, 0),
+            (((10.2, stick, stick, 3, 0x0F, (0.0, 0.0), 0),), 3, 0),
+        )
+        native = {"buttons": ("B",), "buttons_mask": 4, "triggers": (None, None)}
+
+        for _ in range(3):
+            held, _ = tester._consume_raw_hid_stream(native, record_trail=False)
+            self.assertEqual(held["buttons"], ("A", "ZR"))
+            self.assertEqual(held["triggers"], (0.0, 1.0))
+        released, _ = tester._consume_raw_hid_stream(native, record_trail=False)
+
+        self.assertEqual(released["buttons"], ())
+        self.assertEqual(released["triggers"], (0.0, 0.0))
+
+    def test_raw_standalone_xusb_buttons_use_the_xinput_layout(self):
+        tester = self.make_raw_monitor("raw_hid")
+        tester._raw_hid_stream_path = r"\\?\HID#VID_CAFE&PID_4020"
+        report = (10.0, (0.0, 0.0), (0.0, 0.0), 1, 0x0F, (0.0, 0.0), 0x1010)
+        tester.raw_hid_stream.read_samples.return_value = ((report,), 1, 0)
+
+        sample, _ = tester._consume_raw_hid_stream(None, record_trail=False)
+
+        self.assertEqual(sample["buttons"], ("START", "A"))
 
     def test_native_trigger_axes_appear_as_pressed_events(self):
         tester = object.__new__(GamepadTestWindow)
@@ -2393,6 +2874,29 @@ class GamepadMathTests(unittest.TestCase):
 
 
 class NativeSamplerTests(unittest.TestCase):
+    def test_in_flight_sample_is_discarded_after_switching_away_and_back(self):
+        first = GamepadDevice("xinput:0", "xinput", 0, "First", True)
+        second = GamepadDevice("xinput:1", "xinput", 1, "Second", True)
+        stale = GamepadState(1, 0, (), (0, 0), (1, 0), 0, 1)
+        fresh = GamepadState(2, 0, (), (0, 0), (0, 0), 0, 0)
+
+        def read(_device):
+            sampler.set_device(second)
+            sampler.set_device(first)
+            return stale
+
+        backend = SimpleNamespace(read_state=Mock(side_effect=read))
+        sampler = NativeGamepadSampler(backend)
+        sampler.set_device(first)
+        sampler._poll_once()
+        self.assertIsNone(sampler.read_latest_state(first))
+        self.assertEqual(sampler.read_snapshot()[1], ())
+
+        backend.read_state.side_effect = None
+        backend.read_state.return_value = fresh
+        sampler._poll_once()
+        self.assertIs(sampler.read_latest_state(first), fresh)
+
     def test_isolated_enumeration_restores_winmm_capabilities(self):
         devices, caps_by_index = _decode_isolated_enumeration({
             "devices": [{
@@ -2451,6 +2955,24 @@ class NativeSamplerTests(unittest.TestCase):
         thread.is_alive.return_value = False
         self.assertTrue(sampler.stop(timeout=0.01))
         self.assertIsNone(sampler._thread)
+
+    def test_stop_joins_the_generation_it_requested_to_stop(self):
+        sampler = NativeGamepadSampler(SimpleNamespace())
+        old_thread = Mock(is_alive=Mock(return_value=False))
+        new_thread = Mock(is_alive=Mock(return_value=True))
+        sampler._thread = old_thread
+
+        # An old worker can exit as stop signals the wake event, allowing a
+        # concurrent start to install a new worker before stop begins joining.
+        with (
+            patch("gamepad_devices.threading.Thread", return_value=new_thread),
+            patch.object(sampler._wake, "set", side_effect=sampler.start),
+        ):
+            self.assertTrue(sampler.stop(timeout=0.01))
+
+        old_thread.join.assert_called_once_with(timeout=0.01)
+        new_thread.join.assert_not_called()
+        self.assertIs(sampler._thread, new_thread)
 
     def test_start_waits_for_stop_requested_generation_to_exit(self):
         sampler = NativeGamepadSampler(SimpleNamespace())
@@ -2538,6 +3060,34 @@ class NativeSamplerTests(unittest.TestCase):
 
         self.assertEqual(len(samples), 1)
         self.assertIsNone(rate)
+
+    def test_reconnect_counts_same_packet_number_as_a_fresh_sample(self):
+        device = GamepadDevice("xinput:0", "xinput", 0, "XInput", True)
+        old = GamepadState(7, 0, (), (0.0, 0.0), (0.0, 0.0), 0.0, 0.0)
+        new = GamepadState(7, 0, (), (0.0, 0.0), (0.5, 0.0), 0.0, 1.0)
+        sampler = NativeGamepadSampler(SimpleNamespace(read_state=Mock(side_effect=(old, None, new))))
+        sampler.set_device(device)
+        sampler._poll_once()
+        sampler._poll_once()
+        sampler._poll_once()
+        latest, samples, rate = sampler.read_snapshot()
+        self.assertIs(latest, new)
+        self.assertEqual([state for _, state in samples], [new])
+        self.assertIsNone(rate)
+
+    def test_packet_counter_restart_starts_a_new_generation_without_a_missing_poll(self):
+        device = GamepadDevice("xinput:0", "xinput", 0, "XInput", True)
+        old = GamepadState(300, 0, (), (0.0, 0.0), (0.0, 0.0), 0.0, 0.0)
+        new = GamepadState(1, 0, (), (0.0, 0.0), (0.5, 0.0), 0.0, 1.0)
+        sampler = NativeGamepadSampler(SimpleNamespace(read_state=Mock(side_effect=(old, new))))
+        sampler.set_device(device)
+        sampler._poll_once()
+        _, old_generation = sampler.read_latest_with_generation(device)
+        sampler._poll_once()
+        latest, generation = sampler.read_latest_with_generation(device)
+        self.assertIs(latest, new)
+        self.assertGreater(generation, old_generation)
+        self.assertEqual([state for _, state in sampler.read_snapshot()[1]], [new])
 
     def test_xinput_packet_gaps_preserve_updates_between_polls(self):
         clock = [20.0]

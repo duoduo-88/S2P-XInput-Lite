@@ -3,8 +3,10 @@
 `USER_GUIDE.md` and `USER_GUIDE_zh-TW.md` are the current English and
 Traditional Chinese manuals shipped in releases.
 
-`assets/v0.7.14/` contains current English-interface screenshots shared by
-both guides.
+The guides cover desktop v0.8.0 and bundled S2P-FW 1.0.7.
+
+`assets/v0.7.14/` contains English-interface screenshots shared by both guides.
+The written procedures cover the current controls.
 
 `build_manual.py` and `assets/raw/` preserve the source for the archived
 v0.5.3 DOCX manual. They are not used by the current release package. The

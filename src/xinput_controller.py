@@ -16,6 +16,7 @@ from imu_calibration import (
 )
 from switch2_input import SWITCH_BUTTONS
 from config_utils import parse_output_shape_steps as parse_output_shape_steps
+from direction_deadzones import pick_direction
 from mapping_layers import load_layers
 from mapping_targets import (
     validate_button_source,
@@ -30,6 +31,7 @@ from settings_schema import (
     read_section_settings,
 )
 from stick_processing import (
+    _compile_direction_zone_edges,
     _apply_compressed_radial_deadzone as _apply_compressed_radial_deadzone,
     _apply_linear_axis_response,
     _calibration_with_center_override,
@@ -178,7 +180,7 @@ class XInputController:
 
     def __init__(
         self, config, calibration, pad=None, activate_runtime=True,
-        layer_state_config_path=None,
+        layer_state_config_path=None, *, mapping_layers=None,
     ):
         # Parsing a profile/snapshot is read-only unless the real connector
         # explicitly grants the path used to reconcile missing layer IDs.
@@ -368,6 +370,7 @@ class XInputController:
                 "trigger_threshold": settings["trigger_threshold"],
                 "release_threshold": settings["release_threshold"],
                 "direction_deadzone": settings["direction_deadzone"],
+                "direction_zone_edges": _compile_direction_zone_edges(settings),
                 "mouse_speed": settings["mouse_speed"],
                 "mouse_deadzone": settings["mouse_deadzone"],
                 "analog_direction": settings["analog_direction"],
@@ -381,20 +384,22 @@ class XInputController:
         # Secondary layers are complete snapshots of button and stick-direction
         # mappings. Curves, gyro, rumble, and calibration intentionally remain
         # global. Switching only replaces these precompiled hot-path pointers.
-        base_buttons = {
-            name.lower(): target for name, target in self.mapping.items()
-        }
-        base_sticks = {
-            side: dict(config.items(f"stick_direction_{side}"))
-            for side in ("left", "right")
-        }
-        self.mapping_layers = load_layers(
-            config,
-            base_buttons,
-            base_sticks,
-            SWITCH_BUTTONS,
-            config_path=self._layer_state_config_path,
-        )
+        if mapping_layers is None:
+            base_buttons = {
+                name.lower(): target for name, target in self.mapping.items()
+            }
+            base_sticks = {
+                side: dict(config.items(f"stick_direction_{side}"))
+                for side in ("left", "right")
+            }
+            mapping_layers = load_layers(
+                config,
+                base_buttons,
+                base_sticks,
+                SWITCH_BUTTONS,
+                config_path=self._layer_state_config_path,
+            )
+        self.mapping_layers = mapping_layers
         base_runtime = MappingRuntime(
             self._compiled_mapping,
             self.stick_direction_config,
@@ -656,7 +661,7 @@ class XInputController:
             )
             self._rumble_thread.start()
 
-    def reconfigure(self, config, calibration):
+    def reconfigure(self, config, calibration, *, mapping_layers=None):
         """Apply a complete profile without replacing native resources.
 
         The ViGEm pad owns a native vibration callback whose lifetime must
@@ -671,6 +676,7 @@ class XInputController:
             pad=None,
             activate_runtime=False,
             layer_state_config_path=self._layer_state_config_path,
+            mapping_layers=mapping_layers,
         )
 
         # Release outputs under the old mapping before its transient tracking
@@ -1996,6 +2002,9 @@ class XInputController:
         mode = config_data["mode"]
 
         angle = math.degrees(math.atan2(y, x)) % 360.0
+        edges = config_data.get("direction_zone_edges")
+        if edges:
+            return pick_direction(mode, angle, edges, current_direction)
         if mode == "4WAY":
             sector_names = ("RIGHT", "UP", "LEFT", "DOWN")
             sector_step = 90.0

@@ -2,7 +2,9 @@
 
 [English](README.md) · [使用手冊](manual/USER_GUIDE_zh-TW.md) · [English Guide](manual/USER_GUIDE.md)
 
-**[下載 v0.7.15 Windows 版（ZIP）](https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.7.15/S2P-XInput-Lite-v0.7.15.zip)**
+**[Windows ZIP（v0.8.0）](https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.8.0/S2P-XInput-Lite-v0.8.0.zip)**
+
+[v0.8.0 更新說明](RELEASE_NOTES_v0.8.0.md)
 
 完整解壓縮後，直接開啟根目錄的兩個 EXE：
 
@@ -24,16 +26,12 @@
 
 S2P-XInput-Lite 可在 Windows 為 Switch 2 Pro Controller 提供 XInput 相容控制器輸出，支援 USB 有線、ESP32-S3 USB 橋接器及 Windows 原生 BLE。
 
-目前版本：**v0.7.15**
-
-[v0.7.15 發佈說明](RELEASE_NOTES_v0.7.15.md) ·
+[歷史版本](https://github.com/duoduo-88/S2P-XInput-Lite/releases) ·
 [原始碼](https://github.com/duoduo-88/S2P-XInput-Lite/tree/main) ·
 [最新正式版本](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 
-**v0.7.14** 隨附 **S2P-FW 1.0.7**，ESP32 僅保留 CDC Bridge 與 Android USB HID
-獨立模式，移除實體 USB XInput／Auto。Windows 桌面仍可在 Bridge 模式經
-ViGEmBus 輸出 XInput，保留映射、震動與音訊震動。v0.7.14 已正式發佈；
-新韌體實機驗證仍待完成，詳見
+隨附的 **S2P-FW 1.0.7** 支援 CDC Bridge 與 Android USB HID 獨立模式。
+Windows 桌面可在 Bridge 模式透過 ViGEmBus 輸出 XInput。
 [USB 模式、救援與驗證清單](docs/usb-hid-standardization.md)。
 
 程式可在啟動時檢查新版本，也可在手把測試程式的「關於」頁手動檢查、
@@ -61,6 +59,7 @@ Release 頁面供手動下載；程式不會自動下載、執行或覆蓋任何
 - 全域 Mapping Layer 檔案：支援按住／切換啟用、個別按鍵與搖桿覆寫、匯入／匯出，以及各設定檔獨立保存啟用狀態與順序
 - 每支控制器獨立的搖桿校正，以及每次連線時的陀螺儀零偏初始化
 - 搖桿曲線、死區、平滑、穩定化與輸出形狀調整
+- `4WAY` 與 `8WAY` 方向映射提供雷達圖，可逐一調整方向死區
 - USB、ESP32 與原生 BLE 共用一致的 XInput 至 HD Rumble 2 轉換，包含 latest-only 節流、優先停止訊框及音訊震動
 - 可將相容設定檔寫入 ESP32，以 Android USB HID 獨立模式運作，不必保持 Windows
   程式開啟；手把組合鍵及兩種模式均提供的 CDC 可用於救援
@@ -70,6 +69,10 @@ Release 頁面供手動下載；程式不會自動下載、執行或覆蓋任何
   連線與 ESP32 診斷資訊。亦可測試其他 XInput、WinMM 及 Raw HID 手把，
   但這些裝置不會提供 S2P 專屬遙測，因此部分資訊會缺少；回報率頁面仍可
   顯示回報筆數、P50／P95／P99、間隔統計與時間軸
+- **搖桿軌跡** 由原生背景執行緒繪製所選來源的取樣。
+  搖桿圖的 FPS 統計有變化的畫面更新，回報率量測分頁則統計輸入回報。[搖桿圖手冊](manual/USER_GUIDE_zh-TW.md#92-搖桿圖)
+- **瞄準測試** 在 2D 和 3D 各提供跟槍、點靶與限時點靶。背景 Direct2D 繪圖跟隨目前螢幕的更新率。可用 Windows 收到的右搖桿
+  輸出測試陀螺儀映射，並與相同測試條件下的歷史最佳成績比較。[瞄準測試手冊](manual/USER_GUIDE_zh-TW.md#99-瞄準測試)
 - 內建 ESP32 診斷頁：支援定時測試、通過／警告／失敗判定及匯出文字報告
 - 關於頁：提供專案與贊助連結、軟體許可協議及第三方程式聲明
 - 完整遊戲設定檔，可一起切換搖桿、陀螺儀、震動、音訊觸覺與映射設定
@@ -106,8 +109,8 @@ log、firmware、exe 與其他建置產物不會搬移。
 2. USB 有線模式若希望遊戲只看到虛擬 XInput 控制器，可另外安裝 HidHide；ESP32 與原生 BLE 不需要 HidHide。
 3. 請先連接控制器，再開啟 Steam 或其他控制器工具。原生 BLE 模式請勿在 Windows 藍牙設定內手動配對；只需開啟藍牙，讓本程式建立連線。ESP32 模式則接上已燒錄相容韌體的裝置。
 4. 執行 `S2P-XInput-Lite.exe`。
-5. 選擇遊戲設定檔或調整設定，再使用 **儲存設定檔** 或 **另存新設定檔**。
-6. 儲存目前設定檔會更新其保存內容。連線中切換設定檔時，程式會自動停止連線、套用選定設定檔、刷新 GUI，並自動重新連線。只有變更連線方式、裝置或序列埠設定時才需要 **重新啟動**。
+5. 選擇遊戲方案或調整設定，再使用 **儲存/套用** 或 **另存新方案**。
+6. 儲存或切換方案後，畫面會更新，執行中的連線會嘗試直接套用，不必重新連線。若套用失敗，已儲存的設定會在重新連線後生效。變更連線方式、裝置或序列埠設定時，請使用 **重新啟動**。
 
 程式會先檢查 USB 有線，再檢查 ESP32，最後使用 Windows 原生 BLE。連線程序會開啟獨立黑色 CMD 視窗，即時顯示連線與輸入狀態；遊玩期間請保持該 CMD 視窗開啟。縮小設定介面時，只有主視窗會收進 Windows 右下角通知區，黑色 CMD 仍會顯示且連線不中斷。按一下通知區圖示可還原設定介面；按右鍵則可選擇「顯示設定」或「結束程式」。
 
@@ -121,7 +124,7 @@ log、firmware、exe 與其他建置產物不會搬移。
 
 設定及每支控制器的搖桿校正資料儲存在 `app/src/config.ini`。陀螺儀零偏會在每次控制器連線後重新初始化，不會保存為永久校正資料。檔案不存在時，程式會以 `app/src/profiles/System Default.ini` 建立；舊設定缺少的欄位會自動補齊，不會覆寫既有值。各項預設值及還原操作也會以 `System Default.ini` 為基準。每個發佈包都必須保留此檔案，乾淨發佈包則可省略 `config.ini`。
 
-首次啟動提供 General、Audio、FPS-COMP、FPS-IMM、Racing、Action 與 Rhythm 設定檔。選擇設定檔會更新介面；若連線程式正在執行，程式會自動停止並重新連線，使新設定檔完整載入。自訂設定檔可儲存、重新命名或刪除；**System Default** 是受保護的唯讀基準，固定顯示於清單最下方。**恢復預設值** 不會刪除設定檔或校正資料。
+首次啟動提供 General、Audio、FPS-COMP、FPS-IMM、Racing、Action 與 Rhythm 設定檔。選擇設定檔會更新介面，並要求執行中的連線直接套用，不必重新連線。若套用失敗，已儲存的設定會在下次連線生效。自訂設定檔可儲存、重新命名或刪除；**System Default** 是受保護的唯讀基準，固定顯示於清單最下方。**恢復預設值** 不會刪除設定檔或校正資料。
 
 Mapping Layer 檔案是全域資源，可在按住按鍵組合時暫時覆寫目前設定檔，也可切換為持續啟用。Layer 可重新映射按鍵與搖桿方向、交換左右搖桿、用搖桿控制滑鼠，或輸出線性的 XInput 扳機、搖桿方向與滾輪。檔案儲存在 `app/src/layers`，並支援匯入與匯出。各遊戲設定檔會保存啟用哪些 Layers 及其優先順序；切換設定檔只會切換這些狀態，不會刪除或取代 Layer 檔案。同一時間只會套用優先權最高的符合 Layer：按住啟用優先於切換啟用，其餘依編輯器排列順序決定。
 

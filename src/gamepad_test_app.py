@@ -8,7 +8,8 @@ import threading
 import time
 import tkinter as tk
 
-from config_utils import CONFIG_PATH, load_config
+from config_utils import CONFIG_PATH, atomic_write_config, config_file_lock, load_config
+from dialog_layout import startup_banner_geometry
 from gamepad_test_window import GamepadTestWindow, TEST_ICON_PATH
 from localization import translate_text
 from single_instance import SingleInstance, activate_tk_window
@@ -100,9 +101,7 @@ class GamepadTestStartupOverlay:
             font=("Segoe UI", 9),
             fill="#4a4a4a",
         )
-        x = max(0, (int(root.winfo_screenwidth()) - width) // 2)
-        y = max(0, (int(root.winfo_screenheight()) - height) // 2)
-        self.window.geometry(f"{width}x{height}+{x}+{y}")
+        self.window.geometry(startup_banner_geometry(root, width, height))
         self.window.update_idletasks()
         self.window.deiconify()
         self.window.lift()
@@ -216,8 +215,11 @@ class GamepadTestHost:
             allow_automatic_update_prompt
         )
         requested = str(language or "").strip().lower()
+        config = load_config(CONFIG_PATH, persist=requested not in SUPPORTED_LANGUAGES)
+        saved = config.get("gui", "gamepad_tester_language", fallback="").strip().lower()
+        if saved in SUPPORTED_LANGUAGES:
+            requested = saved
         if requested not in SUPPORTED_LANGUAGES:
-            config = load_config(CONFIG_PATH)
             requested = config.get(
                 "gui", "language", fallback="zh"
             ).strip().lower()
@@ -227,6 +229,15 @@ class GamepadTestHost:
 
     def tr(self, text):
         return translate_text(text, self.language)
+
+    def set_tester_language(self, language):
+        if language not in SUPPORTED_LANGUAGES:
+            raise ValueError(f"Unsupported tester language: {language}")
+        with config_file_lock():
+            config = load_config(CONFIG_PATH, persist=False)
+            config.set("gui", "gamepad_tester_language", language)
+            atomic_write_config(config, CONFIG_PATH)
+        self.language = language
 
 
 def main(instance=None):
@@ -285,16 +296,18 @@ def main(instance=None):
             if closing:
                 return
             closing = True
-            if splash is not None:
-                splash.destroy()
-            if "--parent-pipe" in sys.argv:
-                notify_parent_closing()
-            tester.close()
-            root.quit()
             try:
-                root.destroy()
-            except tk.TclError:
-                pass
+                if splash is not None:
+                    splash.destroy()
+                if "--parent-pipe" in sys.argv:
+                    notify_parent_closing()
+                tester.close()
+            finally:
+                root.quit()
+                try:
+                    root.destroy()
+                except tk.TclError:
+                    pass
 
         tester.window.protocol("WM_DELETE_WINDOW", close_all)
         if "--parent-pipe" in sys.argv:

@@ -2,7 +2,9 @@
 
 [繁體中文](README_zh-TW.md) · [User Guide](manual/USER_GUIDE.md) · [繁體中文使用手冊](manual/USER_GUIDE_zh-TW.md)
 
-**[Download v0.7.15 for Windows (ZIP)](https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.7.15/S2P-XInput-Lite-v0.7.15.zip)**
+**[Windows ZIP (v0.8.0)](https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.8.0/S2P-XInput-Lite-v0.8.0.zip)**
+
+[v0.8.0 release notes](RELEASE_NOTES_v0.8.0.md)
 
 Extract the entire ZIP, then open one of the two EXEs in its main folder:
 
@@ -24,17 +26,13 @@ Support files are grouped in **app/**. Keep that folder beside both EXEs.
 
 S2P-XInput-Lite provides XInput-compatible controller output for a Switch 2 Pro Controller on Windows. It supports wired USB, an ESP32-S3 USB bridge, and native Windows BLE.
 
-Current version: **v0.7.15**
-
-[v0.7.15 release notes](RELEASE_NOTES_v0.7.15.md) ·
+[Release history](https://github.com/duoduo-88/S2P-XInput-Lite/releases) ·
 [Source](https://github.com/duoduo-88/S2P-XInput-Lite/tree/main) ·
 [Latest published release](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 
-**v0.7.14** with **S2P-FW 1.0.7** simplifies ESP32 operation to CDC Bridge
-and Android USB HID standalone. Physical USB XInput and Auto modes are removed;
-Windows desktop XInput through ViGEmBus remains available in Bridge mode.
-The v0.7.14 release includes S2P-FW 1.0.7. Physical hardware validation for
-the new firmware remains pending; see [USB modes, recovery and validation](docs/usb-hid-standardization.md).
+The bundled **S2P-FW 1.0.7** supports CDC Bridge and Android USB HID
+standalone. On Windows, Bridge mode provides XInput through ViGEmBus.
+[USB modes, recovery and validation](docs/usb-hid-standardization.md)
 
 > This is an independent, unofficial community project. It is not affiliated with, endorsed by, sponsored by, or certified by Nintendo, Microsoft, Espressif Systems, Apple, or Google.
 >
@@ -49,6 +47,7 @@ the new firmware remains pending; see [USB modes, recovery and validation](docs/
 - Global mapping-layer files with hold/toggle activation, per-layer button and stick overrides, import/export, and per-profile enabled/order state
 - Per-controller stick calibration and connection-time gyro zero-bias initialization
 - Stick curves, deadzones, smoothing, stabilization, and output-shape adjustment
+- Per-direction angular deadzones with a radar editor for `4WAY` and `8WAY` stick mapping
 - Consistent XInput-to-HD Rumble 2 conversion across USB, ESP32, and native BLE, with latest-only pacing, priority stop frames, and audio-reactive vibration
 - ESP32 profile writing for Android USB HID standalone operation without the
   Windows application, with controller chords and CDC available for recovery
@@ -60,6 +59,13 @@ the new firmware remains pending; see [USB modes, recovery and validation](docs/
   tested, but S2P-specific telemetry is unavailable, so some information will
   be missing. The report-rate page still shows report count, P50/P95/P99
   intervals, distribution statistics, and a timeline.
+- **Stick trails** rasterize reports from the selected source on a native background
+  worker. The plot's FPS tracks visible updates,
+  while Report Rate Test measures input reports. [Stick plots guide](manual/USER_GUIDE.md#92-stick-plots)
+- **Aim Test** offers Tracking, Targets, and Timed Targets in both 2D
+  and 3D. Background Direct2D drawing follows the active monitor's refresh rate.
+  Test your gyro mapping with the right-stick output Windows receives
+  and compare completed rounds with your best result under the same conditions. [Aim Test guide](manual/USER_GUIDE.md#99-aim-test)
 - Built-in ESP32 diagnostics with timed tests, a clear pass/warn/fail verdict,
   and exportable text reports
 - Startup update notifications plus a manual check and shared automatic-check
@@ -93,8 +99,8 @@ The packaged release includes a portable Python runtime and all required package
 2. For wired USB, install HidHide if you want games to see only the virtual XInput controller. HidHide is optional for ESP32 and native BLE.
 3. Connect the controller before opening Steam or another controller tool. For native BLE, **do not pair it through Windows Bluetooth settings**; turn Bluetooth on and let this application establish the connection. For ESP32, connect a device running compatible firmware.
 4. Run `S2P-XInput-Lite.exe`.
-5. Choose a game profile or adjust settings, then use **Save Profile** or **Save New Profile**.
-6. Saving the active profile updates its stored settings. Switching profiles while connected automatically stops the connection program, applies the selected profile, refreshes the GUI, and reconnects. Use **Restart** only after changing the connection method, device, or serial settings.
+5. Choose a game profile or adjust settings, then use **Save/Apply** or **Save New**.
+6. Saving or switching profiles refreshes the settings and asks the running connection to apply them without reconnecting. If live application fails, the saved settings take effect after reconnecting. Use **Restart** after changing the connection method, device, or serial settings.
 
 The application checks wired USB first, then ESP32, and finally native BLE. The connector opens a separate black command window with live connection and input status; keep that command window open while playing. Minimizing the settings UI sends only its main window to the Windows notification area, while the command window remains visible and the connection continues. Click the notification icon to restore Settings, or right-click it for **Show Settings** and **Exit**.
 
@@ -119,7 +125,7 @@ explicit overwrite-all or skip-all choice, and the whole import rolls back if
 any validated write fails. Runtime files, logs, firmware, executables, and
 other build artifacts are not copied.
 
-The first launch provides General, Audio, FPS-COMP, FPS-IMM, Racing, Action, and Rhythm profiles. Selecting a profile refreshes the GUI. When the connection program is running, it is stopped and reconnected automatically so the newly selected profile is loaded completely. Built-in profiles start from canonical button and stick-direction mappings. Custom profiles can be saved, renamed, or deleted. **System Default** is a protected read-only baseline and always appears at the bottom of the list. **Restore Defaults** resets the current controls without deleting saved profiles or calibration.
+The first launch provides General, Audio, FPS-COMP, FPS-IMM, Racing, Action, and Rhythm profiles. Selecting a profile refreshes the GUI and asks the running connection to apply it without reconnecting. If live application fails, the saved settings take effect on the next connection. Built-in profiles start from canonical button and stick-direction mappings. Custom profiles can be saved, renamed, or deleted. **System Default** is a protected read-only baseline and always appears at the bottom of the list. **Restore Defaults** resets the current controls without deleting saved profiles or calibration.
 
 Mapping Layer files are global and can temporarily override the active profile while a button chord is held or toggled. A Layer can remap buttons and stick directions, swap sticks, use a stick as a mouse, or produce linear XInput trigger, stick-direction, or scroll output. Layer files are stored under `app/src/layers` and can be imported or exported. Each game profile stores which Layers are enabled and their priority order; switching profiles changes that state without deleting or replacing the Layer files. Only the highest-priority matching Layer is active: held Layers take priority over toggled Layers, then the editor order is used.
 

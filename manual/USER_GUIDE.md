@@ -1,17 +1,15 @@
-# S2P-XInput-Lite v0.7.15 User Guide
+# S2P-XInput-Lite v0.8.0 User Guide
 
 [繁體中文](USER_GUIDE_zh-TW.md)
 
 This guide covers installation, connections, profiles, stick tuning, mapping,
 gyro controls, rumble, HidHide, ESP32-S3 bridge and standalone operation, and
-the Gamepad Test, report-rate, diagnostics, and About pages in
-S2P-XInput-Lite v0.7.15.
+Gamepad Test, including Aim Test, report-rate measurements, and diagnostics.
 
 The feature screenshots show the English v0.7.14 interface; profile values are examples.
 
-This guide matches the published desktop v0.7.15 release and bundled S2P-FW
-1.0.7. The firmware build and descriptor checks passed; physical Windows and
-Android hardware validation remains pending.
+This guide covers desktop v0.8.0 and the bundled S2P-FW 1.0.7. The firmware
+sections describe the scope of Windows and Android hardware validation.
 
 The screenshots use the English interface. Select **中 / En** in the lower-left corner of the main window to switch languages without changing the layout.
 
@@ -32,6 +30,7 @@ The screenshots use the English interface. Select **中 / En** in the lower-left
 - [7. Rumble settings](#7-rumble-settings)
 - [8. HidHide and ESP32-S3](#8-hidhide-and-esp32-s3)
 - [9. Gamepad Test](#9-gamepad-test)
+  - [9.9 Aim Test](#99-aim-test)
 - [10. Quick controls](#10-quick-controls)
 - [11. Troubleshooting](#11-troubleshooting)
 - [Appendix: recommended tuning order](#appendix-recommended-tuning-order)
@@ -91,7 +90,11 @@ S2P-FW 1.0.7, without keeping the Windows application open.
 
 #### Windows BLE
 
-Pair the controller directly with Windows. This is convenient, but update rate and stability can depend on the Bluetooth adapter and wireless environment.
+Enable Windows Bluetooth and start the application. For first-time pairing,
+hold the controller's **SYNC** button and let this application establish the
+connection; do not manually pair it in Windows Bluetooth settings. Wake an
+already paired controller with a button. Update rate and stability depend on
+the Bluetooth adapter and wireless environment.
 
 ---
 
@@ -125,6 +128,10 @@ language, restore defaults, calibrate, flash firmware, restart, and Pin.
 - **Import Profile** — Import an external `.ini` profile.
 - **Import Settings** — Migrate settings from an older or same-version S2P-XInput-Lite installation.
 
+Saving or switching profiles asks the running connection to apply the settings
+without reconnecting. If application fails, the saved settings take effect at
+the next connection; use **Restart** when needed.
+
 ### 2.3 Import Settings
 
 ![Import Settings button at the bottom of the main window](assets/v0.7.14/main-buttons.png)
@@ -143,8 +150,29 @@ Default** is never overwritten; runtime caches, logs, firmware, executables,
 and build output are not imported. A failed validated write rolls back
 `config.ini`, user profiles, and managed Layers together.
 
+Invalid numeric values, unfinished shortcut recordings and unsupported mappings
+are rejected before replacing a profile. Calibration added to the destination
+while the preview is open is retained unless the imported source explicitly
+replaces that same calibration.
+
 > [!WARNING]
 > **System Default** is read-only. Use **Save New** to create an editable profile from it.
+
+### 2.4 Unsaved edits and external file changes
+
+- When switching with unsaved edits, choose whether to save, discard or cancel.
+  **Cancel** keeps the current profile and edits. Closing does not save edits automatically.
+- If another program changes the active profile, the conflict dialog offers
+  **Yes** to reload the external version, **No** to overwrite it with the values
+  on screen, or **Cancel** to keep editing without writing the file.
+- A change that arrives during loading or immediately after saving still needs
+  a decision before the next overwrite. Reopen or reload the latest version
+  when you want to keep the external changes.
+- Correct invalid input before saving again. A validation error does not mean
+  the displayed edits have been saved or applied.
+- A message saying the settings were saved but the profile list could not be
+  refreshed means the files are already saved. Reopen the profile menu later;
+  the selected profile remains the saved one.
 
 ---
 
@@ -226,6 +254,13 @@ Choose **Shortcut** to record a keyboard or mouse input. Labels use short names 
 - **DZ / Trig / Rel** — Direction deadzone, trigger threshold, and release threshold.
 - **Independent sticks** — The left and right sticks can be configured and reset separately.
 
+In `4WAY` or `8WAY`, click the direction diagram to open the radar editor.
+Drag a red sector to rotate its gap. The nearby field sets its full width as
+0–90% of the angle between adjacent directions. For example, 20% in `8WAY`
+is a 9° gap. The main control shows **SET** for custom gaps. Select
+**Use uniform deadzone** in the editor to return to one setting for all gaps
+in that mode. Confirm the edit, then select **Save/Apply** in the main window.
+
 > [!TIP]
 > Keep **Trig** above **Rel**. The resulting hysteresis prevents repeated activation when the stick rests on a direction boundary.
 
@@ -254,6 +289,12 @@ Choose **Shortcut** to record a keyboard or mouse input. Labels use short names 
 
 > [!WARNING]
 > Layer edits remain in memory until **Save/Apply** succeeds. The layer files and profile state are not permanently saved before that point.
+
+The editor's left and right stick number controls are independent. **Cancel**
+closes an editor without applying its edits. If files are changed or deleted
+externally while an editor, rename or delete prompt is open, the application
+checks the intended layer again. A changed-layer warning means you should
+reopen the operation from the refreshed list.
 
 ---
 
@@ -480,6 +521,10 @@ A/B storage retains the previous valid profile until the new slot passes
 validation. Do not assume a failed write or mode save changed the device.
 The obsolete Auto menu screenshot has been removed from this section.
 
+Only one ESP32 write or mode change can run at a time. Repeated requests are
+blocked while the operation is active, and Settings stays open until it finishes.
+Read the completion message before disconnecting the device.
+
 ### 8.6 Returning to Bridge and recovery
 
 - **Desktop menu:** Connect the ESP32 to Windows and choose **ESP32 ▼ → Return
@@ -503,6 +548,12 @@ The obsolete Auto menu screenshot has been removed from this section.
 
 Returning to Bridge retains the last stored standalone profile. **Restart
 Connection** only restarts the desktop connection.
+
+Connection, stick calibration and firmware operations also avoid competing for
+the same device. Close the calibration program before starting a connection or
+flashing firmware. When a version check or write is canceled, a connection that
+was waiting to restart can resume; wait for the current operation to finish
+before retrying another action.
 
 ### 8.7 Standalone support and validation limits
 
@@ -533,7 +584,7 @@ varies by device, OS and game. See [validation and official references](../docs/
 *The screenshot shows a connected S2P-XInput-Lite Bridge. Available controls and data depend on the device.*
 
 - **Device and refresh**: Select the controller to inspect or rescan devices.
-- **Function tabs**: Open Input Monitor, Rumble Test, Report Rate Test,
+- **Function tabs**: Open Input Monitor, Aim Test, Rumble Test, Report Rate Test,
    Diagnostics, or About.
 - **Stick source and zoom**: Select each stick's source and adjust its view.
 - **Left and right stick plots**: Show live position, trails, output shape,
@@ -587,6 +638,13 @@ outer circle is the 100% reference, and the live dot is the current value.
 - S2P output sources can also show the applied deadzone, outer limit, response
   curve, and gyro guides.
 
+The trail uses the reports received from the selected source. It draws each
+selected sample at its recorded position and merges overlapping pixels. The
+corner FPS counter measures plot updates that change the image. Use **Report
+Rate Test** to measure reports from a selected Raw HID interface. On supported
+Windows runtimes, a native background worker rasterizes the points for Canvas
+composition. The plot falls back to Tk image tiles if needed.
+
 ### 9.3 Output-shape capture
 
 ![Output-shape measurement from a connected controller](assets/v0.7.14/tester-shape.png)
@@ -599,7 +657,9 @@ reports coverage, roundness error, and maximum radius.
 - After the displayed line catches the latest maxima and no sector expands for
   one second, the capture locks and stops redrawing to avoid idle rendering
   overhead.
-- Toggle **Shape**, change the source/settings, or select **Clear** to begin a new capture.
+- Toggle **Shape** off and back on, or change the source or settings to start a new capture.
+- **Reset** clears the current measurements and restores the defaults for that row.
+  Enable **Shape** again to start a new shape capture.
 
 ### 9.4 Buttons and triggers
 
@@ -621,6 +681,9 @@ the tester retains generic HID behavior.
 - **Stop controls**: Reset the settings or immediately stop all vibration.
 
 Choose S2P-XInput-Lite (Bridge) or an XInput device that supports vibration, then open **Rumble Test**. Start with low LF/HF levels or choose a pattern. Enable **Repeat** if needed and select **Stop All Rumble** when finished. If `No XInput rumble` appears or controls are disabled, check that the virtual controller is active or select a supported XInput device. Bridge tests use the current profile's LF/HF settings; game rumble patterns do not output in Audio-only mode.
+
+If the output connection changes, the running rumble test stops rather than
+moving to the new connection. Check the selected device before starting again.
 
 The **Rumble Test** tab sends test patterns to Windows devices that expose
 XInput rumble. Stopping or closing the tester sends zero vibration. Mobile USB
@@ -692,6 +755,104 @@ the left. The right side contains scrollable **License Agreement** and
 
 ---
 
+### 9.9 Aim Test
+
+#### Test mapped gyro output
+
+1. Connect the controller through S2P-XInput-Lite. In **Gyro Map**, set **Target**
+   to **Right Stick** and **Control Mode** to **Aim (Center)**. Assign a button
+   and choose **Hold** or **Toggle**, then select **Save/Apply**.
+2. Open **Gamepad Test** and select **S2P-XInput-Lite (Bridge)** from the device
+   list. Aim Test reads that virtual controller's right-stick output as Windows
+   sees it, so the active profile's mapping, deadzone, and response settings apply.
+3. Open **Aim Test**, choose **3D Mode → Tracking**, and select **Start**. Activate
+   the gyro and rotate the controller with your thumb off the right stick to check
+   its response. For a shooting drill, choose **Targets** or **Timed Targets**.
+
+#### Choose and run a drill
+
+In **2D Mode**, the mouse and right stick move the same reticle. In **3D Mode**,
+they turn the camera. The mouse takes over as you move it, and the right stick
+resumes after mouse movement pauses. Shoot with left-click, RT, or Space in
+either mode. Stick values set reticle or camera speed proportionally.
+**3D Mode → Targets** is selected by default.
+
+| Drill | 2D Mode | 3D Mode |
+|---|---|---|
+| **Tracking** | Follow the moving target with the reticle. | Turn the camera to follow the moving ball. |
+| **Targets** | Click or shoot one target at a time. | Shoot one ball at a time. |
+| **Timed Targets** | Shoot as many of the replenishing targets as you can. | Shoot as many of the replenishing balls as you can. |
+
+Tracking runs for the configured duration. In Targets, a hit advances to the
+next target. The round ends at the configured hit count or optional time limit. Timed Targets starts
+with two targets. Each stays until hit and is replaced after a brief delay.
+When 3D targets overlap, the shot hits the first ball surface along the
+crosshair ray. The timer ends the round and the score shows the total hits.
+
+Select **Start**, press Enter, or press controller START. Scoring starts after
+the 3, 2, 1 countdown. If RT was held during the countdown, release it before
+pressing it to shoot. Use the top-right **Restart** button, Enter, or START to
+run the drill again. Use **Close**, Esc, or controller B to return to Gamepad
+Tester. A fullscreen test also closes when you switch away, restoring the
+previous display mode. During a 3D round, right-click to release the pointer
+for the window controls. Right-click in the play area again to resume mouse aim.
+
+#### Test settings and performance
+
+- **Fullscreen** is enabled by default. In windowed mode, **Auto (Highest)** fits the test window, including its title bar,
+  to the current monitor's work area above or beside the Windows taskbar.
+  In **Fullscreen**, **Auto (Highest)** uses the highest resolution Windows validates on
+  that monitor. You can select a specific size for either mode.
+- Set the target count, the optional Targets time limit, and the Tracking and
+  Timed Targets durations in **Test Settings**. A Targets time limit of `0`
+  lets the round continue until you hit every target.
+- A layout seed of `0` uses the built-in Targets sequence or Tracking path.
+  Timed Targets uses a repeatable sequence even with seed `0`. Select **↻** for
+  a new seed, then save it to replay the same sequence.
+- Adjust the reticle's color and size in any drill. The 2D target diameter is a
+  percentage of the viewport's shorter edge. The depth and horizontal and
+  vertical spread sliders control placement in 3D Targets and Timed Targets.
+- **Darken distant targets** is enabled by default. It uses the drill's target
+  distance range, so the nearest target is brightest and farther targets
+  become darker while remaining visible against the background. Turn it off
+  to display outlines on the 3D balls.
+- Tracking changes the target color and gives light feedback while you stay on
+  it. In Targets and Timed Targets, the reticle changes color when on target.
+  Hits trigger a short burst, sound, and vibration on a supported controller.
+  Misses use a distinct sound. Set vibration strength to `0` to turn it off,
+  or use the sound checkbox to mute the cues. Select **Restore Defaults** and
+  save to reset the test settings.
+
+The lower-right **D2D submits** or **Tk updates** counter measures the test's
+draw rate. The target follows the monitor's current refresh rate. **Input**
+shows the source report rate when the device provides enough information, and
+**Simulation** shows the measured simulation rate. The second line shows mean,
+P95 and P99 frame intervals and the share that exceeded the target interval.
+Use **Report Rate Test** to measure device report intervals.
+
+#### Read and compare results
+
+**Accuracy** is hits divided by shots. **Mean Error** is the average distance
+from the reticle to the target center, measured in pixels in 2D and degrees in
+3D. Shooting averages shots taken with a target present, including misses. In
+Timed Targets, a shot during a gap between targets still counts toward accuracy.
+Tracking weights error by time. **On Target** is the percentage of the round
+spent within the target.
+
+Completed rounds appear in the **Aim Test** tab, with changes from the best
+earlier result under the same conditions. The comparison uses the mode,
+viewport, seed, vibration and sound, and relevant drill settings such as target
+count, duration, target size, depth, and spread. You can change colors or reticle
+size and keep the same baseline.
+
+**Targets** ranks by hits, then accuracy, completion time, and mean error.
+Completion time is compared when both rounds hit every target. **Timed Targets**
+ranks by hits, then accuracy and mean error. **Tracking** ranks by time on target,
+then mean error. Arrows indicate the direction of change, green means better,
+and red means worse. Accuracy and On Target changes use percentage points.
+Select a result to see its comparison, or use **Clear History** to remove saved
+rounds. The **?** beside the mode controls explains the comparison rules.
+
 ## 10. Quick controls
 
 ### 10.1 Sliders and values
@@ -738,7 +899,7 @@ Hover over the six-band description to display a question-mark cursor and the co
 |---|---|
 | ViGEm is not Ready | Reinstall ViGEmBus, restart Windows, and launch the application again. |
 | Duplicate game input | Configure HidHide and check whether Steam Input is also remapping the device. |
-| Controller not found | Use a data-capable cable, reconnect the controller, or remove and repeat Windows BLE pairing. |
+| Controller not found | Use a data-capable cable. For native BLE, enable Bluetooth, start this application and hold SYNC for first-time pairing; let the application handle pairing. |
 | ESP32 remains Searching | Check the OTG port, firmware, USB connection, and controller pairing state. |
 | ESP32 received old settings | Select Save/Apply first. Modified System Default settings must be saved with Save New. |
 | Device is missing after a mode change | Wait for automatic USB re-enumeration and reconnection. If the bridge still does not appear, reconnect the ESP32; use Restart Connection only as a manual fallback. |
@@ -750,6 +911,9 @@ Hover over the six-band description to display a question-mark cursor and the co
 | Gyro drift | Run Sensor Cal on a stable surface and avoid magnetic or powered objects. |
 | Profile cannot be overwritten | System Default is read-only; use Save New. |
 | Settings disappear after restart | Select Save/Apply and ensure the application folder is writable. |
+| A profile or layer changed externally | Reopen the operation and decide whether to reload, overwrite or cancel. Keep the external version if you need its changes. |
+| Settings saved, but the list could not refresh | The files are already saved. Open the profile menu again after the folder becomes available. |
+| Another device operation is in progress | Wait for it to finish. Close stick calibration before starting a connection or flashing firmware. |
 
 ### Restoring a stable configuration
 
@@ -787,4 +951,4 @@ Gate → Lvl → six bands → LF/HF Balance → Tail/Decay.
 Keep one verified stable profile and use **Save New** for experimental settings.
 
 > [!NOTE]
-> This guide applies to S2P-XInput-Lite v0.7.15. For later releases, follow the in-app question-mark help and the latest release notes.
+> This guide applies to S2P-XInput-Lite v0.8.0. For later releases, see the in-app help and release notes.
