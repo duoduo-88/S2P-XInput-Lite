@@ -26,19 +26,18 @@ from gamepad_aim_history import AimHistory, METRIC_LABELS, format_change
 from gamepad_aim_model import (
     FOCAL_SCALE,
     MAX_TIMED_TARGETS,
-    ROOM_LINES,
+    ROOM_TILES,
     CursorTest,
     CursorTrackingTest,
     ShootingTest,
     TimedCursorTest,
     TimedShootingTest,
     TrackingTest,
-    clip_near,
-    clip_viewport,
     project_ball,
     room_redraw_interval,
 )
 from gamepad_aim_native_timer import NativeAimTimer
+from gamepad_aim_projection import project_room, project_room_polygons
 from gamepad_aim_render_worker import AimRenderFrame, AimRenderWorker
 from gamepad_aim_settings import AimSettings, show_aim_settings
 from gamepad_aim_timing import (
@@ -58,6 +57,7 @@ VIEW_MARGIN = 8
 VIEW_BUTTON_GAP = 6
 HUD_LINE_GAP = 4
 VIEW_BACKGROUND = "#101825"
+HIDDEN_TILE = (-20, -20) * 3
 RETICLE_COLOR = "#edf4fc"
 TARGET_COLOR = "#57dab1"
 DEPTH_SHADE_STEPS = 255
@@ -242,7 +242,7 @@ class AimTestPane:
         self.gpu_error = None
         self._gpu_overlay = None
         self._gpu_fragments = ()
-        self._gpu_lines = ()
+        self._gpu_room = ()
         self._hud_values = None
         self._frame_dirty = True
         self.settings_path = settings_path
@@ -342,11 +342,11 @@ class AimTestPane:
         self.canvas = tk.Canvas(self.window, background=VIEW_BACKGROUND, highlightthickness=0)
         self._view = self.canvas
         self._place_view()
-        self.grid_lines = [
-            self.canvas.create_line(-20, -20, -20, -20, fill=color, tags="scene")
-            for color, _start, _end in ROOM_LINES
+        self.grid_tiles = [
+            self.canvas.create_polygon(*HIDDEN_TILE, fill=color, outline="", tags="scene")
+            for color, _ in ROOM_TILES
         ]
-        self.grid_bounds = [None] * len(ROOM_LINES)
+        self.grid_bounds = [None] * len(ROOM_TILES)
         self.grid_pose = None
         self.next_room_draw = 0.0
         self._ball_items = tuple(
@@ -1066,7 +1066,9 @@ class AimTestPane:
                     (old_y - y) * MOUSE_LOOK_RADIANS_PER_PIXEL,
                 )
         center = left + width // 2, top + height // 2
-        self._mouse_position = center if _warp_mouse(*center) else position
+        # Windows can clamp a successful warp. Use its actual landing point
+        # so the queued Motion cannot turn the camera while the mouse is still.
+        self._mouse_position = self._view.winfo_pointerxy() if _warp_mouse(*center) else position
         self._mouse_priority_until = now + MOUSE_PRIORITY_SECONDS
 
     def _mouse_click(self, event):
@@ -1448,7 +1450,6 @@ class AimTestPane:
                 self.canvas, (*items, self.countdown_item, self.finish_hint_item),
             )
         overlays, labels = self._gpu_overlay
-        lines = self._gpu_lines if self.mode_is_3d else ()
         balls = tuple(
             (*bounds, color)
             for bounds, color in zip(self._ball_bounds, self._ball_colors)
@@ -1463,7 +1464,8 @@ class AimTestPane:
             ))
         try:
             self.gpu.draw(
-                *self.size, lines=lines, balls=balls, ball_outlines=self._ball_outlines, reticle=reticle,
+                *self.size, room=self._gpu_room if self.mode_is_3d else (),
+                balls=balls, ball_outlines=self._ball_outlines, reticle=reticle,
                 fragments=self._gpu_fragments, overlays=overlays, labels=labels,
             )
         except (OSError, RuntimeError) as error:
@@ -1605,8 +1607,8 @@ class AimTestPane:
         self._ball_outlines = show_outlines
 
     def _sync_canvas_scene(self):
-        for item, bounds in zip(self.grid_lines, self.grid_bounds):
-            self.canvas.coords(item, *(bounds or (-20, -20, -20, -20)))
+        for item, bounds in zip(self.grid_tiles, self.grid_bounds):
+            self.canvas.coords(item, *(bounds or HIDDEN_TILE))
         for item, bounds, color in zip(self._ball_items, self._ball_bounds, self._ball_colors):
             self._position_ball(item, bounds)
             outline = target_outline_color(color) if self._ball_outlines else ""
@@ -1624,12 +1626,6 @@ class AimTestPane:
 
     def _draw_scene(self, width, height):
         transform = self.scene.camera_transform()
-        cx, cy, focal = width / 2, height / 2, height * FOCAL_SCALE
-
-        def project(point):
-            x, y, z = point
-            return cx + focal * x / z, cy - focal * y / z
-
         pose = width, height, self.scene.yaw, self.scene.pitch
         if self._render_worker is not None:
             room_changed = False  # The worker projects the matching scene pose.
@@ -1643,27 +1639,15 @@ class AimTestPane:
             if not resized and now >= self.next_room_draw:
                 _, _, yaw, pitch = self.grid_pose
                 yaw_change = math.remainder(self.scene.yaw - yaw, math.tau)
-                room_changed = max(abs(yaw_change), abs(self.scene.pitch - pitch)) * focal >= 0.5
+                room_changed = max(abs(yaw_change), abs(self.scene.pitch - pitch)) * height * FOCAL_SCALE >= 0.5
             if room_changed:
                 self.next_room_draw = now + room_redraw_interval(width, height)
         if room_changed:
             self.grid_pose = pose
-            for index, (item, (_color, start, end)) in enumerate(zip(self.grid_lines, ROOM_LINES)):
-                clipped = clip_near(transform(start), transform(end))
-                bounds = None if clipped is None else clip_viewport(
-                    project(clipped[0]), project(clipped[1]), width, height,
-                )
-                if bounds is not None and self.gpu is None:
-                    bounds = tuple(round(value) for value in bounds)
-                if bounds != self.grid_bounds[index]:
-                    self.grid_bounds[index] = bounds
-                    if self.gpu is None:
-                        self.canvas.coords(item, *(bounds or (-20, -20, -20, -20)))
             if self.gpu is not None:
-                self._gpu_lines = tuple(
-                    (*bounds, line[0]) for line, bounds in zip(ROOM_LINES, self.grid_bounds)
-                    if bounds is not None
-                )
+                self._gpu_room = project_room(*pose)
+            else:
+                self._draw_canvas_room(pose)
         targets = list(map(transform, self.scene.target_positions()))
         if (len(targets) == 2 and (first := self.scene.crosshair_depth(targets[0])) is not None
                 and (second := self.scene.crosshair_depth(targets[1])) is not None):
@@ -1683,3 +1667,12 @@ class AimTestPane:
                 on_target = on_target or self.scene.on_target(target)
         self._draw_balls(visible, on_target and not self.mode_is_shooting, distances=distances)
         return on_target
+
+    def _draw_canvas_room(self, pose):
+        polygons = dict(project_room_polygons(*pose))
+        for index, item in enumerate(self.grid_tiles):
+            points = polygons.get(index)
+            bounds = tuple(round(value) for point in points for value in point) if points else None
+            if bounds != self.grid_bounds[index]:
+                self.grid_bounds[index] = bounds
+                self.canvas.coords(item, *(bounds or HIDDEN_TILE))

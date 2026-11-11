@@ -250,7 +250,7 @@ class AimPaneTests(unittest.TestCase):
 
         def renderer(_hwnd, _width, _height):
             return SimpleNamespace(
-                draw=lambda _w, _h, **parts: draws.append(dict(parts, lines=tuple(parts["lines"]))),
+                draw=lambda _w, _h, **parts: draws.append(parts),
                 close=lambda: closed.append(True),
             )
 
@@ -269,16 +269,19 @@ class AimPaneTests(unittest.TestCase):
 
         pane.next_draw = 0.0
         pane._draw_if_due(1.0)
-        self.assertTrue(draws[-1]["lines"])
+        self.assertTrue(draws[-1]["room"])
         first = draws[-1]
         self.assertEqual(first["reticle"][2], pane.settings.reticle_size / 2)
         pane.scene.yaw = 0.08
         pane.next_draw = 0.0
         # Even if a software grid repaint would still be on cooldown, the GPU
-        # frame uses the same current camera for the lines and the target.
+        # frame uses the same current camera for the tiles and the target.
         pane.next_room_draw = float("inf")
         pane._draw_if_due(1.001)
-        self.assertNotEqual(draws[-1]["lines"], first["lines"])
+        self.assertNotEqual(
+            [vertices[:count * 6] for _, vertices, count in draws[-1]["room"]],
+            [vertices[:count * 6] for _, vertices, count in first["room"]],
+        )
         self.assertNotEqual(draws[-1]["balls"], first["balls"])
 
         pane.dimension.set("2d")
@@ -287,10 +290,28 @@ class AimPaneTests(unittest.TestCase):
         self.assertEqual(closed, [])
         pane.next_draw = 0.0
         pane._draw_if_due(1.002)
-        self.assertEqual(draws[-1]["lines"], ())
+        self.assertEqual(draws[-1]["room"], ())
         pane.close_test()
         self.assertEqual(closed, [True])
         self.assertIs(pane._view, pane.canvas)
+
+    def test_tk_3d_room_uses_filled_tiles_and_hides_them_in_2d(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_model import FLOOR_TILE_COLORS, WALL_TILE_COLORS
+
+        pane = AimTestPane(self.root, str, lambda: None)
+        pane.dimension.set("3d")
+        pane._reset()
+        visible = [item for item, bounds in zip(pane.grid_tiles, pane.grid_bounds) if bounds is not None]
+        self.assertEqual(
+            {pane.canvas.itemcget(item, "fill") for item in visible},
+            {*FLOOR_TILE_COLORS, *WALL_TILE_COLORS},
+        )
+        self.assertTrue(all(pane.canvas.type(item) == "polygon" for item in visible))
+        self.assertTrue(all(pane.canvas.itemcget(item, "outline") == "" for item in visible))
+        pane.dimension.set("2d")
+        pane._reset()
+        self.assertTrue(all(pane.canvas.itemcget(item, "state") == "hidden" for item in visible))
 
     def test_3d_depth_shading_matches_in_tk_and_gpu_and_keeps_dark_colors_visible(self):
         from dataclasses import replace
@@ -1902,6 +1923,11 @@ class AimPaneTests(unittest.TestCase):
               patch.object(view, "focus_displayof", return_value=view),
               patch.object(view, "winfo_containing", return_value=view),
               patch("gamepad_aim._warp_mouse", return_value=True) as warp):
+            def center_pointer(x, y):
+                pointer.return_value = x, y
+                return True
+
+            warp.side_effect = center_pointer
             pane._mouse_move(event, started - 1)
             warp.assert_not_called()
             pane._advance_countdown(started)
@@ -1927,6 +1953,46 @@ class AimPaneTests(unittest.TestCase):
                 pane._mouse_click(event)
             self.assertAlmostEqual(pane.scene.yaw, math.atan2(2, 8))
         self.assertEqual((pane.shooting.hits, pane.shooting.shots), (1, 1))
+
+    def test_3d_mouse_warp_readback_prevents_drift_when_windows_offsets_center(self):
+        from gamepad_aim import AimTestPane, MOUSE_LOOK_RADIANS_PER_PIXEL
+        from gamepad_aim_settings import AimSettings
+
+        pane = AimTestPane(self.root, str, lambda: None)
+        pane._save_settings(AimSettings(fullscreen=False, window_size="800x450"))
+        pane._start()
+        view = pane._view
+        started = pane.countdown_until
+        event = SimpleNamespace(x=pane.size[0] // 2, y=pane.size[1] // 2)
+        center = view.winfo_rootx() + event.x, view.winfo_rooty() + event.y
+        with (
+            patch.object(view, "winfo_pointerxy", return_value=center) as pointer,
+            patch.object(view, "focus_displayof", return_value=view),
+            patch.object(view, "winfo_containing", return_value=view),
+            patch("gamepad_aim._warp_mouse") as warp,
+        ):
+            def warp_one_pixel_short(x, y):
+                pointer.return_value = x - 1, y + 1
+                return True
+
+            warp.side_effect = warp_one_pixel_short
+            pane._advance_countdown(started)
+            pointer.return_value = center[0] + 20, center[1] - 10
+            pane._mouse_move(event, started + 0.01)
+            pose = pane.scene.yaw, pane.scene.pitch
+            self.assertAlmostEqual(pose[0], 20 * MOUSE_LOOK_RADIANS_PER_PIXEL)
+            self.assertAlmostEqual(pose[1], 10 * MOUSE_LOOK_RADIANS_PER_PIXEL)
+            for tick in range(2, 12):
+                now = started + 0.01 * tick
+                pane._mouse_move(event, now)
+                pane._simulate_tick(now)
+            self.assertEqual((pane.scene.yaw, pane.scene.pitch), pose)
+            warp.assert_called_once_with(*center)
+
+            pointer.return_value = center[0], center[1] + 1
+            pane._mouse_move(event, started + 0.12)
+            self.assertAlmostEqual(pane.scene.yaw, pose[0] + MOUSE_LOOK_RADIANS_PER_PIXEL)
+            self.assertEqual(pane.scene.pitch, pose[1])
 
     def test_3d_mouse_reentry_reanchors_without_turning(self):
         from gamepad_aim import AimTestPane

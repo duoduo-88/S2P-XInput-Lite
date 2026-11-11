@@ -28,12 +28,12 @@ class AimRenderWorkerTests(unittest.TestCase):
         calls = []
         threads = []
         projected = []
-        lines = ((0, 0, 100, 100, "#ffffff"),)
+        room = (object(),)
         pose = (640, 360, 0.1, 0.2)
 
         def project_room(*pose_args):
             projected.append(pose_args)
-            return lines
+            return room
 
         def factory(*_args):
             threads.append(threading.get_ident())
@@ -73,7 +73,7 @@ class AimRenderWorkerTests(unittest.TestCase):
         self.assertEqual([parts["balls"][0][0] for parts in calls], [1, 3])
         self.assertEqual([parts["ball_outlines"] for parts in calls], [True, False])
         self.assertEqual(projected, [pose])
-        self.assertIs(calls[0]["lines"], calls[1]["lines"])
+        self.assertIs(calls[0]["room"], calls[1]["room"])
         self.assertEqual(len(set(threads)), 1)
         self.assertNotEqual(threads[0], threading.get_ident())
 

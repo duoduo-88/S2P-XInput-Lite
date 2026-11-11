@@ -84,7 +84,7 @@ Detailed setting descriptions are available from the `?` buttons in the applicat
 
 ### Aim Test and Directional Deadzone Demos
 
-Simple targets, a wireframe grid, and brief hit feedback keep rendering light.
+Simple targets, a low-contrast room, and brief hit feedback keep rendering light.
 Aim Test uses the selected S2P bridge output or physical controller input
 available through Windows. It adds no response curves, deadzones, or aim assist.
 Direct2D targets the active monitor's current refresh rate.

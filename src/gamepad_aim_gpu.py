@@ -3,7 +3,6 @@
 import ctypes
 import sys
 from functools import lru_cache, partial
-from itertools import islice
 from uuid import UUID
 
 
@@ -111,9 +110,8 @@ class Direct2DAimRenderer:
         self._brushes = {}
         self._formats = {}
         self._layouts = {}
-        self._line_source = self._rectangle_source = self._label_source = None
-        self._lines = []
-        self._visible_lines = 0
+        self._room_source = self._rectangle_source = self._label_source = None
+        self._room_meshes = ()
         self._rectangles = self._labels = ()
         self._ellipse = _Ellipse()
         self._ellipse_center = self._ellipse.center
@@ -203,10 +201,13 @@ class Direct2DAimRenderer:
             _PTR,
             ctypes.POINTER(_PTR),
         )
+        self._create_mesh = _method(target, 14, _HRESULT, ctypes.POINTER(_PTR))
         self._draw_line = _method(target, 15, None, _Point, _Point, _PTR, _FLOAT, _PTR)
         self._fill_rect = _method(target, 17, None, ctypes.POINTER(_Rect), _PTR)
         self._fill_ellipse = _method(target, 21, None, ctypes.POINTER(_Ellipse), _PTR)
+        self._fill_mesh = _method(target, 24, None, _PTR, _PTR)
         self._draw_text_layout = _method(target, 28, None, _Point, _PTR, _PTR, _UINT)
+        self._set_antialias = _method(target, 32, None, _UINT)
         _method(target, 34, None, _UINT)(2)  # SetTextAntialiasMode(GRAYSCALE)
         self._clear = _method(target, 47, None, ctypes.POINTER(_Color))
         self._begin_draw = _method(target, 48, None)
@@ -261,22 +262,35 @@ class Direct2DAimRenderer:
             self._formats[key] = text_format
         return text_format
 
-    def _prepare_lines(self, lines):
-        if lines is self._line_source:
+    def _release_room(self):
+        for mesh, _ in self._room_meshes:
+            _release(mesh)
+        self._room_meshes = ()
+        self._room_source = None
+
+    def _prepare_room(self, room):
+        if room is self._room_source:
             return
-        count = 0
-        # Keep one-pixel alignment and the order of overlapping strokes.
-        for count, (x0, y0, x1, y1, color) in enumerate(lines, 1):
-            if count > len(self._lines):
-                self._lines.append((_Point(x0 + 0.5, y0 + 0.5), _Point(x1 + 0.5, y1 + 0.5),
-                                    self._brush(color), color))
-                continue
-            start, end, _brush, previous_color = self._lines[count - 1]
-            start.x, start.y, end.x, end.y = x0 + 0.5, y0 + 0.5, x1 + 0.5, y1 + 0.5
-            if color != previous_color:
-                self._lines[count - 1] = (start, end, self._brush(color), color)
-        self._visible_lines = count
-        self._line_source = lines if type(lines) is tuple else None
+        meshes = []
+        try:
+            for color, vertices, count in room:
+                brush = self._brush(color)
+                mesh, sink = _PTR(), _PTR()
+                _check_hresult(self._create_mesh(ctypes.byref(mesh)), "CreateMesh")
+                meshes.append((mesh, brush))
+                _check_hresult(_method(mesh, 4, _HRESULT, ctypes.POINTER(_PTR))(ctypes.byref(sink)), "Mesh.Open")
+                try:
+                    _method(sink, 3, None, ctypes.POINTER(_FLOAT), _UINT)(vertices, count)
+                    _check_hresult(_method(sink, 4, _HRESULT)(), "TessellationSink.Close")
+                finally:
+                    _release(sink)
+        except BaseException:
+            for mesh, _ in meshes:
+                _release(mesh)
+            raise
+        self._release_room()
+        self._room_meshes = tuple(meshes)
+        self._room_source = room
 
     def _prepare_overlay(self, rectangles, labels):
         if rectangles is not self._rectangle_source:
@@ -324,7 +338,7 @@ class Direct2DAimRenderer:
         width,
         height,
         *,
-        lines=(),
+        room=(),
         balls=(),
         ball_outlines=True,
         reticle=None,
@@ -344,19 +358,26 @@ class Direct2DAimRenderer:
         brush_limit = 640  # Keep both 256-step target palettes resident.
         if len(self._brushes) > brush_limit:
             # Prepared commands contain borrowed brushes from this target.
-            self._line_source = self._rectangle_source = self._label_source = None
-            self._lines.clear()
+            self._release_room()
+            self._rectangle_source = self._label_source = None
         for cache, limit in ((self._brushes, brush_limit), (self._formats, 32)):
             while len(cache) > limit:
                 _release(cache.pop(next(iter(cache))))
-        self._prepare_lines(lines)
+        self._prepare_room(room)
         self._prepare_overlay(overlays, labels)
 
         self._begin_draw()
         try:
             self._clear(_BACKGROUND_POINTER)
-            for start, end, brush, _color in islice(self._lines, self._visible_lines):
-                self._draw_line(start, end, brush, 1.0, None)
+            if self._room_meshes:
+                # FillMesh requires aliased coverage. Restore edge AA for the
+                # targets and reticle after filling the adjoining tiles.
+                self._set_antialias(1)
+                try:
+                    for mesh, brush in self._room_meshes:
+                        self._fill_mesh(mesh, brush)
+                finally:
+                    self._set_antialias(0)
             ellipse, center = self._ellipse, self._ellipse_center
             for x, y, radius, color in balls:
                 center.x, center.y = x, y
@@ -387,9 +408,8 @@ class Direct2DAimRenderer:
 
     def close(self):
         """Release the renderer's native resources before the window is destroyed."""
-        self._line_source = self._rectangle_source = self._label_source = None
-        self._lines.clear()
-        self._visible_lines = 0
+        self._release_room()
+        self._rectangle_source = self._label_source = None
         self._rectangles = self._labels = ()
         for cache in (self._layouts, self._formats, self._brushes):
             for resource in cache.values():

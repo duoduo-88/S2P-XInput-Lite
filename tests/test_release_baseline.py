@@ -13,9 +13,9 @@ FIRMWARE_ROOT = (
 
 
 class ReleaseBaselineTests(unittest.TestCase):
-    def test_desktop_release_version_is_080(self):
+    def test_desktop_release_version_is_081(self):
         source = (ROOT / "src" / "version.py").read_text(encoding="utf-8")
-        self.assertRegex(source, r'VERSION\s*=\s*"0\.8\.0"')
+        self.assertRegex(source, r'VERSION\s*=\s*"0\.8\.1"')
 
     def test_release_manifest_requires_exact_payload_coverage(self):
         source = (ROOT / "scripts" / "verify_release.ps1").read_text(
