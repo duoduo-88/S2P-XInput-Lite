@@ -34,7 +34,7 @@ _MODE_LABELS = {
     "timed-cursor-mouse": ("2D", "限時 · Windows 游標"),
 }
 _METRIC_UNITS = {"hits": "", "accuracy": "%", "seconds": " s", "tracking": "%"}
-_APPEARANCE_KEYS = {"reticle", "reticle_size", "target_color"}
+_COMPARISON_IGNORED_KEYS = {"reticle", "reticle_size", "target_color", "mouse_sensitivity"}
 
 
 def _precision(key, unit):
@@ -62,7 +62,7 @@ def _metric_unit(key, mode):
 
 
 def _comparison_basis(basis):
-    return {key: value for key, value in basis.items() if key not in _APPEARANCE_KEYS}
+    return {key: value for key, value in basis.items() if key not in _COMPARISON_IGNORED_KEYS}
 
 
 def _matching_records(records, basis):
@@ -327,20 +327,13 @@ class _HistoryView(ttk.Frame):
         dimension, label = _MODE_LABELS[mode]
         return f"{dimension} · {self.tr(label)}"
 
-    def _unit(self, key, mode, *, change=False):
-        if key == "seconds":
-            return f" {self.tr('秒')}"
-        if change and key in ("tracking", "accuracy"):
-            return f" {self.tr('百分點')}"
-        return _metric_unit(key, mode)
-
     def _metric_text(self, key, basis, metrics):
         value = metrics.get(key)
         if value is None:
             return "—"
         if key == "hits":
             return f"{value:.0f}/{basis['targets']}" if basis["targets"] else f"{value:.0f}"
-        unit = self._unit(key, basis["mode"])
+        unit = _metric_unit(key, basis["mode"])
         return f"{value:.{_precision(key, unit)}f}{unit}"
 
     def refresh(self):
@@ -377,7 +370,7 @@ class _HistoryView(ttk.Frame):
         basis = record["basis"]
         width, height = basis["viewport"]
         settings_label = (
-            "時限 {seconds} 秒 · 種子 {seed} · {width}×{height}"
+            "時限 {seconds} s · 種子 {seed} · {width}×{height}"
             if basis["seconds"] else "不限時 · 種子 {seed} · {width}×{height}"
         )
         settings = self.tr(settings_label).format(
@@ -399,7 +392,8 @@ class _HistoryView(ttk.Frame):
         if changes:
             ttk.Label(self.comparison, text=self.tr("與同設定最佳成績比較")).pack(side="left")
             for key, difference, improved in changes:
-                delta = format_change(key, difference, self._unit(key, basis["mode"], change=True))
+                unit = _metric_unit(key, basis["mode"]) if key == "error" else None
+                delta = format_change(key, difference, unit)
                 ttk.Label(
                     self.comparison, text=f"{self.tr(METRIC_LABELS[key])} {delta}",
                     foreground=CHANGE_COLORS[improved],
@@ -423,6 +417,9 @@ class _HistoryView(ttk.Frame):
         sound = basis.get("sound")
         if type(sound) is bool:
             options.append(self.tr("音效開啟" if sound else "音效關閉"))
+        sensitivity = basis.get("mouse_sensitivity", 100)
+        if _MODE_LABELS[basis["mode"]][0] == "3D" and type(sensitivity) is int:
+            options.append(self.tr("滑鼠感度 {value}%").format(value=sensitivity))
         if options:
             self.settings_label.configure(text=" · ".join(options))
             self.settings_label.pack(fill="x", before=self.comparison)

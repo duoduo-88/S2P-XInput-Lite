@@ -26,6 +26,7 @@ LIMITS = {
     "rumble": (0, 100),
     "horizontal_spread": (25, 180),
     "vertical_spread": (25, 180),
+    "mouse_sensitivity": (10, 300),
     "reticle_size": (6, 48),
     "target_size_2d": (2, 20),
 }
@@ -67,6 +68,7 @@ class AimSettings:
     timed_shooting_seconds: int = 30
     fullscreen_size: str = ""
     depth_shading: bool = True
+    mouse_sensitivity: int = 100
 
     @classmethod
     def load(cls, path):
@@ -131,6 +133,8 @@ class AimSettings:
                 value = getattr(self, key)
                 if value != 100:
                     basis[key] = value
+        if (shooting or mode == "tracking") and self.mouse_sensitivity != 100:
+            basis["mouse_sensitivity"] = self.mouse_sensitivity
         if not mode.endswith("cursor-mouse") and self.reticle_size != 14:
             basis["reticle_size"] = self.reticle_size
         if mode.startswith(("cursor-", "timed-cursor")) and self.target_size_2d != 7:
@@ -154,6 +158,7 @@ def show_aim_settings(parent, tr, current, apply):
         ("tracking_seconds", "跟槍秒數"),
         ("seed", "出靶種子（0 為固定配置）"),
         ("timed_shooting_seconds", "限時點靶秒數"),
+        ("mouse_sensitivity", "3D 滑鼠感度（%）"),
     )
     first = None
     for row, (key, label) in enumerate(inputs):
@@ -162,6 +167,8 @@ def show_aim_settings(parent, tr, current, apply):
         entry = ttk.Spinbox(body, from_=LIMITS[key][0], to=LIMITS[key][1],
                             textvariable=values[key], width=10)
         entry.grid(row=row, column=1, sticky="ew", pady=4)
+        if key == "mouse_sensitivity":
+            HoverTip(entry, tr("100% 為預設感度，每像素轉動 0.18°。50% 為一半感度。"))
         if first is None:
             first = entry
     ttk.Button(

@@ -27,11 +27,18 @@ class AimSettingsTests(unittest.TestCase):
                 owner, str, AimSettings(
                     target_count=37, target_color="#ff0000", depth=91, sound=False,
                     window_size="960x540", fullscreen=True, fullscreen_size="1920x1080",
+                    mouse_sensitivity=125,
                 ),
                 saved.append,
             )
         owner.update()
         body = dialog.winfo_children()[0]
+        sensitivity_label = next(
+            child for child in body.winfo_children()
+            if isinstance(child, ttk.Label) and child.cget("text") == "3D 滑鼠感度（%）"
+        )
+        sensitivity = body.grid_slaves(row=sensitivity_label.grid_info()["row"], column=1)[0]
+        self.assertEqual(sensitivity.get(), "125")
         seed_input = body.grid_slaves(row=3, column=1)[0]
         randomize = body.grid_slaves(row=3, column=2)[0]
         self.assertEqual(randomize.cget("text"), "↻")
@@ -73,14 +80,21 @@ class AimSettingsTests(unittest.TestCase):
         self.assertTrue(dialog.winfo_exists())
         buttons["恢復預設"].invoke()
         self.assertEqual(saved, [])
+        self.assertEqual(sensitivity.get(), "100")
         self.assertTrue(shading.instate(["selected"]))
         self.assertEqual(size_picker.get(), "自動（最高）")
         self.assertTrue(size_picker.instate(["readonly", "!disabled"]))
         self.assertTrue(fullscreen.instate(["selected"]))
         size_picker.set("1706x960")
         shading.invoke()
+        sensitivity.set("301")
         buttons["儲存"].invoke()
-        self.assertEqual(saved, [AimSettings(fullscreen=True, fullscreen_size="1706x960", depth_shading=False)])
+        self.assertEqual(saved, [])
+        sensitivity.set("50")
+        buttons["儲存"].invoke()
+        self.assertEqual(saved, [AimSettings(
+            fullscreen=True, fullscreen_size="1706x960", depth_shading=False, mouse_sensitivity=50,
+        )])
 
         with patch("gamepad_aim_settings.available_resolutions", side_effect=OSError):
             dialog = show_aim_settings(owner, str, AimSettings(fullscreen=True), saved.append)
@@ -108,11 +122,16 @@ class AimSettingsTests(unittest.TestCase):
         self.assertEqual((point["targets"], point["seconds"], point["depth"]), (24, 40, 80))
         self.assertNotEqual(point, settings.basis("shooting", (1920, 1080)))
         self.assertNotEqual(point, settings.basis("cursor-stick", (700, 500)))
-        custom = AimSettings(reticle_size=26, target_size_2d=14)
+        custom = AimSettings(reticle_size=26, target_size_2d=14, mouse_sensitivity=50)
         self.assertEqual(custom.basis("cursor-stick", (700, 500))["reticle_size"], 26)
         self.assertEqual(custom.basis("cursor-mouse", (700, 500))["target_size_2d"], 14)
         self.assertNotIn("reticle_size", custom.basis("cursor-mouse", (700, 500)))
         self.assertNotIn("target_size_2d", custom.basis("shooting", (700, 500)))
+        for mode in ("tracking", "shooting", "timed-shooting"):
+            self.assertNotIn("mouse_sensitivity", AimSettings().basis(mode, (700, 500)))
+            self.assertEqual(custom.basis(mode, (700, 500))["mouse_sensitivity"], 50)
+        for mode in ("cursor-tracking", "cursor-shooting", "timed-cursor"):
+            self.assertNotIn("mouse_sensitivity", custom.basis(mode, (700, 500)))
 
     def test_depth_shading_keeps_the_comparison_basis_and_new_3d_hit_order_separates_it(self):
         from gamepad_aim_history import AimHistory
@@ -153,17 +172,19 @@ class AimSettingsTests(unittest.TestCase):
                 target_count=16, depth=82, target_color="#ff8800", sound=False, depth_shading=False,
                 window_size="1706x960", fullscreen=True,
                 reticle_on_target_color="#ff4775", target_on_target_color="#ddf095",
+                mouse_sensitivity=50,
             )
             settings.save(path)
             self.assertEqual(AimSettings.load(path), settings)
             path.write_text(
                 '{"target_count": -1, "reticle_color": "invalid", "depth": 40, '
-                '"window_size": "999x0", "fullscreen": 1}',
+                '"window_size": "999x0", "fullscreen": 1, "mouse_sensitivity": 301}',
                 encoding="utf-8",
             )
             self.assertEqual(AimSettings.load(path), AimSettings(depth=40))
             path.write_text('{"seed": 54}', encoding="utf-8")
             legacy = AimSettings.load(path)
+            self.assertEqual(legacy.mouse_sensitivity, 100)
             self.assertEqual((legacy.seed, legacy.window_size, legacy.fullscreen),
                              (54, "", True))
             path.write_text('{"fullscreen": false, "window_size": "960x540"}', encoding="utf-8")

@@ -38,7 +38,7 @@ class AimHistoryTests(unittest.TestCase):
             path = Path(directory) / "history.json"
             history = AimHistory(path)
             history.add(basis(), {"hits": 10, "accuracy": 70, "seconds": 16, "error": 2})
-            history.add(basis(), {"hits": 10, "accuracy": 85, "seconds": 15, "error": 3})
+            history.add(basis(mouse_sensitivity=50), {"hits": 10, "accuracy": 85, "seconds": 15, "error": 3})
             history.add(basis(), {"hits": 10, "accuracy": 80, "seconds": 12, "error": 2})
             for changed in (
                 basis(mode="cursor-mouse"), basis(targets=15), basis(seconds=45),
@@ -46,12 +46,14 @@ class AimHistoryTests(unittest.TestCase):
             ):
                 self.assertEqual(history.add(changed, {"hits": 10, "accuracy": 100}), ())
 
-            changes = AimHistory(path).add(
-                basis(), {"hits": 10, "accuracy": 82.5, "seconds": 14, "error": 2.75},
-            )
+            reopened = AimHistory(path)
+            tuned = basis(mouse_sensitivity=125)
+            self.assertTrue(reopened.has_matching_record(tuned))
+            changes = reopened.add(tuned, {"hits": 10, "accuracy": 82.5, "seconds": 14, "error": 2.75})
             self.assertEqual(changes, (
                 ("accuracy", -2.5, False), ("seconds", -1.0, True), ("error", -0.25, True),
             ))
+            self.assertEqual(reopened.records[-1]["basis"]["mouse_sensitivity"], 125)
 
     def test_completion_time_requires_two_completed_point_rounds(self):
         from gamepad_aim_history import AimHistory
@@ -281,6 +283,7 @@ class AimHistoryTests(unittest.TestCase):
         self.assertEqual(view.tree.set(rows[0], "hits"), "4")
         self.assertEqual(view.tree.set(rows[0], "mode"), "3D · 限時點靶")
         self.assertIn("遠近差異 50% · 水平 60%／垂直 80%", view.basis_label.cget("text"))
+        self.assertIn("滑鼠感度 100%", view.settings_label.cget("text"))
 
         with patch("gamepad_aim_history.messagebox.askyesno", return_value=True):
             view.clear_button.invoke()
@@ -305,7 +308,7 @@ class AimHistoryTests(unittest.TestCase):
             seconds=0, reticle="#edf4fc", target_color="#57dab1", rumble=35, sound=False,
         )
         history.add(round_basis, {"hits": 2, "accuracy": 80})
-        history.add(round_basis, {"hits": 4, "accuracy": 75})
+        history.add(dict(round_basis, mouse_sensitivity=50), {"hits": 4, "accuracy": 75})
         cleared = []
         popup = history.show(root, str, lambda: cleared.append(True))
         self.assertIs(history.show(root, str, lambda: cleared.append(True)), popup)
@@ -326,10 +329,10 @@ class AimHistoryTests(unittest.TestCase):
             for child in children(popup) if isinstance(child, ttk.Label)
         }
         self.assertTrue(any(text.startswith("不限時") for text in colors))
-        self.assertIn("準心 #edf4fc · 靶色 #57dab1 · 震動 35% · 音效關閉", colors)
+        self.assertIn("準心 #edf4fc · 靶色 #57dab1 · 震動 35% · 音效關閉 · 滑鼠感度 50%", colors)
         self.assertIn("與同設定最佳成績比較", colors)
         self.assertEqual(colors["命中 ↑ +2"], "#15803d")
-        self.assertEqual(colors["命中率 ↓ -5.0 百分點"], "#b91c1c")
+        self.assertEqual(colors["命中率 ↓ -5.0 pp"], "#b91c1c")
         with patch("gamepad_aim_history.messagebox.askyesno", side_effect=(False, True)):
             clear.invoke()
             self.assertEqual(len(tree.get_children()), 2)

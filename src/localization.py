@@ -40,19 +40,21 @@ EN_TEXT = {
         "Press Enter or controller START to start or retry.",
     "同設定的紀錄須使用相同的模式、畫面尺寸、出靶種子、震動與音效。"
     "也會比對該模式的靶數、秒數、靶心大小、遠近與出靶範圍。"
-    "靶色、準心顏色與大小不影響比對。":
+    "靶色、準心顏色與大小不影響比對。"
+    "不同滑鼠感度的成績也能互相比較。":
         "History matches the mode, viewport size, layout seed, vibration, and sound settings. "
         "It also matches any target count, duration, target size, depth, and spread that apply. "
-        "Target color, reticle color, and reticle size are ignored.",
+        "Target color, reticle color, and reticle size are ignored. "
+        "Scores can be compared across mouse sensitivity settings.",
     "成績與同設定的歷史最佳回合比較。點靶依序比命中數、命中率、完成耗時與平均偏差。"
     "跟槍依序比跟靶率與平均偏差。":
         "Results are compared with the best earlier round using the same settings. "
         "Targets ranks by hits, accuracy, completion time, then mean error. "
         "Tracking ranks by time on target, then mean error.",
     "↑ 和 ↓ 表示數值上升或下降，綠色代表進步，紅色代表退步。"
-    "命中率和跟靶率的差異以百分點表示，例如從 80% 降到 65.6% 是下降 14.4 百分點。":
+    "命中率和跟靶率的差異以百分點（pp）表示，例如從 80% 降到 65.6% 顯示 −14.4 pp。":
         "↑ and ↓ show whether a value rose or fell. Green marks improvement and red marks a decline. "
-        "Accuracy and on-target changes use percentage points. A drop from 80% to 65.6% is 14.4 points.",
+        "Accuracy and on-target changes use percentage points (pp). A drop from 80% to 65.6% is shown as −14.4 pp.",
     "命中率是命中數除以射擊次數。兩次都打完所有靶才比較耗時。"
     "平均偏差是準心與靶心的平均距離，2D 用像素（px），3D 用角度（°）。"
     "耗時和平均偏差越小越好。":
@@ -72,6 +74,10 @@ EN_TEXT = {
     "加深遠近效果": "Darken distant targets",
     "3D 點靶水平範圍": "3D target horizontal spread",
     "3D 點靶垂直範圍": "3D target vertical spread",
+    "3D 滑鼠感度（%）": "3D mouse sensitivity (%)",
+    "100% 為預設感度，每像素轉動 0.18°。50% 為一半感度。":
+        "100% is the default (0.18° per cursor pixel). 50% halves the sensitivity.",
+    "滑鼠感度 {value}%": "Mouse sensitivity {value}%",
     "震動強度": "Vibration strength",
     "準心顏色": "Reticle color",
     "準心對靶色": "Reticle on target",
@@ -99,7 +105,7 @@ EN_TEXT = {
     "關閉": "Close",
     "百分點": "pp",
     "尚無瞄準測試紀錄。": "No aim test results yet.",
-    "時限 {seconds} 秒 · 種子 {seed} · {width}×{height}": "{seconds} s limit · Seed {seed} · {width}×{height}",
+    "時限 {seconds} s · 種子 {seed} · {width}×{height}": "{seconds} s limit · Seed {seed} · {width}×{height}",
     "不限時 · 種子 {seed} · {width}×{height}": "No time limit · Seed {seed} · {width}×{height}",
     "遠近差異 {depth}%": "Depth variation {depth}%",
     "水平 {horizontal}%／垂直 {vertical}%": "Horizontal {horizontal}% / Vertical {vertical}%",
@@ -151,10 +157,11 @@ EN_TEXT = {
         "Aim with the mouse or right stick. Left-click or press RT or Space to shoot.",
     "用右搖桿輸出移動游標，按 RT 或空白鍵點靶。":
         "Use right-stick output to move the cursor. Press RT or Space to shoot.",
-    "剩餘 {seconds:.1f} 秒　跟靶率 {percent}　平均偏差 {error}":
-        "{seconds:.1f} s left   On target {percent}   Mean error {error}",
-    "剩餘 {seconds:.1f} 秒　命中 {hits}　命中率 {accuracy}　平均偏差 {error}":
-        "{seconds:.1f} s left   Hits {hits}   Accuracy {accuracy}   Mean error {error}",
+    "剩餘 {seconds:.1f} s": "{seconds:.1f} s left",
+    "耗時 {seconds:.1f}/{limit} s": "Time {seconds:.1f}/{limit} s",
+    "跟靶率 {percent}　平均偏差 {error}": "On target {percent}   Mean error {error}",
+    "命中 {hits}　命中率 {accuracy}　平均偏差 {error}":
+        "Hits {hits}   Accuracy {accuracy}   Mean error {error}",
     "2D 和 3D 都有「限時點靶」。開場就有兩顆靶。"
     "靶會留到被擊中，命中後補新靶。倒數歸零時結算命中數，並記錄命中率與平均偏差。":
         "Timed Targets starts with two targets in both 2D and 3D. "
