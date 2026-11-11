@@ -89,14 +89,14 @@ Aim Test uses the selected S2P bridge output or physical controller input
 available through Windows. It adds no response curves, deadzones, or aim assist.
 Direct2D targets the active monitor's current refresh rate.
 
-![3D Aim Test demonstration](https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.8.0/aim.gif)
+![3D Aim Test demonstration](https://raw.githubusercontent.com/duoduo-88/S2P-XInput-Lite/main/image/v0.8.0/aim.gif)
 
 In the directional deadzone editor, drag each red sector to rotate it and enter
 its width as a percentage of the angle between adjacent directions.
 
 <p>
-  <img src="https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.8.0/directional-deadzone-8way.png" alt="8-way directional deadzone editor" width="45%">
-  <img src="https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.8.0/directional-deadzone-4way.png" alt="4-way directional deadzone editor with individually adjusted widths" width="45%">
+  <img src="https://raw.githubusercontent.com/duoduo-88/S2P-XInput-Lite/main/image/v0.8.0/directional-deadzone-8way.png" alt="8-way directional deadzone editor" width="45%">
+  <img src="https://raw.githubusercontent.com/duoduo-88/S2P-XInput-Lite/main/image/v0.8.0/directional-deadzone-4way.png" alt="4-way directional deadzone editor with individually adjusted widths" width="45%">
 </p>
 
 ## Requirements
