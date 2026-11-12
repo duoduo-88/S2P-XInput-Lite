@@ -2,6 +2,8 @@
 
 [English](README.md) · [使用手冊](manual/USER_GUIDE_zh-TW.md) · [English Guide](manual/USER_GUIDE.md)
 
+**[在 Ko-fi 贊助本專案](https://ko-fi.com/duoduo88)**
+
 **[Windows ZIP（v0.8.0）](https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.8.0/S2P-XInput-Lite-v0.8.0.zip)**
 
 [v0.8.0 更新說明](RELEASE_NOTES_v0.8.0.md)
