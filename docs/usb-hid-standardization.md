@@ -1,7 +1,7 @@
-# USB HID standardization — v0.7.14 / S2P-FW 1.0.7
+# USB HID standardization — v0.8.1 / S2P-FW 1.0.8
 
-This report documents the v0.7.14 release and its locally verified package.
-Hardware validation remains pending. The bridge protocol remains
+This report covers the current USB behavior and records earlier validation
+for v0.7.14 separately. Hardware validation remains pending. The bridge protocol remains
 `s2p_bridge 1.0.0`, with the existing standalone profile schema.
 
 ## USB identity and supported modes
@@ -57,8 +57,9 @@ the expected device identity before checking length and CRC.
 
 - With a connected controller, hold **HOME+A for 3 seconds and release** for HID,
   or **HOME+X for 3 seconds and release** for Bridge. HOME+Y is removed.
-  Chords use raw input before mapping/layers. Same-mode requests do not reboot;
-  failed mode saves do not reboot and leave CDC available.
+  Chords use new native input reports before mapping/layers and work while
+  Bridge CDC output is stalled. A same-mode chord leaves another controller
+  free to request a mode change. Failed mode saves leave CDC available for recovery.
 - Without a controller, CDC remains available in both modes. Close applications
   using the port, send `mode bridge`, and send `restart` after a successful save.
 - Without working CDC, use the board's ROM Download Mode via its native USB
@@ -75,6 +76,11 @@ output report; Android game rumble is not promised. Windows keyboard/mouse,
 Audio/Mix processing, process-based profiles and BLE HID are outside standalone
 support. Android USB OTG and game compatibility must be checked per device.
 
+With S2P-FW 1.0.8, standalone HID applies per-direction 4WAY and 8WAY deadzones
+to both sticks and enabled mapping layers. The desktop verifies the active
+profile after writing. On restart, it verifies the expected device and USB mode
+before checking the active profile length and CRC.
+
 ## Evidence boundaries
 
 The source is built using ESP-IDF 5.5.4 with reproducible builds and locked
@@ -84,12 +90,12 @@ Build/descriptor extraction, automated tests and package checks must be reported
 with their actual results, failures and skips. A source constant or mocked
 Windows output test alone is not hardware descriptor/ViGEm validation.
 The implementation plan in the source repository defines the integration checks.
-Historical performance and compatibility results
-predate this revision and are not proof for S2P-FW 1.0.7.
+Historical performance and compatibility results apply to the versions named
+in the validation records below.
 
 ## Validation
 
-### Portable ZIP follow-up (2026-10-20)
+### v0.7.14 portable ZIP follow-up (2026-10-20)
 
 - The root contains only `S2P-XInput-Lite.exe`, `GamepadTester.exe`,
   `START_HERE.txt` and `app/`. All support files, licenses and firmware are
@@ -105,7 +111,7 @@ predate this revision and are not proof for S2P-FW 1.0.7.
 - The package verifier passed exact manifest coverage, launcher hashes/layout
   metadata, profiles, third-party licenses, firmware evidence and runtime imports.
 
-### Local automated verification (2026-10-20)
+### v0.7.14 local automated verification (2026-10-20)
 
 - Complete suite: **672 tests passed, zero skips**, 26.307 seconds, using the
   bundled runtime with `S2P_RUN_IDF_BUILD=1` and `S2P_VERIFY_RELEASE_IMAGE=1`.
@@ -144,12 +150,13 @@ firmware hash and observed results before marking any item passed.
 | Windows desktop XInput | ViGEmBus output, buttons, sticks, triggers, mappings and gyro | Pending |
 | Windows feedback | Game rumble, stop frames, Audio and Mix haptics | Pending |
 | Android input/game compatibility | Buttons, both sticks, hat, independent analog triggers, Home/Capture behavior | Pending |
+| Android standalone direction deadzones | Check 4WAY/8WAY activation with slow and diagonal input on both sticks, mapping-layer overrides, and persistence after USB replug | Pending |
 | USB unplug/replug | Correct mode, identity and expected-device reconnect | Pending |
 | Sleep / remote wake / host shutdown | USB/BLE lifecycle and Bridge lease behavior | Pending |
 | Idle disconnect / BLE reconnect | Timeout, wake, reconnect and controller/ESP32 restart | Pending |
 | Actual NVS upgrade | Old 0/1/2/3, old keys, notice, repeated reboot, persistence failures | Pending |
 | Profile write/restart | A/B recovery, length/CRC and expected-device verification | Pending |
-| Raw recovery chords | HOME+A / HOME+X hold/release, remapped profiles, same-mode behavior | Pending |
+| Raw recovery chords | HOME+A / HOME+X hold/release, remapped profiles, stalled Bridge CDC output, and two controllers with one holding a same-mode chord | Pending |
 | CDC rescue | `mode bridge` + restart with no controller, both modes | Pending |
 | ROM rescue | Board BOOT/RESET procedure, flashing, reboot to application | Pending |
 
@@ -160,6 +167,7 @@ firmware hash and observed results before marking any item passed.
 桌面仍須驗證韌體身分，不能因同名或另一台 S2P 存在而套用專用 HID 解析。
 舊 PC XInput／Auto 升級會改成 HID 並提示；Windows 桌面 XInput 請切回 Bridge。
 HOME+A 長按 3 秒放開切 HID；HOME+X 長按 3 秒放開切 Bridge；HOME+Y 已移除。
+Bridge 的 CDC 傳送卡住時，仍可用手把救援。S2P-FW 1.0.8 的 Android USB HID
+獨立模式支援左右搖桿及啟用映射層的 4WAY／8WAY 逐區方向死區。
 無手把仍可用 CDC `mode bridge`，無 CDC 時依板商 BOOT／RESET 說明進 ROM 救援。
-Android 不承諾遊戲震動。上表全部實機項目仍待測，歷史量測及自動化測試不能代表
-本文件隨 v0.7.14 正式發佈。新版硬體驗證仍待完成；本表狀態代表實機驗證進度。
+Android 不承諾遊戲震動。上表的 v0.8.1 實機項目仍待測，歷史量測列在 v0.7.14 的驗證紀錄中。

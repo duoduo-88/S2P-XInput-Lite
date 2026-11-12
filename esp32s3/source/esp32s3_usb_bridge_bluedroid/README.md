@@ -1,6 +1,6 @@
 # S2P-XInput-Lite ESP32-S3 BLE Bridge
 
-This is `S2P-FW 1.0.7` for ESP32-S3 with 16 MB flash, using the independent
+This is `S2P-FW 1.0.8` for ESP32-S3 with 16 MB flash, using the independent
 `s2p_bridge 1.0.0` protocol and existing standalone profile schema.
 
 ## Bridge and Android USB HID
@@ -36,7 +36,8 @@ candidates only and must also pass identity verification.
 Chunked profile transfer validates CRC32 and length, uses A/B NVS slots with
 read-back verification and atomic active-slot switching, and limits profiles to
 8192 bytes. Interrupted/rejected transfers retain the previous valid profile.
-HID reuses calibration, curves/deadzones, output shape, button/direction mappings,
+HID reuses calibration, curves, center/outer deadzones, per-direction 4WAY and
+8WAY deadzones on both sticks and enabled mapping layers, output shape, button/direction mappings,
 linear triggers, compatible Mapping Layers, gyro-to-stick, battery LEDs,
 idle disconnect and reconnect. Desktop Bridge XInput through ViGEmBus, game
 rumble and audio haptics remain available. Standalone Windows keyboard/mouse,
@@ -49,9 +50,10 @@ keeps a safe in-memory mode for retry. Old sources are cleared only after durabl
 commit. `mode_migration` exposes the removed source mode to the desktop notice.
 
 Hold HOME+A for 3 seconds and release to select HID; HOME+X for 3 seconds and
-release selects Bridge. HOME+Y is removed. Raw-input chords bypass profile
-mappings/layers. Same-mode requests do not reboot; failed persistence does not
-reboot and leaves CDC available. New mode commands accept only `bridge` and
+release selects Bridge. HOME+Y is removed. Chords read native reports before
+profile mappings and layers, even while Bridge CDC output is stalled. Only a
+chord targeting a different mode can reserve recovery. Failed persistence leaves
+CDC available for recovery. New mode commands accept only `bridge` and
 `standalone_hid`; old `standalone`/`standalone_auto` return unsupported errors.
 
 CDC recovery remains available without a controller in either mode: `mode bridge`,
@@ -80,9 +82,9 @@ or begin commands carrying the released session ID cannot re-arm it. Closing
 the GUI releases its connector through the existing signal path; a Windows
 process-handle wait also handles a GUI-only crash. Legacy desktop clients
 that never send `host begin` do not arm the watchdog. Use the updated desktop
-source together with the 1.0.7 image for crash protection.
+source together with the bundled 1.0.8 image for crash protection.
 
-Android USB HID do not accept these host commands and
+Android USB HID uses an independent lifecycle and
 retain their existing idle disconnect, button wake and reconnect behavior
 with CDC/DTR absent. Mode commands persist the next boot mode; switching
 personality takes effect on restart, as before.

@@ -20,6 +20,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from config_utils import load_stick_calibration  # noqa: E402
+from direction_deadzones import (  # noqa: E402
+    CUSTOM_DEADZONE_KEY,
+    DIRECTION_SECTORS,
+    pick_direction,
+    zone_edges,
+)
 from settings_schema import read_section_settings  # noqa: E402
 from standalone_profile import _send_and_expect  # noqa: E402
 from stick_curve import apply_stick_curve  # noqa: E402
@@ -151,6 +157,9 @@ def _expected_direction(config, first, final):
         if mode == "4WAY"
         else (2, 1, 0, 7, 6, 5, 4, 3)
     )
+    zones = config.get(CUSTOM_DEADZONE_KEY, {}).get(mode)
+    edges = zone_edges(mode, zones) if zones else ()
+    sectors = DIRECTION_SECTORS[mode]
     active = None
     for x, y in (first, final):
         magnitude = math.hypot(x, y)
@@ -160,9 +169,14 @@ def _expected_direction(config, first, final):
         elif magnitude <= config["release_threshold"]:
             active = None
             continue
-        if magnitude < config["trigger_threshold"]:
+        if not edges and magnitude < config["trigger_threshold"]:
             continue
         angle = math.degrees(math.atan2(y, x)) % 360.0
+        if edges:
+            current = sectors[indices.index(active)] if active is not None else None
+            selected = pick_direction(mode, angle, edges, current)
+            active = indices[sectors.index(selected)] if selected is not None else None
+            continue
         half = sector_step / 2.0
         sector = int((angle + half) // sector_step) % len(indices)
         candidate = indices[sector]
@@ -182,6 +196,24 @@ def _expected_direction(config, first, final):
             continue
         active = candidate
     return -1 if active is None else active
+
+
+def _direction_probe_angles(config):
+    mode = config["mode"]
+    zones = config.get(CUSTOM_DEADZONE_KEY, {}).get(mode)
+    if not zones:
+        return (0.0, 39.0, 41.0, 49.0, 51.0, 89.0, 91.0)
+
+    edges = zone_edges(mode, zones)
+    step = 360.0 / len(edges)
+    angles = [0.0]
+    for gap, (start, end) in enumerate(edges):
+        origin = gap * step
+        angles.extend((origin + start / 2, origin + (end + step) / 2))
+        # Tiny intervals cannot reliably survive CDC coordinate rounding.
+        if end - start > 0.001:
+            angles.append(origin + (start + end) / 2)
+    return angles
 
 
 def run(port_name, baudrate, config_path):
@@ -359,7 +391,7 @@ def run(port_name, baudrate, config_path):
 
             if direction_settings[side]["mode"] in ("4WAY", "8WAY"):
                 first = (0.85, 0.0)
-                for angle in (0.0, 39.0, 41.0, 49.0, 51.0, 89.0, 91.0):
+                for angle in _direction_probe_angles(direction_settings[side]):
                     final = (
                         0.85 * math.cos(math.radians(angle)),
                         0.85 * math.sin(math.radians(angle)),

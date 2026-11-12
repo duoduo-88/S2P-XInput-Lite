@@ -109,15 +109,15 @@ class _WindowsDisplay:
         )
         self._change.restype = ctypes.c_int32
 
-    def monitor(self, hwnd):
+    def monitor(self, hwnd, *, work_area=False):
         if not self._is_window(hwnd):
             raise OSError("Display mode selection requires a valid owner window")
         # Tk's widget HWND may be inside a native top-level wrapper.
         owner = self._get_root(hwnd, _GA_ROOT) or hwnd
         monitor = self._monitor_from_window(owner, _MONITOR_DEFAULTTONEAREST)
-        return monitor, *self.monitor_info(monitor)
+        return monitor, *self.monitor_info(monitor, work_area=work_area)
 
-    def monitor_info(self, monitor):
+    def monitor_info(self, monitor, *, work_area=False):
         info = _MonitorInfo()
         info.cbSize = ctypes.sizeof(info)
         if (
@@ -126,7 +126,7 @@ class _WindowsDisplay:
             or not info.szDevice
         ):
             raise OSError("Cannot read the selected monitor's bounds")
-        rect = info.rcMonitor
+        rect = info.rcWork if work_area else info.rcMonitor
         return info.szDevice, (rect.left, rect.top, rect.right, rect.bottom)
 
     def read_mode(self, device, index):
@@ -170,6 +170,13 @@ def fullscreen_monitor_bounds(hwnd: int) -> tuple[int, int, int, int]:
     """Return the owner monitor's bounds in the window's DPI coordinate space."""
     with _MODE_LOCK:
         _, _, bounds = _WindowsDisplay().monitor(hwnd)
+        return bounds
+
+
+def window_work_area(hwnd: int) -> tuple[int, int, int, int]:
+    """Return the owner monitor's usable bounds, excluding the taskbar."""
+    with _MODE_LOCK:
+        _, _, bounds = _WindowsDisplay().monitor(hwnd, work_area=True)
         return bounds
 
 

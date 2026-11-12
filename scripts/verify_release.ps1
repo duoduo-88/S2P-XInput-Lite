@@ -359,7 +359,7 @@ $importCheck = (
     "import config_gui, gamepad_test_window, main; " +
     "from gamepad_render_native import load_render_library; " +
     "native = load_render_library(); " +
-    "assert native is not None and native.aim_project_room and native.s2p_trail_update; " +
+    "assert native is not None and native.aim_project_tiles and native.s2p_trail_update; " +
     "print('release import smoke test passed')"
 )
 & $runtimePython -B -c $importCheck

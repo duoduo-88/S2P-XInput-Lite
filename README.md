@@ -4,9 +4,15 @@
 
 **[Support the project on Ko-fi](https://ko-fi.com/duoduo88)**
 
-**[Windows ZIP (v0.8.0)](https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.8.0/S2P-XInput-Lite-v0.8.0.zip)**
+**[Windows ZIP (v0.8.1)](https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.8.1/S2P-XInput-Lite-v0.8.1.zip)**
 
-[v0.8.0 release notes](RELEASE_NOTES_v0.8.0.md)
+[v0.8.1 release notes](RELEASE_NOTES_v0.8.1.md)
+
+> [!IMPORTANT]
+> **ESP32-S3 firmware update in v0.8.1.** It bundles S2P-FW 1.0.8, which is
+> required for per-direction deadzones in Android USB HID standalone mode.
+> If you use the ESP32-S3 bridge, open **Flash FW** in the v0.8.1 main window
+> to check your installed version and update it. [Flashing instructions](manual/USER_GUIDE.md#flash-esp32-s3)
 
 Extract the entire ZIP, then open one of the two EXEs in its main folder:
 
@@ -32,7 +38,7 @@ S2P-XInput-Lite provides XInput-compatible controller output for a Switch 2 Pro 
 [Source](https://github.com/duoduo-88/S2P-XInput-Lite/tree/main) ·
 [Latest published release](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 
-The bundled **S2P-FW 1.0.7** supports CDC Bridge and Android USB HID
+The bundled **S2P-FW 1.0.8** supports CDC Bridge and Android USB HID
 standalone. On Windows, Bridge mode provides XInput through ViGEmBus.
 [USB modes, recovery and validation](docs/usb-hid-standardization.md)
 
@@ -49,7 +55,7 @@ standalone. On Windows, Bridge mode provides XInput through ViGEmBus.
 - Global mapping-layer files with hold/toggle activation, per-layer button and stick overrides, import/export, and per-profile enabled/order state
 - Per-controller stick calibration and connection-time gyro zero-bias initialization
 - Stick curves, deadzones, smoothing, stabilization, and output-shape adjustment
-- Per-direction angular deadzones with a radar editor for `4WAY` and `8WAY` stick mapping
+- Per-direction angular deadzones with a radar editor for `4WAY` and `8WAY` stick mapping, including Android USB HID standalone with S2P-FW 1.0.8
 - Consistent XInput-to-HD Rumble 2 conversion across USB, ESP32, and native BLE, with latest-only pacing, priority stop frames, and audio-reactive vibration
 - ESP32 profile writing for Android USB HID standalone operation without the
   Windows application, with controller chords and CDC available for recovery
@@ -66,7 +72,7 @@ standalone. On Windows, Bridge mode provides XInput through ViGEmBus.
   while Report Rate Test measures input reports. [Stick plots guide](manual/USER_GUIDE.md#92-stick-plots)
 - **Aim Test** offers Tracking, Targets, and Timed Targets in both 2D
   and 3D. Compare completed rounds with your best result under the same
-  conditions. [Aim Test guide](manual/USER_GUIDE.md#99-aim-test)
+  conditions. [Aim Test guide](manual/USER_GUIDE.md#aim-test-guide)
 - Built-in ESP32 diagnostics with timed tests, a clear pass/warn/fail verdict,
   and exportable text reports
 - Startup update notifications plus a manual check and shared automatic-check
@@ -84,14 +90,17 @@ standalone. On Windows, Bridge mode provides XInput through ViGEmBus.
 
 Detailed setting descriptions are available from the `?` buttons in the application.
 
-### Aim Test and Directional Deadzone Demos
+### Aim Test
 
-Simple targets, a wireframe grid, and brief hit feedback keep rendering light.
+Simple targets, a low-contrast checkerboard room, and brief hit feedback keep rendering light.
 Aim Test uses the selected S2P bridge output or physical controller input
 available through Windows. It adds no response curves, deadzones, or aim assist.
-Direct2D targets the active monitor's current refresh rate.
+Direct2D targets the active monitor's current refresh rate. The test shows
+draw FPS and 99% Low in the lower-right corner.
 
-[![3D Aim Test demonstration](image/v0.8.0/aim-preview.gif)](image/v0.8.0/aim.gif)
+[![v0.8.1 3D Aim Test demonstration](image/v0.8.1/aim-preview.gif)](image/v0.8.1/aim.gif)
+
+### Directional Deadzones
 
 In the directional deadzone editor, drag each red sector to rotate it and enter
 its width as a percentage of the angle between adjacent directions.
@@ -167,8 +176,8 @@ Reusable hardware probes and automated tests are maintained in the development r
 - Testing with multiple bridge implementations and controllers found that higher vibration amplitudes make a light mechanical tapping sound more likely when the output changes rapidly. The effect is usually minor during normal use.
 - The configurable amplitude range of `0` to `1023` is the protocol field range, not a published, certified safe limit for continuous hardware output. The system default maximum amplitude is `500`, about 49% of the field maximum, to reduce excessive-output noise while retaining clear feedback. Adjust it for the individual controller and personal preference, and lower it if tapping or other unusual sounds occur.
 - Set both LF and HF amplitudes to zero to stop vibration. Connection and PIN feedback use the same two short pulses as v0.5.1 (LF `225`, HF `481`, amplitude `800`) on every transport. HF `481` is retained only for this established cue and is not a recommended general-game frequency.
-- Before flashing, the application reads the connected ESP32 firmware version and compares it with the bundled `S2P-FW 1.0.7`. It then verifies that the bootloader reports an actual 16 MB flash chip before writing; smaller or unknown flash sizes are rejected. After a successful flash it waits for USB re-enumeration, starts the desktop connector automatically, and searches for the controller again.
-- S2P-FW 1.0.7 retains the bridge-only host lease: after session establishment, 3 seconds of continuous CDC loss or 8 seconds without host heartbeats starts BLE release. Android USB HID retains its independent idle disconnect and reconnect behavior. The updated desktop source and firmware are both required; see the [shutdown investigation and pending hardware checks](docs/bridge-host-shutdown.md).
+- Before flashing, the application reads the connected ESP32 firmware version and compares it with the bundled `S2P-FW 1.0.8`. It then verifies that the bootloader reports an actual 16 MB flash chip before writing; smaller or unknown flash sizes are rejected. After a successful flash it waits for USB re-enumeration, starts the desktop connector automatically, and searches for the controller again.
+- S2P-FW 1.0.8 retains the bridge-only host lease. After session establishment, 3 seconds of continuous CDC loss or 8 seconds without host heartbeats starts BLE release. Android USB HID uses its own idle disconnect and reconnect behavior. See the [shutdown investigation and pending hardware checks](docs/bridge-host-shutdown.md).
 - The status line reports 9-axis when sustained magnetometer data is available, or 6-axis when only gyro and accelerometer data are active.
 - If HidHide setup reports an error, close HidHide Configuration Client and retry. Restart Steam or the game after changing hiding, and reconnect USB if the physical controller remains visible.
 
@@ -189,10 +198,8 @@ Reusable hardware probes and automated tests are maintained in the development r
 - ESP32 standalone mode does not support Windows keyboard/mouse output, audio
   haptics, process-based profile switching, phone rumble, or BLE HID output
 - Motion is mapped to a stick or mouse; XInput does not expose raw motion sensors
-- The ESP32 connection requires compatible firmware. Standalone profile
-  writing, direct USB controller output, and the diagnostic page require the
-  bundled `S2P-FW 1.0.7`; older S2P builds and upstream firmware cannot provide
-  the complete `s2p_bridge 1.0.0` feature set.
+- Use the bundled `S2P-FW 1.0.8` for the current standalone profile and
+  diagnostic features. Profiles with per-direction deadzones require 1.0.8.
 - The GitHub source release includes the complete ESP32 source. Packaged
   releases include the flashing tool and firmware images under `app/esp32s3`, plus
   the flashing tool's exact tagged source and retained licenses under

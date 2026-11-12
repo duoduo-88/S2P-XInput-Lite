@@ -74,7 +74,7 @@ class AimRenderWorker:
             if self._closed:
                 return
             renderer = factory(hwnd, *size)
-            pose, lines = None, ()
+            pose, room = None, ()
             while True:
                 with self._condition:
                     self._condition.wait_for(lambda: self._closed or self._pending is not None)
@@ -85,18 +85,18 @@ class AimRenderWorker:
                 if frame.room_pose != pose:
                     pose = frame.room_pose
                     if pose is None:
-                        lines = ()
+                        room = ()
                     else:
                         if project_room is None:
                             from gamepad_aim_projection import project_room
-                        lines = project_room(*pose)
+                        room = project_room(*pose)
                 with self._condition:
                     if self._closed:
                         return
                     if generation != self._generation:
                         continue
                 renderer.draw(
-                    *frame.size, lines=lines, balls=frame.balls, reticle=frame.reticle,
+                    *frame.size, room=room, balls=frame.balls, reticle=frame.reticle,
                     fragments=frame.fragments, overlays=frame.overlays, labels=frame.labels,
                     ball_outlines=frame.ball_outlines,
                 )

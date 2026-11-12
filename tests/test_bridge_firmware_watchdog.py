@@ -38,7 +38,7 @@ class BridgeFirmwareWatchdogTests(unittest.TestCase):
             if not compiler:
                 self.skipTest("Host C compiler is not installed")
             compiled = subprocess.run([compiler, "-std=c11", "-Wall", "-Wextra", "-Werror",
-                                       "-I", str(MAIN), "-I", str(output), str(source), "-o", str(exe)],
+                                       "-I", str(MAIN), "-I", str(output), str(source), "-lm", "-o", str(exe)],
                                       capture_output=True, text=True, timeout=60)
         self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
         result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=10)

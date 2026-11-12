@@ -11,16 +11,16 @@ class AimViewportTests(unittest.TestCase):
         self.assertAlmostEqual(room_redraw_interval(2560, 1440), 1 / 35)
         self.assertAlmostEqual(room_redraw_interval(3840, 2160), 1 / 18)
 
-    def test_room_segment_crossing_the_screen_is_clipped_before_drawing(self):
-        from gamepad_aim_model import clip_viewport
+from gamepad_aim_model import (
+    FLOOR_TILE_COLORS, FLOOR_Y, GRID_STEP, ROOM_TILES, SIDE_WALL_TILE_COLORS, WALL_TILE_COLORS,
+    CursorTest, ShootingTest, TrackingTest,
+)
 
-        self.assertEqual(clip_viewport((-1000, 20), (2000, 20), 640, 360),
-                         (0, 20, 640, 20))
-        self.assertIsNone(clip_viewport((0, -10), (640, -20), 640, 360))
-        self.assertEqual(clip_viewport((320, 400), (320, -40), 640, 360),
-                         (320, 360, 320, 0))
 
-from gamepad_aim_model import GRID_STEP, ROOM_LINES, CursorTest, ShootingTest, TrackingTest, clip_near
+def _tile_brightness(color):
+    return sum(channel * weight for channel, weight in zip(
+        bytes.fromhex(color[1:]), (0.2126, 0.7152, 0.0722),
+    ))
 
 
 class AimSpreadTests(unittest.TestCase):
@@ -360,33 +360,46 @@ class AimModelTests(unittest.TestCase):
         other.advance((0, 0), 1)
         self.assertNotEqual(other.target_position(), position)
 
-    def test_room_has_a_denser_floor_and_walls_with_an_open_top(self):
-        points = [(start, end) for _color, start, end in ROOM_LINES]
-        self.assertLessEqual(len(points), 100)
-        self.assertGreaterEqual(sum(
-            start[1] < 0 and end[1] < 0 and start[0] == end[0] and end[2] > 20
-            for start, end in points
-        ), 7)
-        self.assertTrue(any(start[1] < 0 < end[1] and start[2] > 20 for start, end in points))
-        wall_levels = {
-            start[1] for start, end in points
-            if start[1] == end[1] > 0
+    def test_room_keeps_square_tiles_and_an_open_top(self):
+        self.assertEqual(len(ROOM_TILES), 288)
+        for color, quad in ROOM_TILES:
+            self.assertTrue(all(
+                math.isclose(math.dist(quad[i], quad[(i + 1) % 4]), GRID_STEP) for i in range(4)
+            ))
+            xs, ys, zs = map(set, zip(*quad))
+            if len(ys) == 1:
+                self.assertEqual(ys, {FLOOR_Y})
+                self.assertIn(color, FLOOR_TILE_COLORS)
+            elif xs in ({-18}, {18}):
+                self.assertIn(color, SIDE_WALL_TILE_COLORS)
+            else:
+                self.assertIn(zs, ({-36}, {36}))
+                self.assertIn(color, WALL_TILE_COLORS)
+        for index, (color, _) in enumerate(ROOM_TILES[:3]):
+            self.assertEqual(color, FLOOR_TILE_COLORS[(index + 1) % 2])
+
+    def test_right_wall_starts_with_light_at_the_nearest_positive_depth(self):
+        right_wall = {
+            (quad[0][1], quad[0][2]): color
+            for color, quad in ROOM_TILES if all(x == 18 for x, _, _ in quad)
         }
-        self.assertGreaterEqual(len(wall_levels), 6)
-        floor_y = min(start[1] for start, _end in points)
-        levels = sorted({floor_y, *wall_levels})
-        self.assertTrue(all(math.isclose(b - a, GRID_STEP) for a, b in zip(levels, levels[1:])))
-        far_wall_columns = sorted({
-            start[0] for start, end in points if start[2] == end[2] == 36 and start[1] < end[1]
-        })
-        self.assertTrue(all(math.isclose(b - a, GRID_STEP)
-                            for a, b in zip(far_wall_columns, far_wall_columns[1:])))
-        self.assertTrue(all(
-            (start[0] == end[0] and abs(start[0]) == 18)
-            or (start[2] == end[2] and abs(start[2]) == 36)
-            for start, end in points if start[1] == end[1] > 0
-        ))
-        floor = next(color for color, start, end in ROOM_LINES if start[1] == end[1] < 0)
-        wall = next(color for color, start, end in ROOM_LINES if start[1] < 0 < end[1])
-        self.assertGreater(int(wall[3:5], 16) - int(floor[3:5], 16), 50)
-        self.assertEqual(clip_near((0, 0, 0), (1, 0, 1)), ((0.2, 0.0, 0.2), (1, 0, 1)))
+        self.assertEqual(right_wall[FLOOR_Y, 0], SIDE_WALL_TILE_COLORS[1])
+        self.assertEqual(right_wall[FLOOR_Y, GRID_STEP], SIDE_WALL_TILE_COLORS[0])
+
+    def test_room_uses_fixed_tile_colors(self):
+        self.assertEqual(
+            {color for color, _ in ROOM_TILES},
+            {"#111b27", "#162332", "#1b2632", "#232f3d", "#1d2834", "#25313f"},
+        )
+
+    def test_room_tiles_keep_visible_contrast_at_every_shared_edge(self):
+        edges = {}
+        for color, quad in ROOM_TILES:
+            for index in range(4):
+                edge = tuple(sorted((quad[index], quad[(index + 1) % 4])))
+                edges.setdefault(edge, []).append(color)
+        shared = [(edge, colors) for edge, colors in edges.items() if len(colors) == 2]
+        self.assertEqual(len(shared), 558)
+        for edge, (left, right) in shared:
+            brightness_difference = abs(_tile_brightness(left) - _tile_brightness(right))
+            self.assertGreaterEqual(brightness_difference, 3.2, (edge, left, right))

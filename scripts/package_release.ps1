@@ -192,10 +192,13 @@ foreach ($name in @(
 }
 
 $demoImageBase = "https://raw.githubusercontent.com/duoduo-88/S2P-XInput-Lite/v0.7.15/image"
+$releaseImageBase = "https://raw.githubusercontent.com/duoduo-88/S2P-XInput-Lite/v$versionSlug/image"
+$releaseAimImagePath = [regex]::Escape("image/v$versionSlug/") + '(aim(?:-preview)?\.gif)'
 foreach ($name in @("README.md", "README_zh-TW.md")) {
     $readmePath = Join-Path $packageRoot $name
     $readme = Get-Content -LiteralPath $readmePath -Raw -Encoding utf8
     $readme = $readme -replace 'src="image/(GUI|test)\.gif"', ('src="{0}/$1.gif"' -f $demoImageBase)
+    $readme = $readme -replace $releaseAimImagePath, ('{0}/v{1}/$1' -f $releaseImageBase, $versionSlug)
     Set-Content -LiteralPath $readmePath -Value $readme -Encoding utf8 -NoNewline
 }
 Copy-CuratedTree `

@@ -6,7 +6,7 @@ import heapq
 import math
 import random
 from functools import cached_property
-from itertools import islice
+from itertools import islice, pairwise
 
 
 ROUND_SECONDS = 30.0
@@ -35,21 +35,28 @@ GRID_STEP = 6
 GRID_X = tuple(GRID_STEP * i for i in range(-3, 4))
 GRID_Z = tuple(GRID_STEP * i for i in range(-6, 7))
 WALL_LEVELS = tuple(FLOOR_Y + GRID_STEP * layer for layer in range(1, 7))
-WALL_TOP = WALL_LEVELS[-1]
-WALL_GRID_COLOR = "#8096b0"
-ROOM_LINES = (
-    tuple(("#354c66", (x, FLOOR_Y, -36), (x, FLOOR_Y, 36)) for x in GRID_X)
-    + tuple(("#354c66", (-18, FLOOR_Y, z), (18, FLOOR_Y, z)) for z in GRID_Z)
-    + tuple(
-        (WALL_GRID_COLOR, (x, FLOOR_Y, z), (x, WALL_TOP, z))
-        for x in (-18, 18) for z in GRID_Z
-    )
-    + tuple(
-        (WALL_GRID_COLOR, (x, FLOOR_Y, z), (x, WALL_TOP, z))
-        for x in GRID_X[1:-1] for z in (-36, 36)
-    )
-    + tuple((WALL_GRID_COLOR, (x, y, -36), (x, y, 36)) for x in (-18, 18) for y in WALL_LEVELS)
-    + tuple((WALL_GRID_COLOR, (-18, y, z), (18, y, z)) for z in (-36, 36) for y in WALL_LEVELS)
+ROOM_BACKGROUND = "#101825"
+FLOOR_TILE_COLORS = ("#111b27", "#162332")
+WALL_TILE_COLORS = ("#1b2632", "#232f3d")
+SIDE_WALL_TILE_COLORS = ("#1d2834", "#25313f")
+
+
+def _checkerboard(columns, rows, colors, point, *, phase=0):
+    for row, (v0, v1) in enumerate(pairwise(rows)):
+        for column, (u0, u1) in enumerate(pairwise(columns)):
+            color = colors[(row + column + phase) % 2]
+            yield color, (point(u0, v0), point(u1, v0), point(u1, v1), point(u0, v1))
+
+
+_WALL_ROWS = FLOOR_Y, *WALL_LEVELS
+# Start with a light tile to the right at Z=0, and carry the phase around the room.
+# The floor and wall palettes distinguish their tiles where they meet.
+ROOM_TILES = (
+    *(_checkerboard(GRID_X, GRID_Z, FLOOR_TILE_COLORS, lambda x, z: (x, FLOOR_Y, z), phase=1)),
+    *(_checkerboard(GRID_Z, _WALL_ROWS, SIDE_WALL_TILE_COLORS, lambda z, y: (-18, y, z))),
+    *(_checkerboard(GRID_Z, _WALL_ROWS, SIDE_WALL_TILE_COLORS, lambda z, y: (18, y, z), phase=1)),
+    *(_checkerboard(GRID_X, _WALL_ROWS, WALL_TILE_COLORS, lambda x, y: (x, y, -36), phase=1)),
+    *(_checkerboard(GRID_X, _WALL_ROWS, WALL_TILE_COLORS, lambda x, y: (x, y, 36))),
 )
 
 
@@ -532,40 +539,6 @@ class TimedCursorTest(_TimedTargetRound, _CursorGeometry):
 
         point = self._shoot_at(contact)
         return self._project_target(point, width, height, top) if point is not None else None
-
-
-def clip_near(start, end):
-    if start[2] < NEAR_PLANE and end[2] < NEAR_PLANE:
-        return None
-    if start[2] < NEAR_PLANE or end[2] < NEAR_PLANE:
-        if start[2] >= NEAR_PLANE:
-            start, end = end, start
-        amount = (NEAR_PLANE - start[2]) / (end[2] - start[2])
-        start = (
-            start[0] + (end[0] - start[0]) * amount,
-            start[1] + (end[1] - start[1]) * amount,
-            NEAR_PLANE,
-        )
-    return start, end
-
-
-def clip_viewport(start, end, width, height):
-    """Clip a projected segment so the canvas only receives visible geometry."""
-    x, y = start
-    end_x, end_y = end
-    if ((x < 0 and end_x < 0) or (x > width and end_x > width)
-            or (y < 0 and end_y < 0) or (y > height and end_y > height)):
-        return None
-    dx, dy = end_x - x, end_y - y
-    first, last = 0.0, 1.0
-    for delta, distance in ((-dx, x), (dx, width - x), (-dy, y), (dy, height - y)):
-        if delta < 0:
-            first = max(first, distance / delta)
-        elif delta > 0:
-            last = min(last, distance / delta)
-    if first > last:
-        return None
-    return x + first * dx, y + first * dy, x + last * dx, y + last * dy
 
 
 def project_ball(target, width, height):

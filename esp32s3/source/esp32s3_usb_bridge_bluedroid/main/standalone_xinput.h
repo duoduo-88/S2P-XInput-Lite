@@ -40,8 +40,10 @@ void standalone_xinput_get_latency_metrics(
     standalone_usb_latency_metrics_t *metrics
 );
 void standalone_xinput_reset_latency_metrics(void);
+uint32_t standalone_xinput_recovery_release_mask(int channel);
 void standalone_xinput_accept_switch_report(
-    int channel, const uint8_t *payload, size_t length
+    int channel, const uint8_t *payload, size_t length,
+    uint32_t recovery_release_mask
 );
 bool standalone_xinput_can_accept_input(void);
 void standalone_xinput_forget_channel(int channel);

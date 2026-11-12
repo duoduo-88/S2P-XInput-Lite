@@ -15,7 +15,11 @@ from gui_sections.direction_deadzone import DirectionDeadzonePreview, _point
 from localization import translate_text
 from mapping_layers import _layer_payload, normalize_layers
 from settings_schema import DEFAULT_CONFIG_PATH, SettingValidationError, read_section_settings, write_section_settings
-from standalone_profile import analyze_standalone_v2_compatibility, compile_standalone_profile
+from standalone_profile import (
+    STANDALONE_PROFILE_MAX_BYTES,
+    STICK_DIRECTION_KEYS,
+    compile_standalone_profile,
+)
 from stick_processing import _compile_stick_direction_settings
 from xinput_controller import XInputController
 
@@ -147,27 +151,82 @@ class DirectionDeadzoneTests(unittest.TestCase):
                 self.assertEqual(len(gui.mapping_layers), 1)
                 self.assertEqual(error.call_count, 2)
 
-    def test_esp32_compatibility_reports_only_the_active_custom_direction_mode(self):
+    def test_esp32_profile_serializes_only_active_custom_direction_edges(self):
         custom = '{"4WAY":[[15,20],[0,0],[0,0],[0,0]]}'
-        stick = {"mode": "4WAY", CUSTOM_DEADZONE_KEY: custom}
-        settings = {"sections": {"stick_direction_left": stick}}
-        issues = analyze_standalone_v2_compatibility(settings)
-        self.assertEqual([issue.severity for issue in issues], ["blocking"])
-        stick["mode"] = "8WAY"
-        self.assertFalse(analyze_standalone_v2_compatibility(settings))
+        settings = {"sections": {
+            "stick_direction_left": {"mode": "4WAY", CUSTOM_DEADZONE_KEY: custom},
+            "stick_direction_right": {"mode": "8WAY", CUSTOM_DEADZONE_KEY: custom},
+        }}
+        layer = {
+            "id": "layer", "enabled": True, "activation_buttons": ["A"],
+            "stick_right": {
+                "mode": "8WAY", CUSTOM_DEADZONE_KEY: {"8WAY": [[-5, 40]] * 8},
+            },
+        }
+        compiled = compile_standalone_profile("General", settings, [layer])
+        document = json.loads(compiled.payload)
+
+        self.assertFalse(compiled.blocking_issues)
+        self.assertEqual(document["stick_direction_left"]["direction_deadzone_edges"],
+                         [[51, 69], [45, 45], [45, 45], [45, 45]])
+        self.assertNotIn("direction_deadzone_edges", document["stick_direction_right"])
+        self.assertEqual(document["mapping_layers"][0]["stick_right"]["direction_deadzone_edges"],
+                         [[8.5, 26.5]] * 8)
+        self.assertEqual(settings["sections"]["stick_direction_left"][CUSTOM_DEADZONE_KEY], custom)
 
     def test_inactive_custom_layer_settings_do_not_use_firmware_payload_space(self):
         zones = json.dumps({"8WAY": [[1.12345678901234, 18.12345678901234]] * 8})
-        layers = [{"id": str(index), "enabled": True,
+        layers = [{"id": str(index), "enabled": True, "activation_buttons": ["A"],
                    "stick_left": {"mode": "4WAY", CUSTOM_DEADZONE_KEY: zones},
                    "stick_right": {"mode": "4WAY", CUSTOM_DEADZONE_KEY: zones}}
                   for index in range(8)]
         compiled = compile_standalone_profile("General", {"sections": {}}, layers)
         self.assertFalse(compiled.blocking_issues)
+        self.assertEqual(len(compiled.document["mapping_layers"]), 8)
         for layer in compiled.document["mapping_layers"]:
             self.assertEqual(layer["stick_left"], {"mode": "4WAY"})
             self.assertEqual(layer["stick_right"], {"mode": "4WAY"})
         self.assertEqual(layers[0]["stick_left"][CUSTOM_DEADZONE_KEY], zones)
+
+    def test_eight_full_layers_with_custom_deadzones_fit_in_standalone_profile(self):
+        config = configparser.ConfigParser()
+        config.read(DEFAULT_CONFIG_PATH, encoding="utf-8")
+        sections = {name: dict(config[name]) for name in config.sections()}
+        buttons = sections["buttons"]
+        zones = {"8WAY": [[1.123456789, 18.123456789]] * 8}
+        sticks = {side: sections[f"stick_direction_{side}"] for side in ("left", "right")}
+        for stick in sticks.values():
+            stick.update(mode="8WAY", direction_deadzone_custom=zones, up="Y")
+        layers = normalize_layers([
+            {
+                "name": f"Layer {index}", "enabled": True, "activation_buttons": ["GL"],
+                "buttons": {"a": "NONE"},
+                "stick_left": {CUSTOM_DEADZONE_KEY: zones, "up": "NONE", "right": "B"},
+                "stick_right": {CUSTOM_DEADZONE_KEY: zones, "trigger_threshold": "0.75"},
+            }
+            for index in range(8)
+        ], buttons, sticks, ("GL",))
+        settings = {
+            "sections": sections,
+            "buttons": buttons,
+            "direction_mappings": {
+                side: {name: stick[name] for name in STICK_DIRECTION_KEYS}
+                for side, stick in sticks.items()
+            },
+            "calibration": load_stick_calibration(config),
+        }
+
+        compiled = compile_standalone_profile("General", settings, layers)
+        self.assertFalse(compiled.blocking_issues)
+        self.assertLessEqual(len(compiled.payload), STANDALONE_PROFILE_MAX_BYTES)
+        self.assertEqual(len(compiled.document["mapping_layers"]), 8)
+        for layer in compiled.document["mapping_layers"]:
+            self.assertEqual(layer["buttons"], {"a": "NONE"})
+            self.assertEqual(layer["stick_left"]["right"], "B")
+            self.assertEqual(layer["stick_left"].get("up", "NONE"), "NONE")
+            self.assertEqual(float(layer["stick_right"]["trigger_threshold"]), 0.75)
+            for side in ("left", "right"):
+                self.assertEqual(len(layer[f"stick_{side}"]["direction_deadzone_edges"]), 8)
 
     def test_failed_live_reload_can_restore_previous_layer_snapshot(self):
         config = configparser.ConfigParser()
