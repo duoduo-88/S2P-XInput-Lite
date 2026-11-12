@@ -89,7 +89,7 @@ Release 頁面供手動下載；程式不會自動下載、執行或覆蓋任何
 或 Windows 讀取的實體手把輸入。測試不額外套用反應曲線或死區，也無輔助瞄準。
 Direct2D 以測試所在螢幕目前的更新率為繪圖目標。
 
-![3D 瞄準測試展示](https://raw.githubusercontent.com/duoduo-88/S2P-XInput-Lite/main/image/v0.8.0/aim.gif)
+[![3D 瞄準測試展示](image/v0.8.0/aim-preview.gif)](image/v0.8.0/aim.gif)
 
 方向死區編輯器可拖曳紅色區域調整角度，並以相鄰方向夾角的百分比設定每區寬度。
 
