@@ -10,7 +10,7 @@ from tkinter import colorchooser, ttk
 
 from config_utils import atomic_write_bytes, config_file_lock
 from dialog_layout import center_child_dialog
-from gamepad_aim_display import available_resolutions, highest_resolution
+from gamepad_aim_display import available_resolutions, highest_resolution, window_work_area
 from gamepad_aim_model import TIMED_MODES, TRACKING_MODES
 from readable_combobox import ReadableCombobox
 from tooltip_layout import HoverTip
@@ -69,6 +69,7 @@ class AimSettings:
     fullscreen_size: str = ""
     depth_shading: bool = True
     mouse_sensitivity: int = 100
+    auto_input_switch: bool = False
 
     @classmethod
     def load(cls, path):
@@ -89,7 +90,7 @@ class AimSettings:
             value = data.get(key)
             if isinstance(value, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", value):
                 values[key] = value.lower()
-        for key in ("sound", "fullscreen", "depth_shading"):
+        for key in ("sound", "fullscreen", "depth_shading", "auto_input_switch"):
             if type(data.get(key)) is bool:
                 values[key] = data[key]
         if _valid_resolution(data.get("window_size")):
@@ -148,8 +149,16 @@ def show_aim_settings(parent, tr, current, apply):
     dialog.title(tr("測試設定"))
     dialog.transient(parent)
     dialog.resizable(False, False)
-    body = ttk.Frame(dialog, padding=(10, 12))
-    body.pack(fill="both", expand=True)
+    content = ttk.Frame(dialog)
+    content.pack(fill="both", expand=True)
+    background = ttk.Style(dialog).lookup("TFrame", "background") or dialog.cget("background")
+    canvas = tk.Canvas(content, background=background, borderwidth=0, highlightthickness=0,
+                       yscrollincrement=dialog.winfo_pixels("12p"))
+    canvas.pack(side="left", fill="both", expand=True)
+    body = ttk.Frame(canvas, padding=(10, 12, 10, 0))
+    body_window = canvas.create_window(0, 0, window=body, anchor="nw")
+    scrollbar = ttk.Scrollbar(content, orient="vertical", command=canvas.yview)
+    canvas.configure(yscrollcommand=scrollbar.set)
     body.columnconfigure(1, weight=1)
     values = {}
     inputs = (
@@ -267,9 +276,18 @@ def show_aim_settings(parent, tr, current, apply):
     ttk.Checkbutton(body, text=tr("加深遠近效果"), variable=depth_shading).grid(
         row=display_row + 1, column=1, columnspan=2, sticky="w", pady=6,
     )
+    auto_input_switch = tk.BooleanVar(dialog, current.auto_input_switch)
+    auto_switch_option = ttk.Checkbutton(
+        body, text=tr("啟用手把與滑鼠自動銜接"), variable=auto_input_switch,
+    )
+    auto_switch_option.grid(row=display_row + 2, column=0, columnspan=3, sticky="w", pady=(0, 6))
+    HoverTip(auto_switch_option, tr("關閉時，偵測到手把就停用滑鼠瞄準與左鍵射擊。未偵測到手把時可用滑鼠。"))
     error = tk.StringVar(dialog)
-    ttk.Label(body, textvariable=error, foreground="#b91c1c", wraplength=300).grid(
-        row=display_row + 2, column=0, columnspan=3, sticky="w",
+    footer = ttk.Frame(dialog, padding=(10, 0, 10, 12))
+    footer.pack(fill="x")
+    footer.columnconfigure(1, weight=1)
+    ttk.Label(footer, textvariable=error, foreground="#b91c1c", wraplength=300).grid(
+        row=0, column=0, columnspan=3, sticky="w",
     )
 
     def restore_defaults():
@@ -282,6 +300,7 @@ def show_aim_settings(parent, tr, current, apply):
             set_color(key, button, getattr(defaults, key))
         sound.set(defaults.sound)
         depth_shading.set(defaults.depth_shading)
+        auto_input_switch.set(defaults.auto_input_switch)
         window_size.set(defaults.window_size or auto_size)
         fullscreen_size.set(defaults.fullscreen_size or auto_size)
         fullscreen.set(defaults.fullscreen)
@@ -316,20 +335,66 @@ def show_aim_settings(parent, tr, current, apply):
             apply(AimSettings(
                 **options, sound=sound.get(), window_size=selected_window_size, fullscreen=fullscreen.get(),
                 fullscreen_size=selected_fullscreen_size, depth_shading=depth_shading.get(),
+                auto_input_switch=auto_input_switch.get(),
             ))
         except OSError:
             error.set(tr("無法儲存測試設定。"))
             return
         dialog.destroy()
 
-    footer = ttk.Frame(body)
-    footer.grid(row=display_row + 3, column=0, columnspan=3, sticky="ew", pady=(8, 0))
-    ttk.Button(footer, text=tr("恢復預設"), command=restore_defaults).pack(side="left")
-    ttk.Button(footer, text=tr("儲存"), command=save).pack(side="right")
-    ttk.Button(footer, text=tr("取消"), command=dialog.destroy).pack(side="right", padx=4)
+    ttk.Button(footer, text=tr("恢復預設"), command=restore_defaults).grid(row=1, column=0, pady=(8, 0))
+    ttk.Button(footer, text=tr("取消"), command=dialog.destroy).grid(row=1, column=1, sticky="e", padx=4, pady=(8, 0))
+    ttk.Button(footer, text=tr("儲存"), command=save).grid(row=1, column=2, pady=(8, 0))
+
+    owner = parent.winfo_toplevel()
+    try:
+        bounds = window_work_area(owner.winfo_id())
+    except OSError:
+        bounds = 0, 0, owner.winfo_screenwidth(), owner.winfo_screenheight()
+    # Allow space for the title bar and borders outside the Tk client area.
+    height_limit = bounds[3] - bounds[1] - dialog.winfo_pixels("36p")
+
+    def fit_content(_event=None):
+        width, height = body.winfo_reqwidth(), body.winfo_reqheight()
+        available = max(1, height_limit - footer.winfo_reqheight())
+        canvas.configure(width=width, height=min(height, available), scrollregion=(0, 0, width, height))
+        if height > available:
+            if not scrollbar.winfo_manager():
+                scrollbar.pack(side="right", before=canvas, fill="y")
+        elif scrollbar.winfo_manager():
+            scrollbar.pack_forget()
+            canvas.yview_moveto(0)
+
+    def scroll_settings(event):
+        if event.delta and scrollbar.winfo_ismapped():
+            steps = max(1, abs(event.delta) // 120)
+            canvas.yview_scroll(steps if event.delta < 0 else -steps, "units")
+            return "break"
+
+    def reveal_focused_setting(event):
+        widget = event.widget
+        if scrollbar.winfo_ismapped() and isinstance(widget, tk.Misc) and str(widget).startswith(f"{body}."):
+            top = widget.winfo_rooty() - body.winfo_rooty()
+            bottom = top + widget.winfo_height()
+            visible_top = canvas.canvasy(0)
+            visible_height = canvas.winfo_height()
+            if top < visible_top:
+                canvas.yview_moveto(top / body.winfo_height())
+            elif bottom > visible_top + visible_height:
+                canvas.yview_moveto((bottom - visible_height) / body.winfo_height())
+
+    canvas.bind("<Configure>", lambda event: canvas.itemconfigure(body_window, width=event.width))
+    footer.bind("<Configure>", fit_content)
+    # Spinboxes and comboboxes handle the wheel before the dialog's binding.
+    for widget in (*body.winfo_children(), *display.winfo_children()):
+        widget.bind("<MouseWheel>", scroll_settings, add="+")
+    dialog.bind("<MouseWheel>", scroll_settings)
+    dialog.bind("<FocusIn>", reveal_focused_setting)
     dialog.bind("<Return>", save)
     dialog.bind("<Escape>", lambda _event: dialog.destroy())
-    center_child_dialog(dialog, parent.winfo_toplevel())
+    dialog.update_idletasks()
+    fit_content()
+    center_child_dialog(dialog, owner, bounds=bounds)
     dialog.grab_set()
     first.focus_set()
     return dialog

@@ -12,8 +12,15 @@ class AimViewportTests(unittest.TestCase):
         self.assertAlmostEqual(room_redraw_interval(3840, 2160), 1 / 18)
 
 from gamepad_aim_model import (
-    FLOOR_TILE_COLORS, FLOOR_Y, GRID_STEP, ROOM_TILES, WALL_TILE_COLORS, CursorTest, ShootingTest, TrackingTest,
+    FLOOR_TILE_COLORS, FLOOR_Y, GRID_STEP, ROOM_TILES, SIDE_WALL_TILE_COLORS, WALL_TILE_COLORS,
+    CursorTest, ShootingTest, TrackingTest,
 )
+
+
+def _tile_brightness(color):
+    return sum(channel * weight for channel, weight in zip(
+        bytes.fromhex(color[1:]), (0.2126, 0.7152, 0.0722),
+    ))
 
 
 class AimSpreadTests(unittest.TestCase):
@@ -363,8 +370,36 @@ class AimModelTests(unittest.TestCase):
             if len(ys) == 1:
                 self.assertEqual(ys, {FLOOR_Y})
                 self.assertIn(color, FLOOR_TILE_COLORS)
+            elif xs in ({-18}, {18}):
+                self.assertIn(color, SIDE_WALL_TILE_COLORS)
             else:
-                self.assertTrue(xs in ({-18}, {18}) or zs in ({-36}, {36}))
+                self.assertIn(zs, ({-36}, {36}))
                 self.assertIn(color, WALL_TILE_COLORS)
-        self.assertEqual([color for color, _ in ROOM_TILES[:3]],
-                         [FLOOR_TILE_COLORS[0], FLOOR_TILE_COLORS[1], FLOOR_TILE_COLORS[0]])
+        for index, (color, _) in enumerate(ROOM_TILES[:3]):
+            self.assertEqual(color, FLOOR_TILE_COLORS[(index + 1) % 2])
+
+    def test_right_wall_starts_with_light_at_the_nearest_positive_depth(self):
+        right_wall = {
+            (quad[0][1], quad[0][2]): color
+            for color, quad in ROOM_TILES if all(x == 18 for x, _, _ in quad)
+        }
+        self.assertEqual(right_wall[FLOOR_Y, 0], SIDE_WALL_TILE_COLORS[1])
+        self.assertEqual(right_wall[FLOOR_Y, GRID_STEP], SIDE_WALL_TILE_COLORS[0])
+
+    def test_room_uses_fixed_tile_colors(self):
+        self.assertEqual(
+            {color for color, _ in ROOM_TILES},
+            {"#111b27", "#162332", "#1b2632", "#232f3d", "#1d2834", "#25313f"},
+        )
+
+    def test_room_tiles_keep_visible_contrast_at_every_shared_edge(self):
+        edges = {}
+        for color, quad in ROOM_TILES:
+            for index in range(4):
+                edge = tuple(sorted((quad[index], quad[(index + 1) % 4])))
+                edges.setdefault(edge, []).append(color)
+        shared = [(edge, colors) for edge, colors in edges.items() if len(colors) == 2]
+        self.assertEqual(len(shared), 558)
+        for edge, (left, right) in shared:
+            brightness_difference = abs(_tile_brightness(left) - _tile_brightness(right))
+            self.assertGreaterEqual(brightness_difference, 3.2, (edge, left, right))

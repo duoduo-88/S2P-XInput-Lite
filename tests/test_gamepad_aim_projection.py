@@ -3,15 +3,16 @@ import unittest
 from unittest.mock import patch
 
 import gamepad_aim_projection as projection
-from gamepad_aim_model import FLOOR_TILE_COLORS, WALL_TILE_COLORS
+from gamepad_aim_model import ROOM_TILES
 
 
 class AimRoomProjectionTests(unittest.TestCase):
     def test_room_projects_filled_color_batches(self):
+        pose = 1920, 1080, 0.7, -0.3
         with patch.object(projection, "load_render_library", return_value=None):
-            batches = projection.project_room(1920, 1080, 0.7, -0.3)
-
-        self.assertEqual({color for color, _, _ in batches}, {*FLOOR_TILE_COLORS, *WALL_TILE_COLORS})
+            batches = projection.project_room(*pose)
+        visible = {ROOM_TILES[index][0] for index, _ in projection.project_room_polygons(*pose)}
+        self.assertEqual({color for color, _, _ in batches}, visible)
         for _, vertices, count in batches:
             self.assertIsInstance(vertices, ctypes.Array)
             self.assertGreater(count, 0)

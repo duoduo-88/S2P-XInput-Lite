@@ -35,24 +35,27 @@ GRID_STEP = 6
 GRID_X = tuple(GRID_STEP * i for i in range(-3, 4))
 GRID_Z = tuple(GRID_STEP * i for i in range(-6, 7))
 WALL_LEVELS = tuple(FLOOR_Y + GRID_STEP * layer for layer in range(1, 7))
+ROOM_BACKGROUND = "#101825"
 FLOOR_TILE_COLORS = ("#111b27", "#162332")
 WALL_TILE_COLORS = ("#1b2632", "#232f3d")
+SIDE_WALL_TILE_COLORS = ("#1d2834", "#25313f")
 
 
-def _checkerboard(columns, rows, colors, point):
+def _checkerboard(columns, rows, colors, point, *, phase=0):
     for row, (v0, v1) in enumerate(pairwise(rows)):
         for column, (u0, u1) in enumerate(pairwise(columns)):
-            yield colors[(row + column) % 2], (
-                point(u0, v0), point(u1, v0), point(u1, v1), point(u0, v1),
-            )
+            color = colors[(row + column + phase) % 2]
+            yield color, (point(u0, v0), point(u1, v0), point(u1, v1), point(u0, v1))
 
 
 _WALL_ROWS = FLOOR_Y, *WALL_LEVELS
+# Start with a light tile to the right at Z=0, and carry the phase around the room.
+# The floor and wall palettes distinguish their tiles where they meet.
 ROOM_TILES = (
-    *(_checkerboard(GRID_X, GRID_Z, FLOOR_TILE_COLORS, lambda x, z: (x, FLOOR_Y, z))),
-    *(_checkerboard(GRID_Z, _WALL_ROWS, WALL_TILE_COLORS, lambda z, y: (-18, y, z))),
-    *(_checkerboard(GRID_Z, _WALL_ROWS, WALL_TILE_COLORS, lambda z, y: (18, y, z))),
-    *(_checkerboard(GRID_X, _WALL_ROWS, WALL_TILE_COLORS, lambda x, y: (x, y, -36))),
+    *(_checkerboard(GRID_X, GRID_Z, FLOOR_TILE_COLORS, lambda x, z: (x, FLOOR_Y, z), phase=1)),
+    *(_checkerboard(GRID_Z, _WALL_ROWS, SIDE_WALL_TILE_COLORS, lambda z, y: (-18, y, z))),
+    *(_checkerboard(GRID_Z, _WALL_ROWS, SIDE_WALL_TILE_COLORS, lambda z, y: (18, y, z), phase=1)),
+    *(_checkerboard(GRID_X, _WALL_ROWS, WALL_TILE_COLORS, lambda x, y: (x, y, -36), phase=1)),
     *(_checkerboard(GRID_X, _WALL_ROWS, WALL_TILE_COLORS, lambda x, y: (x, y, 36))),
 )
 

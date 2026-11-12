@@ -4,9 +4,15 @@
 
 **[Support the project on Ko-fi](https://ko-fi.com/duoduo88)**
 
-**[Windows ZIP (v0.8.0)](https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.8.0/S2P-XInput-Lite-v0.8.0.zip)**
+**[Windows ZIP (v0.8.1)](https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.8.1/S2P-XInput-Lite-v0.8.1.zip)**
 
-[v0.8.0 release notes](RELEASE_NOTES_v0.8.0.md)
+[v0.8.1 release notes](RELEASE_NOTES_v0.8.1.md)
+
+> [!IMPORTANT]
+> **ESP32-S3 firmware update in v0.8.1.** It bundles S2P-FW 1.0.8, which is
+> required for per-direction deadzones in Android USB HID standalone mode.
+> If you use the ESP32-S3 bridge, open **Flash FW** in the v0.8.1 main window
+> to check your installed version and update it. [Flashing instructions](manual/USER_GUIDE.md#flash-esp32-s3)
 
 Extract the entire ZIP, then open one of the two EXEs in its main folder:
 
@@ -66,7 +72,7 @@ standalone. On Windows, Bridge mode provides XInput through ViGEmBus.
   while Report Rate Test measures input reports. [Stick plots guide](manual/USER_GUIDE.md#92-stick-plots)
 - **Aim Test** offers Tracking, Targets, and Timed Targets in both 2D
   and 3D. Compare completed rounds with your best result under the same
-  conditions. [Aim Test guide](manual/USER_GUIDE.md#99-aim-test)
+  conditions. [Aim Test guide](manual/USER_GUIDE.md#aim-test-guide)
 - Built-in ESP32 diagnostics with timed tests, a clear pass/warn/fail verdict,
   and exportable text reports
 - Startup update notifications plus a manual check and shared automatic-check
@@ -84,12 +90,17 @@ standalone. On Windows, Bridge mode provides XInput through ViGEmBus.
 
 Detailed setting descriptions are available from the `?` buttons in the application.
 
-### Aim Test and Directional Deadzones
+### Aim Test
 
-Simple targets, a low-contrast room, and brief hit feedback keep rendering light.
+Simple targets, a low-contrast checkerboard room, and brief hit feedback keep rendering light.
 Aim Test uses the selected S2P bridge output or physical controller input
 available through Windows. It adds no response curves, deadzones, or aim assist.
-Direct2D targets the active monitor's current refresh rate.
+Direct2D targets the active monitor's current refresh rate. The test shows
+draw FPS and 99% Low in the lower-right corner.
+
+[![v0.8.1 3D Aim Test demonstration](image/v0.8.1/aim-preview.gif)](image/v0.8.1/aim.gif)
+
+### Directional Deadzones
 
 In the directional deadzone editor, drag each red sector to rotate it and enter
 its width as a percentage of the angle between adjacent directions.

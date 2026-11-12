@@ -29,10 +29,10 @@ reconstructed. The input Hz indicator uses source telemetry or a Raw HID report
 counter when available. Repeated XInput or WinMM snapshots do not count as
 transport reports.
 
-The HUD reports successful Direct2D submissions or Tk update passes,
-simulation steps, and measured source input rate where available. Frame times
-are intervals between successful updates, with mean, P95, P99 and the fraction
-strictly longer than the target period. Even normal 1 ms rounding can put
+The HUD reports FPS from successful Direct2D submissions or Tk drawing
+updates. It calculates 99% Low as 1000 divided by the P99 interval in
+milliseconds. The benchmark also reports mean, P95, P99 and the fraction
+strictly longer than the target period. Normal 1 ms rounding can put
 intervals just over the nominal budget. These figures describe application
 work. Windows timers, DWM composition, GPU driver queues and monitor scanout
 can all affect what ultimately appears on screen.

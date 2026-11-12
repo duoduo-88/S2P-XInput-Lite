@@ -4,9 +4,14 @@
 
 **[在 Ko-fi 贊助本專案](https://ko-fi.com/duoduo88)**
 
-**[Windows ZIP（v0.8.0）](https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.8.0/S2P-XInput-Lite-v0.8.0.zip)**
+**[Windows ZIP（v0.8.1）](https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.8.1/S2P-XInput-Lite-v0.8.1.zip)**
 
-[v0.8.0 更新說明](RELEASE_NOTES_v0.8.0.md)
+[v0.8.1 更新說明](RELEASE_NOTES_v0.8.1.md)
+
+> [!IMPORTANT]
+> **v0.8.1 有 ESP32-S3 韌體更新。** 隨附 S2P-FW 1.0.8，Android USB HID 獨立模式的逐區方向死區需要此版本。
+> 若有使用 ESP32-S3 橋接器，請在 v0.8.1 主視窗按 **刷入相容韌體（Flash FW）**，確認目前版本後更新。
+> [刷寫步驟](manual/USER_GUIDE_zh-TW.md#flash-esp32-s3)
 
 完整解壓縮後，直接開啟根目錄的兩個 EXE：
 
@@ -73,7 +78,7 @@ Release 頁面供手動下載；程式不會自動下載、執行或覆蓋任何
   顯示回報筆數、P50／P95／P99、間隔統計與時間軸
 - **搖桿軌跡** 由原生背景執行緒繪製所選來源的取樣。
   搖桿圖的 FPS 統計有變化的畫面更新，回報率量測分頁則統計輸入回報。[搖桿圖手冊](manual/USER_GUIDE_zh-TW.md#92-搖桿圖)
-- **瞄準測試** 在 2D 和 3D 各提供跟槍、點靶與限時點靶，並可與相同測試條件下的歷史最佳成績比較。[瞄準測試手冊](manual/USER_GUIDE_zh-TW.md#99-瞄準測試)
+- **瞄準測試** 在 2D 和 3D 各提供跟槍、點靶與限時點靶，並可與相同測試條件下的歷史最佳成績比較。[瞄準測試手冊](manual/USER_GUIDE_zh-TW.md#aim-test-guide)
 - 內建 ESP32 診斷頁：支援定時測試、通過／警告／失敗判定及匯出文字報告
 - 關於頁：提供專案與贊助連結、軟體許可協議及第三方程式聲明
 - 完整遊戲設定檔，可一起切換搖桿、陀螺儀、震動、音訊觸覺與映射設定
@@ -85,11 +90,15 @@ Release 頁面供手動下載；程式不會自動下載、執行或覆蓋任何
 
 應用程式內各設定旁的 `?` 按鈕提供詳細說明。
 
-### 瞄準測試與方向死區
+### 瞄準測試
 
-瞄準測試採用簡單靶標、低對比場景和短暫命中回饋，降低繪圖負擔。可選擇 S2P 橋接後的輸出，
+瞄準測試採用簡單靶標、低對比棋盤背景和短暫命中回饋，降低繪圖負擔。可選擇 S2P 橋接後的輸出，
 或 Windows 讀取的實體手把輸入。測試不額外套用反應曲線或死區，也無輔助瞄準。
-Direct2D 以測試所在螢幕目前的更新率為繪圖目標。
+Direct2D 以測試所在螢幕目前的更新率為繪圖目標。畫面右下顯示繪圖 FPS 和 99% Low。
+
+[![v0.8.1 3D 瞄準測試展示](image/v0.8.1/aim-preview.gif)](image/v0.8.1/aim.gif)
+
+### 方向死區
 
 方向死區編輯器可拖曳紅色區域調整角度，並以相鄰方向夾角的百分比設定每區寬度。
 

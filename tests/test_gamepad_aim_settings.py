@@ -9,6 +9,49 @@ from unittest.mock import patch
 
 
 class AimSettingsTests(unittest.TestCase):
+    def test_short_work_area_scrolls_settings_and_keeps_save_visible(self):
+        from gamepad_aim_settings import AimSettings, show_aim_settings
+
+        try:
+            owner = tk.Tk()
+        except tk.TclError as error:
+            self.skipTest(str(error))
+        self.addCleanup(owner.destroy)
+        owner.attributes("-alpha", 0)
+        owner.geometry("700x420+20+175")
+        owner.update()
+        bottom = 600
+        saved = []
+        with (patch("gamepad_aim_settings.window_work_area", return_value=(0, 0, 1280, bottom), create=True),
+              patch("gamepad_aim_settings.available_resolutions", return_value=("1280x720",))):
+            dialog = show_aim_settings(owner, str, AimSettings(), saved.append)
+        owner.update()
+
+        self.assertLessEqual(dialog.winfo_rooty() + dialog.winfo_height(), bottom)
+        content, footer = dialog.winfo_children()
+        canvas = next(child for child in content.winfo_children() if isinstance(child, tk.Canvas))
+        scrollbar = next(child for child in content.winfo_children() if isinstance(child, ttk.Scrollbar))
+        self.assertTrue(scrollbar.winfo_ismapped())
+        self.assertLess(canvas.yview()[1], 1.0)
+        save = next(child for child in footer.winfo_children()
+                    if isinstance(child, ttk.Button) and child.cget("text") == "儲存")
+        save_top = save.winfo_rooty()
+        body = canvas.winfo_children()[0]
+        target_count = body.grid_slaves(row=0, column=1)[0]
+        target_count.event_generate("<MouseWheel>", delta=-120)
+        self.assertGreater(canvas.yview()[0], 0.0)
+        self.assertEqual(target_count.get(), "10")
+        self.assertEqual(save.winfo_rooty(), save_top)
+        self.assertLessEqual(save_top + save.winfo_height(), bottom)
+        target_count.set("101")
+        save.invoke()
+        owner.update()
+        self.assertEqual(saved, [])
+        self.assertLessEqual(save.winfo_rooty() + save.winfo_height(), bottom)
+        target_count.set("10")
+        save.invoke()
+        self.assertEqual(saved, [AimSettings()])
+
     def test_centered_dialog_restores_defaults_and_saves_display_choices(self):
         from gamepad_aim_settings import AimSettings, show_aim_settings
 
@@ -27,12 +70,14 @@ class AimSettingsTests(unittest.TestCase):
                 owner, str, AimSettings(
                     target_count=37, target_color="#ff0000", depth=91, sound=False,
                     window_size="960x540", fullscreen=True, fullscreen_size="1920x1080",
-                    mouse_sensitivity=125,
+                    mouse_sensitivity=125, auto_input_switch=True,
                 ),
                 saved.append,
             )
         owner.update()
-        body = dialog.winfo_children()[0]
+        content, footer = dialog.winfo_children()
+        canvas = next(child for child in content.winfo_children() if isinstance(child, tk.Canvas))
+        body = canvas.winfo_children()[0]
         sensitivity_label = next(
             child for child in body.winfo_children()
             if isinstance(child, ttk.Label) and child.cget("text") == "3D 滑鼠感度（%）"
@@ -54,6 +99,9 @@ class AimSettingsTests(unittest.TestCase):
                           if isinstance(child, ttk.Checkbutton) and child.cget("text") == "全螢幕")
         shading = next(child for child in body.winfo_children()
                        if isinstance(child, ttk.Checkbutton) and child.cget("text") == "加深遠近效果")
+        auto_switch = next(child for child in body.winfo_children()
+                           if isinstance(child, ttk.Checkbutton) and child.cget("text") == "啟用手把與滑鼠自動銜接")
+        self.assertTrue(auto_switch.instate(["selected"]))
         self.assertTrue(shading.instate(["selected"]))
         shading.invoke()
         self.assertEqual(size_picker.cget("values"), ("自動（最高）", *supported))
@@ -73,7 +121,7 @@ class AimSettingsTests(unittest.TestCase):
                 getattr(widget, f"winfo_{dimension}")() / 2
             )
             self.assertLess(abs(center(dialog) - center(owner)), 25)
-        buttons = {child.cget("text"): child for child in controls if isinstance(child, ttk.Button)}
+        buttons = {child.cget("text"): child for child in footer.winfo_children() if isinstance(child, ttk.Button)}
         size_picker.set("960x540")
         buttons["儲存"].invoke()
         self.assertEqual(saved, [])
@@ -82,6 +130,8 @@ class AimSettingsTests(unittest.TestCase):
         self.assertEqual(saved, [])
         self.assertEqual(sensitivity.get(), "100")
         self.assertTrue(shading.instate(["selected"]))
+        self.assertTrue(auto_switch.instate(["!selected"]))
+        auto_switch.invoke()
         self.assertEqual(size_picker.get(), "自動（最高）")
         self.assertTrue(size_picker.instate(["readonly", "!disabled"]))
         self.assertTrue(fullscreen.instate(["selected"]))
@@ -94,12 +144,15 @@ class AimSettingsTests(unittest.TestCase):
         buttons["儲存"].invoke()
         self.assertEqual(saved, [AimSettings(
             fullscreen=True, fullscreen_size="1706x960", depth_shading=False, mouse_sensitivity=50,
+            auto_input_switch=True,
         )])
 
         with patch("gamepad_aim_settings.available_resolutions", side_effect=OSError):
             dialog = show_aim_settings(owner, str, AimSettings(fullscreen=True), saved.append)
+        canvas = next(child for child in dialog.winfo_children()[0].winfo_children() if isinstance(child, tk.Canvas))
+        body = canvas.winfo_children()[0]
         controls = (
-            child for frame in dialog.winfo_children()[0].winfo_children()
+            child for frame in body.winfo_children()
             if isinstance(frame, ttk.Frame) for child in frame.winfo_children()
         )
         size_picker = next(child for child in controls if isinstance(child, ttk.Combobox))
@@ -172,18 +225,19 @@ class AimSettingsTests(unittest.TestCase):
                 target_count=16, depth=82, target_color="#ff8800", sound=False, depth_shading=False,
                 window_size="1706x960", fullscreen=True,
                 reticle_on_target_color="#ff4775", target_on_target_color="#ddf095",
-                mouse_sensitivity=50,
+                mouse_sensitivity=50, auto_input_switch=True,
             )
             settings.save(path)
             self.assertEqual(AimSettings.load(path), settings)
             path.write_text(
                 '{"target_count": -1, "reticle_color": "invalid", "depth": 40, '
-                '"window_size": "999x0", "fullscreen": 1, "mouse_sensitivity": 301}',
+                '"window_size": "999x0", "fullscreen": 1, "mouse_sensitivity": 301, "auto_input_switch": 1}',
                 encoding="utf-8",
             )
             self.assertEqual(AimSettings.load(path), AimSettings(depth=40))
             path.write_text('{"seed": 54}', encoding="utf-8")
             legacy = AimSettings.load(path)
+            self.assertFalse(legacy.auto_input_switch)
             self.assertEqual(legacy.mouse_sensitivity, 100)
             self.assertEqual((legacy.seed, legacy.window_size, legacy.fullscreen),
                              (54, "", True))

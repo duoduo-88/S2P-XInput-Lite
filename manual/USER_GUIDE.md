@@ -30,7 +30,7 @@ The screenshots use the English interface. Select **中 / En** in the lower-left
 - [7. Rumble settings](#7-rumble-settings)
 - [8. HidHide and ESP32-S3](#8-hidhide-and-esp32-s3)
 - [9. Gamepad Test](#9-gamepad-test)
-  - [9.9 Aim Test](#99-aim-test)
+  - [9.9 Aim Test](#aim-test-guide)
 - [10. Quick controls](#10-quick-controls)
 - [11. Troubleshooting](#11-troubleshooting)
 - [Appendix: recommended tuning order](#appendix-recommended-tuning-order)
@@ -446,6 +446,8 @@ If you dismiss an automatic reminder, it will not appear on every launch. Select
 > [!WARNING]
 > Close HidHide Configuration Client before retrying a failed setup. Enabling global cloaking can also affect other devices already present in the HidHide list.
 
+<a name="flash-esp32-s3"></a>
+
 ### 8.2 Flashing ESP32-S3 firmware
 
 1. Select **Flash FW**.
@@ -759,6 +761,8 @@ the left. The right side contains scrollable **License Agreement** and
 
 ---
 
+<a name="aim-test-guide"></a>
+
 ### 9.9 Aim Test
 
 #### Test mapped gyro output
@@ -775,11 +779,13 @@ the left. The right side contains scrollable **License Agreement** and
 
 #### Choose and run a drill
 
-In **2D Mode**, the mouse and right stick move the same reticle. In **3D Mode**,
-they turn the camera. The mouse takes over as you move it, and the right stick
-resumes after mouse movement pauses. Shoot with left-click, RT, or Space in
-either mode. Stick values set reticle or camera speed proportionally.
-**3D Mode → Targets** is selected by default.
+In **2D Mode**, the mouse or right stick moves the reticle. In **3D Mode**,
+it turns the camera. A detected controller has priority by default, so use
+RT or Space to shoot. With no controller detected, use the mouse to aim and
+left-click or press Space to shoot. To use both devices in the same round,
+enable **Auto-switch between controller and mouse** in **Test Settings**.
+Stick values set reticle or camera speed proportionally. The default drill
+is **3D Mode → Targets**.
 
 | Drill | 2D Mode | 3D Mode |
 |---|---|---|
@@ -798,8 +804,8 @@ the 3, 2, 1 countdown. If RT was held during the countdown, release it before
 pressing it to shoot. Use the top-right **Restart** button, Enter, or START to
 run the drill again. Use **Close**, Esc, or controller B to return to Gamepad
 Tester. A fullscreen test also closes when you switch away, restoring the
-previous display mode. During a 3D round, right-click to release the pointer
-for the window controls. Right-click in the play area again to resume mouse aim.
+previous display mode. When mouse aim is available in 3D, right-click to release
+the pointer for the window controls. Right-click in the play area again to resume mouse aim.
 
 #### Test settings and performance
 
@@ -816,6 +822,8 @@ for the window controls. Right-click in the play area again to resume mouse aim.
 - Adjust the reticle's color and size in any drill. The 2D target diameter is a
   percentage of the viewport's shorter edge. The depth and horizontal and
   vertical spread sliders control placement in 3D Targets and Timed Targets.
+- **3D mouse sensitivity (%)** defaults to 100%, which turns the camera by
+  0.18° per cursor pixel. Set it to 50% to halve the turn per pixel.
 - **Darken distant targets** is enabled by default. It uses the drill's target
   distance range, so the nearest target is brightest and farther targets
   become darker while remaining visible against the background. Turn it off
@@ -827,12 +835,12 @@ for the window controls. Right-click in the play area again to resume mouse aim.
   or use the sound checkbox to mute the cues. Select **Restore Defaults** and
   save to reset the test settings.
 
-The lower-right **D2D submits** or **Tk updates** counter measures the test's
-draw rate. The target follows the monitor's current refresh rate. **Input**
-shows the source report rate when the device provides enough information, and
-**Simulation** shows the measured simulation rate. The second line shows mean,
-P95 and P99 frame intervals and the share that exceeded the target interval.
-Use **Report Rate Test** to measure device report intervals.
+The timer is at the upper left. The lower right shows **FPS**, based on
+successful Direct2D submissions or Tk drawing updates. **99% Low** converts the
+P99 interval between updates to FPS, so dips show up even when average FPS stays
+high. The target follows the monitor's current refresh rate. Actual display
+presentation also depends on Windows and the GPU. Use **Report Rate Test**
+for controller report intervals.
 
 #### Read and compare results
 
@@ -843,11 +851,11 @@ Timed Targets, a shot during a gap between targets still counts toward accuracy.
 Tracking weights error by time. **On Target** is the percentage of the round
 spent within the target.
 
-Completed rounds appear in the **Aim Test** tab, with changes from the best
-earlier result under the same conditions. The comparison uses the mode,
+The end screen shows your result and changes from the best earlier round in
+the center. Saved rounds appear in the **Aim Test** tab. The comparison uses the mode,
 viewport, seed, vibration and sound, and relevant drill settings such as target
-count, duration, target size, depth, and spread. You can change colors or reticle
-size and keep the same baseline.
+count, duration, target size, depth, and spread. You can compare results across
+changes to colors, reticle size, or 3D mouse sensitivity.
 
 **Targets** ranks by hits, then accuracy, completion time, and mean error.
 Completion time is compared when both rounds hit every target. **Timed Targets**

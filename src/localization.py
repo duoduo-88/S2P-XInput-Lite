@@ -30,10 +30,13 @@ EN_TEXT = {
     "按 Enter 或手把 START 開始測試。": "Press Enter or controller START to begin.",
     "測試已中斷。按 Enter 或手把 START 重新開始。": "Test interrupted. Press Enter or controller START to restart.",
     "瞄準測試說明": "Aim Test Help",
-    "3D 模式可用滑鼠或右搖桿轉動視角，依輸入自動接手。"
+    "2D 用滑鼠或右搖桿移動準心。3D 用滑鼠或右搖桿轉動視角。":
+        "Use the mouse or right stick to move the reticle in 2D or turn the camera in 3D.",
+    "偵測到手把時預設只用手把瞄準。若要在同一回合交替使用滑鼠，請開啟測試設定的自動銜接。":
+        "By default, a detected controller takes priority. To switch between it and the mouse during a round, "
+        "turn on automatic switching in Test Settings.",
     "跟槍時盡量讓準心留在移動的靶上。跟靶率是準心在靶上的時間比例。":
-        "In 3D, turn the camera with either the mouse or the right stick. "
-        "The active input takes over automatically. In Tracking, keep the reticle on the moving target. "
+        "In Tracking, keep the reticle on the moving target. "
         "The on-target percentage measures how long the reticle stayed on the target.",
     "點靶時按滑鼠左鍵、RT 或空白鍵射擊。按 Enter 或手把 START 可開始或重測。":
         "In Targets, left-click or press RT or Space to shoot. "
@@ -72,6 +75,10 @@ EN_TEXT = {
     "重新抽靶": "Randomize",
     "3D 點靶遠近差異": "3D target depth variation",
     "加深遠近效果": "Darken distant targets",
+    "啟用手把與滑鼠自動銜接": "Auto-switch between controller and mouse",
+    "關閉時，偵測到手把就停用滑鼠瞄準與左鍵射擊。未偵測到手把時可用滑鼠。":
+        "When off, a detected controller disables mouse aim and left-click shooting. "
+        "You can still use the mouse without a controller.",
     "3D 點靶水平範圍": "3D target horizontal spread",
     "3D 點靶垂直範圍": "3D target vertical spread",
     "3D 滑鼠感度（%）": "3D mouse sensitivity (%)",
@@ -155,6 +162,8 @@ EN_TEXT = {
     "用滑鼠或右搖桿移動準心，追蹤移動球靶。": "Use the mouse or right stick to follow the moving target.",
     "用滑鼠或右搖桿瞄準，按左鍵、RT 或空白鍵點靶。":
         "Aim with the mouse or right stick. Left-click or press RT or Space to shoot.",
+    "用右搖桿瞄準，追蹤移動球靶。": "Aim with the right stick to follow the moving target.",
+    "用右搖桿瞄準，按 RT 或空白鍵點靶。": "Aim with the right stick. Press RT or Space to shoot.",
     "用右搖桿輸出移動游標，按 RT 或空白鍵點靶。":
         "Use right-stick output to move the cursor. Press RT or Space to shoot.",
     "剩餘 {seconds:.1f} s": "{seconds:.1f} s left",
