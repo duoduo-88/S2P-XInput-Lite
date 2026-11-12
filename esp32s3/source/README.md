@@ -2,7 +2,7 @@
 
 `esp32s3_usb_bridge_bluedroid/` contains the complete bundled firmware source.
 
-- Product/version: `S2P-FW 1.0.7`
+- Product/version: `S2P-FW 1.0.8`
 - Protocol: `s2p_bridge 1.0.0`; firmware profile: `s2p_usb_bridge`
 - Build: `standalone_diagnostics`; target: ESP32-S3 with 16 MB flash
 - Locked toolchain: ESP-IDF `5.5.4`, esp_tinyusb `1.7.6~2`, tinyusb `0.19.0~3`
@@ -21,7 +21,7 @@ USB certification. Physical USB XInput, XUSB20 and Auto probing are removed.
 Desktop Windows XInput through ViGEmBus, mapping, rumble and audio haptics remain
 on the Bridge path. HID provides input only; Android rumble is not promised.
 
-The shared runtime preserves calibration, stick curves/deadzones, mapping layers,
+The shared runtime preserves calibration, stick curves, 4WAY and 8WAY angular deadzones, mapping layers,
 gyro-to-stick, battery LEDs, idle disconnect and reconnect. Bounded button/trigger
 edge queues coexist with newest-state stick/IMU samples. CDC control/lifecycle
 queues retain priority over scan/debug traffic. Host rumble uses latest-only

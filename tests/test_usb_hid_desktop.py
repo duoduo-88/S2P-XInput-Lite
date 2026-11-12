@@ -58,6 +58,109 @@ class FakeSerial:
 
 
 class DesktopUSBIdentityTests(unittest.TestCase):
+    def test_saved_mode_does_not_confirm_active_mode_after_restart(self):
+        before = identity(mode="bridge", active_mode="bridge")
+        stale = FakeSerial(identity(mode="standalone_hid", active_mode="bridge"))
+        with (
+            patch.object(profiles.list_ports, "comports", return_value=[]),
+            patch.object(profiles.serial, "Serial", return_value=stale),
+        ):
+            with self.assertRaisesRegex(profiles.StandaloneTransferError, "USB 模式已生效"):
+                profiles._confirm_esp32_mode("COM8", 2_000_000, before, "standalone_hid", timeout=0.05)
+        self.assertEqual(set(stale.commands), {"status lite"})
+        self.assertFalse(stale.is_open)
+
+    def test_mode_switch_checks_same_esp32_at_new_port_after_restart(self):
+        class RestartingPort(FakeSerial):
+            def __init__(self, status, acknowledge_restart, drop_mode_reply):
+                super().__init__(status)
+                self.acknowledge_restart = acknowledge_restart
+                self.drop_mode_reply = drop_mode_reply
+
+            def write(self, payload):
+                command = payload.decode().strip()
+                if command.startswith("profile begin "):
+                    response = dict(cmd="profile_begin", ok=1)
+                elif command.startswith("profile chunk "):
+                    _, _, offset, chunk = command.split()
+                    response = dict(cmd="profile_chunk", ok=1,
+                                    received=int(offset) + len(bytes.fromhex(chunk)))
+                elif command == "profile commit":
+                    response = dict(cmd="profile_commit", ok=1, runtime_applied=1)
+                elif command.startswith("mode "):
+                    if self.drop_mode_reply:
+                        self.drop_mode_reply = False
+                        self.commands.append(command)
+                        return
+                    response = dict(cmd="mode", ok=1, mode=command.split()[1], restart_required=1)
+                elif command == "restart":
+                    if not self.acknowledge_restart:
+                        self.commands.append(command)
+                        raise OSError("old COM port disappeared")
+                    response = dict(cmd="restart", ok=1)
+                else:
+                    return super().write(payload)
+                self.commands.append(command)
+                self.pending.append((json.dumps(response) + "\n").encode())
+
+        compiled = profiles.compile_standalone_profile("General", {"sections": {}})
+        send = profiles._send_and_expect
+
+        def send_with_short_mode_timeout(port, command, expected, timeout=2.0):
+            return send(port, command, expected, timeout=0.03 if expected == "mode" else timeout)
+
+        for target_mode, acknowledge_restart, profile_on_restart, drop_mode_reply in (
+            ("standalone_hid", True, "applied", False),
+            ("standalone_hid", False, "applied", False),
+            ("standalone_hid", True, "applied", True),
+            ("standalone_hid", True, "previous", False),
+            ("standalone_hid", True, "stored_only", False),
+            ("bridge", True, None, False),
+            ("bridge", False, None, False),
+            ("bridge", True, None, True),
+        ):
+            with self.subTest(target_mode=target_mode, acknowledge_restart=acknowledge_restart,
+                              profile_on_restart=profile_on_restart, drop_mode_reply=drop_mode_reply):
+                old_mode = "bridge" if target_mode == "standalone_hid" else "standalone_hid"
+                write_profile = profile_on_restart is not None
+                profile_error = profile_on_restart in ("previous", "stored_only")
+                before = identity(mode=old_mode, active_mode=old_mode)
+                ports = [SimpleNamespace(device="COM9", serial_number=before["usb_serial"])]
+                original = RestartingPort(before, acknowledge_restart, drop_mode_reply)
+                wrong = FakeSerial(identity("S2P-001122334455", active_mode=target_mode))
+                correct = FakeSerial(identity(active_mode=target_mode), {
+                    "valid": 1, "length": len(compiled.payload),
+                    "crc32": "00000000" if profile_on_restart == "previous" else f"{compiled.crc32:08x}",
+                    "runtime_applied": int(profile_on_restart != "stored_only"),
+                })
+                with (
+                    patch.object(profiles.list_ports, "comports", return_value=ports),
+                    patch.object(profiles.serial, "Serial", side_effect=[original, wrong, correct]) as open_port,
+                    patch.object(profiles, "_send_and_expect", side_effect=send_with_short_mode_timeout),
+                ):
+                    if profile_error:
+                        with self.assertRaisesRegex(profiles.StandaloneTransferError, "重新啟動後無法確認已套用"):
+                            profiles.write_standalone_profile(
+                                "COM8", 2_000_000, compiled, target_mode=target_mode
+                            )
+                    elif write_profile:
+                        result = profiles.write_standalone_profile(
+                            "COM8", 2_000_000, compiled, target_mode=target_mode
+                        )
+                    else:
+                        result = profiles.set_esp32_mode("COM8", 2_000_000, target_mode)
+
+                if not profile_error:
+                    self.assertEqual(result["mode"], target_mode)
+                self.assertEqual([call.args[0] for call in open_port.call_args_list],
+                                 ["COM8", "COM8", "COM9"])
+                self.assertEqual(original.commands[-2:], [f"mode {target_mode}", "restart"])
+                self.assertEqual(original.commands.count(f"mode {target_mode}"), 2 if drop_mode_reply else 1)
+                self.assertEqual(wrong.commands, ["status lite"])
+                self.assertEqual(correct.commands,
+                                 ["status lite", "profile status"] if write_profile else ["status lite"])
+                self.assertFalse(original.is_open or wrong.is_open or correct.is_open)
+
     def test_json_array_is_not_a_firmware_status(self):
         port = SimpleNamespace(device="COM8", vid=0x303A, pid=0x4005,
                                product="S2P Mobile Gamepad", serial_number="S2P-AABBCCDDEEFF")

@@ -267,6 +267,13 @@ typedef struct {
     uint16_t min_y;
 } stick_runtime_config_t;
 
+typedef struct {
+    float x;
+    float y;
+    int16_t report_x;
+    int16_t report_y;
+} processed_stick_t;
+
 typedef enum {
     STICK_DIRECTION_4WAY,
     STICK_DIRECTION_8WAY,
@@ -280,6 +287,8 @@ typedef struct {
     float trigger_threshold;
     float release_threshold;
     float direction_deadzone;
+    bool has_custom_deadzone;
+    float deadzone_edges[8][2];
     uint8_t analog_direction;
     int8_t active_direction;
     uint32_t targets[8];
@@ -426,6 +435,7 @@ typedef struct {
     uint8_t layer_count;
     mapping_layer_runtime_t layers[STANDALONE_LAYER_MAX];
     int8_t toggle_layer;
+    int8_t active_layer;
     uint32_t previous_source_buttons;
     uint8_t idle_disconnect_minutes;
     gyro_runtime_t gyro;
@@ -447,6 +457,8 @@ static const uint32_t s_source_masks[SOURCE_BUTTON_COUNT] = {
 
 static standalone_runtime_config_t s_runtime = {
     .idle_disconnect_minutes = 15,
+    .toggle_layer = -1,
+    .active_layer = -1,
     .sticks = {
         {
             .x = {0.0f,0.25f,0.50f,0.75f,1.0f},
@@ -681,11 +693,38 @@ static void parse_calibration_side(
     }
 }
 
-static void parse_direction_config(
+static bool parse_direction_deadzone_edges(
+    const cJSON *edges, stick_direction_runtime_t *config
+) {
+    config->has_custom_deadzone = false;
+    if (!edges) return true;
+    int count = config->mode == STICK_DIRECTION_4WAY ? 4 :
+                config->mode == STICK_DIRECTION_8WAY ? 8 : 0;
+    if (!count || !cJSON_IsArray(edges) || cJSON_GetArraySize(edges) != count)
+        return false;
+    double step = 360.0 / count;
+    for (int gap = 0; gap < count; gap++) {
+        const cJSON *pair = cJSON_GetArrayItem(edges, gap);
+        if (!cJSON_IsArray(pair) || cJSON_GetArraySize(pair) != 2)
+            return false;
+        const cJSON *start = cJSON_GetArrayItem(pair, 0);
+        const cJSON *end = cJSON_GetArrayItem(pair, 1);
+        if (!cJSON_IsNumber(start) || !cJSON_IsNumber(end) ||
+            !(start->valuedouble > 0.0 && start->valuedouble <= end->valuedouble &&
+              end->valuedouble < step))
+            return false;
+        config->deadzone_edges[gap][0] = (float)start->valuedouble;
+        config->deadzone_edges[gap][1] = (float)end->valuedouble;
+    }
+    config->has_custom_deadzone = true;
+    return true;
+}
+
+static bool parse_direction_config(
     const cJSON *section, const cJSON *mappings,
     stick_direction_runtime_t *config
 ) {
-    if (!config) return;
+    if (!config) return false;
     if (cJSON_IsObject(section)) {
         const cJSON *mode =
             cJSON_GetObjectItemCaseSensitive(section, "mode");
@@ -716,6 +755,11 @@ static void parse_direction_config(
                 section, "direction_deadzone", config->direction_deadzone
             ), 0.0f, 20.0f
         );
+        if (!parse_direction_deadzone_edges(
+                cJSON_GetObjectItemCaseSensitive(section, "direction_deadzone_edges"),
+                config
+            ))
+            return false;
         const cJSON *direction =
             cJSON_GetObjectItemCaseSensitive(section, "analog_direction");
         if (cJSON_IsString(direction)) {
@@ -742,6 +786,7 @@ static void parse_direction_config(
         }
     }
     config->active_direction = -1;
+    return true;
 }
 
 static void reset_gyro_runtime_state(gyro_runtime_t *config) {
@@ -1097,20 +1142,19 @@ static bool parse_profile_json(
     }
     const cJSON *direction_mappings =
         cJSON_GetObjectItemCaseSensitive(root, "direction_mappings");
-    parse_direction_config(
+    if (!parse_direction_config(
         cJSON_GetObjectItemCaseSensitive(root, "stick_direction_left"),
         cJSON_IsObject(direction_mappings)
             ? cJSON_GetObjectItemCaseSensitive(direction_mappings, "left")
             : NULL,
         &next.directions[0]
-    );
-    parse_direction_config(
+    ) || !parse_direction_config(
         cJSON_GetObjectItemCaseSensitive(root, "stick_direction_right"),
         cJSON_IsObject(direction_mappings)
             ? cJSON_GetObjectItemCaseSensitive(direction_mappings, "right")
             : NULL,
         &next.directions[1]
-    );
+    )) goto invalid_direction;
     const cJSON *rumble =
         cJSON_GetObjectItemCaseSensitive(root, "rumble");
     if (cJSON_IsObject(rumble)) {
@@ -1156,6 +1200,7 @@ static bool parse_profile_json(
     }
     next.layer_count = 0;
     next.toggle_layer = -1;
+    next.active_layer = -1;
     next.previous_source_buttons = 0;
     const cJSON *layers =
         cJSON_GetObjectItemCaseSensitive(root, "mapping_layers");
@@ -1200,12 +1245,16 @@ static bool parse_profile_json(
             );
             runtime->directions[0] = next.directions[0];
             runtime->directions[1] = next.directions[1];
+            /* A layer without custom edges uses its uniform deadzone. */
+            runtime->directions[0].has_custom_deadzone = false;
+            runtime->directions[1].has_custom_deadzone = false;
             const cJSON *left =
                 cJSON_GetObjectItemCaseSensitive(layer, "stick_left");
             const cJSON *right =
                 cJSON_GetObjectItemCaseSensitive(layer, "stick_right");
-            parse_direction_config(left, left, &runtime->directions[0]);
-            parse_direction_config(right, right, &runtime->directions[1]);
+            if (!parse_direction_config(left, left, &runtime->directions[0]) ||
+                !parse_direction_config(right, right, &runtime->directions[1]))
+                goto invalid_direction;
             if (runtime->activation_mask)
                 next.layer_count++;
         }
@@ -1214,6 +1263,10 @@ static bool parse_profile_json(
 #undef next
     cJSON_Delete(root);
     return true;
+
+invalid_direction:
+    cJSON_Delete(root);
+    return false;
 }
 
 bool standalone_xinput_validate_profile_json(
@@ -1458,9 +1511,9 @@ static float evaluate_stick_curve_slope(
     return fmaxf(0.0f, dy / dx);
 }
 
-static void process_stick(
+static processed_stick_t process_stick(
     uint16_t raw_x, uint16_t raw_y, uint32_t report_time,
-    stick_runtime_config_t *config, int16_t *output_x, int16_t *output_y
+    stick_runtime_config_t *config
 ) {
     float delta_x = (float)raw_x - config->center_x;
     float delta_y = (float)raw_y - config->center_y;
@@ -1477,9 +1530,7 @@ static void process_stick(
         config->smoothed_magnitude = 0.0f;
         config->smoothing_valid = false;
         config->smoothing_report_time = 0;
-        *output_x = 0;
-        *output_y = 0;
-        return;
+        return (processed_stick_t){0};
     }
 
     float direction_x = x / magnitude;
@@ -1559,8 +1610,12 @@ static void process_stick(
     }
     x = clampf(direction_x * output_magnitude, -1.0f, 1.0f);
     y = clampf(direction_y * output_magnitude, -1.0f, 1.0f);
-    *output_x = (int16_t)lrintf(x * (x < 0.0f ? 32768.0f : 32767.0f));
-    *output_y = (int16_t)lrintf(y * (y < 0.0f ? 32768.0f : 32767.0f));
+    return (processed_stick_t){
+        .x = x,
+        .y = y,
+        .report_x = (int16_t)lrintf(x * (x < 0.0f ? 32768.0f : 32767.0f)),
+        .report_y = (int16_t)lrintf(y * (y < 0.0f ? 32768.0f : 32767.0f)),
+    };
 }
 
 static float linear_trigger_amount(
@@ -1605,6 +1660,26 @@ static float angular_distance(float first, float second) {
     return fabsf(distance);
 }
 
+static int8_t pick_custom_direction(
+    const stick_direction_runtime_t *config, float angle, float step,
+    int count, const int8_t *indices
+) {
+    /* Adding 360 to a tiny negative angle can round it to 360. */
+    if (angle >= 360.0f) angle = 0.0f;
+    int gap = (int)(angle / step);
+    float position = angle - gap * step;
+    float start = config->deadzone_edges[gap][0];
+    float end = config->deadzone_edges[gap][1];
+    int8_t lower = indices[gap];
+    int8_t upper = indices[(gap + 1) % count];
+    int8_t current = config->active_direction;
+    if (position < start) return lower;
+    if (position > end) return upper;
+    if ((position > start && position < end) || current == lower || current == upper)
+        return current;
+    return position < end ? lower : upper;
+}
+
 static uint32_t apply_stick_direction(
     stick_direction_runtime_t *config,
     const stick_runtime_config_t *stick,
@@ -1631,28 +1706,35 @@ static uint32_t apply_stick_direction(
         config->mode != STICK_DIRECTION_8WAY
     ) return 0;
     float magnitude = sqrtf(x * x + y * y);
-    if (config->active_direction >= 0) {
-        if (magnitude <= config->release_threshold)
-            config->active_direction = -1;
-    } else if (magnitude < config->trigger_threshold) {
-        return 0;
+    if (config->active_direction >= 0 && magnitude <= config->release_threshold) {
+        config->active_direction = -1;
+        if (config->has_custom_deadzone) return 0;
     }
-    if (magnitude >= config->trigger_threshold) {
+    if (magnitude >= config->trigger_threshold ||
+        (config->has_custom_deadzone && config->active_direction >= 0 &&
+         magnitude > config->release_threshold)) {
         float angle = atan2f(y, x) * (180.0f / (float)M_PI);
         if (angle < 0.0f) angle += 360.0f;
         float sector_step =
             config->mode == STICK_DIRECTION_4WAY ? 90.0f : 45.0f;
         int sector_count =
             config->mode == STICK_DIRECTION_4WAY ? 4 : 8;
+        static const int8_t indices_4way[4] = {2, 0, 6, 4};
+        static const int8_t indices_8way[8] = {2, 1, 0, 7, 6, 5, 4, 3};
+        const int8_t *indices = config->mode == STICK_DIRECTION_4WAY
+            ? indices_4way : indices_8way;
+        if (config->has_custom_deadzone) {
+            config->active_direction = pick_custom_direction(
+                config, angle, sector_step, sector_count, indices
+            );
+            return config->active_direction >= 0
+                ? config->targets[config->active_direction] : 0;
+        }
         float half_sector = sector_step / 2.0f;
         int sector = ((int)floorf(
             (angle + half_sector) / sector_step
         )) % sector_count;
-        static const int indices_4way[4] = {2, 0, 6, 4};
-        static const int indices_8way[8] = {2, 1, 0, 7, 6, 5, 4, 3};
-        const int *indices = config->mode == STICK_DIRECTION_4WAY
-            ? indices_4way : indices_8way;
-        int candidate = indices[sector];
+        int8_t candidate = indices[sector];
         float candidate_distance =
             angular_distance(angle, sector * sector_step);
 
@@ -1683,6 +1765,22 @@ static uint32_t apply_stick_direction(
     }
     return config->active_direction >= 0
         ? config->targets[config->active_direction] : 0;
+}
+
+static uint32_t apply_processed_stick_direction(
+    stick_direction_runtime_t *config, const stick_runtime_config_t *stick,
+    uint16_t raw_x, uint16_t raw_y, const processed_stick_t *sample,
+    uint8_t *left_trigger, uint8_t *right_trigger
+) {
+    float x = sample->x;
+    float y = sample->y;
+    if (!config->has_custom_deadzone) {
+        x = sample->report_x / (sample->report_x < 0 ? 32768.0f : 32767.0f);
+        y = sample->report_y / (sample->report_y < 0 ? 32768.0f : 32767.0f);
+    }
+    return apply_stick_direction(
+        config, stick, raw_x, raw_y, x, y, left_trigger, right_trigger
+    );
 }
 
 static bool stick_direction_consumes_native_output(
@@ -1733,21 +1831,18 @@ bool standalone_xinput_format_algorithm_test(
         stick_runtime_config_t stick = s_runtime.sticks[side];
         stick.smoothing_valid = false;
         stick.smoothing_report_time = 0;
-        int16_t first_x, first_y, final_x, final_y;
-        process_stick(
-            (uint16_t)raw_x_1, (uint16_t)raw_y_1, (uint32_t)time_1,
-            &stick, &first_x, &first_y
+        processed_stick_t first = process_stick(
+            (uint16_t)raw_x_1, (uint16_t)raw_y_1, (uint32_t)time_1, &stick
         );
-        process_stick(
-            (uint16_t)raw_x_2, (uint16_t)raw_y_2, (uint32_t)time_2,
-            &stick, &final_x, &final_y
+        processed_stick_t final = process_stick(
+            (uint16_t)raw_x_2, (uint16_t)raw_y_2, (uint32_t)time_2, &stick
         );
         snprintf(
             output, size,
             "{\"cmd\":\"algorithm_test\",\"ok\":1,"
             "\"kind\":\"stick\",\"first\":[%d,%d],"
             "\"final\":[%d,%d]}\n",
-            first_x, first_y, final_x, final_y
+            first.report_x, first.report_y, final.report_x, final.report_y
         );
         return true;
     }
@@ -1819,7 +1914,7 @@ bool standalone_xinput_format_algorithm_test(
     return false;
 }
 
-static int select_mapping_layer(uint32_t source) {
+static int select_mapping_layer(uint32_t source, bool first_report) {
     int rising_toggle = -1;
     int best_hold = -1;
     for (int i = 0; i < s_runtime.layer_count; i++) {
@@ -1845,11 +1940,22 @@ static int select_mapping_layer(uint32_t source) {
         }
     }
     if (rising_toggle >= 0) {
-        s_runtime.toggle_layer =
-            s_runtime.toggle_layer == rising_toggle ? -1 : rising_toggle;
+        s_runtime.toggle_layer = (int8_t)(
+            s_runtime.toggle_layer == rising_toggle ? -1 : rising_toggle
+        );
     }
     s_runtime.previous_source_buttons = source;
-    return best_hold >= 0 ? best_hold : s_runtime.toggle_layer;
+    int selected = best_hold >= 0 ? best_hold : s_runtime.toggle_layer;
+    if (first_report || selected != s_runtime.active_layer) {
+        stick_direction_runtime_t *directions = selected >= 0
+            ? s_runtime.layers[selected].directions : s_runtime.directions;
+        for (int side = 0; side < 2; side++) {
+            if (directions[side].has_custom_deadzone)
+                directions[side].active_direction = -1;
+        }
+        s_runtime.active_layer = (int8_t)selected;
+    }
+    return selected;
 }
 
 static int16_t read_i16_le(const uint8_t *data) {
@@ -3350,20 +3456,35 @@ void standalone_xinput_observe_mode_chord(
     if ((!s_usb_hid_mode || channel == s_active_channel) &&
         (s_mode_chord_channel < 0 || channel == s_mode_chord_channel)) {
         uint32_t source = read_u32_le(payload + 4);
-        uint32_t chord_mask = mode_chord_mask(mode_chord_target(source));
-        if (chord_mask && s_mode_chord_channel < 0)
+        standalone_output_mode_t target = mode_chord_target(source);
+        bool wants_switch = mode_chord_mask(target) != 0 &&
+            target != s_configured_output_mode;
+        if (wants_switch && s_mode_chord_channel < 0)
             s_mode_chord_channel = channel;
-        (void)filter_mode_chord(source);
-        /* Preserve ownership through release until the request is consumed;
-         * disconnect can still cancel it during this interval. */
-        if (!chord_mask && !s_mode_chord_is_armed && !s_mode_switch_requested)
-            s_mode_chord_channel = -1;
+        if (s_mode_chord_channel == channel) {
+            (void)filter_mode_chord(source);
+            /* Keep ownership through an armed release until the request is
+             * consumed, so a disconnect can still cancel it. */
+            if (!wants_switch && !s_mode_chord_is_armed && !s_mode_switch_requested) {
+                s_mode_chord_channel = -1;
+                s_mode_chord_candidate = (standalone_output_mode_t)-1;
+                s_mode_chord_started_us = 0;
+            }
+        }
     }
     portEXIT_CRITICAL(&s_state_mux);
 }
 
+uint32_t standalone_xinput_recovery_release_mask(int channel) {
+    portENTER_CRITICAL(&s_state_mux);
+    uint32_t mask = channel == s_mode_chord_channel ? s_mode_chord_release_mask : 0;
+    portEXIT_CRITICAL(&s_state_mux);
+    return mask;
+}
+
 void standalone_xinput_accept_switch_report(
-    int channel, const uint8_t *payload, size_t length
+    int channel, const uint8_t *payload, size_t length,
+    uint32_t recovery_release_mask
 ) {
     if (!payload || length < 16) return;
     bool accepted;
@@ -3385,8 +3506,9 @@ void standalone_xinput_accept_switch_report(
         /* Recovery timing follows the latest raw state, never delayed FIFO
          * playback. Suppress chord buttons here without replaying that timing. */
         source &= ~mode_chord_mask(mode_chord_target(source));
+        source &= ~recovery_release_mask;
         xinput_report_t report = {.report_size = 20};
-        int layer_index = select_mapping_layer(source);
+        int layer_index = select_mapping_layer(source, !idle_baseline_valid);
         const uint32_t *button_targets = s_runtime.button_targets;
         stick_direction_runtime_t *directions = s_runtime.directions;
         if (layer_index >= 0 && layer_index < s_runtime.layer_count) {
@@ -3438,32 +3560,25 @@ void standalone_xinput_accept_switch_report(
                 abs((int)raw_gyro[i]) >= 120
             ) activity = true;
         }
-        int16_t left_x, left_y, right_x, right_y;
-        process_stick(
-            left_raw_x, left_raw_y, report_time,
-            &s_runtime.sticks[0], &left_x, &left_y
+        processed_stick_t left = process_stick(
+            left_raw_x, left_raw_y, report_time, &s_runtime.sticks[0]
         );
-        process_stick(
-            right_raw_x, right_raw_y, report_time,
-            &s_runtime.sticks[1], &right_x, &right_y
+        processed_stick_t right = process_stick(
+            right_raw_x, right_raw_y, report_time, &s_runtime.sticks[1]
         );
-        report.left_x = left_x;
-        report.left_y = left_y;
-        report.right_x = right_x;
-        report.right_y = right_y;
+        report.left_x = left.report_x;
+        report.left_y = left.report_y;
+        report.right_x = right.report_x;
+        report.right_y = right.report_y;
         uint32_t direction_targets = 0;
-        direction_targets |= apply_stick_direction(
+        direction_targets |= apply_processed_stick_direction(
             &directions[0], &s_runtime.sticks[0],
-            left_raw_x, left_raw_y,
-            left_x / (left_x < 0 ? 32768.0f : 32767.0f),
-            left_y / (left_y < 0 ? 32768.0f : 32767.0f),
+            left_raw_x, left_raw_y, &left,
             &report.left_trigger, &report.right_trigger
         );
-        direction_targets |= apply_stick_direction(
+        direction_targets |= apply_processed_stick_direction(
             &directions[1], &s_runtime.sticks[1],
-            right_raw_x, right_raw_y,
-            right_x / (right_x < 0 ? 32768.0f : 32767.0f),
-            right_y / (right_y < 0 ? 32768.0f : 32767.0f),
+            right_raw_x, right_raw_y, &right,
             &report.left_trigger, &report.right_trigger
         );
         report.buttons1 |= (uint8_t)(direction_targets & 0xffu);

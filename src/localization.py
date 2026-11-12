@@ -739,6 +739,14 @@ EN_TEXT = {
     "找不到相容的 ESP32。請確認已連接 OTG 接口，而且沒有其他程式占用連接埠。":
         "No compatible ESP32 was found. Check the OTG connection and make sure no other program owns the port.",
     "找不到相容的 ESP32。": "No compatible ESP32 was found.",
+    "目前 ESP32 韌體不支援逐區方向死區，請先更新韌體。":
+        "The current ESP32 firmware does not support per-direction deadzones. Update the firmware first.",
+    "ESP32 已儲存設定，但無法確認是否已套用。":
+        "ESP32 saved the profile, but its active settings could not be confirmed.",
+    "ESP32 重新啟動後無法確認指定的 USB 模式已生效。":
+        "The requested USB mode could not be confirmed after ESP32 restarted.",
+    "ESP32 重新啟動後無法確認已套用寫入的設定。":
+        "The written profile could not be confirmed after ESP32 restarted.",
     "ESP32 已切回橋接模式並重新啟動。":
         "ESP32 returned to bridge mode and restarted.",
     "\n\n已啟用手機 USB HID 模式。重新插入手機後，ESP32 會顯示為「S2P Mobile Gamepad」。\n此模式不提供手機遊戲震動；是否支援 Home／Capture 等額外按鍵取決於手機系統與遊戲。":

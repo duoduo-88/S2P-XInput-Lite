@@ -26,6 +26,7 @@ static size_t s_expected;
 static size_t s_received;
 static uint16_t s_schema;
 static uint32_t s_crc32;
+static standalone_profile_header_t s_runtime_header;
 static standalone_profile_fault_hook_t s_fault_hook;
 
 static uint32_t profile_crc32(const uint8_t *data, size_t length) {
@@ -69,7 +70,8 @@ static size_t parse_hex(
 static bool read_slot(
     nvs_handle_t nvs,
     uint8_t slot,
-    standalone_profile_header_t *header
+    standalone_profile_header_t *header,
+    bool validate_runtime
 ) {
     const char *key = slot == 0 ? "slot_a" : "slot_b";
     size_t size = 0;
@@ -88,9 +90,23 @@ static bool read_slot(
             header->length == size - sizeof(*header) &&
             profile_crc32(blob + sizeof(*header), header->length) ==
                 header->crc32;
+        if (valid && validate_runtime) {
+            valid = standalone_xinput_validate_profile_json(
+                blob + sizeof(*header), header->length
+            );
+        }
     }
     free(blob);
     return valid;
+}
+
+static bool apply_profile(
+    const standalone_profile_header_t *header, const uint8_t *json
+) {
+    if (!standalone_xinput_apply_profile_json(json, header->length))
+        return false;
+    s_runtime_header = *header;
+    return true;
 }
 
 static bool apply_slot(nvs_handle_t nvs, uint8_t slot) {
@@ -113,10 +129,7 @@ static bool apply_slot(nvs_handle_t nvs, uint8_t slot) {
             profile_crc32(blob + sizeof(header), header.length) ==
                 header.crc32;
     }
-    if (valid)
-        valid = standalone_xinput_apply_profile_json(
-            blob + sizeof(header), header.length
-        );
+    if (valid) valid = apply_profile(&header, blob + sizeof(header));
     free(blob);
     return valid;
 }
@@ -160,18 +173,23 @@ void standalone_profile_format_status(char *output, size_t size) {
     if (nvs_open(STANDALONE_NVS_NAMESPACE, NVS_READONLY, &nvs) == ESP_OK) {
         nvs_get_u8(nvs, "active", &active_slot);
         active_slot = active_slot == 1 ? 1 : 0;
-        valid = read_slot(nvs, active_slot, &header);
+        valid = read_slot(nvs, active_slot, &header, false);
         nvs_close(nvs);
     }
+    bool runtime_applied = valid &&
+        header.schema == s_runtime_header.schema &&
+        header.length == s_runtime_header.length &&
+        header.crc32 == s_runtime_header.crc32;
     snprintf(
         output, size,
         "{\"cmd\":\"profile_status\",\"ok\":1,\"valid\":%d,"
         "\"slot\":\"%c\",\"schema\":%u,\"length\":%u,"
-        "\"crc32\":\"%08lx\"}\n",
+        "\"crc32\":\"%08lx\",\"runtime_applied\":%d}\n",
         valid ? 1 : 0, active_slot == 0 ? 'A' : 'B',
         valid ? (unsigned)header.schema : 0,
         valid ? (unsigned)header.length : 0,
-        valid ? (unsigned long)header.crc32 : 0ul
+        valid ? (unsigned long)header.crc32 : 0ul,
+        runtime_applied ? 1 : 0
     );
 }
 
@@ -321,6 +339,27 @@ void standalone_profile_commit(char *output, size_t size) {
         const char *key = target_slot == 0 ? "slot_a" : "slot_b";
         if (inject_fault(STANDALONE_PROFILE_FAULT_BEFORE_SLOT_WRITE))
             error = ESP_FAIL;
+        if (error == ESP_OK) {
+            nvs_stats_t stats;
+            // NVS entries are 32 bytes. Allow for the chunk header, blob
+            // index, and new active marker in addition to the blob data.
+            size_t required_entries = (blob_size + 31) / 32 + 3;
+            if (nvs_get_stats(NULL, &stats) == ESP_OK &&
+                stats.available_entries < required_entries) {
+                // NVS normally writes the new blob before freeing the old
+                // one. Reclaim only the inactive slot, and only when the
+                // currently active profile can survive an interrupted write.
+                standalone_profile_header_t previous;
+                if (!read_slot(nvs, active_slot, &previous, true)) {
+                    error = ESP_ERR_NVS_NOT_ENOUGH_SPACE;
+                } else {
+                    error = nvs_erase_key(nvs, key);
+                    if (error == ESP_ERR_NVS_NOT_FOUND)
+                        error = ESP_ERR_NVS_NOT_ENOUGH_SPACE;
+                    if (error == ESP_OK) error = nvs_commit(nvs);
+                }
+            }
+        }
         if (error == ESP_OK) error = nvs_set_blob(nvs, key, blob, blob_size);
         if (error == ESP_OK &&
             inject_fault(STANDALONE_PROFILE_FAULT_AFTER_SLOT_WRITE))
@@ -330,7 +369,7 @@ void standalone_profile_commit(char *output, size_t size) {
             inject_fault(STANDALONE_PROFILE_FAULT_AFTER_SLOT_COMMIT))
             error = ESP_FAIL;
         standalone_profile_header_t verify = {0};
-        if (error == ESP_OK && !read_slot(nvs, target_slot, &verify))
+        if (error == ESP_OK && !read_slot(nvs, target_slot, &verify, false))
             error = ESP_ERR_INVALID_CRC;
         if (error == ESP_OK)
             error = nvs_set_u8(nvs, "active", target_slot);
@@ -355,9 +394,7 @@ void standalone_profile_commit(char *output, size_t size) {
 
     uint32_t committed_crc = s_crc32;
     size_t committed_length = s_expected;
-    bool applied = standalone_xinput_apply_profile_json(
-        s_staging, s_expected
-    );
+    bool applied = apply_profile(&header, s_staging);
     reset_staging();
     if (!applied) {
         if (nvs_open(

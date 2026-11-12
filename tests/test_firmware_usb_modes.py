@@ -23,6 +23,46 @@ def extract_function(source, name):
 
 
 class FirmwareUsbModesTests(unittest.TestCase):
+    def test_repeated_large_profile_commits_keep_the_active_slot(self):
+        source = (MAIN / 'standalone_profile_store.c').read_text(encoding='utf-8')
+        header = re.search(r'typedef struct \{.*?\} standalone_profile_header_t;',
+                           source, re.S).group()
+        defines = re.findall(r'^#define STANDALONE_[^\n]+', source, re.M)
+        state = re.findall(
+            r'^static (?:const char \*TAG|standalone_profile_header_t s_runtime_header)[^\n]*;',
+            source, re.M,
+        )
+        functions = [extract_function(source, name) for name in (
+            'profile_crc32', 'reset_staging', 'inject_fault', 'read_slot',
+            'apply_profile', 'apply_slot', 'standalone_profile_load_runtime',
+            'standalone_profile_format_status', 'standalone_profile_commit')]
+        output = ROOT / 'build/bridge-host-tests'
+        output.mkdir(parents=True, exist_ok=True)
+        (output / 'firmware_profile_store.inc').write_text(
+            '\n'.join([*defines, header, *state, *functions]), encoding='utf-8')
+        host_tests.BridgeFirmwareWatchdogTests.compile_and_run(
+            self, ROOT / 'tests/firmware_profile_store_test.c', 'profile_store')
+
+    def test_standalone_stick_direction_deadzone_switching(self):
+        source = (MAIN / 'standalone_xinput.c').read_text(encoding='utf-8')
+        types = source.split('typedef struct {\n    float x[5];', 1)[1]
+        types = ('typedef struct {\n    float x[5];' +
+                 types.split('} mapping_layer_runtime_t;', 1)[0] +
+                 '} mapping_layer_runtime_t;')
+        functions = [extract_function(source, name) for name in (
+            'clampf', 'json_number', 'parse_direction_deadzone_edges', 'parse_direction_config',
+            'evaluate_stick_curve', 'evaluate_stick_curve_slope', 'process_stick',
+            'linear_trigger_amount',
+            'angular_distance', 'pick_custom_direction', 'apply_stick_direction',
+            'apply_processed_stick_direction', 'select_mapping_layer')]
+        output = ROOT / 'build/bridge-host-tests'
+        output.mkdir(parents=True, exist_ok=True)
+        (output / 'firmware_stick_direction_types.inc').write_text(types, encoding='utf-8')
+        (output / 'firmware_stick_direction.inc').write_text(
+            '\n'.join(functions), encoding='utf-8')
+        host_tests.BridgeFirmwareWatchdogTests.compile_and_run(
+            self, ROOT / 'tests/firmware_stick_direction_test.c', 'stick_direction')
+
     def test_actual_mode_migration_and_failure_recovery(self):
         source = (MAIN / 'standalone_xinput.c').read_text(encoding='utf-8')
         functions = [extract_function(source, name) for name in (
@@ -65,6 +105,7 @@ class FirmwareUsbModesTests(unittest.TestCase):
             self.assertEqual(response['features']['standalone_usb_xinput'], 0)
             self.assertEqual(response['features']['standalone_usb_auto'], 0)
             self.assertEqual(response['features']['standalone_usb_hid'], 1)
+            self.assertEqual(response['features']['standalone_custom_deadzones'], 1)
 
     def test_raw_recovery_survives_stalled_usb_without_consuming_edges(self):
         # Generate the same NVS/type stubs used by the production mode harness.
@@ -73,24 +114,24 @@ class FirmwareUsbModesTests(unittest.TestCase):
         main = (MAIN / 'main.c').read_text(encoding='utf-8')
         runtime = [extract_function(source, name) for name in (
             'standalone_xinput_observe_mode_chord', 'standalone_xinput_forget_channel',
+            'standalone_xinput_recovery_release_mask',
             'standalone_xinput_can_accept_input', 'standalone_xinput_pump')]
         ingress = [extract_function(main, name) for name in (
             'input_digital_signature', 'queue_input_state', 'take_input_edge',
-            'take_latest_input_if_no_edges')]
-        if 'static void pump_standalone_mode_chords(void)' in main:
-            ingress.append(extract_function(main, 'pump_standalone_mode_chords'))
+            'take_latest_input_if_no_edges', 'pump_mode_chords')]
         maintenance = main.split('static void cdc_task(void *arg)', 1)[1].split(
             'pump_standalone_pairing();', 1)[0].split('for (;;) {', 1)[1]
+        accept = extract_function(source, 'standalone_xinput_accept_switch_report')
+        output_buttons = accept.split(
+            'uint32_t source = read_u32_le(payload + 4);', 1
+        )[1].split('xinput_report_t report', 1)[0]
         output = ROOT / 'build/bridge-host-tests'
         (output / 'firmware_usb_recovery_functions.inc').write_text(
             '\n'.join(runtime + ingress) + '\nstatic void maintenance(void) {\n' +
-            maintenance + '\n}\nstatic void bridge_forward(int channel) {\n'
-            'in_report_t edge; if (take_input_edge(&edge)) {\n' + re.search(
-                r'standalone_xinput_observe_mode_chord\(edge\.ch, edge\.data, edge\.len\);',
-                main).group() + '\n} else { in_report_t r; '
-            'if (take_latest_input_if_no_edges(channel,&r)) {\n' + re.search(
-                r'standalone_xinput_observe_mode_chord\(r\.ch, r\.data, r\.len\);',
-                main).group() + '\n}\n}\n}\n', encoding='utf-8')
+            maintenance + '\n}\nstatic uint32_t hid_output_buttons(const in_report_t *input) {\n'
+            'uint32_t source = read_u32_le(input->data + 4);\n'
+            'uint32_t recovery_release_mask = input->recovery_release_mask;\n' + output_buttons +
+            '\nreturn source;\n}\n', encoding='utf-8')
         host_tests.BridgeFirmwareWatchdogTests.compile_and_run(
             self, ROOT / 'tests/firmware_usb_recovery_test.c', 'usb_recovery')
 

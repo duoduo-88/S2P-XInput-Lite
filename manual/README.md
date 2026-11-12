@@ -3,7 +3,7 @@
 `USER_GUIDE.md` and `USER_GUIDE_zh-TW.md` are the current English and
 Traditional Chinese manuals shipped in releases.
 
-The guides cover desktop v0.8.0 and bundled S2P-FW 1.0.7.
+The guides cover desktop v0.8.1 and bundled S2P-FW 1.0.8.
 
 `assets/v0.7.14/` contains English-interface screenshots shared by both guides.
 The written procedures cover the current controls.

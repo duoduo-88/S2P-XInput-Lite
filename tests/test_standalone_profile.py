@@ -2,7 +2,7 @@ import unittest
 from dataclasses import replace
 from unittest.mock import patch
 
-from test_usb_hid_desktop import identity
+from test_usb_hid_desktop import FakeSerial, identity
 
 from standalone_profile import (
     CompatibilityIssue,
@@ -35,6 +35,72 @@ def _settings():
 
 
 class StandaloneProfileTests(unittest.TestCase):
+    def test_recovered_custom_deadzone_commit_checks_runtime_even_when_crc_matches(self):
+        settings = _settings()
+        settings["sections"]["stick_direction_left"] = {
+            "mode": "4WAY", "direction_deadzone_custom": {"4WAY": [[0, 20]] * 4},
+        }
+        compiled = compile_standalone_profile("General", settings)
+        for reported, expected in (({}, 0), ({"runtime_applied": 0}, 0), ({"runtime_applied": 1}, 1)):
+            with self.subTest(reported=reported):
+                status = {
+                    "valid": 1, "slot": "B", "length": len(compiled.payload),
+                    "crc32": f"{compiled.crc32:08x}", **reported,
+                }
+                port = FakeSerial(identity(), status)
+                with (
+                    patch("standalone_profile.serial.Serial", return_value=port),
+                    patch("standalone_profile.list_ports.comports", return_value=[]),
+                ):
+                    recovered = _recover_committed_profile(
+                        "COM5", 2_000_000, compiled, expected_identity=identity(), timeout=0.2
+                    )
+                self.assertEqual(recovered["runtime_applied"], expected)
+
+    def test_explicit_commit_error_is_reported_without_reconnect(self):
+        class RejectingCommitPort(FakeSerial):
+            def write(self, payload):
+                command = payload.decode().strip()
+                if command.startswith("profile begin "):
+                    response = b'{"cmd":"profile_begin","ok":1}\n'
+                elif command.startswith("profile chunk "):
+                    _, _, offset, chunk = command.split()
+                    received = int(offset) + len(bytes.fromhex(chunk))
+                    response = f'{{"cmd":"profile_chunk","ok":1,"received":{received}}}\n'.encode()
+                elif command == "profile commit":
+                    response = b'{"cmd":"profile_commit","ok":0,"error":"nvs_ESP_ERR_NVS_NOT_ENOUGH_SPACE"}\n'
+                else:
+                    return super().write(payload)
+                self.commands.append(command)
+                self.pending.append(response)
+
+        port = RejectingCommitPort(identity())
+        compiled = compile_standalone_profile("General", _settings())
+        with (
+            patch("standalone_profile.serial.Serial", return_value=port),
+            patch("standalone_profile._recover_committed_profile",
+                  side_effect=StandaloneTransferError("CRC mismatch")) as recover,
+        ):
+            with self.assertRaisesRegex(StandaloneTransferError, "ESP_ERR_NVS_NOT_ENOUGH_SPACE"):
+                write_standalone_profile("COM5", 2_000_000, compiled, target_mode="standalone_hid")
+        recover.assert_not_called()
+        self.assertIn("profile abort", port.commands)
+        self.assertNotIn("mode standalone_hid", port.commands)
+
+    def test_custom_deadzone_layer_requires_firmware_support_before_staging(self):
+        layer = {
+            "id": "layer", "enabled": True, "activation_buttons": ["A"],
+            "stick_left": {
+                "mode": "4WAY", "direction_deadzone_custom": {"4WAY": [[0, 20]] * 4},
+            },
+        }
+        compiled = compile_standalone_profile("General", _settings(), [layer])
+        port = FakeSerial(identity())
+        with patch("standalone_profile.serial.Serial", return_value=port):
+            with self.assertRaisesRegex(StandaloneTransferError, "請先更新韌體"):
+                write_standalone_profile("COM5", 2_000_000, compiled, target_mode="standalone_hid")
+        self.assertEqual(port.commands, ["status lite", "capabilities"])
+
     @patch("standalone_profile.serial.Serial")
     def test_blocking_issue_prevents_serial_write(self, serial_factory):
         compiled = compile_standalone_profile("General", _settings())
@@ -179,6 +245,7 @@ class StandaloneProfileTests(unittest.TestCase):
         layer = {
             "name": "Aim",
             "enabled": True,
+            "activation_buttons": ["A"],
             "buttons": {},
             "stick_left": {
                 "mode": "8WAY",
@@ -206,6 +273,110 @@ class StandaloneProfileTests(unittest.TestCase):
         )
         self.assertTrue(
             any("RIGHT DOWN" in issue.detail for issue in direction_issues)
+        )
+
+    def test_enabled_layer_without_activation_buttons_does_not_consume_esp32_capacity(self):
+        settings = _settings()
+        layers = [
+            {"id": button, "enabled": True, "activation_buttons": [button]}
+            for button in ("A", "B", "X", "Y", "L", "R", "GL", "GR")
+        ]
+        dormant = {
+            "id": "dormant", "enabled": True, "activation_buttons": [],
+            "buttons": {"a": "KEYBOARD:W"},
+            "stick_left": {
+                "mode": "4WAY", "direction_deadzone_custom": {"4WAY": [[0, 20]] * 4},
+            },
+        }
+        baseline = compile_standalone_profile("General", settings, layers)
+        compiled = compile_standalone_profile("General", settings, [dormant, *layers])
+
+        self.assertFalse(compiled.blocking_issues)
+        self.assertEqual(compiled.payload, baseline.payload)
+        self.assertFalse(compiled.uses_custom_deadzones)
+
+    def test_layer_chord_with_unsupported_button_cannot_silently_shrink(self):
+        layer = {
+            "name": "Aim", "enabled": True, "activation_buttons": ["A", "SR_R"],
+            "stick_left": {
+                "mode": "4WAY", "direction_deadzone_custom": {"4WAY": [[0, 20]] * 4},
+            },
+        }
+        compiled = compile_standalone_profile("General", _settings(), [layer])
+
+        self.assertEqual(len(compiled.blocking_issues), 1)
+        self.assertIn("Aim", compiled.blocking_issues[0].detail)
+        self.assertIn("SR_R", compiled.blocking_issues[0].detail)
+
+    def test_standalone_blocks_layer_chords_consumed_by_usb_mode_recovery(self):
+        for buttons, blocked in (
+            (["HOME", "A"], True),
+            (["HOME", "X", "GL"], True),
+            (["HOME"], False),
+            (["HOME", "Y"], False),
+            (["HOME", "A", "Y"], False),
+            (["HOME", "A", "X"], False),
+        ):
+            with self.subTest(buttons=buttons):
+                layer = {
+                    "name": "Aim", "enabled": True, "activation_buttons": buttons,
+                    "stick_left": {"mode": "4WAY", "up": "A"},
+                }
+                compiled = compile_standalone_profile("General", _settings(), [layer])
+                if blocked:
+                    self.assertEqual(len(compiled.blocking_issues), 1)
+                    self.assertIn("Aim", compiled.blocking_issues[0].detail)
+                    self.assertIn("救援組合鍵", compiled.blocking_issues[0].detail)
+                else:
+                    self.assertFalse(compiled.blocking_issues)
+
+    def test_usb_recovery_chord_cannot_be_required_for_gyro_activation(self):
+        for mode, match, buttons, blocked in (
+            ("HOLD", "ALL", ["HOME", "A"], True),
+            ("TOGGLE", "ALL", ["HOME", "X", "GL"], True),
+            ("HOLD", "ANY", ["HOME", "A"], False),
+            ("OFF", "ALL", ["HOME", "X"], False),
+            ("HOLD", "ALL", ["HOME", "A", "Y"], False),
+        ):
+            with self.subTest(mode=mode, match=match, buttons=buttons):
+                settings = _settings()
+                settings["sections"]["gyro_mapping"] = {
+                    "activation_mode": mode, "activation_match": match,
+                }
+                settings["gyro_activation_buttons"] = buttons
+                compiled = compile_standalone_profile("General", settings)
+                self.assertEqual(bool(compiled.blocking_issues), blocked)
+                if blocked:
+                    self.assertEqual(compiled.blocking_issues[0].feature, "陀螺儀啟用按鍵")
+
+    def test_standalone_checks_direction_targets_only_in_effective_modes(self):
+        settings = _settings()
+        settings["sections"]["stick_direction_left"] = {"mode": "4WAY"}
+        settings["sections"]["stick_direction_right"] = {"mode": "XINPUT_LT_LINEAR"}
+        settings["direction_mappings"]["left"]["up_right"] = "KEYBOARD:W"
+        settings["direction_mappings"]["right"]["up"] = "MOUSE:WHEEL_DOWN"
+        layer = {
+            "name": "Aim", "enabled": True, "activation_buttons": ["A"],
+            "stick_left": {"up_right": "KEYBOARD:W"},
+            "stick_right": {"mode": "XINPUT_RT_LINEAR", "down": "MOUSE:WHEEL_DOWN"},
+        }
+
+        compiled = compile_standalone_profile("General", settings, [layer])
+        self.assertFalse(compiled.blocking_issues)
+
+        settings["sections"]["stick_direction_left"]["mode"] = "8WAY"
+        compiled = compile_standalone_profile("General", settings, [layer])
+        self.assertEqual(
+            [issue.feature for issue in compiled.blocking_issues],
+            ["搖桿方向映射", "映射層方向輸出"],
+        )
+
+        settings["sections"]["stick_direction_left"]["mode"] = "映射為右搖桿"
+        settings["direction_mappings"]["left"] = {"up": "NONE"}
+        compiled = compile_standalone_profile("General", settings)
+        self.assertEqual(
+            [issue.feature for issue in compiled.blocking_issues],
+            ["搖桿 Windows 輸出"],
         )
 
     @patch("standalone_profile._send_and_expect")

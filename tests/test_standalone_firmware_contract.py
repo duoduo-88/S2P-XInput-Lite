@@ -338,7 +338,7 @@ class StandaloneFirmwareContractTests(unittest.TestCase):
             XINPUT_SOURCE[helper:],
         )
         mapping = XINPUT_SOURCE.index(
-            "direction_targets |= apply_stick_direction"
+            "direction_targets |= apply_processed_stick_direction"
         )
         consume = XINPUT_SOURCE.index(
             "stick_direction_consumes_native_output(&directions[0])",
@@ -513,12 +513,14 @@ class StandaloneFirmwareContractTests(unittest.TestCase):
 
     def test_recovery_chords_run_before_mapping_in_hid_and_bridge(self):
         source = XINPUT_SOURCE.index("source &= ~mode_chord_mask(mode_chord_target(source));")
-        mapping = XINPUT_SOURCE.index("select_mapping_layer(source)", source)
+        mapping = XINPUT_SOURCE.index("select_mapping_layer(source,", source)
         self.assertLess(source, mapping)
-        self.assertEqual(MAIN_SOURCE.count("standalone_xinput_observe_mode_chord("), 3)
+        self.assertEqual(MAIN_SOURCE.count("standalone_xinput_observe_mode_chord("), 1)
         task = MAIN_SOURCE[MAIN_SOURCE.index("static void cdc_task(void *arg)"):]
-        self.assertLess(task.index("pump_standalone_mode_chords();"),
+        self.assertLess(task.index("pump_mode_chords();"),
                         task.index("standalone_xinput_can_accept_input()"))
+        self.assertLess(task.index("pump_mode_chords();"),
+                        task.index("cdc_tx_can_submit("))
 
     @unittest.skipUnless(
         os.environ.get("S2P_RUN_IDF_BUILD") == "1",

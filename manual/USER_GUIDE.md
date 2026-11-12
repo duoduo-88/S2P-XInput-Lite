@@ -8,7 +8,7 @@ Gamepad Test, including Aim Test, report-rate measurements, and diagnostics.
 
 The feature screenshots show the English v0.7.14 interface; profile values are examples.
 
-This guide covers desktop v0.8.0 and the bundled S2P-FW 1.0.7. The firmware
+This guide covers desktop v0.8.1 and the bundled S2P-FW 1.0.8. The firmware
 sections describe the scope of Windows and Android hardware validation.
 
 The screenshots use the English interface. Select **中 / En** in the lower-left corner of the main window to switch languages without changing the layout.
@@ -86,7 +86,7 @@ The previous physical PC XInput and Auto modes have been removed.
 The controller's four player LEDs show the measured battery level
 cumulatively: one LED for low, two for medium-low, three for medium-high, and
 four for high. This display also works in standalone mode with bundled
-S2P-FW 1.0.7, without keeping the Windows application open.
+S2P-FW 1.0.8, without keeping the Windows application open.
 
 #### Windows BLE
 
@@ -450,7 +450,7 @@ If you dismiss an automatic reminder, it will not appear on every launch. Select
 
 1. Select **Flash FW**.
 2. The application reads the connected firmware version and compares it with
-   the bundled `S2P-FW 1.0.7`.
+   the bundled `S2P-FW 1.0.8`.
 3. Review the installed and bundled versions, then choose whether to flash or
    cancel. Cancelling resumes the connector if it was paused for detection.
 4. After confirming, connect the ESP32-S3 OTG port and hold **BOOT**.
@@ -505,7 +505,8 @@ Unknown values or read errors start in Bridge. Migration itself does not reboot.
 ### 8.5 Writing a profile and enabling Android USB HID
 
 1. Select a profile and select **Save/Apply** after adjusting its settings.
-2. Confirm that the connected ESP32 runs bundled `S2P-FW 1.0.7`.
+2. Confirm that the connected ESP32 runs bundled `S2P-FW 1.0.8` to apply
+   per-direction 4WAY and 8WAY deadzones in standalone mode.
 3. Open **ESP32 ▼ → Write and enable Android USB HID standalone**
    (**寫入並啟用 Android USB HID 獨立模式** in Traditional Chinese).
 4. Review compatibility warnings. Cancel and correct Windows-only outputs, or
@@ -533,7 +534,9 @@ Read the completion message before disconnecting the device.
 - **Connected controller:** Hold **HOME+X for 3 seconds, then release** to save
   Bridge; hold **HOME+A for 3 seconds, then release** to save Android USB HID.
   HOME+Y is removed. Chords read raw input before mappings and layers. Selecting
-  the current mode does not reboot; failed persistence does not reboot.
+  the current mode leaves recovery available to other controllers. In Bridge,
+  a controller can request HID while CDC output is stalled. The ESP32 restarts
+  once it saves the new mode successfully.
 - **No controller:** CDC remains available in both modes. Send `mode bridge`,
   then `restart` after the mode is saved. Close the desktop connector before
   opening the same COM port in a serial terminal.
@@ -557,7 +560,8 @@ before retrying another action.
 
 ### 8.7 Standalone support and validation limits
 
-HID reuses stick calibration, curves, center/outer deadzones, output shape,
+HID reuses stick calibration, curves, center/outer deadzones, per-direction
+4WAY and 8WAY deadzones on both sticks and enabled mapping layers, output shape,
 stabilization/smoothing, button and direction mapping, compatible Mapping
 Layers, linear triggers, gyro-to-stick, idle disconnect and BLE reconnect.
 Its input report retains buttons, four stick axes, a hat, separate analog
@@ -736,7 +740,7 @@ text.
 
 Bridge mode temporarily uses the application's active serial connection.
 Standalone modes open the ESP32 diagnostic channel directly. The complete
-diagnostic command set requires the bundled `S2P-FW 1.0.7`.
+diagnostic command set requires the bundled `S2P-FW 1.0.8`.
 
 ### 9.8 About
 

@@ -64,7 +64,7 @@
 static const char *TAG = "S3_BLUEDROID";
 
 #define APP_FIRMWARE_PRODUCT      "S2P-FW"
-#define APP_FIRMWARE_VERSION      "1.0.7"
+#define APP_FIRMWARE_VERSION      "1.0.8"
 #define APP_PROTOCOL_NAME         "s2p_bridge"
 #define APP_PROTOCOL_VERSION      "1.0.0"
 #define EXPECTED_FIRMWARE_PROFILE "s2p_usb_bridge"
@@ -383,12 +383,14 @@ typedef struct {
     uint8_t len;
     uint16_t handle;
     uint32_t generation;
+    uint32_t recovery_release_mask;
     uint8_t data[REPORT_SIZE];
 } in_report_t;
 static char s_rx_buf[512];
 static int  s_rx_len = 0;
 static in_report_t s_in_shadow[MAX_CH];
 static volatile bool s_in_dirty[MAX_CH];
+static bool s_mode_chord_report_pending[MAX_CH];
 static in_report_t s_input_edge_queue[INPUT_EDGE_QUEUE_SIZE];
 static uint8_t s_input_edge_head;
 static uint8_t s_input_edge_tail;
@@ -480,6 +482,11 @@ static void queue_input_state(
         channel, data, length, &signature
     );
     portENTER_CRITICAL(&s_in_mux);
+    /* Snapshot the armed chord before a later report can release it. */
+    if (s_standalone_mode && signature != 0) {
+        report.recovery_release_mask =
+            standalone_xinput_recovery_release_mask(channel);
+    }
     bool digital_edge = signature_valid && (
         !s_last_input_digital_valid[channel] ||
         signature != s_last_input_digital[channel]
@@ -503,6 +510,8 @@ static void queue_input_state(
         s_input_latency_metrics.shadow_overwrites++;
     s_in_shadow[channel] = report;
     s_in_dirty[channel] = true;
+    s_mode_chord_report_pending[channel] =
+        signature_valid && !s_ch[channel].prefer_legacy;
     portEXIT_CRITICAL(&s_in_mux);
     if (s_cdc_task_h) xTaskNotifyGive(s_cdc_task_h);
 }
@@ -521,6 +530,8 @@ static bool take_input_edge(in_report_t *report) {
             report->ch < MAX_CH && s_in_dirty[report->ch] &&
             s_in_shadow[report->ch].generation == report->generation &&
             s_in_shadow[report->ch].len == report->len &&
+            s_in_shadow[report->ch].recovery_release_mask ==
+                report->recovery_release_mask &&
             memcmp(
                 s_in_shadow[report->ch].data,
                 report->data, report->len
@@ -547,23 +558,22 @@ static bool take_latest_input_if_no_edges(
     return available;
 }
 
-static void pump_standalone_mode_chords(void) {
-    if (!s_standalone_mode) return;
+static void pump_mode_chords(void) {
     for (int channel = 0; channel < MAX_CH; channel++) {
-        in_report_t latest;
-        bool valid;
         portENTER_CRITICAL(&s_in_mux);
-        latest = s_in_shadow[channel];
-        valid = s_last_input_digital_valid[channel] &&
-            latest.ch == channel && latest.len >= 16 &&
-            s_ch[channel].used && s_ch[channel].ready &&
-            latest.generation == s_ch[channel].generation;
-        /* Keep the generation check and observation atomic with channel
-         * invalidation; peeking does not consume any queued HID input edge. */
-        if (valid)
-            standalone_xinput_observe_mode_chord(
-                channel, latest.data, latest.len
-            );
+        if (s_mode_chord_report_pending[channel]) {
+            s_mode_chord_report_pending[channel] = false;
+            const in_report_t *latest = &s_in_shadow[channel];
+            /* Observe each new shadow independently of USB output.
+             * Keep the generation check atomic with channel invalidation. */
+            if (latest->ch == channel && latest->len >= 16 &&
+                s_ch[channel].used && s_ch[channel].ready &&
+                !s_ch[channel].prefer_legacy &&
+                latest->generation == s_ch[channel].generation)
+                standalone_xinput_observe_mode_chord(
+                    channel, latest->data, latest->len
+                );
+        }
         portEXIT_CRITICAL(&s_in_mux);
     }
 }
@@ -1120,6 +1130,7 @@ static void clear_channel_state(int ch) {
     portENTER_CRITICAL(&s_in_mux);
     standalone_xinput_forget_channel(ch);
     s_in_dirty[ch] = false;
+    s_mode_chord_report_pending[ch] = false;
     memset(&s_in_shadow[ch], 0, sizeof(s_in_shadow[ch]));
     s_last_input_digital[ch] = 0;
     s_last_input_digital_valid[ch] = false;
@@ -1202,6 +1213,7 @@ static void send_status_response(void) {
         "\"features\":{\"host_lease\":%u,\"wrpair\":1,\"shadow\":1,"
         "\"diagnostics\":1,\"rumble_diagnostics\":1,"
         "\"standalone_profile_write\":1,\"standalone_profile_runtime\":1,"
+        "\"standalone_custom_deadzones\":1,"
         "\"standalone_usb_xinput\":0,"
         "\"standalone_usb_hid\":1,"
         "\"standalone_usb_auto\":0,"
@@ -1230,6 +1242,7 @@ static void send_capabilities_response(void) {
         "\"features\":{\"bridge\":1,"
         "\"diagnostics\":1,\"rumble_diagnostics\":1,"
         "\"standalone_profile_write\":1,\"standalone_profile_runtime\":1,"
+        "\"standalone_custom_deadzones\":1,"
         "\"standalone_usb_xinput\":0,"
         "\"standalone_usb_hid\":1,"
         "\"standalone_usb_auto\":0,"
@@ -2710,7 +2723,7 @@ static void cdc_task(void *arg) {
     (void)arg;
     for (;;) {
         pump_gatt_outputs();
-        pump_standalone_mode_chords();
+        pump_mode_chords();
         standalone_xinput_pump();
         pump_standalone_pairing();
         pump_standalone_controller_init();
@@ -2809,11 +2822,10 @@ static void cdc_task(void *arg) {
                     edge.ch, edge.data, edge.len
                 );
                 standalone_xinput_accept_switch_report(
-                    edge.ch, edge.data, edge.len
+                    edge.ch, edge.data, edge.len, edge.recovery_release_mask
                 );
                 standalone_xinput_pump();
             } else {
-                standalone_xinput_observe_mode_chord(edge.ch, edge.data, edge.len);
                 if (edge.handle) {
                     send_notify_handle_frame(
                         edge.ch, edge.handle, edge.data, edge.len
@@ -2848,11 +2860,10 @@ static void cdc_task(void *arg) {
                         r.ch, r.data, r.len
                     );
                     standalone_xinput_accept_switch_report(
-                        r.ch, r.data, r.len
+                        r.ch, r.data, r.len, r.recovery_release_mask
                     );
                     standalone_xinput_pump();
                 } else {
-                    standalone_xinput_observe_mode_chord(r.ch, r.data, r.len);
                     if (r.handle) send_notify_handle_frame(r.ch, r.handle, r.data, r.len);
                     else send_report_frame(r.ch, r.data, r.len, false);
                     cdc_tx_pump_until(cdc_deadline_us);
