@@ -82,14 +82,12 @@ standalone. On Windows, Bridge mode provides XInput through ViGEmBus.
 
 Detailed setting descriptions are available from the `?` buttons in the application.
 
-### Aim Test and Directional Deadzone Demos
+### Aim Test and Directional Deadzones
 
 Simple targets, a low-contrast room, and brief hit feedback keep rendering light.
 Aim Test uses the selected S2P bridge output or physical controller input
 available through Windows. It adds no response curves, deadzones, or aim assist.
 Direct2D targets the active monitor's current refresh rate.
-
-[![3D Aim Test demonstration](image/v0.8.0/aim-preview.gif)](image/v0.8.0/aim.gif)
 
 In the directional deadzone editor, drag each red sector to rotate it and enter
 its width as a percentage of the angle between adjacent directions.
