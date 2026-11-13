@@ -1645,6 +1645,16 @@ class ESP32Bridge:
                 and self._connection_generation == generation
             )
 
+    def _matches_connection_attempt_locked(self, event):
+        mac = event.get("mac")
+        return (
+            self.running
+            and not self._closing
+            and self._connecting
+            and self.connected_channel is None
+            and (mac is None or (isinstance(mac, str) and mac.upper() == self.controller_id))
+        )
+
     def _fail_controller_preparation(self, channel, generation):
         """Drop a BLE link that never reached the ready state."""
         if not self._connection_is_current(channel, generation):
@@ -1912,17 +1922,18 @@ class ESP32Bridge:
                     self._restart_scan()
 
             elif cmd == "connected":
-                if self._closing:
+                channel = obj.get("channel")
+                if type(channel) is not int or not 0 <= channel < 8:
                     return
                 with self._state_lock:
-                    self.connected_channel = int(
-                        obj.get("channel", 0)
-                    )
+                    if not self._matches_connection_attempt_locked(obj):
+                        return
+                    self.connected_channel = channel
                     self._ready_channel = None
                     self._connection_generation += 1
                     generation = self._connection_generation
-                    channel = self.connected_channel
                     pairing_required = self._pending_pair
+                    self._pending_pair = False
                     self._connecting = False
                     self._channel_missing_count = 0
                 self._disconnect_event.clear()
@@ -1956,11 +1967,12 @@ class ESP32Bridge:
 
             elif cmd == "connect_fail":
                 with self._state_lock:
-                    self.connected_channel = None
-                    self._ready_channel = None
+                    if not self._matches_connection_attempt_locked(obj):
+                        return
                     self._connection_generation += 1
                     self.controller_id = None
                     self._connecting = False
+                    self._pending_pair = False
                 self._disconnect_event.set()
                 self._command_response_event.set()
                 with self._rumble_condition:

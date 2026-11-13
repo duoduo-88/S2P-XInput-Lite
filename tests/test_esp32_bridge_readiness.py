@@ -7,6 +7,43 @@ from esp32_bridge import ESP32Bridge, SERIAL_RECEIVE_BUFFER_LIMIT
 
 
 class ESP32BridgeReadinessTests(unittest.TestCase):
+    def test_unrelated_or_delayed_connection_failure_keeps_ready_link(self):
+        bridge = self.make_bridge()
+        bridge._ready_channel = 2
+        bridge._rumble_accepting = True
+        restarts = []
+        bridge._restart_scan = lambda: restarts.append(True)
+
+        for mac in ("11:22:33:44:55:66", bridge.controller_id):
+            bridge._handle_text(json.dumps({"cmd": "connect_fail", "mac": mac}).encode())
+            self.assertTrue(bridge.is_ready)
+            self.assertEqual(bridge._connection_generation, 7)
+            self.assertTrue(bridge._rumble_accepting)
+            self.assertFalse(bridge._disconnect_event.is_set())
+        self.assertEqual(restarts, [])
+
+    def test_connection_events_only_affect_the_selected_attempt(self):
+        bridge = self.make_bridge()
+        bridge.connected_channel = None
+        bridge._connecting = True
+        bridge._pending_pair = True
+        restarts = []
+        bridge._restart_scan = lambda: restarts.append(True)
+
+        with patch("esp32_bridge.threading.Thread") as thread:
+            bridge._handle_text(b'{"cmd":"connected","channel":3,"mac":"11:22:33:44:55:66"}')
+        thread.assert_not_called()
+        bridge._handle_text(b'{"cmd":"connect_fail","mac":"11:22:33:44:55:66"}')
+        self.assertIsNone(bridge.connected_channel)
+        self.assertTrue(bridge._connecting)
+        self.assertEqual(restarts, [])
+
+        bridge._handle_text(b'{"cmd":"connect_fail","mac":"aa:bb:cc:dd:ee:ff"}')
+        self.assertFalse(bridge._connecting)
+        self.assertFalse(bridge._pending_pair)
+        self.assertIsNone(bridge.controller_id)
+        self.assertEqual(restarts, [True])
+
     def test_scan_ignores_unclassified_advertisements_and_recovers_from_failed_write(self):
         bridge = ESP32Bridge("COM5")
         bridge.running = True
@@ -78,15 +115,21 @@ class ESP32BridgeReadinessTests(unittest.TestCase):
         thread_factory,
     ):
         bridge = self.make_bridge()
+        bridge.connected_channel = None
+        bridge._connecting = True
         events = []
         bridge._channel_missing_count = 0
         bridge._status_grace_until = 0.0
         bridge._pending_pair = False
         bridge.connected_callback = lambda: events.append("connected")
 
-        bridge._handle_text(b'{"cmd":"connected","channel":2}\n')
+        notice = b'{"cmd":"connected","channel":2,"mac":"aa:bb:cc:dd:ee:ff"}\n'
+        bridge._handle_text(notice)
+        bridge._handle_text(notice)
 
         self.assertEqual(events, [])
+        self.assertEqual(bridge.connected_channel, 2)
+        self.assertEqual(bridge._connection_generation, 8)
         self.assertIsNone(bridge._ready_channel)
         self.assertFalse(bridge._rumble_accepting)
         thread_factory.assert_called_once()
