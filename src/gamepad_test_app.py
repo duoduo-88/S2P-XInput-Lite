@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import ctypes
+import subprocess
 import sys
 import threading
 import time
 import tkinter as tk
+from pathlib import Path
 
 from config_utils import CONFIG_PATH, atomic_write_config, config_file_lock, load_config
 from dialog_layout import startup_banner_geometry
 from gamepad_test_window import GamepadTestWindow, TEST_ICON_PATH
 from localization import translate_text
-from single_instance import SingleInstance, activate_tk_window
+from single_instance import GYRO_SETTINGS_ACTION, SETTINGS_INSTANCE_NAME, SingleInstance, activate_tk_window
 from version import VERSION
 
 
@@ -229,6 +231,25 @@ class GamepadTestHost:
 
     def tr(self, text):
         return translate_text(text, self.language)
+
+    def open_gyro_settings(self):
+        instance = SingleInstance(SETTINGS_INSTANCE_NAME, action=GYRO_SETTINGS_ACTION)
+        try:
+            if not instance.is_primary and instance.notify_existing(action=True):
+                return
+        finally:
+            instance.close()
+        script = Path(__file__).with_name("config_gui.py")
+        executable = Path(sys.executable)
+        windowed = executable.with_name("pythonw.exe")
+        process = subprocess.Popen(
+            [str(windowed if windowed.is_file() else executable), str(script), "--gyro-settings"],
+            cwd=script.parent, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        try:
+            ctypes.windll.user32.AllowSetForegroundWindow(process.pid)
+        except (AttributeError, OSError):
+            pass
 
     def set_tester_language(self, language):
         if language not in SUPPORTED_LANGUAGES:

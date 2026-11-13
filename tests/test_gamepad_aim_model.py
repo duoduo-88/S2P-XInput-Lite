@@ -347,6 +347,54 @@ class AimModelTests(unittest.TestCase):
         self.assertFalse(drill.running)
         self.assertTrue(drill.completed)
 
+    def test_tracking_sweep_reverses_at_each_end_of_the_configured_arc(self):
+        drill = TrackingTest(tracking_arc=180)
+        angles = []
+        for seconds in (0, 1, 2, 3, 4):
+            x, _y, z = drill.target(seconds)
+            angles.append(round(math.degrees(math.atan2(x, z))))
+        self.assertEqual(angles, [0, 90, 0, -90, 0])
+
+    def test_tracking_measures_peak_and_longest_same_direction_full_stick(self):
+        drill = TrackingTest(seconds=0.1)
+        drill.start()
+        drill.advance((0.75, 1.0), 0.005)
+        self.assertEqual(drill.horizontal_peak, 0.75)
+        self.assertEqual(drill.longest_horizontal_full_stick, 0)
+        drill.advance((1.0, 0.0), 0.010)
+        drill.advance((1.0, 0.0), 0.020)
+        drill.advance((-32767 / 32768, 0.0), 0.020)
+        drill.advance(None, 0.010)
+        drill.advance((-1.0, 0.0), 0.100)
+        self.assertEqual(drill.horizontal_peak, 1.0)
+        self.assertAlmostEqual(drill.longest_horizontal_full_stick, 0.035)
+        drill.start()
+        self.assertIsNone(drill.horizontal_peak)
+        self.assertEqual(drill.longest_horizontal_full_stick, 0)
+
+    def test_full_tracking_arc_reverses_behind_on_each_side(self):
+        drill = TrackingTest(tracking_arc=360, tracking_speed=200)
+        angles = []
+        for seconds in (0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4):
+            x, _y, z = drill.target(seconds)
+            angles.append(round(math.degrees(math.atan2(x, z))))
+        self.assertEqual(angles, [0, 90, 180, 90, 0, -90, -180, -90, 0])
+        self.assertEqual(drill.target(0.6), TrackingTest(tracking_arc=360).target(1.2))
+
+    def test_tracking_speed_also_scales_the_original_route(self):
+        self.assertEqual(TrackingTest(tracking_speed=200).target(0.5), TrackingTest().target(1))
+
+    def test_seeded_tracking_can_start_in_either_horizontal_direction(self):
+        for arc in (180, 360):
+            with self.subTest(arc=arc):
+                left = TrackingTest(seed=1, tracking_arc=arc)
+                right = TrackingTest(seed=5, tracking_arc=arc)
+                self.assertLess(left.target(0.5)[0], 0)
+                self.assertGreater(right.target(0.5)[0], 0)
+                route = [left.target(seconds) for seconds in (0, 0.5, 1, 2, 3)]
+                left.start()
+                self.assertEqual([left.target(seconds) for seconds in (0, 0.5, 1, 2, 3)], route)
+
     def test_tracking_seed_repeats_the_path_after_reset(self):
         drill = TrackingTest(seconds=5, seed=321)
         drill.start()

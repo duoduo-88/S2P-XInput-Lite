@@ -30,9 +30,12 @@ def load_idle_disconnect_minutes(config) -> int:
     )
 
 
-def perform_idle_disconnect(controller, xinput, publish_status) -> bool:
+def perform_idle_disconnect(controller, run_exclusive, reset_output, publish_status) -> bool:
     """Publish idle-disconnected only after the transport confirms success."""
-    xinput.reset_output_state()
+    if not run_exclusive(reset_output):
+        return False
+    # Transport shutdown can invoke the disconnect callback on another thread.
+    # Wait for it only after releasing the dispatcher's callback lock.
     if not controller.disconnect_for_idle():
         return False
     publish_status(

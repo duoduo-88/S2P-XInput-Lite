@@ -96,14 +96,14 @@ jobs:
               )
           for image in applications:
               data = image.read_bytes()
-              for marker in (b"S2P-FW", b"1.0.8"):
+              for marker in (b"S2P-FW", b"1.0.9"):
                   if marker not in data:
                       raise SystemExit(f"{image.name} is missing {marker!r}")
           generated_partition = build / "partition_table/partition-table.bin"
           released_partition = bundled / "partition-table.bin"
           if generated_partition.read_bytes() != released_partition.read_bytes():
               raise SystemExit("bundled partition table does not match the clean build")
-          print("Built and bundled firmware images are valid for S2P firmware 1.0.8.")
+          print("Built and bundled firmware images are valid for S2P firmware 1.0.9.")
           PY
           python scripts/inspect_usb_descriptors.py \
             esp32s3/source/esp32s3_usb_bridge_bluedroid/build/esp32s3_bluedroid_bridge.elf \

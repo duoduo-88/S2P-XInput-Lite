@@ -90,6 +90,7 @@ class BluetoothController:
         self.host_mac_value = None
         self.controller_reconnect_mac = 0
         self.pairing_required = False
+        self.pairing_diagnostics = None
         self._rumble_write_lock = None
         self._rumble_pending = None
         self._rumble_send_task = None
@@ -747,7 +748,7 @@ class BluetoothController:
                 ))
 
             mac_value = int(adapter.bluetooth_address)
-            if not 0 <= mac_value <= 0xFFFFFFFFFFFF:
+            if not 0 < mac_value <= 0xFFFFFFFFFFFF:
                 raise RuntimeError(tr(
                     "Windows 回傳了無效的本機藍牙 MAC。",
                     "Windows returned an invalid local Bluetooth MAC.",
@@ -798,6 +799,7 @@ class BluetoothController:
 
         scanner = BleakScanner(detection_callback=on_advertisement)
         pairing_candidate = None
+        pairing_details = None
         pairing_deadline = None
         announced = set()
         await scanner.start()
@@ -809,7 +811,8 @@ class BluetoothController:
                 ):
                     self.controller_reconnect_mac = 0
                     self.pairing_required = True
-                    print("辨識為第一次配對模式。")
+                    self.pairing_diagnostics = pairing_details
+                    print(tr("找到手把，正在配對。", "Controller found; pairing."))
                     return pairing_candidate
                 timeout = 0.5
                 if pairing_deadline is not None:
@@ -820,10 +823,7 @@ class BluetoothController:
                     )
                 except asyncio.TimeoutError:
                     if pairing_candidate is not None and time.monotonic() >= pairing_deadline:
-                        self.controller_reconnect_mac = 0
-                        self.pairing_required = True
-                        print("辨識為第一次配對模式。")
-                        return pairing_candidate
+                        continue
                     if not self._search_message_shown:
                         print("尚未偵測到可連線的手把，搜尋中...")
                         self._search_message_shown = True
@@ -833,30 +833,35 @@ class BluetoothController:
                 if reconnect_mac is None:
                     continue
                 key = (getattr(device, "address", ""), reconnect_mac)
-                if key not in announced:
-                    announced.add(key)
-                    print(
-                        "找到 Switch 2 Pro Controller：",
-                        device.address,
-                        "reconnect_mac =",
-                        f"{reconnect_mac:012X}"
-                    )
+                details = {
+                    "controller_mac": key[0],
+                    "reconnect_mac": f"{reconnect_mac:012X}",
+                    "host_mac": f"{self.host_mac_value:012X}" if self.host_mac_value else None,
+                }
+                self.pairing_diagnostics = details
 
                 if (
-                    self.host_mac_value is not None
+                    reconnect_mac != 0
                     and reconnect_mac == self.host_mac_value
                 ):
                     self.controller_reconnect_mac = reconnect_mac
                     self.pairing_required = False
-                    print("辨識為已配對手把，將直接重新連線。")
+                    print(tr("找到已配對手把，正在重新連線。", "Paired controller found; reconnecting."))
                     return device
 
                 if reconnect_mac == 0:
                     pairing_candidate = device
+                    pairing_details = details
                     # Give an already-paired advertisement a brief chance to win
                     # without imposing the old fixed five-second scan delay.
                     if pairing_deadline is None:
                         pairing_deadline = time.monotonic() + 0.25
+                elif self.host_mac_value is not None and key not in announced:
+                    announced.add(key)
+                    print(tr(
+                        "手把正在重連其他裝置。若要連到這台電腦，請按住 SYNC 重新配對。",
+                        "The controller is reconnecting to another device. Hold SYNC to pair it with this PC.",
+                    ))
         finally:
             await scanner.stop()
         return None

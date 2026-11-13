@@ -34,6 +34,36 @@ class SingleInstanceTests(unittest.TestCase):
         instance.notify_existing.assert_called_once_with()
         instance.close.assert_called_once_with()
 
+    @unittest.skipUnless(os.name == "nt", "Windows named events required")
+    def test_gyro_settings_action_is_delivered_separately_from_activation(self):
+        name = f"S2P-XInput-Lite.Tests.{uuid.uuid4()}"
+        primary = SingleInstance(name, action="GyroSettings")
+        duplicate = SingleInstance(name, action="GyroSettings")
+        self.addCleanup(primary.close)
+        self.addCleanup(duplicate.close)
+        self.assertTrue(primary.is_primary)
+        self.assertFalse(duplicate.is_primary)
+        self.assertTrue(duplicate.notify_existing(action=True))
+        self.assertFalse(primary.activation_requested())
+        self.assertTrue(primary.activation_requested(action=True))
+        self.assertFalse(primary.activation_requested(action=True))
+
+    def test_tester_routes_gyro_settings_to_existing_instance_or_launches_it(self):
+        host = gamepad_test_app.GamepadTestHost.__new__(gamepad_test_app.GamepadTestHost)
+        with (patch.object(gamepad_test_app, "SingleInstance") as guard,
+              patch.object(gamepad_test_app.subprocess, "Popen") as launch):
+            instance = guard.return_value
+            instance.is_primary = False
+            instance.notify_existing.return_value = True
+            host.open_gyro_settings()
+            instance.notify_existing.assert_called_once_with(action=True)
+            launch.assert_not_called()
+            instance.is_primary = True
+            launch.return_value.pid = 1234
+            host.open_gyro_settings()
+            self.assertTrue(launch.call_args.args[0][1].endswith("config_gui.py"))
+            self.assertEqual(launch.call_args.args[0][2], "--gyro-settings")
+
     def test_duplicate_tester_notifies_existing_window_without_tk(self):
         instance = Mock(is_primary=False)
 

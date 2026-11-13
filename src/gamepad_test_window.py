@@ -38,6 +38,9 @@ from gamepad_trail_photo import TrailPhotoUploader
 from gamepad_trail_worker import TrailRasterWorker, TrailStyle
 from gamepad_devices import (
     GamepadDevice,
+    NINTENDO_PRO2_PID,
+    NINTENDO_PRO2_PROFILE,
+    NINTENDO_PRO2_VID,
     NativeGamepadSampler,
     WindowsGamepadBackend,
     XINPUT_BUTTON_NAMES,
@@ -49,6 +52,7 @@ from raw_hid_probe import (
     RawHidAnalysisClient,
     RawHidStreamClient,
     enumerate_raw_hid_gamepads,
+    is_raw_hid_device_present,
 )
 from readable_combobox import ReadableCombobox
 from switch2_input import SWITCH_BUTTONS
@@ -1785,6 +1789,8 @@ class StickPlot:
                 gyro.get("tilt_deadzone"),
                 gyro.get("x_ratio"),
                 gyro.get("y_ratio"),
+                gyro.get("x_compensation", 1.0),
+                gyro.get("y_compensation", 1.0),
                 gyro.get("smoothing_ms"),
                 gyro.get("tilt_smoothing_ms"),
                 gyro.get("adaptive_deadzone"),
@@ -2809,6 +2815,8 @@ class GamepadTestWindow:
             feedback=AimFeedback(window, self._set_aim_rumble),
             gpu_renderer=Direct2DAimRenderer,
             render_in_worker=True,
+            open_gyro_settings=getattr(self.gui, "open_gyro_settings", None),
+            compensation_available=self._selected_device_supports_gyro_compensation,
         )
         self._build_rumble_tab(rumble_tab)
         self._build_high_rate_tab(high_rate_tab)
@@ -6239,7 +6247,7 @@ class GamepadTestWindow:
                     self._last_event_input_signature = event_signature
                     self._update_events(sample, is_s2p, now)
             self._draw_plots(
-                is_s2p, update_details=refresh_details
+                is_s2p, has_live_sample=sample is not None, update_details=refresh_details,
             )
         if refresh_details and not window_in_motion:
             self._last_detail_refresh = now
@@ -6374,13 +6382,13 @@ class GamepadTestWindow:
                     values = item.get(f"final_{side}") or (0.0, 0.0)
                 history.add(values[0], values[1], sample_time, record_shape)
 
-    def _draw_plots(self, is_s2p, update_details=True):
-        telemetry = self.latest_telemetry if is_s2p else {}
+    def _draw_plots(self, is_s2p, *, has_live_sample, update_details=True):
+        telemetry = self.latest_telemetry if is_s2p and has_live_sample else {}
         frame_changed = False
         presentation_now = time.perf_counter()
         for side, plot in self.plots.items():
             history = self.histories[side]
-            if history.trail:
+            if has_live_sample and history.trail:
                 _, x, y, _sequence = history.trail[-1]
             else:
                 x = y = 0.0
@@ -6457,6 +6465,8 @@ class GamepadTestWindow:
                 gyro.get("tilt_max_angle"),
                 gyro.get("x_ratio"),
                 gyro.get("y_ratio"),
+                gyro.get("x_compensation", 1.0),
+                gyro.get("y_compensation", 1.0),
             ))
         return tuple(signature)
 
@@ -6502,6 +6512,27 @@ class GamepadTestWindow:
 
     def _selected_device(self):
         return self.devices.get(self.selected_device_var.get())
+
+    def _selected_device_supports_gyro_compensation(self):
+        device = self._selected_device()
+        if device is None:
+            return False
+        if device.kind == "s2p":
+            gyro = self.latest_telemetry.get("gyro") or {}
+            return self._telemetry_is_fresh(self.latest_telemetry) and gyro.get("available") is not False
+        if device.kind == "winmm":
+            return (
+                device.input_profile == NINTENDO_PRO2_PROFILE
+                and self.latest_diagnostic_input.get("device_key") == device.key
+                and self.backend.is_nintendo_pro2_winmm(device.index)
+            )
+        raw = self._selected_raw_hid_device()
+        if raw is None or raw.is_virtual:
+            return False
+        return (
+            (raw.vendor_id, raw.product_id) == (NINTENDO_PRO2_VID, NINTENDO_PRO2_PID)
+            and is_raw_hid_device_present(raw.path)
+        )
 
     def _set_aim_input_active(self, active):
         if active == getattr(self, "_aim_input_active", False):
@@ -6786,6 +6817,9 @@ class GamepadTestWindow:
 
     def _configure_source_controls(self):
         device = self._selected_device()
+        aim_pane = getattr(self, "aim_pane", None)
+        if aim_pane is not None:
+            aim_pane.refresh_compensation_buttons()
         is_s2p = device is not None and device.kind == "s2p"
         is_raw_hid = device is not None and device.kind == "raw_hid"
         raw_hid_toggle = getattr(self, "raw_hid_stream_toggle", None)

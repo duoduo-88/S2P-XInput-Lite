@@ -125,7 +125,7 @@ static const char *esp_err_to_name(esp_err_t err) {(void)err; return "FAIL";}
 static void test_protocol(void) {
     assert(!strcmp(standalone_usb_serial(),"S2P-102A3B4C5DEF"));
     send_status_response();
-    assert(strstr(response,"\"version\":\"1.0.8\""));
+    assert(strstr(response,"\"version\":\"1.0.9\""));
     assert(strstr(response,"\"mode_migration\":"));
     assert(strstr(response,"\"usb_serial\":\"S2P-"));
     FILE *out=fopen("build/bridge-host-tests/usb_status.json","wb");

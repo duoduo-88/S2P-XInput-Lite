@@ -119,7 +119,8 @@ from mapping_targets import (
     validate_profile_mapping_targets,
 )
 from settings_schema import SECTION_SCHEMAS, SettingValidationError, validate_config_sections
-from single_instance import SingleInstance, activate_tk_window
+from gyro_compensation_window import GyroCompensationSettings
+from single_instance import GYRO_SETTINGS_ACTION, SETTINGS_INSTANCE_NAME, SingleInstance, activate_tk_window
 from system_tray import SystemTrayIcon
 from gui_settings import (
     apply_gui_settings_to_config,
@@ -159,7 +160,6 @@ _GUI_ROOT = None
 _MESSAGEBOX_FUNCTIONS = {}
 HIDHIDE_DOWNLOAD_URL = "https://github.com/nefarius/HidHide/releases/latest"
 LOGGER = logging.getLogger(__name__)
-SETTINGS_INSTANCE_NAME = "S2P-XInput-Lite.Settings.v1"
 
 
 GYRO_DEFAULT_KEYS = (
@@ -169,7 +169,9 @@ GYRO_DEFAULT_KEYS = (
     "mouse_sensitivity", "deadzone", "stick_anti_deadzone",
     "response_curve", "curve_strength", "smoothing_ms", "invert_x",
     "invert_y", "x_ratio", "y_ratio", "accel_suppression",
-    "adaptive_deadzone", "button_freeze_ms", "stabilization_buttons",
+    "x_compensation", "y_compensation",
+    "adaptive_deadzone", "button_stabilization_mode", "button_freeze_ms",
+    "stabilization_buttons",
     "player_space",
 )
 
@@ -1814,8 +1816,6 @@ class StartupOverlay:
         self,
         root,
         language="zh",
-        center_rect=None,
-        bounds=None,
         paint_now=False,
     ):
         self.root = root
@@ -1856,9 +1856,7 @@ class StartupOverlay:
             fill="#4a4a4a",
         )
 
-        self.window.geometry(startup_banner_geometry(
-            root, width, height, center_rect=center_rect, bounds=bounds,
-        ))
+        self.window.geometry(startup_banner_geometry(root, width, height))
         self.window.update_idletasks()
         self.window.deiconify()
         self.window.lift()
@@ -3298,6 +3296,11 @@ class ConfigGUI:
                 "gyro_mapping", "adaptive_deadzone", fallback="85"
             )
         )
+        self.gyro_button_stabilization_mode_var = tk.StringVar(
+            value=self.config.get(
+                "gyro_mapping", "button_stabilization_mode", fallback="FREEZE"
+            ).strip().upper()
+        )
         self.gyro_button_freeze_var = tk.StringVar(
             value=self.config.get(
                 "gyro_mapping", "button_freeze_ms", fallback="5"
@@ -3329,6 +3332,10 @@ class ConfigGUI:
         self.gyro_y_ratio_var = tk.StringVar(
             value=self.config.get("gyro_mapping", "y_ratio", fallback="1.00")
         )
+        self.gyro_compensation_vars = {
+            axis: tk.StringVar(value=self.config.get("gyro_mapping", f"{axis.lower()}_compensation", fallback="1.00"))
+            for axis in ("X", "Y")
+        }
         self.gyro_invert_x_var = tk.BooleanVar(
             value=self.config.getboolean(
                 "gyro_mapping", "invert_x", fallback=False
@@ -5638,6 +5645,37 @@ class ConfigGUI:
             )
         )
 
+    def open_gyro_compensation_window(self):
+        if self.gyro_target_var.get().strip().upper() == "MOUSE":
+            return
+        overlay = getattr(self, "_gyro_compensation_window", None)
+        if overlay is None or not overlay.window.winfo_exists():
+            def apply_ratios(values):
+                for axis, value in values.items():
+                    self.gyro_compensation_vars[axis].set(value)
+
+            overlay = self._gyro_compensation_window = GyroCompensationSettings(
+                self.root, self.tr,
+                {axis: variable.get() for axis, variable in self.gyro_compensation_vars.items()},
+                apply=apply_ratios,
+            )
+        overlay.window.lift()
+        overlay.window.focus_set()
+
+    def open_gyro_settings(self):
+        restored = self.restore_from_system_tray()
+        activate_tk_window(self.root)
+        self.gyro_settings_tab.master.select(self.gyro_settings_tab)
+        if restored:
+            self.root.after(75, self.open_gyro_compensation_window)
+        else:
+            self.open_gyro_compensation_window()
+
+    def close_gyro_compensation_window(self):
+        overlay = getattr(self, "_gyro_compensation_window", None)
+        if overlay is not None and overlay.window.winfo_exists():
+            overlay.close()
+
     def open_gyro_curve_window(self):
         """Edit the Center-stick gyro response curve in a separate window."""
         window = tk.Toplevel(self.root)
@@ -6814,6 +6852,7 @@ class ConfigGUI:
 
     def reload_profile_variables(self):
         """Reload every GUI setting without rebuilding the window or callbacks."""
+        self.close_gyro_compensation_window()
         old_bindings = {
             name: value
             for name, value in self.__dict__.items()
@@ -9023,18 +9062,9 @@ class ConfigGUI:
         """Cover a taskbar restore until the complete root has repainted."""
         self._hide_restore_splash()
         try:
-            work_area = self.get_work_area()
-            center_rect = (
-                int(self.root.winfo_rootx()),
-                int(self.root.winfo_rooty()),
-                max(1, int(self.root.winfo_width())),
-                max(1, int(self.root.winfo_height())),
-            )
             self._restore_splash = StartupOverlay(
                 self.root,
                 language=self.language,
-                center_rect=center_rect,
-                bounds=work_area,
             )
             self._restore_splash_generation = generation
         except (tk.TclError, OSError, ValueError):
@@ -10653,6 +10683,7 @@ class ConfigGUI:
 
     def apply_gyro_defaults(self, defaults):
         """Apply one complete gyro preset without touching calibration data."""
+        self.close_gyro_compensation_window()
         self.gyro_activation_mode_var.set(defaults["activation_mode"])
         self.gyro_activation_buttons = list(defaults["activation_buttons"])
         self.gyro_activation_match_var.set(defaults["activation_match"])
@@ -10667,6 +10698,8 @@ class ConfigGUI:
         self.gyro_mouse_sensitivity_var.set(defaults["mouse_sensitivity"])
         self.gyro_x_ratio_var.set(defaults["x_ratio"])
         self.gyro_y_ratio_var.set(defaults["y_ratio"])
+        for axis, variable in self.gyro_compensation_vars.items():
+            variable.set(defaults[f"{axis.lower()}_compensation"])
         self.gyro_deadzone_var.set(defaults["deadzone"])
         self.gyro_stick_anti_deadzone_var.set(defaults["stick_anti_deadzone"])
         self.gyro_response_curve_var.set(defaults["response_curve"])
@@ -10674,6 +10707,7 @@ class ConfigGUI:
         self.gyro_smoothing_var.set(defaults["smoothing_ms"])
         self.gyro_accel_suppression_var.set(defaults["accel_suppression"])
         self.gyro_adaptive_deadzone_var.set(defaults["adaptive_deadzone"])
+        self.gyro_button_stabilization_mode_var.set(defaults["button_stabilization_mode"])
         self.gyro_button_freeze_var.set(defaults["button_freeze_ms"])
         self.gyro_stabilization_buttons = list(defaults["stabilization_buttons"])
         self.gyro_invert_x_var.set(defaults["invert_x"])
@@ -12061,11 +12095,12 @@ def show_startup_window(root):
     )
 
 
-def main(instance=None):
-    instance = instance or SingleInstance(SETTINGS_INSTANCE_NAME)
+def main(instance=None, *, open_gyro=False):
+    instance = instance or SingleInstance(SETTINGS_INSTANCE_NAME, action=GYRO_SETTINGS_ACTION)
     if not instance.is_primary:
         try:
-            instance.notify_existing()
+            if not open_gyro or not instance.notify_existing(action=True):
+                instance.notify_existing()
         finally:
             instance.close()
         return False
@@ -12099,10 +12134,14 @@ def main(instance=None):
         root.update_idletasks()
         gui._flush_dwm_composition()
         startup_window.destroy()
+        if open_gyro:
+            gui.open_gyro_settings()
 
         def poll_activation_request():
             try:
-                if instance.activation_requested():
+                if instance.activation_requested(action=True):
+                    gui.open_gyro_settings()
+                elif instance.activation_requested():
                     gui.activate_existing_settings()
                 root.after(100, poll_activation_request)
             except (OSError, tk.TclError):
@@ -12119,4 +12158,4 @@ def main(instance=None):
         instance.close()
 
 if __name__ == "__main__":
-    main()
+    main(open_gyro="--gyro-settings" in sys.argv[1:])

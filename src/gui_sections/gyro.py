@@ -1,12 +1,16 @@
 import tkinter as tk
 from tkinter import ttk
 
+from settings_schema import GYRO_RATIO_MAX, GYRO_RATIO_MIN
+
+
 def build_gyro_section(gui, mapping_notebook):
     """Build the gyroscope mapping tab."""
     # =========================
     # 頁籤 4：陀螺儀映射
     # =========================
     gyro_frame = ttk.Frame(mapping_notebook, padding=(12, 10))
+    gui.gyro_settings_tab = gyro_frame
     mapping_notebook.add(gyro_frame, text=" 陀螺儀映射 ")
     gyro_frame.columnconfigure(0, weight=1)
 
@@ -191,12 +195,18 @@ def build_gyro_section(gui, mapping_notebook):
          "每轉動一度對應的游標像素倍率。\n數值越高，游標移動越快。", "MOUSE"),
         ("最大傾角", gui.gyro_tilt_max_angle_var, 10.0, 60.0, 1.0, ".0f",
          "傾斜到此角度時輸出滿值。\n數值越小，較小的傾斜就能達到滿輸出。", "TILT"),
-        ("X 比例", gui.gyro_x_ratio_var, 0.5, 2.0, 0.05, ".2f",
-         "水平陀螺儀感度相對倍率。1.00 = 不改變。", "ALL"),
-        ("Y 比例", gui.gyro_y_ratio_var, 0.5, 2.0, 0.05, ".2f",
-         "垂直陀螺儀感度相對倍率。1.00 = 不改變。", "Y_AXIS"),
+        ("X 比例", gui.gyro_x_ratio_var, GYRO_RATIO_MIN, GYRO_RATIO_MAX, 0.01, ".2f",
+         "水平陀螺儀感度相對倍率。1.00 = 不改變。\n\n"
+         "使用搖桿輸出時，調整遊戲內的水平視角速度後，可用手把測試的「補償計算」，選擇 X（水平）。\n"
+         "用相同的右搖桿推幅與瞄準狀態，錄下舊、新設定各自從地標 A 轉到 B 的過程。\n"
+         "填入兩次耗時（秒），即可算出獨立的 X 輸出補償倍率。", "ALL"),
+        ("Y 比例", gui.gyro_y_ratio_var, GYRO_RATIO_MIN, GYRO_RATIO_MAX, 0.01, ".2f",
+         "垂直陀螺儀感度相對倍率。1.00 = 不改變。\n\n"
+         "使用搖桿輸出時，調整遊戲內的垂直視角速度後，可用手把測試的「補償計算」，選擇 Y（垂直）。\n"
+         "用相同的右搖桿推幅與瞄準狀態，錄下舊、新設定各自從地標 A 轉到 B 的過程。\n"
+         "填入兩次耗時（秒），即可算出獨立的 Y 輸出補償倍率。", "Y_AXIS"),
         ("死區", gui.gyro_deadzone_var, 0.0, 5.0, 0.1, ".1f",
-         "忽略小於此角速度的感測器漂移。單位：度／秒。\n"
+         "以水平與垂直的合成角速度判斷死區，保留斜向轉動的方向。單位：度／秒。\n"
          "自適應功能會在明確轉動時縮小死區。\n數值越高，需要更明顯的轉動才會開始輸出。", "CENTER"),
         ("反死區", gui.gyro_stick_anti_deadzone_var, 0.0, 30.0, 1.0, ".0f",
          "補償遊戲內建搖桿死區；只作用於回中搖桿輸出，不改變實體搖桿。\n"
@@ -297,6 +307,9 @@ def build_gyro_section(gui, mapping_notebook):
         command=gui.open_gyro_curve_window,
     )
     gui.gyro_curve_button.pack(side="left", padx=(0, 6))
+    compensation_button = ttk.Button(
+        gyro_action_row, text="補償設定", command=gui.open_gyro_compensation_window,
+    )
     stability_frame = ttk.LabelFrame(
         gyro_frame, text="穩定控制", padding=(10, 8)
     )
@@ -319,8 +332,8 @@ def build_gyro_section(gui, mapping_notebook):
         (
             "防晃 ms", gui.gyro_button_freeze_var,
             0.0, 120.0, 5.0,
-            "設定的額外按鍵按下或放開時，短暫停止陀螺儀輸出。\n"
-            "0 = 關閉；數值越高，額外按鍵動作後暫停輸出的時間越長。", "ALL",
+            "設定額外按鍵按下或放開後的防晃時間。\n"
+            "0 = 關閉；抑制突波可先試 20 ms。", "ALL",
         ),
     )
     stability_scoped_rows = []
@@ -390,9 +403,29 @@ def build_gyro_section(gui, mapping_notebook):
             target_scope, (label_widget, scale, value_label, help_widget)
         ))
 
+    stabilization_mode_content = ttk.Frame(stability_content)
+    stabilization_mode_content.grid(
+        row=len(stability_rows), column=0, columnspan=4, pady=(4, 0)
+    )
+    ttk.Label(stabilization_mode_content, text="防晃模式").pack(side="left")
+    for label, mode in (("暫停輸出", "FREEZE"), ("抑制突波", "SPIKE")):
+        ttk.Radiobutton(
+            stabilization_mode_content,
+            text=label,
+            value=mode,
+            variable=gui.gyro_button_stabilization_mode_var,
+        ).pack(side="left", padx=(6, 0))
+
+    gui.create_help(
+        stabilization_mode_content,
+        "設定的額外按鍵按下或放開時觸發防晃。\n\n"
+        "暫停輸出：在防晃時間內暫停陀螺儀輸出，視角可能短暫停住。\n\n"
+        "抑制突波：保留原本的轉動，限制按鍵瞬間的突波。若同時快速轉向，部分動作也可能被壓低。",
+    ).pack(side="left", padx=(6, 0))
+
     stabilization_key_content = ttk.Frame(stability_content)
     stabilization_key_content.grid(
-        row=len(stability_rows), column=0, columnspan=4, pady=(4, 0)
+        row=len(stability_rows) + 1, column=0, columnspan=4, pady=(4, 0)
     )
     ttk.Label(stabilization_key_content, text="額外按鍵").pack(
         side="left", padx=(0, 5)
@@ -414,7 +447,7 @@ def build_gyro_section(gui, mapping_notebook):
     stabilization_key_help = gui.create_help(
         stabilization_key_content,
         "可選多顆容易造成手把晃動的按鍵。\n"
-        "任一按鍵按下或放開都會短暫停止陀螺儀，原映射仍保留。"
+        "任一按鍵按下或放開都會觸發防晃，原映射仍保留。"
     )
     stabilization_key_help.pack(side="left", padx=(6, 0))
     gui.gyro_reset_button = ttk.Button(
@@ -437,6 +470,10 @@ def build_gyro_section(gui, mapping_notebook):
             state="disabled" if is_mouse else "normal"
         )
         motion_mode = gui.gyro_motion_mode_var.get().strip().upper()
+        if motion_mode == "CENTER":
+            stabilization_mode_content.grid()
+        else:
+            stabilization_mode_content.grid_remove()
         curve_enabled = (
             gui.gyro_activation_mode_var.get() != "OFF"
             and motion_mode == "CENTER"
@@ -445,6 +482,11 @@ def build_gyro_section(gui, mapping_notebook):
         gui.gyro_curve_button.state(
             ["!disabled"] if curve_enabled else ["disabled"]
         )
+        if is_mouse:
+            compensation_button.pack_forget()
+            gui.close_gyro_compensation_window()
+        else:
+            compensation_button.pack(side="left")
         player_space_enabled = motion_mode == "CENTER"
         gui.gyro_player_space_button.state(
             ["!disabled"] if player_space_enabled else ["disabled"]

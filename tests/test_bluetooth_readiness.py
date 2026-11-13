@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from bluetooth_controller import BluetoothController
@@ -28,6 +29,57 @@ class _Client:
 
 
 class BluetoothReadinessTests(unittest.IsolatedAsyncioTestCase):
+    async def test_scan_prefers_reconnect_and_keeps_raw_mac_in_diagnostics(self):
+        controller = self.make_controller()
+        controller.host_mac_value = 0x112233445566
+        device = SimpleNamespace(address="AA:BB:CC:DD:EE:FF")
+
+        class Scanner:
+            def __init__(self, detection_callback):
+                self.detect = detection_callback
+
+            async def start(self):
+                self.detect(device, 0)
+                self.detect(device, controller.host_mac_value)
+
+            async def stop(self):
+                pass
+
+        with (patch("bluetooth_controller.BleakScanner", Scanner),
+              patch.object(controller, "_advertised_controller_reconnect_mac", side_effect=lambda data: data),
+              patch("bluetooth_controller.print") as output):
+            self.assertIs(await asyncio.wait_for(controller._find_controller(), timeout=2), device)
+        self.assertFalse(controller.pairing_required)
+        self.assertEqual(controller.pairing_diagnostics["reconnect_mac"], "112233445566")
+        self.assertNotIn("112233445566", str(output.call_args_list))
+        self.assertNotIn("000000000000", str(output.call_args_list))
+
+    async def test_sync_pairing_keeps_diagnostics_for_the_selected_controller(self):
+        controller = self.make_controller()
+        controller.host_mac_value = 0x112233445566
+        pairing = SimpleNamespace(address="AA:BB:CC:DD:EE:FF")
+        foreign = SimpleNamespace(address="00:11:22:33:44:55")
+
+        class Scanner:
+            def __init__(self, detection_callback):
+                self.detect = detection_callback
+
+            async def start(self):
+                self.detect(pairing, 0)
+                self.detect(foreign, 0x223344556677)
+
+            async def stop(self):
+                pass
+
+        with (patch("bluetooth_controller.BleakScanner", Scanner),
+              patch.object(controller, "_advertised_controller_reconnect_mac", side_effect=lambda data: data),
+              patch("bluetooth_controller.print") as output):
+            self.assertIs(await asyncio.wait_for(controller._find_controller(), timeout=2), pairing)
+        self.assertTrue(controller.pairing_required)
+        self.assertEqual(controller.pairing_diagnostics["controller_mac"], pairing.address)
+        self.assertEqual(controller.pairing_diagnostics["reconnect_mac"], "000000000000")
+        self.assertNotIn("000000000000", str(output.call_args_list))
+
     def make_controller(self):
         controller = BluetoothController()
         controller.running = True

@@ -329,15 +329,21 @@ typedef struct {
     bool invert_y;
     float x_ratio;
     float y_ratio;
+    float x_compensation;
+    float y_compensation;
     float accel_suppression;
     float adaptive_deadzone;
     float button_freeze_ms;
+    bool suppress_button_spikes;
     bool player_space;
     uint32_t stabilization_mask;
     uint32_t recenter_mask;
     uint32_t previous_stabilization;
     bool previous_recenter;
     uint32_t freeze_until_report_time;
+    float button_guard_remaining;
+    float button_reference_x;
+    float button_reference_y;
     float motion_envelope;
     float gyro_bias[3];
     float accel_bias[3];
@@ -506,6 +512,8 @@ static standalone_runtime_config_t s_runtime = {
         .tilt_max_angle = 35.0f,
         .x_ratio = 1.0f,
         .y_ratio = 1.0f,
+        .x_compensation = 1.0f,
+        .y_compensation = 1.0f,
     },
 };
 static standalone_runtime_config_t s_profile_config;
@@ -515,6 +523,11 @@ static void ensure_profile_config_initialized(void) {
     if (s_profile_config_initialized) return;
     s_profile_config = s_runtime;
     s_profile_config_initialized = true;
+}
+
+static void reset_standalone_input_state(void) {
+    ensure_profile_config_initialized();
+    s_runtime = s_profile_config;
 }
 
 static float clampf(float value, float low, float high) {
@@ -862,6 +875,8 @@ static void reset_gyro_runtime_state(gyro_runtime_t *config) {
     config->previous_stabilization = 0;
     config->previous_recenter = false;
     config->freeze_until_report_time = 0;
+    config->button_guard_remaining = 0.0f;
+    config->button_reference_x = config->button_reference_y = 0.0f;
     config->motion_envelope = 0.0f;
     config->last_report_time = 0;
 }
@@ -924,10 +939,16 @@ static void parse_gyro_config(
     config->invert_x = json_bool(gyro, "invert_x", false);
     config->invert_y = json_bool(gyro, "invert_y", false);
     config->x_ratio = clampf(
-        (float)json_number(gyro, "x_ratio", 1.0), 0.5f, 2.0f
+        (float)json_number(gyro, "x_ratio", 1.0), 0.10f, 2.0f
     );
     config->y_ratio = clampf(
-        (float)json_number(gyro, "y_ratio", 1.0), 0.5f, 2.0f
+        (float)json_number(gyro, "y_ratio", 1.0), 0.10f, 2.0f
+    );
+    config->x_compensation = clampf(
+        (float)json_number(gyro, "x_compensation", 1.0), 0.10f, 2.0f
+    );
+    config->y_compensation = clampf(
+        (float)json_number(gyro, "y_compensation", 1.0), 0.10f, 2.0f
     );
     config->accel_suppression = clampf(
         (float)json_number(gyro, "accel_suppression", 0.0) / 100.0f,
@@ -941,6 +962,11 @@ static void parse_gyro_config(
         (float)json_number(gyro, "button_freeze_ms", 0.0),
         0.0f, 120.0f
     );
+    const cJSON *stabilization_mode = cJSON_GetObjectItemCaseSensitive(
+        gyro, "button_stabilization_mode"
+    );
+    config->suppress_button_spikes = cJSON_IsString(stabilization_mode) &&
+        strcmp(stabilization_mode->valuestring, "SPIKE") == 0;
     config->player_space = json_bool(gyro, "player_space", false);
     config->activation_mask = 0;
     const cJSON *buttons = cJSON_GetObjectItemCaseSensitive(
@@ -2803,6 +2829,38 @@ static void clamp_vector_to_shape(
     *y = clampf(*y, -1.0f, 1.0f);
 }
 
+static void guard_gyro_button_spike(
+    gyro_runtime_t *gyro, float *x, float *y, float dt, bool triggered
+) {
+    if (!gyro->was_active) {
+        gyro->button_reference_x = *x;
+        gyro->button_reference_y = *y;
+        gyro->button_guard_remaining = 0.0f;
+        return;
+    }
+
+    float duration = gyro->button_freeze_ms / 1000.0f;
+    float remaining = triggered
+        ? duration : fmaxf(0.0f, gyro->button_guard_remaining - dt);
+    gyro->button_guard_remaining = remaining;
+    float dx = *x - gyro->button_reference_x;
+    float dy = *y - gyro->button_reference_y;
+    if (remaining > 0.0f) {
+        // Widen the allowance after the edge to let deliberate turns through.
+        float allowance = 2.0f + 400.0f * (duration - remaining);
+        float deviation = hypotf(dx, dy);
+        if (deviation > allowance) {
+            float scale = allowance / deviation;
+            *x = gyro->button_reference_x + dx * scale;
+            *y = gyro->button_reference_y + dy * scale;
+        }
+    } else {
+        float alpha = 1.0f - expf(-dt / 0.020f);
+        gyro->button_reference_x += dx * alpha;
+        gyro->button_reference_y += dy * alpha;
+    }
+}
+
 static void apply_gyro_to_report_runtime(
     const uint8_t *payload, size_t length, uint32_t source,
     xinput_report_t *report, gyro_runtime_t *gyro,
@@ -2857,10 +2915,12 @@ static void apply_gyro_to_report_runtime(
     }
     gyro->previous_recenter = recenter_pressed;
     uint32_t stabilization = source & gyro->stabilization_mask;
-    if (
+    bool button_guard_triggered =
         stabilization != gyro->previous_stabilization &&
-        gyro->button_freeze_ms > 0.0f
-    ) {
+        gyro->button_freeze_ms > 0.0f;
+    bool use_spike_guard = !gyro->tilt_mode && gyro->suppress_button_spikes &&
+        gyro->button_freeze_ms > 0.0f && gyro->stabilization_mask != 0;
+    if (button_guard_triggered && !use_spike_guard) {
         gyro->freeze_until_report_time =
             report_time + (uint32_t)ceilf(gyro->button_freeze_ms);
     }
@@ -2995,11 +3055,16 @@ static void apply_gyro_to_report_runtime(
         gravity_aware_aim_axes(
             gyro, rates, dt, report_time, &horizontal, &vertical
         );
+        if (use_spike_guard) {
+            guard_gyro_button_spike(
+                gyro, &horizontal, &vertical, dt, button_guard_triggered
+            );
+        }
     }
 
-    float active_deadzone;
     if (gyro->tilt_mode) {
-        active_deadzone = gyro->tilt_deadzone;
+        horizontal = soft_deadzone(horizontal, gyro->tilt_deadzone);
+        vertical = soft_deadzone(vertical, gyro->tilt_deadzone);
         gyro->motion_envelope = 0.0f;
     } else {
         float motion_speed = sqrtf(
@@ -3014,11 +3079,16 @@ static void apply_gyro_to_report_runtime(
         float adaptive = clampf(
             gyro->motion_envelope / 6.0f, 0.0f, 1.0f
         );
-        active_deadzone = gyro->deadzone *
+        float active_deadzone = gyro->deadzone *
             (1.0f - gyro->adaptive_deadzone * adaptive);
+        if (motion_speed <= active_deadzone) {
+            horizontal = vertical = 0.0f;
+        } else {
+            float scale = (motion_speed - active_deadzone) / motion_speed;
+            horizontal *= scale;
+            vertical *= scale;
+        }
     }
-    horizontal = soft_deadzone(horizontal, active_deadzone);
-    vertical = soft_deadzone(vertical, active_deadzone);
     horizontal *= gyro->x_ratio;
     vertical *= gyro->y_ratio;
     if (gyro->invert_x) horizontal = -horizontal;
@@ -3097,6 +3167,8 @@ static void apply_gyro_to_report_runtime(
         }
     }
 
+    x *= gyro->x_compensation;
+    y *= gyro->y_compensation;
     int16_t target_x = gyro->target_left
         ? report->left_x : report->right_x;
     int16_t target_y = gyro->target_left
@@ -3501,6 +3573,9 @@ void standalone_xinput_accept_switch_report(
     memcpy(idle_gyro, s_idle_gyro, sizeof(idle_gyro));
     portEXIT_CRITICAL(&s_state_mux);
     if (accepted) {
+        // Restore the committed profile on the CDC task, where runtime
+        // processing and profile commits already run serially.
+        if (!idle_baseline_valid) reset_standalone_input_state();
         uint32_t report_time = read_u32_le(payload);
         uint32_t source = read_u32_le(payload + 4);
         /* Recovery timing follows the latest raw state, never delayed FIFO
@@ -3548,7 +3623,7 @@ void standalone_xinput_accept_switch_report(
             bool outside =
                 abs((int)raw_sticks[i] - stick_centers[i]) >= 150;
             bool was_outside =
-                abs((int)s_idle_sticks[i] - stick_centers[i]) >= 150;
+                abs((int)idle_sticks[i] - stick_centers[i]) >= 150;
             if (
                 abs((int)raw_sticks[i] - (int)idle_sticks[i]) >= 24 &&
                 (outside || was_outside)

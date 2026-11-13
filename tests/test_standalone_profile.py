@@ -35,6 +35,60 @@ def _settings():
 
 
 class StandaloneProfileTests(unittest.TestCase):
+    def test_output_compensation_requires_firmware_support(self):
+        settings = _settings()
+        settings["sections"]["gyro_mapping"].update(activation_mode="HOLD", x_compensation="0.16")
+        settings["gyro_activation_buttons"] = ["ZL"]
+        compiled = compile_standalone_profile("FPS-COMP", settings)
+        gyro = compiled.document["gyro_mapping"]
+        self.assertEqual((gyro["x_ratio"], gyro["x_compensation"], gyro["y_compensation"]), (1.0, 0.16, 1.0))
+        status = identity(version="1.0.9")
+        port = FakeSerial(status)
+        with patch("standalone_profile.serial.Serial", return_value=port):
+            with self.assertRaisesRegex(StandaloneTransferError, "輸出補償"):
+                write_standalone_profile("COM5", 2_000_000, compiled, target_mode="standalone_hid")
+        self.assertEqual(port.commands, ["status lite", "capabilities"])
+
+    def test_low_gyro_ratios_require_firmware_support_before_staging(self):
+        settings = _settings()
+        settings["sections"]["gyro_mapping"].update(
+            activation_mode="HOLD", x_ratio="0.16", y_ratio="0.10",
+        )
+        settings["gyro_activation_buttons"] = ["ZL"]
+        compiled = compile_standalone_profile("FPS-COMP", settings)
+        self.assertEqual(compiled.document["gyro_mapping"]["x_ratio"], 0.16)
+        self.assertEqual(compiled.document["gyro_mapping"]["y_ratio"], 0.10)
+        for supported in (False, True):
+            with self.subTest(supported=supported):
+                status = identity()
+                if supported:
+                    status["features"]["standalone_extended_gyro_ratio"] = 1
+                port = FakeSerial(status)
+                with patch("standalone_profile.serial.Serial", return_value=port):
+                    # FakeSerial provides capabilities but does not implement profile writes.
+                    with self.assertRaises(StandaloneTransferError) as raised:
+                        write_standalone_profile("COM5", 2_000_000, compiled, target_mode="standalone_hid")
+                self.assertEqual(any(cmd.startswith("profile begin ") for cmd in port.commands), supported)
+                if not supported:
+                    self.assertIn("低於 0.50", str(raised.exception))
+
+    def test_button_spike_guard_requires_firmware_support_before_staging(self):
+        settings = _settings()
+        settings["sections"]["gyro_mapping"].update(
+            activation_mode="HOLD",
+            button_stabilization_mode="SPIKE",
+            button_freeze_ms=20,
+        )
+        settings["gyro_activation_buttons"] = ["ZL"]
+        settings["gyro_stabilization_buttons"] = ["ZR"]
+        compiled = compile_standalone_profile("FPS-COMP", settings)
+        self.assertEqual(compiled.document["gyro_mapping"]["button_stabilization_mode"], "SPIKE")
+        port = FakeSerial(identity())
+        with patch("standalone_profile.serial.Serial", return_value=port):
+            with self.assertRaisesRegex(StandaloneTransferError, "突波"):
+                write_standalone_profile("COM5", 2_000_000, compiled, target_mode="standalone_hid")
+        self.assertEqual(port.commands, ["status lite", "capabilities"])
+
     def test_recovered_custom_deadzone_commit_checks_runtime_even_when_crc_matches(self):
         settings = _settings()
         settings["sections"]["stick_direction_left"] = {

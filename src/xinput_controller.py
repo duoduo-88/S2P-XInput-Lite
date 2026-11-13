@@ -497,6 +497,7 @@ class XInputController:
         self.gyro_player_space = gyro_settings["player_space"]
         self.gyro_accel_suppression = gyro_settings["accel_suppression"] / 100.0
         self.gyro_adaptive_deadzone = gyro_settings["adaptive_deadzone"] / 100.0
+        self.gyro_button_stabilization_mode = gyro_settings["button_stabilization_mode"]
         self.gyro_button_freeze_ms = gyro_settings["button_freeze_ms"]
         legacy_stabilization_button = config.get(
             "gyro_mapping", "stabilization_button", fallback="NONE"
@@ -515,6 +516,8 @@ class XInputController:
         )
         self.gyro_x_ratio = gyro_settings["x_ratio"]
         self.gyro_y_ratio = gyro_settings["y_ratio"]
+        self.gyro_x_compensation = gyro_settings["x_compensation"]
+        self.gyro_y_compensation = gyro_settings["y_compensation"]
         self.gyro_invert_x = gyro_settings["invert_x"]
         self.gyro_invert_y = gyro_settings["invert_y"]
         self._gyro_toggle_enabled = False
@@ -543,6 +546,8 @@ class XInputController:
         self._aim_pose_ready_since = None
         self._aim_player_space_blend = 0.0
         self._gyro_freeze_until = 0.0
+        self._gyro_button_guard_remaining = 0.0
+        self._gyro_button_reference = (0.0, 0.0)
         self._gyro_stabilization_button_state = 0
         self._tilt_recenter_was_pressed = False
         self._tilt_orientation = None
@@ -995,6 +1000,8 @@ class XInputController:
                 "tilt_max_angle": self.gyro_tilt_max_angle,
                 "x_ratio": self.gyro_x_ratio,
                 "y_ratio": self.gyro_y_ratio,
+                "x_compensation": self.gyro_x_compensation,
+                "y_compensation": self.gyro_y_compensation,
                 "response_curve": self.gyro_response_curve,
                 "curve_strength": self.gyro_curve_strength,
                 "smoothing_ms": self.gyro_smoothing_ms,
@@ -1052,6 +1059,8 @@ class XInputController:
         self._aim_pose_ready_since = None
         self._aim_player_space_blend = 0.0
         self._gyro_freeze_until = 0.0
+        self._gyro_button_guard_remaining = 0.0
+        self._gyro_button_reference = (0.0, 0.0)
         self._gyro_stabilization_button_state = 0
         self._tilt_recenter_was_pressed = False
         self._tilt_orientation = None
@@ -3678,11 +3687,18 @@ class XInputController:
             self, "_gyro_stabilization_button_state", 0
         )
         self._gyro_stabilization_button_state = stabilization_button_state
-        if should_freeze_gyro_output(
+        button_guard_triggered = should_freeze_gyro_output(
             self.gyro_activation_mode,
             getattr(self, "gyro_button_freeze_ms", 0.0),
             stabilization_changed,
-        ):
+        )
+        use_spike_guard = (
+            self.gyro_motion_mode == "CENTER"
+            and self.gyro_button_stabilization_mode == "SPIKE"
+            and self.gyro_button_freeze_ms > 0.0
+            and bool(self.gyro_stabilization_buttons)
+        )
+        if button_guard_triggered and not use_spike_guard:
             self._gyro_freeze_until = max(
                 getattr(self, "_gyro_freeze_until", 0.0),
                 time.perf_counter()
@@ -3802,8 +3818,13 @@ class XInputController:
                 )
         else:
             horizontal, vertical = self._gravity_aware_aim_axes(gyroscope, dt)
+            if use_spike_guard:
+                horizontal, vertical = self._guard_gyro_button_spike(
+                    horizontal, vertical, dt, button_guard_triggered
+                )
         if self.gyro_motion_mode == "TILT":
-            active_deadzone = self.gyro_tilt_deadzone
+            horizontal = _soft_deadzone(horizontal, self.gyro_tilt_deadzone)
+            vertical = _soft_deadzone(vertical, self.gyro_tilt_deadzone)
             self._gyro_motion_envelope = 0.0
         else:
             motion_speed = math.hypot(horizontal, vertical)
@@ -3823,8 +3844,12 @@ class XInputController:
                 self._gyro_motion_envelope,
                 getattr(self, "gyro_adaptive_deadzone", 0.0),
             )
-        horizontal = _soft_deadzone(horizontal, active_deadzone)
-        vertical = _soft_deadzone(vertical, active_deadzone)
+            if motion_speed <= active_deadzone:
+                horizontal = vertical = 0.0
+            else:
+                scale = (motion_speed - active_deadzone) / motion_speed
+                horizontal *= scale
+                vertical *= scale
         horizontal *= self.gyro_x_ratio
         vertical *= self.gyro_y_ratio
         if self.gyro_invert_x:
@@ -3894,7 +3919,40 @@ class XInputController:
                 self.gyro_response_curve,
                 self.gyro_curve_strength,
             )
-        return stick_x, stick_y, 0.0, 0.0
+        return (
+            stick_x * self.gyro_x_compensation,
+            stick_y * self.gyro_y_compensation,
+            0.0,
+            0.0,
+        )
+
+    def _guard_gyro_button_spike(self, x, y, dt, triggered):
+        """Bound sudden deviations from the pre-button angular velocity."""
+        if not self._gyro_was_active:
+            self._gyro_button_reference = (x, y)
+            self._gyro_button_guard_remaining = 0.0
+            return x, y
+
+        reference_x, reference_y = self._gyro_button_reference
+        duration = self.gyro_button_freeze_ms / 1000.0
+        remaining = (
+            duration if triggered else max(0.0, self._gyro_button_guard_remaining - dt)
+        )
+        self._gyro_button_guard_remaining = remaining
+        delta_x, delta_y = x - reference_x, y - reference_y
+        if remaining > 0.0:
+            # Widen the allowance after the edge to let deliberate turns through.
+            allowance = 2.0 + 400.0 * (duration - remaining)
+            deviation = math.hypot(delta_x, delta_y)
+            if deviation > allowance:
+                scale = allowance / deviation
+                return reference_x + delta_x * scale, reference_y + delta_y * scale
+        else:
+            alpha = 1.0 - math.exp(-dt / 0.020)
+            self._gyro_button_reference = (
+                reference_x + delta_x * alpha, reference_y + delta_y * alpha
+            )
+        return x, y
 
     def _emit_mouse_move(self, delta_x, delta_y):
         self._desktop_output.emit_mouse_move(delta_x, delta_y)

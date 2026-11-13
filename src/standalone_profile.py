@@ -672,6 +672,34 @@ def write_standalone_profile(
             raise StandaloneTransferError(
                 "目前 ESP32 韌體不支援逐區方向死區，請先更新韌體。"
             )
+        gyro = compiled.document["gyro_mapping"]
+        if (
+            gyro["activation_mode"] != "OFF"
+            and (gyro["x_compensation"], gyro["y_compensation"]) != (1.0, 1.0)
+            and not features.get("standalone_gyro_output_compensation")
+        ):
+            raise StandaloneTransferError(
+                "目前 ESP32 韌體不支援陀螺儀輸出補償，請先更新韌體。"
+            )
+        if (
+            gyro["activation_mode"] != "OFF"
+            and min(gyro["x_ratio"], gyro["y_ratio"]) < 0.50
+            and not features.get("standalone_extended_gyro_ratio")
+        ):
+            raise StandaloneTransferError(
+                "目前 ESP32 韌體的陀螺儀比例下限為 0.50。若要使用低於 0.50 的比例，請先更新韌體。"
+            )
+        if (
+            gyro["button_stabilization_mode"] == "SPIKE"
+            and gyro["activation_mode"] != "OFF"
+            and gyro["motion_mode"] == "CENTER"
+            and gyro["button_freeze_ms"] > 0
+            and compiled.document["gyro_stabilization_buttons"]
+            and not features.get("standalone_gyro_spike_guard")
+        ):
+            raise StandaloneTransferError(
+                "目前 ESP32 韌體不支援陀螺儀突波抑制，請先更新韌體。"
+            )
         if (
             target_mode == "standalone_hid"
             and not features.get("standalone_usb_hid")

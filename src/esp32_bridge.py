@@ -123,6 +123,7 @@ class ESP32Bridge:
         self._host_released_event = threading.Event()
         self._bridge_failure_reported = False
         self._last_foreign_pairing_notice = None
+        self.pairing_diagnostics = None
         self._diagnostic_lock = threading.Lock()
         self._diagnostic_snapshot = {}
         self._diagnostic_last_poll = 0.0
@@ -165,6 +166,7 @@ class ESP32Bridge:
         self._channel_missing_count = 0
         self._status_grace_until = 0.0
         self._last_foreign_pairing_notice = None
+        self.pairing_diagnostics = None
         if self._opening_cancelled:
             raise serial.SerialException("ESP32 host session startup cancelled")
         self.running = True
@@ -1859,103 +1861,55 @@ class ESP32Bridge:
                 if not mac:
                     return
 
-                reconnect_mac = (
-                    self._parse_reconnect_mac(
-                        data_hex
-                    )
-                )
-
-                # The firmware can report the same advertisement many times per
-                # second.  A controller paired to another host must remain visible
-                # so a later SYNC advertisement (reconnect_mac == 0) is detected,
-                # but repeating the same guidance for every scan result only floods
-                # the console.  Suppress only the unchanged foreign-host notice.
-                foreign_pairing = (
-                    self.esp32_mac_value is not None
-                    and reconnect_mac not in (None, 0, self.esp32_mac_value)
-                )
-                if foreign_pairing:
+                reconnect_mac = self._parse_reconnect_mac(data_hex)
+                if reconnect_mac is None:
+                    return
+                host_mac = self.esp32_mac_value
+                self.pairing_diagnostics = {
+                    "controller_mac": mac,
+                    "reconnect_mac": f"{reconnect_mac:012X}",
+                    "host_mac": f"{host_mac:012X}" if host_mac else None,
+                }
+                # Wait for status before deciding which host this advertisement targets.
+                if not host_mac:
+                    return
+                if reconnect_mac not in (0, host_mac):
                     notice_key = (mac.upper(), reconnect_mac)
                     if notice_key == self._last_foreign_pairing_notice:
                         return
                     self._last_foreign_pairing_notice = notice_key
-
-                print(
-                    "控制器 reconnect_mac：",
-                    (
-                        f"{reconnect_mac:012X}"
-                        if reconnect_mac is not None
-                        else "無法解析"
-                    )
-                )
-
-                # SYNC 配對模式
-                if reconnect_mac == 0:
-                    print(
-                        _tr("辨識為 SYNC 配對模式。", "SYNC pairing mode detected.")
-                    )
-
-                    with self._state_lock:
-                        self._pending_pair = True
-
-                # 已經配對到這個 ESP32
-                elif (
-                    self.esp32_mac_value is not None
-                    and reconnect_mac
-                    == self.esp32_mac_value
-                ):
-                    print(
-                        _tr("辨識為已配對到此 ESP32。", "Controller is already paired with this ESP32.")
-                    )
-
-                    with self._state_lock:
-                        self._pending_pair = False
-
-                # 已經配對到其他 Host
-                elif self.esp32_mac_value is not None:
-                    print(
-                        _tr("控制器目前配對到其他裝置。", "Controller is paired with another device.")
-                    )
-                    print(
-                        "目前 ESP32 BLE MAC：",
-                        f"{self.esp32_mac_value:012X}"
-                    )
-                    print(
-                        _tr("如要切換到 ESP32，請按住 SYNC 重新配對。", "Hold SYNC to pair the controller with this ESP32.")
-                    )
-
+                    print(_tr("控制器目前配對到其他裝置。", "Controller is paired with another device."))
+                    print(_tr(
+                        "如要切換到 ESP32，請按住 SYNC 重新配對。",
+                        "Hold SYNC to pair the controller with this ESP32.",
+                    ))
                     return
-
-                # 還沒取得 ESP32 MAC
-                else:
-                    print(
-                        "尚未取得 ESP32 BLE MAC，"
-                        "暫時使用一般連線模式。"
-                    )
-
-                    with self._state_lock:
-                        self._pending_pair = False
 
                 with self._state_lock:
                     if (
-                        self.connected_channel is not None
+                        not self.running or self._closing
+                        or self.connected_channel is not None
                         or self._connecting
                     ):
                         return
                     self._connecting = True
+                    self._pending_pair = reconnect_mac == 0
                     self.controller_id = mac.upper()
+                    generation = self._connection_generation
 
-                print(
-                    _tr(f"已找到控制器：{mac}", f"Controller found: {mac}")
-                )
-                print(
-                    _tr("正在連線，請稍候...", "Connecting, please wait...")
-                )
-
-                self.send("scan off")
-                self.send(
-                    f"conn {addr_type} {mac}"
-                )
+                if reconnect_mac == 0:
+                    print(_tr("找到手把，正在配對。", "Controller found; pairing."))
+                else:
+                    print(_tr("找到已配對手把，正在重新連線。", "Paired controller found; reconnecting."))
+                if not (self.send("scan off") and self.send(f"conn {addr_type} {mac}")):
+                    with self._state_lock:
+                        if self._connection_generation != generation or not self._connecting:
+                            return
+                        self._connecting = False
+                        self._pending_pair = False
+                        self.controller_id = None
+                    print(_tr("控制器連線失敗。", "Controller connection failed."))
+                    self._restart_scan()
 
             elif cmd == "connected":
                 if self._closing:

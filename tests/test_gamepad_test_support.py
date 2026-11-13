@@ -26,6 +26,9 @@ from gamepad_devices import (
     JOYCAPS_HASV,
     JOYCAPS_HASZ,
     JOYCAPSW,
+    NINTENDO_PRO2_PROFILE,
+    NINTENDO_PRO2_PID,
+    NINTENDO_PRO2_VID,
     NativeGamepadSampler,
     S2P_MOBILE_HID_PROFILE,
     WindowsGamepadBackend,
@@ -404,6 +407,70 @@ class SharedTelemetryTests(unittest.TestCase):
 
 
 class GamepadMathTests(unittest.TestCase):
+    def test_winmm_identity_reads_current_slot_capabilities(self):
+        backend = object.__new__(WindowsGamepadBackend)
+        backend.winmm = Mock()
+        current_pid = NINTENDO_PRO2_PID
+
+        def read_caps(_index, pointer, _size):
+            pointer._obj.wMid = NINTENDO_PRO2_VID
+            pointer._obj.wPid = current_pid
+            return 0
+
+        backend.winmm.joyGetDevCapsW.side_effect = read_caps
+        self.assertTrue(backend.is_nintendo_pro2_winmm(0))
+        current_pid = 0x2009
+        self.assertFalse(backend.is_nintendo_pro2_winmm(0))
+
+    def test_gyro_compensation_requires_a_selected_switch_2_controller(self):
+        tester = object.__new__(GamepadTestWindow)
+        tester._selected_device = Mock(return_value=None)
+        tester.latest_telemetry = {"timestamp_ns": time.monotonic_ns()}
+        tester.latest_diagnostic_input = {}
+        tester.backend = Mock()
+        raw = RawHidDevice("switch", "switch-path", "Gamepad", 0x057E, 0x2069, 1, 5, 0)
+        other = RawHidDevice("other", "other-path", "Switch 2 Pro Controller", 0x057E, 0x2009, 1, 5, 0)
+        tester.raw_hid_devices = {device.key: device for device in (raw, other)}
+        native = GamepadDevice("winmm:0", "winmm", 0, "Gamepad", False, input_profile=NINTENDO_PRO2_PROFILE)
+        bridge = GamepadDevice("s2p", "s2p", 0, "Bridge", True)
+        xinput = GamepadDevice("xinput:1", "xinput", 1, "Switch 2 Pro Controller", True)
+
+        for device, expected in (
+            (None, False), (bridge, True), (xinput, False), (native, False),
+            (raw_hid_test_device(other, 1), False),
+        ):
+            with self.subTest(device=device):
+                tester._selected_device.return_value = device
+                self.assertEqual(tester._selected_device_supports_gyro_compensation(), expected)
+
+        tester._selected_device.return_value = native
+        tester.latest_diagnostic_input = {"device_key": native.key}
+        tester.backend.is_nintendo_pro2_winmm.return_value = True
+        self.assertTrue(tester._selected_device_supports_gyro_compensation())
+        tester.backend.is_nintendo_pro2_winmm.return_value = False
+        self.assertFalse(tester._selected_device_supports_gyro_compensation())
+        tester.backend.is_nintendo_pro2_winmm.assert_called_with(native.index)
+
+        tester._selected_device.return_value = bridge
+        tester.latest_telemetry["gyro"] = {"available": False, "target": None}
+        self.assertFalse(tester._selected_device_supports_gyro_compensation())
+        tester.latest_telemetry["gyro"] = {"available": True, "target": "right"}
+        self.assertTrue(tester._selected_device_supports_gyro_compensation())
+        tester.latest_telemetry = {"timestamp_ns": time.monotonic_ns() - 2_000_000_000}
+        self.assertFalse(tester._selected_device_supports_gyro_compensation())
+
+    def test_gyro_compensation_checks_raw_hid_presence_even_without_a_stream(self):
+        tester = object.__new__(GamepadTestWindow)
+        raw = RawHidDevice("switch", "switch-path", "Gamepad", 0x057E, 0x2069, 1, 5, 0)
+        tester._selected_device = Mock(return_value=raw_hid_test_device(raw, 0))
+        tester.raw_hid_devices = {raw.key: raw}
+        with patch("gamepad_test_window.is_raw_hid_device_present") as present:
+            present.return_value = True
+            self.assertTrue(tester._selected_device_supports_gyro_compensation())
+            present.return_value = False
+            self.assertFalse(tester._selected_device_supports_gyro_compensation())
+            present.assert_called_with(raw.path)
+
     def test_raw_hid_collection_is_a_first_class_virtual_test_device(self):
         raw = RawHidDevice(
             "hid:vigem", "hid-path", "Xbox Controller",
@@ -831,6 +898,30 @@ class GamepadMathTests(unittest.TestCase):
 
         self.assertEqual(diagnostic_inputs[0]["left"], [0.9, 0.0])
         self.assertEqual(diagnostic_inputs[1], {})
+
+    def test_stick_readout_returns_to_zero_without_a_live_sample(self):
+        tester = self.make_raw_monitor("xinput")
+        tester._raw_hid_stream_path = None
+        tester._monitor_presentation_allowed.return_value = True
+        tester._update_triggers = Mock()
+        tester._event_inputs = Mock(return_value={})
+        tester._update_events = Mock()
+        tester.trail_length_var = Mock(get=Mock(return_value=2.5))
+        tester.shape_enabled_var = Mock(get=Mock(return_value=False))
+        history = StickHistory()
+        history.add(0.9, 0.2, 9.9, False)
+        tester.histories = {"left": history}
+        plot = Mock()
+        tester.plots = {"left": plot}
+
+        with patch("gamepad_test_window.time.perf_counter", return_value=10.0):
+            tester._poll()
+            self.assertEqual(plot.draw.call_args.args[1:3], (0.9, 0.2))
+            tester.native_sampler.read_snapshot.return_value = (None, (), None)
+            tester._poll()
+
+        self.assertEqual(plot.draw.call_args.args[1:3], (0.0, 0.0))
+        self.assertTrue(history.trail)
 
     def test_completed_measurement_resumes_actual_sampling_once(self):
         tester = object.__new__(GamepadTestWindow)

@@ -27,6 +27,18 @@ CMAKE_SOURCE = (
 
 
 class StandaloneFirmwareContractTests(unittest.TestCase):
+    def test_first_report_after_disconnect_reloads_pristine_input_state(self):
+        accept = XINPUT_SOURCE.split("void standalone_xinput_accept_switch_report(", 1)[1]
+        accept = accept.split("bool standalone_xinput_can_accept_input(", 1)[0]
+        reset = accept.index("if (!idle_baseline_valid) reset_standalone_input_state();")
+        self.assertLess(accept.index("portEXIT_CRITICAL(&s_state_mux);"), reset)
+        self.assertLess(reset, accept.index("select_mapping_layer("))
+        self.assertLess(reset, accept.index("apply_gyro_to_report_runtime("))
+        helper = XINPUT_SOURCE.split("static void reset_standalone_input_state(void)", 1)[1].split("}", 1)[0]
+        self.assertIn("s_runtime = s_profile_config;", helper)
+        disconnect = XINPUT_SOURCE.split("void standalone_xinput_forget_channel(", 1)[1]
+        self.assertIn("s_idle_baseline_valid = false;", disconnect.split("bool standalone_xinput_idle_disconnect_due(", 1)[0])
+
     def test_standalone_rumble_default_is_500(self):
         self.assertIn(".max_amplitude = 500,", XINPUT_SOURCE)
 

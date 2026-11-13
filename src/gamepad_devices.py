@@ -372,10 +372,7 @@ class WindowsGamepadBackend:
                     name = f"Generic Gamepad {index + 1}"
                     name_translation_key = "一般手把 {index}"
                 is_s2p_mobile = is_s2p_mobile_hid_device(caps, name)
-                is_nintendo_pro2 = (
-                    int(caps.wMid) == NINTENDO_PRO2_VID
-                    and int(caps.wPid) == NINTENDO_PRO2_PID
-                )
+                is_nintendo_pro2 = self._is_nintendo_pro2_caps(caps)
                 if is_s2p_mobile:
                     found_s2p_mobile = True
                     # WinMM sometimes replaces the USB product string with a
@@ -421,6 +418,20 @@ class WindowsGamepadBackend:
             else:
                 self._close_s2p_mobile_hid()
         return devices
+
+    @staticmethod
+    def _is_nintendo_pro2_caps(caps):
+        return (int(caps.wMid), int(caps.wPid)) == (NINTENDO_PRO2_VID, NINTENDO_PRO2_PID)
+
+    def is_nintendo_pro2_winmm(self, index):
+        """Verify the current device in a WinMM slot that may have been reused."""
+        if self.winmm is None:
+            return False
+        caps = JOYCAPSW()
+        return (
+            self.winmm.joyGetDevCapsW(index, ctypes.byref(caps), ctypes.sizeof(caps)) == JOYERR_NOERROR
+            and self._is_nintendo_pro2_caps(caps)
+        )
 
     def _close_s2p_mobile_hid(self):
         device = getattr(self, "_s2p_mobile_hid", None)

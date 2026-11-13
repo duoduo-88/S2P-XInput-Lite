@@ -996,6 +996,7 @@ def main():
                 publish_status(
                     rumble=rumble_status,
                     firmware_diagnostics=firmware_diagnostics,
+                    pairing_diagnostics=getattr(controller, "pairing_diagnostics", None),
                     async_logging=get_async_log_metrics(),
                 )
                 if not controller_is_connected():
@@ -1024,7 +1025,8 @@ def main():
                 try:
                     if not perform_idle_disconnect(
                         controller,
-                        xinput,
+                        input_dispatcher.run_exclusive,
+                        xinput.reset_output_state,
                         publish_status,
                     ):
                         raise RuntimeError(tr(

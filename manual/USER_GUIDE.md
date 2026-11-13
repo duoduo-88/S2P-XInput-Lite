@@ -8,7 +8,7 @@ Gamepad Test, including Aim Test, report-rate measurements, and diagnostics.
 
 The feature screenshots show the English v0.7.14 interface; profile values are examples.
 
-This guide covers desktop v0.8.1 and the bundled S2P-FW 1.0.8. The firmware
+This guide covers desktop v0.8.2 and the bundled S2P-FW 1.0.9. The firmware
 sections describe the scope of Windows and Android hardware validation.
 
 The screenshots use the English interface. Select **中 / En** in the lower-left corner of the main window to switch languages without changing the layout.
@@ -452,7 +452,7 @@ If you dismiss an automatic reminder, it will not appear on every launch. Select
 
 1. Select **Flash FW**.
 2. The application reads the connected firmware version and compares it with
-   the bundled `S2P-FW 1.0.8`.
+   the bundled `S2P-FW 1.0.9`.
 3. Review the installed and bundled versions, then choose whether to flash or
    cancel. Cancelling resumes the connector if it was paused for detection.
 4. After confirming, connect the ESP32-S3 OTG port and hold **BOOT**.

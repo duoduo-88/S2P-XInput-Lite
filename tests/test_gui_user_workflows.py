@@ -100,6 +100,62 @@ class GUIUserWorkflowTests(unittest.TestCase):
         self.assertEqual(self.callback_errors, [])
         self.assertEqual(self.errors, [])
 
+    def test_gyro_compensation_settings_save_both_axes(self):
+        curve = self.gui.gyro_curve_button
+        controls = curve.master.pack_slaves()
+        compensation = controls[controls.index(curve) + 1]
+        self.assertEqual(compensation.cget("text"), self.gui.tr("補償設定"))
+        stabilization = self.gui.gyro_stabilization_button_entry.master.master
+        help_buttons = [
+            widget for row in stabilization.winfo_children() if isinstance(row, ttk.Frame)
+            for widget in row.winfo_children()
+            if "抑制突波：保留原本的轉動" in getattr(widget, "parameter_help_text", "")
+        ]
+        self.assertEqual(len(help_buttons), 1)
+        self.assertEqual(help_buttons[0].cget("text"), "?")
+        compensation.invoke()
+        overlay = self.gui._gyro_compensation_window
+        overlay.compensation["X"].set("0.75")
+        overlay.compensation["Y"].set("0.16")
+        overlay.apply_button.invoke()
+        self.assertEqual(float(self.gui.gyro_x_ratio_var.get()), 1.0)
+        self.assertEqual(float(self.gui.gyro_y_ratio_var.get()), 1.0)
+        self.assertTrue(self.gui.save_current_profile(show_message=False))
+        self.close_gui()
+        self.open_gui()
+        self.assertEqual(float(self.gui.gyro_y_ratio_var.get()), 1.0)
+        self.gui.open_gyro_settings()
+        self.assertEqual(self.gui.gyro_settings_tab.master.select(), str(self.gui.gyro_settings_tab))
+        overlay = self.gui._gyro_compensation_window
+        self.assertEqual(overlay.compensation["X"].get(), "0.75")
+        self.assertEqual(overlay.compensation["Y"].get(), "0.16")
+        self.gui.apply_selected_profile("Action")
+        self.assertEqual(self.gui.active_profile, "Action")
+        self.assertFalse(overlay.window.winfo_exists())
+        self.gui.open_gyro_compensation_window()
+        overlay = self.gui._gyro_compensation_window
+        self.assertEqual(overlay.compensation["X"].get(), "1.00")
+        self.assertEqual(overlay.compensation["Y"].get(), "1.00")
+
+    def test_gyro_compensation_is_hidden_for_mouse_output(self):
+        curve = self.gui.gyro_curve_button
+        controls = curve.master
+        compensation = next(button for button in controls.pack_slaves()
+                            if button.cget("text") == self.gui.tr("補償設定"))
+        compensation.invoke()
+        overlay = self.gui._gyro_compensation_window
+
+        self.gui.gyro_target_var.set("MOUSE")
+        self.assertNotIn(compensation, controls.pack_slaves())
+        self.assertFalse(overlay.window.winfo_exists())
+        self.gui.open_gyro_compensation_window()
+        self.assertFalse(self.gui._gyro_compensation_window.window.winfo_exists())
+
+        for target in ("LEFT_STICK", "RIGHT_STICK"):
+            self.gui.gyro_target_var.set(target)
+            buttons = controls.pack_slaves()
+            self.assertEqual(buttons[buttons.index(curve) + 1], compensation)
+
     def test_edit_save_switch_save_as_and_reopen(self):
         self.assertEqual(self.gui.active_profile, "General")
         self.assertFalse(self.gui.has_unsaved_changes())

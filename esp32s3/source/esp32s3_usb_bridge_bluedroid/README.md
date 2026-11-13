@@ -1,6 +1,6 @@
 # S2P-XInput-Lite ESP32-S3 BLE Bridge
 
-This is `S2P-FW 1.0.8` for ESP32-S3 with 16 MB flash, using the independent
+This is `S2P-FW 1.0.9` for ESP32-S3 with 16 MB flash, using the independent
 `s2p_bridge 1.0.0` protocol and existing standalone profile schema.
 
 ## Bridge and Android USB HID

@@ -282,8 +282,21 @@ class AimHistoryTests(unittest.TestCase):
         self.assertEqual(view.tree.selection(), (rows[0],))
         self.assertEqual(view.tree.set(rows[0], "hits"), "4")
         self.assertEqual(view.tree.set(rows[0], "mode"), "3D · 限時點靶")
-        self.assertIn("遠近差異 50% · 水平 60%／垂直 80%", view.basis_label.cget("text"))
-        self.assertIn("滑鼠感度 100%", view.settings_label.cget("text"))
+        self.assertEqual(
+            " · ".join(view.basis_label.cget("text").strip().splitlines()),
+            "種子 0 · 時限 30 s · 遠近差異 50% · 水平 60%／垂直 80% · "
+            "手把視角速度 140／115°/秒 · 滑鼠感度 100% · 800×450",
+        )
+
+        history.add(basis(
+            mode="tracking", targets=0, seconds=30, viewport=[2560, 1440],
+            reticle="#edf4fc", target_color="#57dab1", tracking_arc=360, tracking_speed=600,
+        ), {"tracking": 80})
+        self.assertEqual(
+            " · ".join(view.basis_label.cget("text").strip().splitlines()),
+            "時限 30 s · 種子 0 · 環繞 360° · 靶速 600% · "
+            "手把視角速度 140／115°/秒 · 滑鼠感度 100% · 2560×1440",
+        )
 
         with patch("gamepad_aim_history.messagebox.askyesno", return_value=True):
             view.clear_button.invoke()
@@ -293,6 +306,45 @@ class AimHistoryTests(unittest.TestCase):
         view.destroy()
         history.add(basis(), {"hits": 5})
         self.assertEqual(len(history.records), 1)
+
+    def test_history_parameters_reserve_two_lines_and_wrap_between_items(self):
+        from gamepad_aim_history import AimHistory
+
+        try:
+            root = tk.Tk()
+        except tk.TclError as error:
+            self.skipTest(str(error))
+        self.addCleanup(root.destroy)
+        root.attributes("-alpha", 0)
+        root.geometry("330x440")
+        history = AimHistory(None)
+        history.add(basis(
+            mode="tracking", targets=0, seconds=30, viewport=[2560, 1440],
+            reticle="#edf4fc", target_color="#57dab1", rumble=35, sound=True,
+            tracking_arc=360, tracking_speed=600,
+        ), {"tracking": 80})
+        view = history.create_view(root, str)
+        view.pack(fill="both", expand=True)
+        root.update()
+
+        lines = view.basis_label.cget("text").splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(
+            " · ".join(lines),
+            "時限 30 s · 種子 0 · 環繞 360° · 靶速 600% · "
+            "手把視角速度 140／115°/秒 · 滑鼠感度 100% · 2560×1440",
+        )
+        for label in ("準心", "靶色", "震動", "音效"):
+            self.assertNotIn(label, view.basis_label.cget("text"))
+        self.assertFalse(any(
+            isinstance(widget, ttk.Scrollbar) and widget.cget("orient") == "horizontal"
+            for widget in view.winfo_children()
+        ))
+        height = view.basis_label.winfo_height()
+        root.geometry("1400x440")
+        root.update()
+        self.assertEqual(view.basis_label.cget("text").strip(), " · ".join(lines))
+        self.assertEqual(view.basis_label.winfo_height(), height)
 
     def test_popup_raises_one_window_and_clears_after_confirmation(self):
         from gamepad_aim_history import AimHistory
@@ -325,11 +377,14 @@ class AimHistoryTests(unittest.TestCase):
         )
         self.assertEqual(len(tree.get_children()), 2)
         colors = {
-            child.cget("text"): str(child.cget("foreground"))
+            " · ".join(child.cget("text").strip().splitlines()): str(child.cget("foreground"))
             for child in children(popup) if isinstance(child, ttk.Label)
         }
-        self.assertTrue(any(text.startswith("不限時") for text in colors))
-        self.assertIn("準心 #edf4fc · 靶色 #57dab1 · 震動 35% · 音效關閉 · 滑鼠感度 50%", colors)
+        self.assertIn(
+            "不限時 · 種子 0 · 遠近差異 50% · "
+            "手把視角速度 140／115°/秒 · 滑鼠感度 50% · 800×450",
+            colors,
+        )
         self.assertIn("與同設定最佳成績比較", colors)
         self.assertEqual(colors["命中 ↑ +2"], "#15803d")
         self.assertEqual(colors["命中率 ↓ -5.0 pp"], "#b91c1c")

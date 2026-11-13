@@ -6,11 +6,11 @@
 
 **[Windows ZIP（v0.8.1）](https://github.com/duoduo-88/S2P-XInput-Lite/releases/download/v0.8.1/S2P-XInput-Lite-v0.8.1.zip)**
 
-[v0.8.1 更新說明](RELEASE_NOTES_v0.8.1.md)
+[v0.8.2 更新說明](RELEASE_NOTES_v0.8.2.md)
 
 > [!IMPORTANT]
-> **v0.8.1 有 ESP32-S3 韌體更新。** 隨附 S2P-FW 1.0.8，Android USB HID 獨立模式的逐區方向死區需要此版本。
-> 若有使用 ESP32-S3 橋接器，請在 v0.8.1 主視窗按 **刷入相容韌體（Flash FW）**，確認目前版本後更新。
+> **v0.8.2 隨附 S2P-FW 1.0.9。** Android USB HID 獨立模式可使用低於 0.50 的陀螺儀比例和按鍵突波抑制。
+> 若有使用 ESP32-S3 橋接器，請在 v0.8.2 主視窗按 **刷入相容韌體（Flash FW）**，確認目前版本後更新。
 > [刷寫步驟](manual/USER_GUIDE_zh-TW.md#flash-esp32-s3)
 
 完整解壓縮後，直接開啟根目錄的兩個 EXE：
@@ -37,7 +37,7 @@ S2P-XInput-Lite 可在 Windows 為 Switch 2 Pro Controller 提供 XInput 相容�
 [原始碼](https://github.com/duoduo-88/S2P-XInput-Lite/tree/main) ·
 [最新正式版本](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)
 
-隨附的 **S2P-FW 1.0.8** 支援 CDC Bridge 與 Android USB HID 獨立模式。
+隨附的 **S2P-FW 1.0.9** 支援 CDC Bridge 與 Android USB HID 獨立模式。
 Windows 桌面可在 Bridge 模式透過 ViGEmBus 輸出 XInput。
 [USB 模式、救援與驗證清單](docs/usb-hid-standardization.md)。
 
@@ -168,7 +168,7 @@ Mapping Layer 檔案是全域資源，可在按住按鍵組合時暫時覆寫目
 - ESP32 獨立模式不支援 Windows 鍵盤／滑鼠輸出、音訊震動、依程序自動
   切換設定檔、手機震動或 BLE HID 輸出。
 - XInput 無法輸出原始動作感測資料，因此陀螺儀只能映射至搖桿或滑鼠。
-- 請使用隨附的 `S2P-FW 1.0.8` 取得目前的獨立模式設定與診斷功能。含逐區方向死區的設定檔需要 1.0.8。
+- 獨立模式使用低於 0.50 的陀螺儀比例或按鍵突波抑制時，需要隨附的 `S2P-FW 1.0.9`。逐區方向死區支援 1.0.8 以上版本。
 - GitHub 原始碼庫包含完整 ESP32 原始碼；發佈包則只在 `app/esp32s3` 內提供
   燒錄工具及必要韌體映像。
 - HidHide 不隨附，也不是 ESP32 或 BLE 的必要元件。未安裝時 USB 輸入仍可使用，但遊戲可能同時偵測實體 HID 與虛擬 XInput 控制器。
@@ -179,7 +179,7 @@ Mapping Layer 檔案是全域資源，可在按住按鍵組合時暫時覆寫目
 - 經過多款橋接實作及不同手把的實機測試，震動振幅越高，線性馬達在輸出快速變化時越可能出現輕微的機械撞擊聲；不過在一般使用情況下，影響通常不明顯。
 - 設定中的 `0`～`1023` 是協議振幅欄位的可用範圍，不代表已公開認證的硬體安全連續輸出上限。本程式的系統預設最大振幅為 `500`，約為欄位上限的 49%，在保留清楚回饋的同時降低過強輸出造成異音的可能。建議依個別手把狀況及個人偏好調整；若出現撞擊聲或其他異音，請適度降低最大振幅。
 - 將 LF 與 HF 振幅都設為零即可停止震動；所有傳輸的連線與 PIN 提示使用與 v0.5.1 相同的兩次短震動（LF `225`、HF `481`、振幅 `800`）。HF `481` 僅用於這個既有提示效果，不是一般遊戲震動的建議頻率。
-- 刷寫前會讀取目前 ESP32 韌體版本並與內建的 `S2P-FW 1.0.8` 比對，並透過開機載入器驗證實際 Flash 容量為 16 MB；容量不足或無法確認時不會刷寫。刷寫成功後，程式會等待 USB 重新列舉，自動啟動桌面連接並重新搜尋手把。
+- 刷寫前會讀取目前 ESP32 韌體版本並與內建的 `S2P-FW 1.0.9` 比對，並透過開機載入器驗證實際 Flash 容量為 16 MB；容量不足或無法確認時不會刷寫。刷寫成功後，程式會等待 USB 重新列舉，自動啟動桌面連接並重新搜尋手把。
 - S2P-FW 1.0.8 保留 Bridge 專用的主機工作階段保護。建立工作階段後，CDC 連續消失 3 秒或主機心跳逾時 8 秒便開始解除 BLE。Android USB HID 有獨立的閒置斷線與重連行為。詳見[關閉流程調查與待完成的實機驗證](docs/bridge-host-shutdown.md)。
 
 ## 上游專案與授權

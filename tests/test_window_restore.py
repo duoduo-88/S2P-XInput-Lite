@@ -57,6 +57,29 @@ class WindowRestoreTests(unittest.TestCase):
         gui._flush_dwm_composition = lambda: None
         return gui
 
+    def test_restore_artwork_stays_centered_on_the_monitor_when_window_moves(self):
+        gui = self.gui(1.0)
+        gui.root = Mock()
+        gui.root.winfo_width.return_value = 800
+        gui.root.winfo_height.return_value = 600
+        gui.root.winfo_rootx.side_effect = (100, 900)
+        gui.root.winfo_rooty.side_effect = (80, 360)
+        gui.language = "en"
+        gui.get_work_area = Mock(return_value=(0, 0, 1920, 1040))
+        image = Mock()
+        image.width.return_value = 600
+        image.height.return_value = 340
+        window = Mock()
+        with (
+            patch.object(config_gui.tk, "Toplevel", return_value=window),
+            patch.object(config_gui.tk, "PhotoImage", return_value=image),
+            patch.object(config_gui.tk, "Canvas"),
+            patch("dialog_layout.fullscreen_monitor_bounds", return_value=(0, 0, 1920, 1080)),
+        ):
+            gui._show_restore_splash(1)
+            gui._show_restore_splash(2)
+        self.assertEqual([call.args[0] for call in window.geometry.call_args_list], ["600x340+660+370"] * 2)
+
     def test_restore_preserves_low_custom_alpha_exactly(self):
         gui = self.gui(0.03)
         with patch.object(config_gui.sys, "platform", "win32"):

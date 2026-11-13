@@ -64,7 +64,7 @@
 static const char *TAG = "S3_BLUEDROID";
 
 #define APP_FIRMWARE_PRODUCT      "S2P-FW"
-#define APP_FIRMWARE_VERSION      "1.0.8"
+#define APP_FIRMWARE_VERSION      "1.0.9"
 #define APP_PROTOCOL_NAME         "s2p_bridge"
 #define APP_PROTOCOL_VERSION      "1.0.0"
 #define EXPECTED_FIRMWARE_PROFILE "s2p_usb_bridge"
@@ -1243,6 +1243,9 @@ static void send_capabilities_response(void) {
         "\"diagnostics\":1,\"rumble_diagnostics\":1,"
         "\"standalone_profile_write\":1,\"standalone_profile_runtime\":1,"
         "\"standalone_custom_deadzones\":1,"
+        "\"standalone_gyro_spike_guard\":1,"
+        "\"standalone_extended_gyro_ratio\":1,"
+        "\"standalone_gyro_output_compensation\":1,"
         "\"standalone_usb_xinput\":0,"
         "\"standalone_usb_hid\":1,"
         "\"standalone_usb_auto\":0,"

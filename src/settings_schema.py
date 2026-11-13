@@ -17,6 +17,8 @@ from direction_deadzones import CUSTOM_DEADZONE_KEY, format_custom_zones, parse_
 
 
 DEFAULT_CONFIG_PATH = Path(__file__).with_name("profiles") / "System Default.ini"
+GYRO_RATIO_MIN = 0.10
+GYRO_RATIO_MAX = 2.00
 
 
 class SettingValidationError(ValueError):
@@ -176,10 +178,13 @@ GYRO_SCHEMA = {
     "smoothing_ms": _float("陀螺儀平滑 ms", "gyro smoothing ms", 0.0, 100.0),
     "invert_x": _bool("陀螺儀反轉 X", "invert gyro X"),
     "invert_y": _bool("陀螺儀反轉 Y", "invert gyro Y"),
-    "x_ratio": _float("陀螺儀 X 比例", "gyro X ratio", 0.5, 2.0, 2),
-    "y_ratio": _float("陀螺儀 Y 比例", "gyro Y ratio", 0.5, 2.0, 2),
+    "x_ratio": _float("陀螺儀 X 比例", "gyro X ratio", GYRO_RATIO_MIN, GYRO_RATIO_MAX, 2),
+    "y_ratio": _float("陀螺儀 Y 比例", "gyro Y ratio", GYRO_RATIO_MIN, GYRO_RATIO_MAX, 2),
+    "x_compensation": _float("X 補償倍率", "X compensation multiplier", GYRO_RATIO_MIN, GYRO_RATIO_MAX, 2),
+    "y_compensation": _float("Y 補償倍率", "Y compensation multiplier", GYRO_RATIO_MIN, GYRO_RATIO_MAX, 2),
     "accel_suppression": _float("加速度抑制", "acceleration suppression", 0.0, 100.0),
     "adaptive_deadzone": _float("自適應死區", "adaptive deadzone", 0.0, 100.0),
+    "button_stabilization_mode": _enum("按鍵防晃模式", "button stabilization mode", "FREEZE", "SPIKE"),
     "button_freeze_ms": _float("按鍵防晃 ms", "button freeze ms", 0.0, 120.0),
     "player_space": _bool("玩家空間", "player space"),
 }

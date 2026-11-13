@@ -12,6 +12,101 @@ EN_TEXT = {
         "Uniform deadzone must be 0–20°. Activation must be 10–100%, and release must be at least 3 percentage points lower.",
     "瞄準設定": "Aim Settings",
     "測試設定": "Test Settings",
+    "補償計算": "Calculator",
+    "補償預覽": "Gyro Preview",
+    "補償設定": "Compensation Settings",
+    "陀螺儀補償計算": "Gyro Compensation Calculator",
+    "陀螺儀補償設定": "Gyro Compensation Settings",
+    "3D 陀螺儀補償預覽": "3D Gyro Compensation Preview",
+    "原始視角速度": "Original turn speeds",
+    "調整後視角速度": "Adjusted turn speeds",
+    "開啟 S2P 陀螺儀設定": "Open S2P Gyro Settings",
+    "開啟 S2P 補償設定": "Open S2P Compensation Settings",
+    "無法開啟 S2P 主視窗。": "Could not open S2P settings.",
+    "量測原始 {axis}…": "Measuring original {axis}…",
+    "量測": "Measure",
+    "量測調整後 {axis}…": "Measuring adjusted {axis}…",
+    "以上以原補償倍率 1.00 試算。": "Preview assumes an original multiplier of 1.00.",
+    "請輸入大於 0 的倍率及耗時。": "Enter a positive multiplier and positive times.",
+    "調高遊戲視角速度後，如果陀螺儀微瞄變得太敏感，\n"
+    "可降低對應的倍率。X 調水平，Y 調垂直。\n"
+    "維持 1.00 會保留原本的陀螺儀輸出。\n"
+    "例如 X 設為 0.50，水平輸出在反死區前會減半。\n"
+    "倍率只作用於陀螺儀，實體搖桿維持原本的輸出。":
+        "If raising the in-game look speed makes gyro aim too\n"
+        "sensitive, lower X for horizontal or Y for vertical aim.\n"
+        "A multiplier of 1.00 keeps the original gyro output.\n"
+        "X at 0.50 halves horizontal output before anti-deadzone.\n"
+        "The physical stick keeps its original output.",
+    "補償倍率已填入，請按主視窗的儲存／套用。":
+        "Multipliers entered. Click Save/Apply in the main window.",
+    "1. 選 X 或 Y，填入原補償倍率。首次調整用 1.00。\n"
+    "2. 改遊戲視角速度前後，用相同搖桿推幅\n"
+    "   從同一地標轉到另一地標，錄影並填入兩次耗時。\n"
+    "3. 到 S2P 的「補償設定」輸入建議倍率。":
+        "1. Pick X or Y and enter the old multiplier. Start at 1.00.\n"
+        "2. Record turns between the same landmarks before and\n"
+        "   after the speed change. Use the same stick deflection.\n"
+        "3. Enter both times and use the result in S2P settings.",
+    "原補償倍率": "Original compensation",
+    "補償倍率": "Compensation multiplier",
+    "補償倍率須介於 {low:.2f} 和 {high:.2f}。": "Enter a multiplier between {low:.2f} and {high:.2f}.",
+    "X（水平）": "X (Horizontal)",
+    "Y（垂直）": "Y (Vertical)",
+    "右搖桿輸出（%）": "Right-stick output (%)",
+    "輸出時間（秒）": "Output duration (s)",
+    "舊設定轉過角度（°）": "Old setting angle (°)",
+    "新設定轉過角度（°）": "New setting angle (°)",
+    "舊設定耗時（秒）": "Old setting time (s)",
+    "新設定耗時（秒）": "New setting time (s)",
+    "量測舊設定": "Measure old",
+    "量測新設定": "Measure new",
+    "倒數結束後會在 S2P 內開始模擬。": "Simulation starts inside S2P after the countdown.",
+    "正在模擬 {axis} 軸轉動。\n完成後會自動填入角度。":
+        "Simulating {axis}-axis movement.\nThe measured angle will fill in automatically.",
+    "請輸入大於 0 的原補償倍率。": "Enter an original compensation multiplier greater than zero.",
+    "請輸入大於 0 的角度。": "Enter an angle greater than zero.",
+    "請輸入大於 0 的秒數。": "Enter a time greater than zero.",
+    "1. 選擇 X 或 Y，填入原本的視角速度。\n按「量測舊設定」在 3D 預覽中模擬。":
+        "1. Pick X or Y and enter the original turn speed.\nClick Measure old to run the 3D preview.",
+    "1. 選好 X 或 Y，確認原補償倍率。\n錄下用舊設定從地標 A 轉到 B 的過程。\n回看錄影，填入舊設定的秒數。":
+        "1. Pick X or Y and check the original compensation.\n"
+        "Record a turn from landmark A to B with the old setting.\n"
+        "Review the clip and enter the turn time in seconds.",
+    "2. 在上方調整同一軸的視角速度。\n維持相同輸出與時間，再按「量測新設定」。":
+        "2. Change the same axis's turn speed above.\nKeep the output and duration, then click Measure new.",
+    "2. 調整遊戲內同一軸的視角速度。\n以相同推幅和瞄準狀態，再錄一次 A 到 B。\n回看錄影，填入新設定的秒數。":
+        "2. Change the in-game turn speed for that axis.\n"
+        "Keep the same stick deflection and aim state.\n"
+        "Record the turn from A to B again.\n"
+        "Review the clip and enter the new turn time.",
+    "請確認兩次量測值，必要時重測。": "Check the two measurements and repeat if needed.",
+    "3. 套用建議倍率，或手動輸入並套用。\n再到主視窗按「儲存／套用」。":
+        "3. Apply the suggested multiplier or enter one manually.\nThen click Save/Apply in the main window.",
+    "3. 查看所選軸的建議補償倍率。": "3. Check the suggested compensation for the selected axis.",
+    "取消量測": "Cancel measurement",
+    "套用建議倍率": "Apply suggestion",
+    "建議 {axis} 補償倍率 {value:.2f}": "Suggested {axis} compensation: {value:.2f}",
+    "建議 {axis} 補償倍率 {value:.2f}，超出 {low:.2f}–{high:.2f} 的設定範圍。":
+        "Suggested {axis} compensation {value:.2f} is outside the {low:.2f}–{high:.2f} range.",
+    "{axis} 補償倍率已填入，請按主視窗的儲存／套用。":
+        "{axis} compensation entered. Click Save/Apply in the main window.",
+    "設定的額外按鍵按下或放開時觸發防晃。\n\n"
+    "暫停輸出：在防晃時間內暫停陀螺儀輸出，視角可能短暫停住。\n\n"
+    "抑制突波：保留原本的轉動，限制按鍵瞬間的突波。若同時快速轉向，部分動作也可能被壓低。":
+        "Pressing or releasing a selected extra button activates protection.\n\n"
+        "Freeze output: Pauses gyro output for the configured duration. The view may briefly stop.\n\n"
+        "Suppress spikes: Preserves ongoing motion and limits sudden changes when the button toggles. "
+        "A fast turn at the same time may also be reduced.",
+    "請輸入 1–100% 的輸出和 0.1–5 秒的時間。": "Enter 1–100% output and a duration of 0.1–5 seconds.",
+    "請用相同的輸出與時間，或重新量測舊設定。":
+        "Use the same output and duration, or repeat the old measurement.",
+    "垂直轉動會超過 {limit}°。請降低輸出或縮短時間，再重測兩組設定。":
+        "The vertical turn would exceed {limit}°. Lower the output or duration and measure both settings again.",
+    "{seconds} 秒後開始量測": "Measuring in {seconds} s",
+    "正在量測 3D 預覽。": "Measuring the 3D preview.",
+    "量測完成。": "Measurement complete.",
+    "量測已取消。": "Measurement canceled.",
     "開始": "Start",
     "請先結束目前的測試再切換語言。": "End the current test before switching languages.",
     "無法儲存手把測試語言。": "Could not save the Gamepad Tester language.",
@@ -44,10 +139,11 @@ EN_TEXT = {
     "同設定的紀錄須使用相同的模式、畫面尺寸、出靶種子、震動與音效。"
     "也會比對該模式的靶數、秒數、靶心大小、遠近與出靶範圍。"
     "靶色、準心顏色與大小不影響比對。"
-    "不同滑鼠感度的成績也能互相比較。":
+    "3D 紀錄也會比對水平與垂直的手把視角速度。不同滑鼠感度的成績可以互相比較。":
         "History matches the mode, viewport size, layout seed, vibration, and sound settings. "
         "It also matches any target count, duration, target size, depth, and spread that apply. "
         "Target color, reticle color, and reticle size are ignored. "
+        "3D history also matches horizontal and vertical controller turn speeds. "
         "Scores can be compared across mouse sensitivity settings.",
     "成績與同設定的歷史最佳回合比較。點靶依序比命中數、命中率、完成耗時與平均偏差。"
     "跟槍依序比跟靶率與平均偏差。":
@@ -72,6 +168,8 @@ EN_TEXT = {
     "跟槍秒數": "Tracking duration",
     "限時點靶秒數": "Timed targets duration",
     "出靶種子（0 為固定配置）": "Layout seed (0 for fixed layout)",
+    "按 ↻ 隨機產生種子。相同種子可重播路線。3D 環繞在種子非 0 時可往左或往右起跑。":
+        "Press ↻ to randomize the seed. Reuse a seed to replay the route. A nonzero seed can start a 3D orbit left or right.",
     "重新抽靶": "Randomize",
     "3D 點靶遠近差異": "3D target depth variation",
     "加深遠近效果": "Darken distant targets",
@@ -82,6 +180,28 @@ EN_TEXT = {
     "3D 點靶水平範圍": "3D target horizontal spread",
     "3D 點靶垂直範圍": "3D target vertical spread",
     "3D 滑鼠感度（%）": "3D mouse sensitivity (%)",
+    "回合與靶": "Drills and targets",
+    "視角與顯示": "Look and display",
+    "3D 水平視角速度（°/秒）": "3D horizontal turn speed (°/s)",
+    "3D 垂直視角速度（°/秒）": "3D vertical turn speed (°/s)",
+    "3D 跟槍環繞範圍（°）": "3D tracking arc (°)",
+    "3D 跟槍靶速（%）": "3D tracking target speed (%)",
+    "0° 使用原本的路線。180° 在左右各 90° 處折返。360° 在正後方折返，經過正面後往另一側移動。":
+        "0° uses the original path. 180° reverses 90° to either side. At 360°, the target reverses directly behind you and crosses the front toward the other side.",
+    "環繞路線在 100% 時為 90°/秒，最高 600% 為 540°/秒。":
+        "The orbit moves at 90°/s at 100%, up to 540°/s at 600%.",
+    "3D 跟槍可在測試設定調整環繞範圍與靶速。360° 會在正後方折返。":
+        "Set the tracking arc and target speed in Test Settings. At 360°, the target reverses directly behind you.",
+    "環繞 {angle}°": "Tracking arc {angle}°",
+    "原本路線": "Original path",
+    "靶速 {value}%": "Target speed {value}%",
+    "水平輸出峰值 {peak:.1f}%　最長連續滿桿 {duration:.0f} ms":
+        "Peak horizontal output {peak:.1f}% · Longest at full stick {duration:.0f} ms",
+    "右搖桿水平推到底時的轉向速度，包含映射至右搖桿的陀螺儀輸出。":
+        "Turn speed at full horizontal right-stick output, including gyro mapped to the right stick.",
+    "右搖桿垂直推到底時的轉向速度，包含映射至右搖桿的陀螺儀輸出。":
+        "Turn speed at full vertical right-stick output, including gyro mapped to the right stick.",
+    "手把視角速度 {horizontal}／{vertical}°/秒": "Stick turn speed {horizontal}/{vertical}°/s",
     "100% 為預設感度，每像素轉動 0.18°。50% 為一半感度。":
         "100% is the default (0.18° per cursor pixel). 50% halves the sensitivity.",
     "滑鼠感度 {value}%": "Mouse sensitivity {value}%",
@@ -112,8 +232,9 @@ EN_TEXT = {
     "關閉": "Close",
     "百分點": "pp",
     "尚無瞄準測試紀錄。": "No aim test results yet.",
-    "時限 {seconds} s · 種子 {seed} · {width}×{height}": "{seconds} s limit · Seed {seed} · {width}×{height}",
-    "不限時 · 種子 {seed} · {width}×{height}": "No time limit · Seed {seed} · {width}×{height}",
+    "時限 {seconds} s": "{seconds} s limit",
+    "不限時": "No time limit",
+    "種子 {seed}": "Seed {seed}",
     "遠近差異 {depth}%": "Depth variation {depth}%",
     "水平 {horizontal}%／垂直 {vertical}%": "Horizontal {horizontal}% / Vertical {vertical}%",
     "準心 {color}": "Reticle {color}",
@@ -1032,6 +1153,9 @@ EN_TEXT = {
     "加速抑制": "Accel Sup.",
     "自適死區": "Adaptive DZ",
     "防晃 ms": "Freeze ms",
+    "防晃模式": "Button guard",
+    "暫停輸出": "Freeze output",
+    "抑制突波": "Suppress spikes",
     "額外按鍵": "Extra Key",
     "校正陀螺儀": "Calibrate Gyro",
     "校正中...": "Calibrating...",
@@ -1449,8 +1573,8 @@ EN_TEXT = {
     "傾斜平滑 ms 必須介於 0 ～ 150。": "Tilt smoothing must be 0–150 ms.",
     "陀螺儀搖桿感度 必須介於 0.1 ～ 10。": "Gyro stick sensitivity must be 0.1–10.",
     "陀螺儀滑鼠感度 必須介於 0.5 ～ 30。": "Gyro mouse sensitivity must be 0.5–30.",
-    "陀螺儀 X 比例 必須介於 0.5 ～ 2。": "Gyro X ratio must be 0.5–2.0.",
-    "陀螺儀 Y 比例 必須介於 0.5 ～ 2。": "Gyro Y ratio must be 0.5–2.0.",
+    "陀螺儀 X 比例必須介於 0.1 ～ 2。": "Gyro X ratio must be 0.10–2.00.",
+    "陀螺儀 Y 比例必須介於 0.1 ～ 2。": "Gyro Y ratio must be 0.10–2.00.",
     "陀螺儀死區 必須介於 0 ～ 5。": "Gyro DZ must be 0–5.",
     "陀螺儀平滑 ms 必須介於 0 ～ 100。": "Gyro smoothing must be 0–100 ms.",
     "加速度抑制 必須介於 0 ～ 100。": "Accel suppression must be 0–100.",
@@ -1469,12 +1593,24 @@ EN_TEXT = {
         "Tilt angle that reaches full output.\nLower values reach full output with less tilt.",
     "每轉動一度對應的游標像素倍率。\n數值越高，游標移動越快。":
         "Cursor-pixel multiplier per degree of rotation.\nHigher values move the cursor faster.",
-    "水平陀螺儀感度相對倍率。1.00 = 不改變。":
-        "Relative horizontal gyro sensitivity. 1.00 = unchanged.",
-    "垂直陀螺儀感度相對倍率。1.00 = 不改變。":
-        "Relative vertical gyro sensitivity. 1.00 = unchanged.",
-    "忽略小於此角速度的感測器漂移。單位：度／秒。\n自適應功能會在明確轉動時縮小死區。\n數值越高，需要更明顯的轉動才會開始輸出。":
-        "Ignores angular-speed drift. Adaptive mode reduces DZ during intentional motion.\nHigher values require more intentional motion before output begins.",
+    "水平陀螺儀感度相對倍率。1.00 = 不改變。\n\n"
+    "使用搖桿輸出時，調整遊戲內的水平視角速度後，可用手把測試的「補償計算」，選擇 X（水平）。\n"
+    "用相同的右搖桿推幅與瞄準狀態，錄下舊、新設定各自從地標 A 轉到 B 的過程。\n"
+    "填入兩次耗時（秒），即可算出獨立的 X 輸出補償倍率。":
+        "Relative horizontal gyro sensitivity. 1.00 = unchanged.\n\n"
+        "With stick output, change the in-game horizontal turn speed, then open Calculator in Gamepad Tester "
+        "and select X (Horizontal).\nRecord a turn from landmark A to B with each setting, using the same "
+        "right-stick deflection and aim state.\nEnter both times in seconds to calculate the X output compensation.",
+    "垂直陀螺儀感度相對倍率。1.00 = 不改變。\n\n"
+    "使用搖桿輸出時，調整遊戲內的垂直視角速度後，可用手把測試的「補償計算」，選擇 Y（垂直）。\n"
+    "用相同的右搖桿推幅與瞄準狀態，錄下舊、新設定各自從地標 A 轉到 B 的過程。\n"
+    "填入兩次耗時（秒），即可算出獨立的 Y 輸出補償倍率。":
+        "Relative vertical gyro sensitivity. 1.00 = unchanged.\n\n"
+        "With stick output, change the in-game vertical turn speed, then open Calculator in Gamepad Tester "
+        "and select Y (Vertical).\nRecord a turn from landmark A to B with each setting, using the same "
+        "right-stick deflection and aim state.\nEnter both times in seconds to calculate the Y output compensation.",
+    "以水平與垂直的合成角速度判斷死區，保留斜向轉動的方向。單位：度／秒。\n自適應功能會在明確轉動時縮小死區。\n數值越高，需要更明顯的轉動才會開始輸出。":
+        "Uses the combined horizontal and vertical angular speed in degrees per second to preserve the direction of diagonal motion.\nAdaptive mode reduces the deadzone during intentional motion.\nHigher values require more intentional motion before output begins.",
     "補償遊戲內建搖桿死區；只作用於回中搖桿輸出，不改變實體搖桿。\n0 = 不補償；數值越高，越容易跨過遊戲內建的搖桿死區。":
         "Compensates for the game's built-in stick deadzone. Only affects Center stick gyro output and does not alter the physical stick.\n0 = no compensation; higher values cross the game's built-in deadzone more easily.",
     "忽略中立角度附近的小幅傾斜。單位：度。\n數值越高，中立附近越不容易誤觸。":
@@ -1489,12 +1625,19 @@ EN_TEXT = {
         "Reduces accelerometer pull during fast motion or vibration in 9-axis and Tilt Axis Compensation modes.\n0 = off; higher values reduce accelerometer pull during fast motion.",
     "回中模式靜止時保留死區，明確轉動時自動縮小。\n0 = 固定死區；數值越高，明確轉動時死區縮小得越多。":
         "Keeps Center DZ at rest and reduces it during intentional motion.\n0 = fixed DZ; higher values reduce the deadzone more during intentional motion.",
-    "設定的額外按鍵按下或放開時，短暫停止陀螺儀輸出。\n0 = 關閉；數值越高，額外按鍵動作後暫停輸出的時間越長。":
-        "Briefly freezes gyro output when a configured extra button is pressed or released.\n0 = off; higher values freeze gyro longer after an extra-button change.",
+    "設定額外按鍵按下或放開後的防晃時間。\n0 = 關閉；抑制突波可先試 20 ms。":
+        "Sets how long gyro protection lasts after an extra button is pressed or released.\n0 = off. Try 20 ms for spike suppression.",
     "選擇射擊鍵等容易造成手把晃動的按鍵。\n只暫停陀螺儀，不會取消該按鍵原本的遊戲映射。":
         "Select a fire key or another button that tends to shake the controller.\nOnly gyro is frozen; the original game mapping remains active.",
-    "可選多顆容易造成手把晃動的按鍵。\n任一按鍵按下或放開都會短暫停止陀螺儀，原映射仍保留。":
-        "Select multiple buttons that tend to shake the controller.\nPressing or releasing any selected button briefly freezes gyro while preserving its original mapping.",    "只有搖桿模式選擇「映射為滑鼠」時生效。\n\n代表搖桿推到最外圈時每秒移動的游標像素數。\n設定範圍：100 ～ 3000；數值越高，游標移動越快。":
+    "可選多顆容易造成手把晃動的按鍵。\n任一按鍵按下或放開都會觸發防晃，原映射仍保留。":
+        "Select multiple buttons that tend to shake the controller.\nPressing or releasing any selected button triggers gyro protection and preserves its original mapping.",
+    "目前 ESP32 韌體的陀螺儀比例下限為 0.50。若要使用低於 0.50 的比例，請先更新韌體。":
+        "This ESP32 firmware has a gyro ratio minimum of 0.50. Update the firmware to use a lower ratio.",
+    "目前 ESP32 韌體不支援陀螺儀輸出補償，請先更新韌體。":
+        "Update the ESP32 firmware to use gyro output compensation.",
+    "目前 ESP32 韌體不支援陀螺儀突波抑制，請先更新韌體。":
+        "The current ESP32 firmware does not support gyro spike suppression. Update the firmware first.",
+    "只有搖桿模式選擇「映射為滑鼠」時生效。\n\n代表搖桿推到最外圈時每秒移動的游標像素數。\n設定範圍：100 ～ 3000；數值越高，游標移動越快。":
         "Used only when a stick mode is Mouse.\n\nPixels per second at full stick deflection.\nRange: 100–3000; higher values move the cursor faster.",
     "請先啟動連接程式並確認手把已連線。":
         "Start the connector and make sure the controller is connected first.",

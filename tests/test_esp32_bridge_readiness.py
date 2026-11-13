@@ -1,3 +1,4 @@
+import json
 import threading
 import unittest
 from unittest.mock import patch
@@ -6,6 +7,45 @@ from esp32_bridge import ESP32Bridge, SERIAL_RECEIVE_BUFFER_LIMIT
 
 
 class ESP32BridgeReadinessTests(unittest.TestCase):
+    def test_scan_ignores_unclassified_advertisements_and_recovers_from_failed_write(self):
+        bridge = ESP32Bridge("COM5")
+        bridge.running = True
+        commands = []
+        bridge.send = lambda command: commands.append(command) or not command.startswith("conn ")
+        bridge._restart_scan = lambda: commands.append("restart")
+        scan = json.dumps({"cmd": "scan_result", "mac": "AA:BB:CC:DD:EE:FF", "data": ""}).encode()
+        bridge._handle_text(scan)
+        self.assertEqual(commands, [])
+        with patch.object(bridge, "_parse_reconnect_mac", return_value=0):
+            bridge._handle_text(scan)
+            self.assertEqual(commands, [])
+            bridge.esp32_mac_value = 0x112233445566
+            with patch("esp32_bridge.print") as output:
+                bridge._handle_text(scan)
+        self.assertEqual(commands, ["scan off", "conn 0 AA:BB:CC:DD:EE:FF", "restart"])
+        self.assertFalse(bridge._connecting)
+        self.assertFalse(bridge._pending_pair)
+        self.assertIsNone(bridge.controller_id)
+        self.assertEqual(bridge.pairing_diagnostics["reconnect_mac"], "000000000000")
+        self.assertNotIn("000000000000", str(output.call_args_list))
+
+    def test_foreign_host_notice_does_not_block_a_later_sync_advertisement(self):
+        bridge = ESP32Bridge("COM5")
+        bridge.running = True
+        bridge.esp32_mac_value = 0x112233445566
+        commands = []
+        bridge.send = lambda command: commands.append(command) or True
+        scan = json.dumps({"cmd": "scan_result", "mac": "AA:BB:CC:DD:EE:FF"}).encode()
+        with (patch.object(bridge, "_parse_reconnect_mac", side_effect=(0x223344556677, 0x223344556677, 0)),
+              patch("esp32_bridge.print") as output):
+            bridge._handle_text(scan)
+            bridge._handle_text(scan)
+            self.assertEqual(commands, [])
+            bridge._handle_text(scan)
+        self.assertEqual(commands, ["scan off", "conn 0 AA:BB:CC:DD:EE:FF"])
+        self.assertTrue(bridge._pending_pair)
+        self.assertEqual(output.call_count, 3)
+
     def make_bridge(self):
         bridge = ESP32Bridge.__new__(ESP32Bridge)
         bridge.running = True

@@ -15,6 +15,9 @@ MIN_REFILL_SECONDS = 0.06
 MAX_REFILL_SECONDS = 0.14
 TIMED_MODES = frozenset(("timed-shooting", "timed-cursor", "timed-cursor-stick", "timed-cursor-mouse"))
 TRACKING_MODES = frozenset(("tracking", "cursor-tracking"))
+TRACKING_ORBIT_DEGREES_PER_SECOND = 90
+# S2P writes -32767 at full left output and XInput normalizes it by 32768.
+HORIZONTAL_FULL_STICK = 32767 / 32768
 TARGET_RADIUS = 0.36
 NEAR_PLANE = 0.2
 FOCAL_SCALE = 0.5 / math.tan(math.radians(30))
@@ -172,16 +175,23 @@ class CursorTest(_TargetRound, _CursorGeometry):
         return impact
 
 
+DEFAULT_STICK_TURN_SPEED = (140, 115)
+AIM_PITCH_LIMIT_DEGREES = 85
+
+
 class AimCamera:
-    def __init__(self):
+    def __init__(self, stick_turn_speed=DEFAULT_STICK_TURN_SPEED):
         self.yaw = self.pitch = 0.0
+        self._yaw_speed, self._pitch_speed = map(math.radians, stick_turn_speed)
 
     def turn(self, axes, seconds):
-        self.look(axes[0] * math.radians(140) * seconds, axes[1] * math.radians(115) * seconds)
+        yaw_delta = axes[0] * self._yaw_speed * seconds
+        self.look(yaw_delta, axes[1] * self._pitch_speed * seconds)
+        return yaw_delta
 
     def look(self, yaw_delta, pitch_delta):
         self.yaw = math.remainder(self.yaw + yaw_delta, math.tau)
-        limit = math.radians(85)
+        limit = math.radians(AIM_PITCH_LIMIT_DEGREES)
         self.pitch = max(-limit, min(limit, self.pitch + pitch_delta))
 
     def camera_transform(self):
@@ -269,29 +279,72 @@ class _TrackingRound:
 
 
 class TrackingTest(_TrackingRound, AimCamera):
-    def __init__(self, seconds=ROUND_SECONDS, seed=0):
+    def __init__(self, seconds=ROUND_SECONDS, seed=0, *,
+                 stick_turn_speed=DEFAULT_STICK_TURN_SPEED, tracking_arc=0, tracking_speed=100):
         super().__init__(seconds)
-        AimCamera.__init__(self)
+        AimCamera.__init__(self, stick_turn_speed)
         self._path = _seed_tracking_path(((3.6, 0.92), (0.65, 2.1), (0.95, 1.35), (1.6, 0.52)), seed)
+        self._tracking_arc = tracking_arc
+        self._tracking_direction = random.Random(seed).choice((-1, 1)) if seed and tracking_arc else 1
+        self._tracking_speed = tracking_speed / 100
+        self._reset_stick_measurements()
+
+    def _reset_stick_measurements(self):
+        self.horizontal_peak = None
+        self.longest_horizontal_full_stick = 0.0
+        self._horizontal_full_stick_time = 0.0
+        self._horizontal_full_stick_direction = 0
 
     def start(self):
         self.yaw = self.pitch = 0.0
+        self._reset_stick_measurements()
         super().start()
 
     def advance(self, axes, seconds):
         if self.running:
             seconds = min(seconds, self.duration - self.elapsed)
-        self.turn(axes, seconds)
+        if axes is not None:
+            self.turn(axes, seconds)
         if self.running:
+            if seconds > 0:
+                self._measure_horizontal_stick(axes, seconds)
             target = self.camera_transform()(self.target(self.elapsed + seconds))
             error = self.target_error(target)
             self.record(seconds, error, self.on_target(target))
 
+    def _measure_horizontal_stick(self, axes, seconds):
+        direction = 0
+        if axes is not None:
+            horizontal = axes[0]
+            magnitude = abs(horizontal)
+            self.horizontal_peak = max(self.horizontal_peak or 0.0, magnitude)
+            if magnitude >= HORIZONTAL_FULL_STICK:
+                direction = 1 if horizontal > 0 else -1
+
+        if not direction or direction != self._horizontal_full_stick_direction:
+            self._horizontal_full_stick_time = 0.0
+        self._horizontal_full_stick_direction = direction
+        if direction:
+            self._horizontal_full_stick_time += seconds
+            self.longest_horizontal_full_stick = max(
+                self.longest_horizontal_full_stick, self._horizontal_full_stick_time,
+            )
+
     def target(self, seconds):
+        path_seconds = seconds * self._tracking_speed
         wide, small, vertical, depth = (
-            amplitude * math.sin(seconds * rate) for amplitude, rate in self._path
+            amplitude * math.sin(path_seconds * rate) for amplitude, rate in self._path
         )
-        return wide + small, vertical, 7.4 + depth
+        radius = 7.4 + depth
+        if not self._tracking_arc:
+            return wide + small, vertical, radius
+
+        travel = path_seconds * TRACKING_ORBIT_DEGREES_PER_SECOND
+        half_arc = self._tracking_arc / 2
+        phase = (travel + half_arc) % (2 * self._tracking_arc)
+        angle = half_arc - abs(phase - self._tracking_arc)
+        angle = math.radians(angle * self._tracking_direction)
+        return radius * math.sin(angle), vertical, radius * math.cos(angle)
 
     @cached_property
     def target_distance_range(self):
@@ -378,9 +431,9 @@ def _shoot_positions(count, seed, depth, horizontal_spread, vertical_spread):
 
 class ShootingTest(_TargetRound, AimCamera):
     def __init__(self, count=10, seconds=0, seed=0, depth=0, *,
-                 horizontal_spread=100, vertical_spread=100):
+                 horizontal_spread=100, vertical_spread=100, stick_turn_speed=DEFAULT_STICK_TURN_SPEED):
         super().__init__(count, seconds)
-        AimCamera.__init__(self)
+        AimCamera.__init__(self, stick_turn_speed)
         self._targets = _shoot_positions(self.count, seed, depth, horizontal_spread, vertical_spread)
 
     def start(self):
@@ -469,9 +522,10 @@ class _TimedTargetRound(_TargetRound):
 
 
 class TimedShootingTest(_TimedTargetRound, AimCamera):
-    def __init__(self, seconds=30, seed=0, depth=0, *, horizontal_spread=100, vertical_spread=100):
+    def __init__(self, seconds=30, seed=0, depth=0, *,
+                 horizontal_spread=100, vertical_spread=100, stick_turn_speed=DEFAULT_STICK_TURN_SPEED):
         super().__init__(seconds, seed)
-        AimCamera.__init__(self)
+        AimCamera.__init__(self, stick_turn_speed)
         self._placement = depth, horizontal_spread, vertical_spread
 
     def _position_stream(self):
