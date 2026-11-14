@@ -66,8 +66,22 @@ from runtime_logging import (
     write_interactive_prompt,
 )
 
-# Loop passes a live reload may wait for a finished calibration to be saved.
-RELOAD_RETRY_LIMIT = 3
+# Loop passes a reload or calibration start may wait for a finished
+# calibration result to be saved, or for input processing to pause.
+COMMAND_RETRY_LIMIT = 3
+
+# Command -> (xinput sensor name, status prefix, fields published on start).
+CALIBRATION_COMMANDS = {
+    "calibrate_gyro": ("gyro", "gyro", {"message": "keep_still"}),
+    "calibrate_magnetometer": (
+        "magnetometer", "mag",
+        {"message": "move_figure_eight", "progress": 0, "spans": [0.0, 0.0, 0.0]},
+    ),
+    "calibrate_accelerometer": (
+        "accelerometer", "accel",
+        {"message": "move_and_pause", "progress": 0, "quality": None},
+    ),
+}
 
 HIDHIDE_APPLICATION_PATHS = (
     Path(sys.executable),
@@ -1006,30 +1020,35 @@ def _run_connector():
         return controller_application_ready(controller)
 
     def start_sensor_calibration(sensor, start, expected_connection_id):
-        """Return None when a previous result is already waiting to be saved."""
+        """Return "started", "disconnected", "pending" or "busy".
+
+        "pending" means a previous result is still waiting to be saved and
+        "busy" means input processing did not pause in time; both can retry.
+        """
         connection = active_connection
         # The transport may acquire its state lock here. Keep this outside
         # the dispatcher lock since the connection callbacks reset the dispatcher.
         if connection is None or not controller_is_connected():
-            return False
+            return "disconnected"
         if expected_connection_id is not None and expected_connection_id != connection[1]:
-            return False
+            return "disconnected"
 
-        started = False
+        outcome = "disconnected"
 
         def begin():
-            nonlocal started
+            nonlocal outcome
             if stop_requested or active_connection is not connection:
                 return
             if start():
                 calibration_connections[sensor] = connection
-                started = True
+                outcome = "started"
             else:
                 # The existing result will be saved by this iteration.
-                started = None
+                outcome = "pending"
 
-        input_dispatcher.run_exclusive(begin, timeout=1.0)
-        return started
+        if not input_dispatcher.run_exclusive(begin, timeout=1.0):
+            return "busy"
+        return outcome
 
     def apply_saved_sensor_calibration(connection, apply):
         def apply_if_current():
@@ -1154,10 +1173,10 @@ def _run_connector():
             wait_for_error_acknowledgment()
             return
 
-    # A reload that arrives just after a calibration finishes is retried
-    # once this loop has saved that result, instead of being reported failed.
-    deferred_reload = None
-    deferred_reload_attempts = 0
+    # A reload or calibration start that collides with an unsaved calibration
+    # result (or a busy input worker) is retried on a later pass.
+    deferred_command = None
+    deferred_command_attempts = 0
     try:
         last_heartbeat = 0.0
         last_battery_led_mask = None
@@ -1241,11 +1260,11 @@ def _run_connector():
                         f"閒置自動斷線失敗：{exc}",
                         f"Idle disconnect failed: {exc}",
                     ))
-            if deferred_reload is not None:
-                pending_command, deferred_reload = deferred_reload, None
+            if deferred_command is not None:
+                pending_command, deferred_command = deferred_command, None
             else:
                 pending_command = command_inbox.next()
-                deferred_reload_attempts = 0
+                deferred_command_attempts = 0
             if pending_command is not None:
                 try:
                     command = pending_command.command
@@ -1279,59 +1298,36 @@ def _run_connector():
                                 )
                             )
 
-                    elif command == "calibrate_gyro":
+                    elif command in CALIBRATION_COMMANDS:
                         clear_legacy_command()
-                        started = start_sensor_calibration(
-                            "gyro", xinput.start_gyro_calibration, pending_command.connection_id
-                        )
-                        if started:
-                            publish_status(
-                                gyro_calibration_state="running",
-                                gyro_calibration_message="keep_still",
-                            )
-                        elif started is False:
-                            publish_status(
-                                gyro_calibration_state="failed",
-                                gyro_calibration_message="disconnected",
-                            )
-
-                    elif command == "calibrate_magnetometer":
-                        clear_legacy_command()
-                        started = start_sensor_calibration(
-                            "magnetometer", xinput.start_magnetometer_calibration,
+                        sensor, prefix, running_fields = CALIBRATION_COMMANDS[command]
+                        outcome = start_sensor_calibration(
+                            sensor, getattr(xinput, f"start_{sensor}_calibration"),
                             pending_command.connection_id,
                         )
-                        if started:
+                        if outcome == "started":
                             publish_status(
-                                mag_calibration_state="running",
-                                mag_calibration_message="move_figure_eight",
-                                mag_calibration_progress=0,
-                                mag_calibration_spans=[0.0, 0.0, 0.0],
+                                **{f"{prefix}_calibration_state": "running"},
+                                **{
+                                    f"{prefix}_calibration_{key}": value
+                                    for key, value in running_fields.items()
+                                },
                             )
-                        elif started is False:
-                            publish_status(
-                                mag_calibration_state="failed",
-                                mag_calibration_message="disconnected",
-                            )
-
-                    elif command == "calibrate_accelerometer":
-                        clear_legacy_command()
-                        started = start_sensor_calibration(
-                            "accelerometer", xinput.start_accelerometer_calibration,
-                            pending_command.connection_id,
-                        )
-                        if started:
-                            publish_status(
-                                accel_calibration_state="running",
-                                accel_calibration_message="move_and_pause",
-                                accel_calibration_progress=0,
-                                accel_calibration_quality=None,
-                            )
-                        elif started is False:
-                            publish_status(
-                                accel_calibration_state="failed",
-                                accel_calibration_message="disconnected",
-                            )
+                        elif (
+                            outcome != "disconnected"
+                            and deferred_command_attempts < COMMAND_RETRY_LIMIT
+                        ):
+                            # Retry after this pass saves a pending result or
+                            # input processing becomes idle again.
+                            deferred_command_attempts += 1
+                            deferred_command = pending_command
+                        else:
+                            publish_status(**{
+                                f"{prefix}_calibration_state": "failed",
+                                f"{prefix}_calibration_message": (
+                                    "disconnected" if outcome == "disconnected" else "busy"
+                                ),
+                            })
 
                     elif command == "reset_tilt_neutral":
                         clear_legacy_command()
@@ -1358,12 +1354,12 @@ def _run_connector():
                         except Exception as exc:
                             if (
                                 isinstance(exc, CalibrationResultPendingError)
-                                and deferred_reload_attempts < RELOAD_RETRY_LIMIT
+                                and deferred_command_attempts < COMMAND_RETRY_LIMIT
                             ):
                                 # The result is saved later in this iteration;
                                 # retry the same request on the next pass.
-                                deferred_reload_attempts += 1
-                                deferred_reload = pending_command
+                                deferred_command_attempts += 1
+                                deferred_command = pending_command
                             else:
                                 publish_status(
                                     settings_reload_state="failed",
@@ -1411,7 +1407,7 @@ def _run_connector():
                     )
                 finally:
                     # A deferred reload keeps its claimed request until it is retried.
-                    if deferred_reload is not pending_command:
+                    if deferred_command is not pending_command:
                         pending_command.finish()
 
             if gyro_initialization_tracking and controller_is_connected():
@@ -1687,8 +1683,8 @@ def _run_connector():
         print(tr("\n正在關閉程式...", "\nClosing program..."))
 
     finally:
-        if deferred_reload is not None:
-            deferred_reload.finish()
+        if deferred_command is not None:
+            deferred_command.finish()
         cleanup()
 
 

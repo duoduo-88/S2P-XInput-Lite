@@ -52,6 +52,39 @@ class BridgeRumbleQueueTests(unittest.TestCase):
         self.assertEqual(bridge._serial_reads, 1)
 
 
+class BridgeUnmatchedLinkTests(unittest.TestCase):
+    def make_bridge(self):
+        bridge = ESP32Bridge("test")
+        bridge.running = True
+        bridge.send = Mock(return_value=True)
+        return bridge
+
+    def test_late_connected_event_releases_the_untracked_link(self):
+        bridge = self.make_bridge()  # No connection attempt is in progress.
+
+        bridge._handle_text(b'{"cmd":"connected","channel":2,"mac":"AA:BB:CC:DD:EE:FF"}')
+
+        bridge.send.assert_called_once_with("disc 2")
+        self.assertIsNone(bridge.connected_channel)
+
+    def test_repeated_event_for_the_current_link_keeps_it(self):
+        bridge = self.make_bridge()
+        bridge.connected_channel = 2
+
+        bridge._handle_text(b'{"cmd":"connected","channel":2,"mac":"AA:BB:CC:DD:EE:FF"}')
+
+        bridge.send.assert_not_called()
+        self.assertEqual(bridge.connected_channel, 2)
+
+    def test_closing_bridge_leaves_release_to_the_host_session(self):
+        bridge = self.make_bridge()
+        bridge._closing = True
+
+        bridge._handle_text(b'{"cmd":"connected","channel":2,"mac":"AA:BB:CC:DD:EE:FF"}')
+
+        bridge.send.assert_not_called()
+
+
 def _connector_mocks(mocks, *, config, mode="esp32", controller=None):
     values = {
         "ControllerCommandInbox": Mock(),
@@ -144,84 +177,103 @@ class RuntimeStickFallbackTests(unittest.TestCase):
         printed.assert_called_once()
 
 
+def _run_queued_command(command, *, reconfigure_effects=(), start_results=(), busy_begins=0):
+    """Run the connector loop with one queued request against a mocked wired pad."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config_path = Path(tmp) / "config.ini"
+        config = configparser.ConfigParser()
+        config.read(DEFAULT_CONFIG_PATH, encoding="utf-8")
+        with config_path.open("w", encoding="utf-8") as stream:
+            config.write(stream)
+
+        controller = Mock(controller_id=None, is_ready=True)
+        controller.open.side_effect = lambda: controller.connected_callback()
+        xinput = Mock(mapping_layers=[])
+        xinput.get_rumble_diagnostics.return_value = {}
+        xinput.get_gyro_initialization_status.return_value = {
+            "complete": True, "ready": True, "source": "saved",
+        }
+        for sensor in ("gyro", "magnetometer", "accelerometer"):
+            getattr(xinput, f"get_{sensor}_calibration_status").return_value = {
+                "state": "idle", "message": "", "progress": 0, "spans": (0, 0, 0),
+            }
+            getattr(xinput, f"consume_{sensor}_calibration_result").return_value = None
+        start_results = iter(start_results)
+        xinput.start_gyro_calibration.side_effect = lambda: next(start_results, True)
+        busy = [busy_begins]
+
+        def run_exclusive(callback, timeout):
+            if getattr(callback, "__name__", "") == "begin" and busy[0]:
+                busy[0] -= 1
+                return False  # The input worker did not pause in time.
+            callback()
+            return True
+
+        dispatcher = Mock()
+        dispatcher.run_exclusive.side_effect = run_exclusive
+        publisher = Mock()
+        request = SimpleNamespace(
+            command=command, request_id="request-1", connection_id=None,
+            compensation_signature=None, clear_legacy=Mock(), finish=Mock(),
+        )
+        commands = iter([request])
+        inbox = Mock(next=Mock(side_effect=lambda: next(commands, None)))
+        reconfigure_effects = iter(reconfigure_effects)
+        connected = []
+
+        def reconfigure(*_args, **_kwargs):
+            if not connected:
+                connected.append(True)  # on_connected() reload
+                return None
+            effect = next(reconfigure_effects, None)
+            if effect is not None:
+                raise effect
+            return None
+
+        xinput.reconfigure.side_effect = reconfigure
+        sleeps = iter(range(8))
+
+        def sleep(_delay):
+            if next(sleeps, None) is None:
+                raise KeyboardInterrupt
+
+        with patch.multiple(
+            connector,
+            CONFIG_PATH=config_path,
+            config_file_lock=nullcontext,
+            find_wired_controller=Mock(return_value={}),
+            WiredController=Mock(return_value=controller),
+            XInputController=Mock(return_value=xinput),
+            InputDispatcher=Mock(return_value=dispatcher),
+            AudioHaptics=Mock(),
+            SharedTestTelemetry=Mock(),
+            ControllerCommandInbox=Mock(return_value=inbox),
+            ControllerStatusPublisher=Mock(return_value=publisher),
+            reconcile_active_hidhide=Mock(return_value={}),
+            watch_parent_process_exit=Mock(),
+            print=Mock(),
+            input=Mock(side_effect=AssertionError("Unexpected startup prompt")),
+        ), patch.object(connector.signal, "signal"), \
+           patch.object(connector.time, "sleep", side_effect=sleep):
+            connector._run_connector()
+    return publisher, request, xinput
+
+
 class ReloadAfterCalibrationTests(unittest.TestCase):
     def run_reload(self, reconfigure_effects):
-        with tempfile.TemporaryDirectory() as tmp:
-            config_path = Path(tmp) / "config.ini"
-            config = configparser.ConfigParser()
-            config.read(DEFAULT_CONFIG_PATH, encoding="utf-8")
-            with config_path.open("w", encoding="utf-8") as stream:
-                config.write(stream)
-
-            controller = Mock(controller_id=None, is_ready=True)
-            controller.open.side_effect = lambda: controller.connected_callback()
-            xinput = Mock(mapping_layers=[])
-            xinput.get_rumble_diagnostics.return_value = {}
-            xinput.get_gyro_initialization_status.return_value = {
-                "complete": True, "ready": True, "source": "saved",
-            }
-            for sensor in ("gyro", "magnetometer", "accelerometer"):
-                getattr(xinput, f"get_{sensor}_calibration_status").return_value = {
-                    "state": "idle", "message": "", "progress": 0, "spans": (0, 0, 0),
-                }
-                getattr(xinput, f"consume_{sensor}_calibration_result").return_value = None
-            dispatcher = Mock()
-            dispatcher.run_exclusive.side_effect = lambda callback, timeout: callback() or True
-            publisher = Mock()
-            request = SimpleNamespace(
-                command="reload_settings", request_id="reload-1", connection_id=None,
-                compensation_signature=None, clear_legacy=Mock(), finish=Mock(),
-            )
-            commands = iter([request])
-            inbox = Mock(next=Mock(side_effect=lambda: next(commands, None)))
-            connected = []
-
-            def reconfigure(*_args, **_kwargs):
-                if not connected:
-                    connected.append(True)  # on_connected() reload
-                    return None
-                effect = next(reconfigure_effects)
-                if effect is not None:
-                    raise effect
-                return None
-
-            xinput.reconfigure.side_effect = reconfigure
-            sleeps = iter(range(8))
-
-            def sleep(_delay):
-                if next(sleeps, None) is None:
-                    raise KeyboardInterrupt
-
-            with patch.multiple(
-                connector,
-                CONFIG_PATH=config_path,
-                config_file_lock=nullcontext,
-                find_wired_controller=Mock(return_value={}),
-                WiredController=Mock(return_value=controller),
-                XInputController=Mock(return_value=xinput),
-                InputDispatcher=Mock(return_value=dispatcher),
-                AudioHaptics=Mock(),
-                SharedTestTelemetry=Mock(),
-                ControllerCommandInbox=Mock(return_value=inbox),
-                ControllerStatusPublisher=Mock(return_value=publisher),
-                reconcile_active_hidhide=Mock(return_value={}),
-                watch_parent_process_exit=Mock(),
-                print=Mock(),
-                input=Mock(side_effect=AssertionError("Unexpected startup prompt")),
-            ), patch.object(connector.signal, "signal"), \
-               patch.object(connector.time, "sleep", side_effect=sleep):
-                connector._run_connector()
-
+        publisher, request, _xinput = _run_queued_command(
+            "reload_settings", reconfigure_effects=reconfigure_effects,
+        )
         states = [
             update.kwargs["settings_reload_state"]
             for update in publisher.publish.call_args_list
-            if update.kwargs.get("settings_reload_request_id") == "reload-1"
+            if update.kwargs.get("settings_reload_request_id") == "request-1"
         ]
         return states, request
 
     def test_reload_waits_for_a_finished_calibration_result_to_be_saved(self):
         pending = CalibrationResultPendingError("calibration result is waiting to be saved")
-        states, request = self.run_reload(iter([pending, None]))
+        states, request = self.run_reload([pending, None])
 
         self.assertEqual(states[-1], "success")
         self.assertNotIn("failed", states)
@@ -229,10 +281,43 @@ class ReloadAfterCalibrationTests(unittest.TestCase):
 
     def test_reload_still_fails_when_the_result_never_clears(self):
         pending = CalibrationResultPendingError("calibration result is waiting to be saved")
-        states, request = self.run_reload(iter([pending] * (connector.RELOAD_RETRY_LIMIT + 1)))
+        states, request = self.run_reload([pending] * (connector.COMMAND_RETRY_LIMIT + 1))
 
         self.assertEqual(states[-1], "failed")
         self.assertNotIn("success", states)
+        request.finish.assert_called_once()
+
+
+class CalibrationStartRetryTests(unittest.TestCase):
+    @staticmethod
+    def gyro_updates(publisher):
+        return [
+            (update.kwargs["gyro_calibration_state"], update.kwargs.get("gyro_calibration_message"))
+            for update in publisher.publish.call_args_list
+            if "gyro_calibration_state" in update.kwargs
+        ]
+
+    def test_new_calibration_starts_after_the_previous_result_is_saved(self):
+        publisher, request, xinput = _run_queued_command("calibrate_gyro", start_results=[False, True])
+
+        self.assertEqual(xinput.start_gyro_calibration.call_count, 2)
+        self.assertEqual(self.gyro_updates(publisher), [("running", "keep_still")])
+        request.finish.assert_called_once()
+
+    def test_busy_input_worker_is_retried_instead_of_reported_disconnected(self):
+        publisher, request, xinput = _run_queued_command("calibrate_gyro", busy_begins=1)
+
+        xinput.start_gyro_calibration.assert_called_once()
+        self.assertEqual(self.gyro_updates(publisher), [("running", "keep_still")])
+        request.finish.assert_called_once()
+
+    def test_persistently_busy_worker_reports_busy_not_disconnected(self):
+        publisher, request, xinput = _run_queued_command(
+            "calibrate_gyro", busy_begins=connector.COMMAND_RETRY_LIMIT + 1,
+        )
+
+        xinput.start_gyro_calibration.assert_not_called()
+        self.assertEqual(self.gyro_updates(publisher), [("failed", "busy")])
         request.finish.assert_called_once()
 
 

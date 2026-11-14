@@ -5253,7 +5253,8 @@ class ConfigGUI:
             age = time.time() - float(status.get("updated_at", 0.0))
             if age > 3.0 or status.get("state") != "connected":
                 raise RuntimeError("controller_not_connected")
-        except (OSError, ValueError, TypeError, json.JSONDecodeError, RuntimeError):
+        # AttributeError: a valid JSON list or value is not a status object.
+        except (OSError, ValueError, TypeError, AttributeError, RuntimeError):
             messagebox.showerror(
                 "無法校正感測器",
                 "請先啟動連接程式並確認手把已連線。",
@@ -5277,6 +5278,10 @@ class ConfigGUI:
                 pass
 
         def check_connection(data):
+            if not isinstance(data, dict):
+                # A valid JSON list or value cannot describe the connection.
+                finish(False, "無法確認手把連線。請確認手把後重新開始感測器校正。")
+                return False
             if (
                 data.get("state") == "connected"
                 and data.get("connection_id") == connection_id
@@ -5289,6 +5294,8 @@ class ConfigGUI:
         def check_connection_after_prompt():
             try:
                 data = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
+                if not isinstance(data, dict):
+                    return check_connection(data)
                 if time.time() - float(data.get("updated_at", 0.0)) <= 3.0:
                     return check_connection(data)
             except (OSError, ValueError, TypeError):
@@ -5434,11 +5441,12 @@ class ConfigGUI:
                     elif (
                         state == "failed"
                         and updated_at >= mag_started_at
-                        and (mag_seen_running or data.get("mag_calibration_message") == "disconnected")
+                        and (mag_seen_running or data.get("mag_calibration_message") in ("disconnected", "busy"))
                     ):
                         reason = data.get("mag_calibration_message", "")
                         messages = {
                             "disconnected": "校正期間手把已斷線；原有磁力計資料未被修改。",
+                            "busy": "連接程式忙碌中，校正未開始；原有磁力計資料未被修改，請稍後再試。",
                             "save_failed": "校正完成，但無法安全寫入 config.ini。",
                             "apply_failed": "校正已儲存。請重新連線以套用新校正。",
                             "insufficient_3d_coverage": (
@@ -5518,10 +5526,11 @@ class ConfigGUI:
                     elif (
                         state == "failed"
                         and updated_at >= accel_started_at
-                        and (accel_seen_running or message == "disconnected")
+                        and (accel_seen_running or message in ("disconnected", "busy"))
                     ):
                         messages = {
                             "disconnected": "校正期間手把已斷線。",
+                            "busy": "連接程式忙碌中，加速度計校正未開始，請稍後再試。",
                             "save_failed": "加速度計校正完成，但無法安全寫入 config.ini。",
                             "apply_failed": "校正已儲存。請重新連線以套用新校正。",
                             "insufficient_accelerometer_coverage": "加速度計方向覆蓋不足（至少 14/26），請包含六個主要方向及更多斜向姿勢。",
@@ -5559,11 +5568,12 @@ class ConfigGUI:
                 elif (
                     state == "failed"
                     and updated_at >= started_at
-                    and (gyro_seen_running or data.get("gyro_calibration_message") == "disconnected")
+                    and (gyro_seen_running or data.get("gyro_calibration_message") in ("disconnected", "busy"))
                 ):
                     reason = data.get("gyro_calibration_message", "")
                     messages = {
                         "disconnected": "校正期間手把已斷線，請重新連線後再試。",
+                        "busy": "連接程式忙碌中，陀螺儀校正未開始，請稍後再試。",
                         "save_failed": "校正完成，但無法安全寫入 config.ini。",
                         "apply_failed": "校正已儲存。請重新連線以套用新校正。",
                         "unstable": "三軸數值變動過大。請勿碰觸手把或桌面後重試。",

@@ -1698,6 +1698,13 @@ EN_TEXT = {
         "Calibration timed out. Keep the controller connected on a stable surface and try again.",
     "校正期間手把已斷線，請重新連線後再試。":
         "The controller disconnected during calibration. Reconnect and try again.",
+    "連接程式忙碌中，陀螺儀校正未開始，請稍後再試。":
+        "The connector was busy, so gyro calibration did not start. Try again shortly.",
+    "連接程式忙碌中，加速度計校正未開始，請稍後再試。":
+        "The connector was busy, so accelerometer calibration did not start. Try again shortly.",
+    "連接程式忙碌中，校正未開始；原有磁力計資料未被修改，請稍後再試。":
+        "The connector was busy, so calibration did not start. Existing magnetometer data was not changed. "
+        "Try again shortly.",
     "校正期間手把連線已變更。請確認手把後重新開始感測器校正。":
         "The controller connection changed during calibration. Check your controller and restart sensor calibration.",
     "無法確認手把連線。請確認手把後重新開始感測器校正。":
