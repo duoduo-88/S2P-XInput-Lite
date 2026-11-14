@@ -265,6 +265,12 @@ foreach ($name in @("requirements.txt", "requirements-binary.txt")) {
         -RelativePath "src\$name" `
         -DestinationRoot $packageRoot
 }
+foreach ($name in @("S2PAimSans-Regular.ttf", "S2PAimSans-Bold.ttf", "OFL.txt")) {
+    Copy-ReleaseFile `
+        -Source (Join-Path $repoRoot "src\fonts\$name") `
+        -RelativePath "src\fonts\$name" `
+        -DestinationRoot $packageRoot
+}
 Copy-ReleaseFile `
     -Source (Join-Path $repoRoot "src\layers\mouse.json") `
     -RelativePath "src\layers\mouse.json" `

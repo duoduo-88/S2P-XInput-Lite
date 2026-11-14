@@ -182,6 +182,9 @@ AIM_PITCH_LIMIT_DEGREES = 85
 class AimCamera:
     def __init__(self, stick_turn_speed=DEFAULT_STICK_TURN_SPEED):
         self.yaw = self.pitch = 0.0
+        self.set_stick_turn_speed(stick_turn_speed)
+
+    def set_stick_turn_speed(self, stick_turn_speed):
         self._yaw_speed, self._pitch_speed = map(math.radians, stick_turn_speed)
 
     def turn(self, axes, seconds):

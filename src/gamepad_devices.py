@@ -792,6 +792,7 @@ class NativeGamepadSampler:
         self._last_token = None
         self._samples = deque(maxlen=4096)
         self._aim_capture = False
+        self._aim_capture_generation = 0
         self._aim_samples = deque(maxlen=512)
         self._observed_update_count = 0
         self._rate_points = deque(maxlen=4096)
@@ -870,6 +871,7 @@ class NativeGamepadSampler:
         """Start or stop a separate, bounded queue for the visible aim pane."""
         with self._lock:
             self._aim_capture = enabled
+            self._aim_capture_generation += 1
             self._aim_samples.clear()
 
     def read_aim_snapshot(self, device):
@@ -903,6 +905,7 @@ class NativeGamepadSampler:
         with self._lock:
             device = self._device
             generation = self._device_generation
+            aim_generation = self._aim_capture_generation
         if device is None:
             return
         with self._backend_lock:
@@ -934,7 +937,7 @@ class NativeGamepadSampler:
             self._observed_update_count += update_count
             sample = (now, state)
             self._samples.append(sample)
-            if self._aim_capture:
+            if self._aim_capture and aim_generation == self._aim_capture_generation:
                 self._aim_samples.append(sample)
             self._rate_points.append(
                 (now, self._observed_update_count)

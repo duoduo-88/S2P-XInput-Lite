@@ -18,6 +18,7 @@ if (
 
 import configparser
 import ctypes
+from copy import deepcopy
 import hashlib
 import json
 import logging
@@ -118,8 +119,10 @@ from mapping_targets import (
     stick_setting_key_error,
     validate_profile_mapping_targets,
 )
-from settings_schema import SECTION_SCHEMAS, SettingValidationError, validate_config_sections
+from settings_schema import SECTION_SCHEMAS, SettingValidationError, normalize_config_in_place, validate_config_sections
+from gyro_compensation import COMPENSATION_FIELDS, profile_compensation
 from gyro_compensation_window import GyroCompensationSettings
+from runtime_status import settings_reload_result
 from single_instance import GYRO_SETTINGS_ACTION, SETTINGS_INSTANCE_NAME, SingleInstance, activate_tk_window
 from system_tray import SystemTrayIcon
 from gui_settings import (
@@ -2108,9 +2111,6 @@ class ConfigGUI:
                 )
             )
         self._profile_folder_snapshot = self._capture_profile_folder_snapshot()
-        self._active_profile_content_baseline = (
-            self.profile_file_fingerprint(self.active_profile)
-        )
         self._profile_apply_job = None
         self._profile_switch_in_progress = False
         self._profile_context_target = None
@@ -2132,6 +2132,57 @@ class ConfigGUI:
         self.root.after(250, self.start_connection_on_launch)
         self.root.after(1400, self.start_automatic_update_check)
         self._start_system_tray()
+        self._focus_save_job = None
+        self._focus_save_prompt_open = False
+        self._focus_save_armed = True
+        self.root.bind("<FocusIn>", self._arm_focus_save_prompt, add="+")
+        self.root.bind("<FocusOut>", self._schedule_focus_save_prompt, add="+")
+
+    def _arm_focus_save_prompt(self, _event=None):
+        if not self._focus_save_prompt_open and not self._another_app_has_focus():
+            self._focus_save_armed = True
+
+    def _schedule_focus_save_prompt(self, _event=None):
+        if self._focus_save_armed and self._focus_save_job is None and not self._focus_save_prompt_open:
+            self._focus_save_job = self.root.after(150, self._check_focus_save_prompt)
+
+    @staticmethod
+    def _another_app_has_focus():
+        user32 = ctypes.windll.user32
+        foreground_window = user32.GetForegroundWindow
+        foreground_window.restype = wintypes.HWND
+        window_pid = user32.GetWindowThreadProcessId
+        window_pid.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.DWORD))
+        window_pid.restype = wintypes.DWORD
+        hwnd = foreground_window()
+        pid = wintypes.DWORD()
+        return bool(hwnd and window_pid(hwnd, ctypes.byref(pid)) and pid.value != os.getpid())
+
+    def _check_focus_save_prompt(self):
+        self._focus_save_job = None
+        if (self._focus_save_prompt_open or getattr(self, "_close_in_progress", False)
+                or self.root.state() not in ("normal", "zoomed")
+                or self.root.grab_current() is not None or not self._another_app_has_focus()):
+            return
+        self._sync_saved_gyro_compensation()
+        if not self.has_unsaved_changes():
+            return
+        self._focus_save_armed = False
+        self._focus_save_prompt_open = True
+        try:
+            protected = is_protected_profile(self.active_profile)
+            prompt = (
+                "目前使用唯讀的系統預設。要將尚未儲存的變更另存為新方案並套用嗎？"
+                if protected else "目前方案有尚未儲存的變更。要儲存並套用目前方案嗎？"
+            )
+            if messagebox.askyesno(self.tr("尚未儲存設定"), self.tr(prompt), default="no", parent=self.root):
+                if protected:
+                    self.save_profile_as()
+                else:
+                    self.save_current_profile(show_message=False)
+        finally:
+            self._focus_save_prompt_open = False
+            self._arm_focus_save_prompt()
 
     def get_serial_ports(self):
         """取得目前所有可用的 COM Port。"""
@@ -5106,26 +5157,13 @@ class ConfigGUI:
             if age > 3.0 and state != "stopped":
                 state = "stopped"
 
-            reload_updated_at = float(
-                data.get("settings_reload_updated_at", 0.0) or 0.0
-            )
-            last_reload_notice = float(
-                getattr(self, "_last_settings_reload_notice", 0.0)
-            )
             pending_request = getattr(
                 self, "_pending_settings_reload_request", None
             )
-            status_request = str(
-                data.get("settings_reload_request_id", "") or ""
-            )
-            if (
-                pending_request
-                and status_request == pending_request
-                and reload_updated_at > last_reload_notice
-            ):
-                self._last_settings_reload_notice = reload_updated_at
-                reload_state = data.get("settings_reload_state")
-                if reload_state == "failed":
+            reload_result = settings_reload_result(data, pending_request)
+            if reload_result is not None:
+                self._pending_settings_reload_request = None
+                if reload_result["state"] == "failed":
                     messagebox.showerror(
                         self.tr("即時套用設定失敗"),
                         self.tr(
@@ -5133,11 +5171,9 @@ class ConfigGUI:
                             "新設定已儲存至檔案，重新連線後將會生效。"
                         )
                         + "\n\n"
-                        + str(data.get("settings_reload_message", "")),
+                        + str(reload_result.get("message", "")),
                         parent=self.root,
                     )
-                if reload_state in ("success", "failed"):
-                    self._pending_settings_reload_request = None
 
             raw_mode = data.get("mode")
             mode = mode_text.get(raw_mode, "")
@@ -5224,30 +5260,8 @@ class ConfigGUI:
             )
             return
 
-        confirmed = messagebox.askokcancel(
-            "感測器校正（1/3）",
-            "請將手把平放在穩固且不會晃動的平面上。\n\n"
-            "按下「確定」後請勿碰觸手把、按鍵或桌面，"
-            "直到顯示校正完成。穩定採樣約需 5 秒；"
-            "若偵測到移動，計時會重新開始。",
-        )
-        if not confirmed:
-            return
-
-        try:
-            enqueue_controller_command("calibrate_gyro")
-        except OSError as exc:
-            messagebox.showerror(
-                "無法校正感測器",
-                f"無法送出校正指令：\n{exc}",
-            )
-            return
-
-        started_at = time.time()
-        gyro_deadline = time.monotonic() + 15.0
-        gyro_seen_running = False
-        self.gyro_calibration_button.state(["disabled"])
-        self.gyro_calibration_button.configure(text=self.tr("靜止校正中..."))
+        controller_id = status.get("controller_id")
+        connection_id = status.get("connection_id")
 
         def finish(success, message):
             try:
@@ -5261,6 +5275,51 @@ class ConfigGUI:
                     messagebox.showerror("感測器校正失敗", message)
             except tk.TclError:
                 pass
+
+        def check_connection(data):
+            if (
+                data.get("state") == "connected"
+                and data.get("connection_id") == connection_id
+                and data.get("controller_id") == controller_id
+            ):
+                return True
+            finish(False, "校正期間手把連線已變更。請確認手把後重新開始感測器校正。")
+            return False
+
+        def check_connection_after_prompt():
+            try:
+                data = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
+                if time.time() - float(data.get("updated_at", 0.0)) <= 3.0:
+                    return check_connection(data)
+            except (OSError, ValueError, TypeError):
+                pass
+            finish(False, "無法確認手把連線。請確認手把後重新開始感測器校正。")
+            return False
+
+        confirmed = messagebox.askokcancel(
+            "感測器校正（1/3）",
+            "請將手把平放在穩固且不會晃動的平面上。\n\n"
+            "按下「確定」後請勿碰觸手把、按鍵或桌面，"
+            "直到顯示校正完成。穩定採樣約需 5 秒；"
+            "若偵測到移動，計時會重新開始。",
+        )
+        if not confirmed or not check_connection_after_prompt():
+            return
+
+        try:
+            enqueue_controller_command("calibrate_gyro", connection_id=connection_id)
+        except OSError as exc:
+            messagebox.showerror(
+                "無法校正感測器",
+                f"無法送出校正指令：\n{exc}",
+            )
+            return
+
+        started_at = time.time()
+        gyro_deadline = time.monotonic() + 15.0
+        gyro_seen_running = False
+        self.gyro_calibration_button.state(["disabled"])
+        self.gyro_calibration_button.configure(text=self.tr("靜止校正中..."))
 
         def start_magnetometer_stage(accel_completed=True):
             completed_text = (
@@ -5276,14 +5335,18 @@ class ConfigGUI:
                 "約需 12～30 秒。若取消，已完成的其他校正仍會保留，"
                 "原有磁力計資料不會被修改。",
             )
+            if not check_connection_after_prompt():
+                return
             if not confirmed_mag:
                 finish(
                     True,
-                    "陀螺儀與加速度計校正已儲存；磁力計校正已略過，原資料保持不變。",
+                    "陀螺儀與加速度計校正已儲存；磁力計校正已略過，原資料保持不變。"
+                    if accel_completed
+                    else "陀螺儀校正已完成並儲存。加速度計沿用原有資料，磁力計也沿用原有資料。",
                 )
                 return
             try:
-                enqueue_controller_command("calibrate_magnetometer")
+                enqueue_controller_command("calibrate_magnetometer", connection_id=connection_id)
             except OSError as exc:
                 finish(False, f"無法送出磁力計校正指令：\n{exc}")
                 return
@@ -5304,6 +5367,8 @@ class ConfigGUI:
                     return
                 try:
                     data = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
+                    if not check_connection(data):
+                        return
                     state = data.get("mag_calibration_state", "idle")
                     updated_at = float(data.get("updated_at", 0.0))
                     if state == "running" and updated_at >= mag_started_at:
@@ -5375,6 +5440,7 @@ class ConfigGUI:
                         messages = {
                             "disconnected": "校正期間手把已斷線；原有磁力計資料未被修改。",
                             "save_failed": "校正完成，但無法安全寫入 config.ini。",
+                            "apply_failed": "校正已儲存。請重新連線以套用新校正。",
                             "insufficient_3d_coverage": (
                                 "磁力方向覆蓋不足（至少 18/26）。請讓手把各面都朝向不同方向，"
                                 "完整做立體 8 字翻轉後重試；原有資料未被修改。"
@@ -5406,11 +5472,13 @@ class ConfigGUI:
                 "務必包含正面、背面、左右側、USB 端及握把端，並加入一些斜向姿勢；至少讓 CMD 的加速 3D 覆蓋達到 14/26。"
                 "若取消，會保留原有資料並直接進入磁力計校正。",
             )
+            if not check_connection_after_prompt():
+                return
             if not confirmed_accel:
                 start_magnetometer_stage(False)
                 return
             try:
-                enqueue_controller_command("calibrate_accelerometer")
+                enqueue_controller_command("calibrate_accelerometer", connection_id=connection_id)
             except OSError as exc:
                 finish(False, f"無法送出加速度計校正指令：\n{exc}")
                 return
@@ -5428,6 +5496,8 @@ class ConfigGUI:
                     return
                 try:
                     data = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
+                    if not check_connection(data):
+                        return
                     state = data.get("accel_calibration_state", "idle")
                     message = data.get("accel_calibration_message", "")
                     updated_at = float(data.get("updated_at", 0.0))
@@ -5453,6 +5523,7 @@ class ConfigGUI:
                         messages = {
                             "disconnected": "校正期間手把已斷線。",
                             "save_failed": "加速度計校正完成，但無法安全寫入 config.ini。",
+                            "apply_failed": "校正已儲存。請重新連線以套用新校正。",
                             "insufficient_accelerometer_coverage": "加速度計方向覆蓋不足（至少 14/26），請包含六個主要方向及更多斜向姿勢。",
                             "excessive_accelerometer_distortion": "加速度資料失真過大，請避免快速移動並重新校正。",
                             "poor_accelerometer_fit": "重力橢球殘差過大，請放慢動作並在更多方向短暫停住。",
@@ -5476,6 +5547,8 @@ class ConfigGUI:
                 return
             try:
                 data = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
+                if not check_connection(data):
+                    return
                 state = data.get("gyro_calibration_state", "idle")
                 updated_at = float(data.get("updated_at", 0.0))
                 if state == "running" and updated_at >= started_at:
@@ -5492,6 +5565,7 @@ class ConfigGUI:
                     messages = {
                         "disconnected": "校正期間手把已斷線，請重新連線後再試。",
                         "save_failed": "校正完成，但無法安全寫入 config.ini。",
+                        "apply_failed": "校正已儲存。請重新連線以套用新校正。",
                         "unstable": "三軸數值變動過大。請勿碰觸手把或桌面後重試。",
                         "timeout_or_movement": "持續偵測到移動，無法取得五秒穩定資料。",
                     }
@@ -5646,6 +5720,7 @@ class ConfigGUI:
         )
 
     def open_gyro_compensation_window(self):
+        self._sync_saved_gyro_compensation()
         if self.gyro_target_var.get().strip().upper() == "MOUSE":
             return
         overlay = getattr(self, "_gyro_compensation_window", None)
@@ -5657,10 +5732,44 @@ class ConfigGUI:
             overlay = self._gyro_compensation_window = GyroCompensationSettings(
                 self.root, self.tr,
                 {axis: variable.get() for axis, variable in self.gyro_compensation_vars.items()},
-                apply=apply_ratios,
+                apply=apply_ratios, sync_saved=self._sync_saved_gyro_compensation,
             )
         overlay.window.lift()
         overlay.window.focus_set()
+
+    def _sync_saved_gyro_compensation(self, *, latest=None):
+        """Accept tester changes without overwriting unsaved edits in this window."""
+        try:
+            if latest is None:
+                latest = load_config(CONFIG_PATH, persist=False)
+            if latest.get("gui", "active_profile", fallback="") != self.config.get(
+                "gui", "active_profile", fallback="",
+            ):
+                return
+            previous = profile_compensation(self.config)
+            saved = profile_compensation(latest)
+        except (OSError, ValueError, configparser.Error):
+            return
+        for axis, key in COMPENSATION_FIELDS.items():
+            if saved[axis] == previous[axis]:
+                continue
+            variable = self.gyro_compensation_vars[axis]
+            try:
+                unchanged = float(variable.get()) == previous[axis]
+            except ValueError:
+                unchanged = False
+            text = f"{saved[axis]:.2f}"
+            if unchanged:
+                variable.set(text)
+                overlay = getattr(self, "_gyro_compensation_window", None)
+                if overlay is not None and overlay.window.winfo_exists():
+                    draft = overlay.compensation[axis]
+                    try:
+                        if float(draft.get()) == previous[axis]:
+                            draft.set(text)
+                    except ValueError:
+                        pass  # Keep incomplete input for the dialog's validation.
+            self.config.set("gyro_mapping", key, text)
 
     def open_gyro_settings(self):
         restored = self.restore_from_system_tray()
@@ -6050,13 +6159,16 @@ class ConfigGUI:
         # so a calibration result cannot be overwritten by stale GUI state.
         with config_file_lock():
             latest = load_config(CONFIG_PATH)
-            apply_profile(latest, read_profile(active, PROFILE_DIR))
+            profile, fingerprint = read_profile(active, PROFILE_DIR, return_fingerprint=True)
+            apply_profile(latest, profile)
             if not latest.has_section("gui"):
                 latest.add_section("gui")
             latest.set("gui", "active_profile", active)
             atomic_write_config(latest, CONFIG_PATH)
         self.config = latest
         self.active_profile = active
+        self._active_profile_content_baseline = fingerprint
+        self._active_profile_settings_baseline = profile
         self.profile_name_var = tk.StringVar(value=active)
 
     @staticmethod
@@ -6581,6 +6693,7 @@ class ConfigGUI:
             self._active_profile_content_baseline = self.profile_file_fingerprint(
                 self.active_profile
             )
+            self._active_profile_settings_baseline = build_profile(self.config)
             self._external_active_profile_changed = False
             self.request_adaptive_window_update()
             reload_request = self.request_live_settings_reload()
@@ -6995,23 +7108,23 @@ class ConfigGUI:
                 self.profile_name_var.set(self.active_profile)
                 return
 
-            profile, loaded_fingerprint = read_profile(selected, PROFILE_DIR, return_fingerprint=True)
-            validate_profile_mapping_targets(profile, SWITCH_BUTTONS)
-
-            # Merge into the latest on-disk configuration instead of the GUI's
-            # potentially older copy.  This preserves calibration data written
-            # by the connector since the settings window was opened.
+            # Read the profile and current config under the same lock used by
+            # the tester to update them together.
             with config_file_lock():
-                updated_config = load_config(CONFIG_PATH)
+                profile, loaded_fingerprint = read_profile(selected, PROFILE_DIR, return_fingerprint=True)
+                validate_profile_mapping_targets(profile, SWITCH_BUTTONS)
+                updated_config = load_config(CONFIG_PATH, persist=False)
                 apply_profile(updated_config, profile)
                 if not updated_config.has_section("gui"):
                     updated_config.add_section("gui")
                 updated_config.set("gui", "active_profile", selected)
+                normalize_config_in_place(updated_config)
                 atomic_write_config(updated_config, CONFIG_PATH)
-            self.config = load_config(CONFIG_PATH)
+            self.config = updated_config
             self.active_profile = selected
             self.reload_profile_variables()
             self._active_profile_content_baseline = loaded_fingerprint
+            self._active_profile_settings_baseline = profile
             self._external_active_profile_changed = (
                 self.profile_file_fingerprint(selected) != loaded_fingerprint
             )
@@ -7044,7 +7157,9 @@ class ConfigGUI:
             return False
         expected_profile_fingerprint = self.profile_file_fingerprint(self.active_profile)
         if expected_profile_fingerprint != getattr(self, "_active_profile_content_baseline", None):
-            self._external_active_profile_changed = True
+            self._external_active_profile_changed = not self._merge_saved_profile_compensation(
+                expected_profile_fingerprint,
+            )
         conflict_result = self.resolve_external_active_profile_conflict()
         if conflict_result != "overwrite":
             return conflict_result == "reloaded"
@@ -7059,9 +7174,10 @@ class ConfigGUI:
                     raise ValueError(
                         self.tr("方案檔案在儲存前再次變更，請重新操作。")
                     )
+                previous_config = self.config
                 try:
                     if not self.save_config(show_confirmation=False, changes=changes):
-                        self._restore_failed_settings_save(changes)
+                        self._restore_failed_settings_save(changes, previous_config)
                         return False
                     if (
                         self.profile_file_fingerprint(self.active_profile)
@@ -7075,9 +7191,10 @@ class ConfigGUI:
                         self.config, self.active_profile, PROFILE_DIR, return_fingerprint=True,
                     )
                 except (OSError, configparser.Error, ValueError):
-                    self._restore_failed_settings_save(changes)
+                    self._restore_failed_settings_save(changes, previous_config)
                     raise
             self._active_profile_content_baseline = saved_fingerprint
+            self._active_profile_settings_baseline = build_profile(self.config)
             self._external_active_profile_changed = (
                 self.profile_file_fingerprint(self.active_profile) != saved_fingerprint
             )
@@ -7101,7 +7218,47 @@ class ConfigGUI:
             )
             return False
 
-    def _restore_failed_settings_save(self, changes):
+    def _merge_saved_profile_compensation(self, expected_fingerprint):
+        """Accept a matching disk update if only untouched compensation axes changed."""
+        baseline = getattr(self, "_active_profile_settings_baseline", None)
+        if baseline is None or expected_fingerprint is None:
+            return False
+        try:
+            with config_file_lock():
+                profile, fingerprint = read_profile(self.active_profile, PROFILE_DIR, return_fingerprint=True)
+                if fingerprint != expected_fingerprint:
+                    return False
+                latest = load_config(CONFIG_PATH, persist=False)
+                if any(
+                    config.get("gui", "active_profile", fallback="") != self.active_profile
+                    for config in (self.config, latest)
+                ):
+                    return False
+                saved = profile_compensation(profile)
+                original = profile_compensation(baseline)
+                if saved == original or saved != profile_compensation(latest):
+                    return False
+                without_edit = deepcopy(profile)
+                for key in COMPENSATION_FIELDS.values():
+                    without_edit.set("gyro_mapping", key, baseline.get("gyro_mapping", key))
+                if without_edit != baseline:
+                    return False
+                displayed = profile_compensation(self.config)
+                for axis in COMPENSATION_FIELDS:
+                    if saved[axis] != original[axis]:
+                        local = float(self.gyro_compensation_vars[axis].get())
+                        if local not in (displayed[axis], saved[axis]):
+                            return False
+                self._sync_saved_gyro_compensation(latest=latest)
+        except (OSError, ValueError, configparser.Error):
+            return False
+        self._active_profile_content_baseline = fingerprint
+        self._active_profile_settings_baseline = profile
+        return True
+
+    def _restore_failed_settings_save(self, changes, previous_config):
+        # Use the values last shown in the GUI to identify unchanged axes.
+        self.config = previous_config
         if not changes:
             return
         snapshot = getattr(self, "_layer_folder_snapshot", {})
@@ -7119,7 +7276,9 @@ class ConfigGUI:
 
     def refresh_saved_settings_baseline(self):
         """Refresh disk comparisons without discarding working GUI values."""
-        self.config = load_config(CONFIG_PATH, persist=False)
+        latest = load_config(CONFIG_PATH, persist=False)
+        self._sync_saved_gyro_compensation(latest=latest)
+        self.config = latest
         base_buttons, base_sticks = self._mapping_layer_file_defaults()
         (
             self._layer_disk_baseline,
@@ -7164,6 +7323,7 @@ class ConfigGUI:
             self.config = load_config(CONFIG_PATH)
             self.reload_profile_variables()
             self._active_profile_content_baseline = loaded_fingerprint
+            self._active_profile_settings_baseline = profile
             self._external_active_profile_changed = (
                 self.profile_file_fingerprint(self.active_profile) != loaded_fingerprint
             )
@@ -7214,9 +7374,10 @@ class ConfigGUI:
             with config_file_lock():
                 if self.profile_file_fingerprint(name) != expected_profile_fingerprint:
                     raise ValueError(self.tr("方案檔案在儲存前再次變更，請重新操作。"))
+                previous_config = self.config
                 try:
                     if not self.save_config(show_confirmation=False, changes=changes):
-                        self._restore_failed_settings_save(changes)
+                        self._restore_failed_settings_save(changes, previous_config)
                         return False
                     self.config.set("gui", "active_profile", name)
                     changes.write_config(self.config, CONFIG_PATH)
@@ -7229,10 +7390,11 @@ class ConfigGUI:
                         self.config, name, PROFILE_DIR, return_fingerprint=True,
                     )
                 except (OSError, configparser.Error, ValueError):
-                    self._restore_failed_settings_save(changes)
+                    self._restore_failed_settings_save(changes, previous_config)
                     raise
             self.active_profile = name
             self._active_profile_content_baseline = saved_fingerprint
+            self._active_profile_settings_baseline = build_profile(self.config)
             self._external_active_profile_changed = (
                 self.profile_file_fingerprint(name) != saved_fingerprint
             )
@@ -7710,7 +7872,8 @@ class ConfigGUI:
                     latest.add_section("gui")
                 latest.set("gui", "idle_disconnect_minutes", str(minutes))
                 atomic_write_config(latest, CONFIG_PATH)
-            self.config = load_config(CONFIG_PATH)
+            # Keep the loaded gameplay values for merging external edits at save time.
+            self.config.set("gui", "idle_disconnect_minutes", str(minutes))
             self.idle_disconnect_minutes = minutes
             enqueue_controller_command("reload_settings")
         except OSError as exc:
@@ -11964,19 +12127,20 @@ class ConfigGUI:
             # [gyro] / [gyro.<controller>] 校正資料。
             if changes is not None:
                 changes.watch(CONFIG_PATH)
-            self.config = load_config(CONFIG_PATH, persist=False)
+            latest = load_config(CONFIG_PATH, persist=False)
+            self._sync_saved_gyro_compensation(latest=latest)
 
             # Save and dirty-state detection now consume the exact same bundle.
             # This prevents new controls from being added to one path but
             # accidentally omitted from the other.
             settings_bundle = collect_gui_settings(self, strict=True)
-            apply_gui_settings_to_config(self.config, settings_bundle)
+            apply_gui_settings_to_config(latest, settings_bundle)
 
             # Layer JSON files contain the shared mappings.  Only the ordered
             # IDs and enabled IDs belong to the active profile.
-            store_layer_state(self.config, self.mapping_layers)
+            store_layer_state(latest, self.mapping_layers)
             save_layers(
-                self.config,
+                latest,
                 self.mapping_layers,
                 LAYER_DIR,
                 deletable_paths=getattr(self, "_layer_managed_paths", ()),
@@ -11985,7 +12149,7 @@ class ConfigGUI:
             )
 
             write = changes.write_config if changes is not None else atomic_write_config
-            write(self.config, CONFIG_PATH)
+            write(latest, CONFIG_PATH)
 
             # 重新載入剛剛實際寫入的設定與映射層。映射層編輯器的
             # DoubleVar 會產生 float，而 JSON 載入後會標準化為字串；

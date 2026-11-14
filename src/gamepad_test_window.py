@@ -27,7 +27,10 @@ from diagnostic_session import (
     read_controller_status,
 )
 from command_queue import enqueue_controller_command
-from config_utils import CONFIG_PATH
+from config_utils import (
+    CONFIG_PATH, PROFILE_DIR, SettingsFileChanges, config_file_lock,
+    is_protected_profile, load_config, profile_path, read_profile,
+)
 from gamepad_aim import AimTestPane
 from gamepad_aim_display import window_refresh_rate
 from gamepad_aim_feedback import AimFeedback
@@ -47,6 +50,14 @@ from gamepad_devices import (
     find_s2p_hid_firmware,
     xinput_packet_delta,
 )
+from gyro_compensation import (
+    COMPENSATION_FIELDS,
+    DEFAULT_COMPENSATION,
+    CompensationSnapshot,
+    compensation_connection,
+    compensation_reload_signature,
+    profile_compensation,
+)
 from gyro_processing import _apply_gyro_response_curve
 from raw_hid_probe import (
     RawHidAnalysisClient,
@@ -55,6 +66,7 @@ from raw_hid_probe import (
     is_raw_hid_device_present,
 )
 from readable_combobox import ReadableCombobox
+from settings_schema import GYRO_RATIO_MAX, GYRO_RATIO_MIN
 from switch2_input import SWITCH_BUTTONS
 from support_log import format_support_log
 from test_telemetry import SharedTestTelemetry
@@ -2817,6 +2829,10 @@ class GamepadTestWindow:
             render_in_worker=True,
             open_gyro_settings=getattr(self.gui, "open_gyro_settings", None),
             compensation_available=self._selected_device_supports_gyro_compensation,
+            read_gyro_compensation=self._read_gyro_compensation,
+            reset_gyro_compensation=self._reset_gyro_compensation,
+            apply_gyro_compensation=self._write_gyro_compensation,
+            read_gyro_reload_status=self._read_gyro_reload_status,
         )
         self._build_rumble_tab(rumble_tab)
         self._build_high_rate_tab(high_rate_tab)
@@ -6499,6 +6515,9 @@ class GamepadTestWindow:
 
     def _on_device_selected(self, _event=None):
         self._device_selection_explicit = True
+        aim_pane = getattr(self, "aim_pane", None)
+        if aim_pane is not None:
+            aim_pane.close_gyro_compensation_for_device_change()
         if self.diagnostic_session.running:
             self.stop_diagnostic("device_changed")
             self.diagnostic_state_var.set(
@@ -6533,6 +6552,81 @@ class GamepadTestWindow:
             (raw.vendor_id, raw.product_id) == (NINTENDO_PRO2_VID, NINTENDO_PRO2_PID)
             and is_raw_hid_device_present(raw.path)
         )
+
+    def _gyro_compensation_snapshot(self, config, profile, status):
+        target = config.get("gyro_mapping", "target", fallback="RIGHT_STICK").strip().upper()
+        profile_target = (
+            profile.get("gyro_mapping", "target", fallback="RIGHT_STICK").strip().upper()
+            if profile is not None else None
+        )
+        if "MOUSE" in (target, profile_target):
+            raise ValueError(self.gui.tr("現行設定或方案使用滑鼠輸出，無法調整搖桿補償。"))
+        return CompensationSnapshot(
+            config.get("gui", "active_profile", fallback=""), profile_compensation(config),
+            profile_compensation(profile) if profile is not None else None,
+            connection=compensation_connection(status),
+            output_target=target,
+            saved_output_target=profile_target,
+        )
+
+    def _read_gyro_compensation(self):
+        with config_file_lock():
+            config = load_config(CONFIG_PATH, persist=False)
+            active_profile = config.get("gui", "active_profile", fallback="")
+            profile = None
+            if active_profile and not is_protected_profile(active_profile):
+                profile = read_profile(active_profile, PROFILE_DIR)
+            return self._gyro_compensation_snapshot(config, profile, self._read_gyro_reload_status())
+
+    def _reset_gyro_compensation(self, expected):
+        self._write_gyro_compensation(expected, DEFAULT_COMPENSATION)
+
+    @staticmethod
+    def _read_gyro_reload_status():
+        return read_controller_status(CONTROLLER_STATUS_PATH)
+
+    def _write_gyro_compensation(self, expected, ratios):
+        if ratios.keys() != COMPENSATION_FIELDS.keys() or not all(
+            GYRO_RATIO_MIN <= value <= GYRO_RATIO_MAX for value in ratios.values()
+        ):
+            raise ValueError(self.gui.tr("建議倍率超出設定範圍，未寫入。"))
+        stale_message = self.gui.tr("手把或方案設定已變更，請重新開啟補償視窗。")
+        with config_file_lock():
+            changes = SettingsFileChanges()
+            changes.watch(CONFIG_PATH)
+            config = load_config(CONFIG_PATH, persist=False)
+            active_profile = config.get("gui", "active_profile", fallback="")
+            if active_profile != expected.profile:
+                raise ValueError(stale_message)
+            profile = None
+            if active_profile and not is_protected_profile(active_profile):
+                path = profile_path(active_profile, PROFILE_DIR)
+                changes.watch(path)
+                profile = read_profile(active_profile, PROFILE_DIR)
+            status = self._read_gyro_reload_status()
+            if self._gyro_compensation_snapshot(config, profile, status) != expected:
+                raise ValueError(stale_message)
+            for axis, key in COMPENSATION_FIELDS.items():
+                value = f"{ratios[axis]:.2f}"
+                config.set("gyro_mapping", key, value)
+                if profile is not None:
+                    profile.set("gyro_mapping", key, value)
+            try:
+                changes.write_config(config, CONFIG_PATH)
+                if profile is not None:
+                    changes.write_config(profile, path)
+                status = self._read_gyro_reload_status()
+                if compensation_connection(status) != expected.connection:
+                    raise ValueError(stale_message)
+                if status.get("state") not in (None, "stopped"):
+                    connection_id = expected.connection[1] if expected.connection is not None else None
+                    return enqueue_controller_command(
+                        "reload_settings", connection_id=connection_id,
+                        compensation_signature=compensation_reload_signature(config),
+                    )
+            except (OSError, ValueError):
+                changes.restore()
+                raise
 
     def _set_aim_input_active(self, active):
         if active == getattr(self, "_aim_input_active", False):
@@ -6792,6 +6886,9 @@ class GamepadTestWindow:
         next_device = mapping.get(next_name)
         next_device_key = next_device.key if next_device is not None else None
         if previous_device_key != next_device_key or bridge_slot_changed:
+            aim_pane = getattr(self, "aim_pane", None)
+            if aim_pane is not None:
+                aim_pane.close_gyro_compensation_for_device_change()
             self.stop_rumble()
             self.clear_measurements()
         self.selected_device_var.set(next_name)
@@ -6805,6 +6902,8 @@ class GamepadTestWindow:
         if self.window is None or not self.window.winfo_exists():
             return
         self._refresh_devices(force=False)
+        if self.aim_pane is not None:
+            self.aim_pane.refresh_compensation_connection()
         self._device_refresh_job = self.window.after(
             1000, self._refresh_devices_after_telemetry
         )

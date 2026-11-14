@@ -1,4 +1,5 @@
 from pathlib import Path
+from contextlib import contextmanager
 import json
 import shutil
 import sys
@@ -155,6 +156,121 @@ class GUIUserWorkflowTests(unittest.TestCase):
             self.gui.gyro_target_var.set(target)
             buttons = controls.pack_slaves()
             self.assertEqual(buttons[buttons.index(curve) + 1], compensation)
+
+    def test_confirming_compensation_preserves_saved_changes_to_an_unchanged_axis(self):
+        self.gui.open_gyro_compensation_window()
+        overlay = self.gui._gyro_compensation_window
+        overlay.compensation["X"].set("0.70")
+        overlay.compensation["Y"].set("1.0")
+
+        latest = config_utils.load_config(self.config_path, persist=False)
+        latest.set("gyro_mapping", "x_compensation", "0.40")
+        latest.set("gyro_mapping", "y_compensation", "0.55")
+        config_utils.atomic_write_config(latest, self.config_path)
+        config_utils.save_profile(latest, "General", self.profiles)
+        overlay.apply_button.invoke()
+
+        self.assertFalse(overlay.window.winfo_exists())
+        self.assertEqual(self.gui.gyro_compensation_vars["X"].get(), "0.70")
+        self.assertEqual(self.gui.gyro_compensation_vars["Y"].get(), "0.55")
+        self.assertTrue(self.gui.has_unsaved_changes())
+        self.assertEqual(config_utils.load_config(self.config_path, persist=False).getfloat(
+            "gyro_mapping", "x_compensation",
+        ), 0.40)
+
+    def test_changing_idle_timeout_does_not_hide_new_compensation_from_the_next_save(self):
+        self.gui.open_gyro_compensation_window()
+        overlay = self.gui._gyro_compensation_window
+        overlay.compensation["X"].set("0.70")
+        overlay.apply_button.invoke()
+
+        latest = config_utils.load_config(self.config_path, persist=False)
+        latest.set("gyro_mapping", "y_compensation", "0.55")
+        config_utils.atomic_write_config(latest, self.config_path)
+        config_utils.save_profile(latest, "General", self.profiles)
+        with patch.object(config_gui, "enqueue_controller_command") as enqueue:
+            self.gui.set_idle_disconnect_minutes(15)
+        enqueue.assert_called_once_with("reload_settings")
+
+        with patch.object(config_gui.messagebox, "askyesnocancel", return_value=False):
+            self.assertTrue(self.gui.save_current_profile(show_message=False))
+
+        config = config_utils.load_config(self.config_path, persist=False)
+        profile = config_utils.read_profile("General", self.profiles)
+        self.assertEqual(config.getint("gui", "idle_disconnect_minutes"), 15)
+        for saved in (config, profile):
+            self.assertEqual(saved.getfloat("gyro_mapping", "x_compensation"), 0.70)
+            self.assertEqual(saved.getfloat("gyro_mapping", "y_compensation"), 0.55)
+
+    def test_profile_save_merges_preview_compensation_without_a_conflict_prompt(self):
+        self.gui.gyro_compensation_vars["X"].set("0.70")
+        latest = config_utils.load_config(self.config_path, persist=False)
+        latest.set("gyro_mapping", "y_compensation", "0.55")
+        config_utils.atomic_write_config(latest, self.config_path)
+        profile = config_utils.read_profile("General", self.profiles)
+        profile.set("gyro_mapping", "y_compensation", "0.55")
+        config_utils.atomic_write_config(profile, self.profiles / "General.ini")
+        self.gui.sync_profile_directory()
+
+        with patch.object(config_gui.messagebox, "askyesnocancel", return_value=None) as conflict:
+            self.assertTrue(self.gui.save_current_profile(show_message=False))
+        conflict.assert_not_called()
+        saved = config_utils.read_profile("General", self.profiles)
+        self.assertEqual(saved.getfloat("gyro_mapping", "x_compensation"), 0.70)
+        self.assertEqual(saved.getfloat("gyro_mapping", "y_compensation"), 0.55)
+
+    def test_profile_save_still_confirms_an_external_edit_alongside_compensation(self):
+        self.gui.gyro_compensation_vars["X"].set("0.70")
+        latest = config_utils.load_config(self.config_path, persist=False)
+        latest.set("gyro_mapping", "y_compensation", "0.55")
+        config_utils.atomic_write_config(latest, self.config_path)
+        profile = config_utils.read_profile("General", self.profiles)
+        profile.set("gyro_mapping", "y_compensation", "0.55")
+        profile.set("rumble", "lf_strength", "0.91")
+        path = self.profiles / "General.ini"
+        config_utils.atomic_write_config(profile, path)
+        before = path.read_bytes()
+
+        with patch.object(config_gui.messagebox, "askyesnocancel", return_value=None) as conflict:
+            self.assertFalse(self.gui.save_current_profile(show_message=False))
+        conflict.assert_called_once()
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_profile_save_keeps_conflict_prompt_when_both_windows_edit_the_same_axis(self):
+        self.gui.gyro_compensation_vars["Y"].set("0.75")
+        latest = config_utils.load_config(self.config_path, persist=False)
+        latest.set("gyro_mapping", "y_compensation", "0.55")
+        config_utils.atomic_write_config(latest, self.config_path)
+        profile = config_utils.read_profile("General", self.profiles)
+        profile.set("gyro_mapping", "y_compensation", "0.55")
+        path = self.profiles / "General.ini"
+        config_utils.atomic_write_config(profile, path)
+        before = path.read_bytes()
+
+        with patch.object(config_gui.messagebox, "askyesnocancel", return_value=None) as conflict:
+            self.assertFalse(self.gui.save_current_profile(show_message=False))
+        conflict.assert_called_once()
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(self.gui.gyro_compensation_vars["Y"].get(), "0.75")
+
+    def test_switch_reads_the_destination_profile_under_the_config_lock(self):
+        # Another S2P window completes a profile update while this one waits for the lock.
+        @contextmanager
+        def wait_for_other_writer():
+            profile = config_utils.read_profile("Action", self.profiles)
+            profile.set("gyro_mapping", "y_compensation", "0.55")
+            config_utils.atomic_write_config(profile, self.profiles / "Action.ini")
+            with config_utils.config_file_lock():
+                yield
+
+        with patch.object(config_gui, "config_file_lock", wait_for_other_writer):
+            self.gui.apply_selected_profile("Action")
+
+        self.assertEqual(self.gui.active_profile, "Action")
+        self.assertEqual(float(self.gui.gyro_compensation_vars["Y"].get()), 0.55)
+        config = config_utils.load_config(self.config_path, persist=False)
+        self.assertEqual(config.getfloat("gyro_mapping", "y_compensation"), 0.55)
+        self.assertFalse(self.gui._external_active_profile_changed)
 
     def test_edit_save_switch_save_as_and_reopen(self):
         self.assertEqual(self.gui.active_profile, "General")
@@ -363,6 +479,52 @@ class GUIUserWorkflowTests(unittest.TestCase):
 
         self.assertEqual(self.config_path.read_bytes(), external)
         self.assertEqual(float(self.gui.lf_strength_var.get()), 0.42)
+
+    def test_failed_save_merges_a_newly_saved_compensation_axis_before_retry(self):
+        self.gui.open_gyro_compensation_window()
+        overlay = self.gui._gyro_compensation_window
+        overlay.compensation["X"].set("0.70")
+        overlay.apply_button.invoke()
+        latest = config_utils.load_config(self.config_path, persist=False)
+        latest.set("gyro_mapping", "y_compensation", "0.55")
+
+        def fail_after_external_write(*_args, **_kwargs):
+            config_utils.atomic_write_config(latest, self.config_path)
+            config_utils.save_profile(latest, "General", self.profiles)
+            raise OSError("forced profile write failure")
+
+        with (
+            patch.object(config_gui.messagebox, "showerror"),
+            patch.object(config_gui, "save_profile", side_effect=fail_after_external_write),
+        ):
+            self.assertFalse(self.gui.save_current_profile(show_message=False))
+        self.assertEqual(self.gui.gyro_compensation_vars["X"].get(), "0.70")
+
+        with patch.object(config_gui.messagebox, "askyesnocancel", return_value=False):
+            self.assertTrue(self.gui.save_current_profile(show_message=False))
+
+        config = config_utils.load_config(self.config_path, persist=False)
+        profile = config_utils.read_profile("General", self.profiles)
+        for saved in (config, profile):
+            self.assertEqual(saved.getfloat("gyro_mapping", "x_compensation"), 0.70)
+            self.assertEqual(saved.getfloat("gyro_mapping", "y_compensation"), 0.55)
+
+    def test_save_failure_before_first_write_keeps_compensation_marked_unsaved(self):
+        self.gui.open_gyro_compensation_window()
+        overlay = self.gui._gyro_compensation_window
+        overlay.compensation["X"].set("0.70")
+        overlay.apply_button.invoke()
+        original = self.config_path.read_bytes()
+
+        with (
+            patch.object(config_gui.messagebox, "showerror"),
+            patch.object(config_gui, "save_layers", side_effect=OSError("forced layer write failure")),
+        ):
+            self.assertFalse(self.gui.save_current_profile(show_message=False))
+
+        self.assertEqual(self.config_path.read_bytes(), original)
+        self.assertEqual(self.gui.gyro_compensation_vars["X"].get(), "0.70")
+        self.assertTrue(self.gui.has_unsaved_changes())
 
     def test_save_rejects_external_config_edits_during_layer_writes(self):
         self.gui.lf_strength_var.set("0.42")

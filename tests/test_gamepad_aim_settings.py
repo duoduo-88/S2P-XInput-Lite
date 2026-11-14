@@ -123,6 +123,9 @@ class AimSettingsTests(unittest.TestCase):
         vertical_speed = spinbox(controls_panel, "3D 垂直視角速度（°/秒）")
         self.assertEqual(sensitivity.get(), "125")
         self.assertEqual((horizontal_speed.get(), vertical_speed.get()), ("300", "180"))
+        for entry in (sensitivity, horizontal_speed, vertical_speed):
+            marker = controls_panel.grid_slaves(row=entry.grid_info()["row"], column=3)[0]
+            self.assertEqual(marker.cget("text"), "?")
         seed_input = spinbox(drills, "出靶種子（0 為固定配置）")
         tracking_arc = spinbox(drills, "3D 跟槍環繞範圍（°）")
         tracking_speed = spinbox(drills, "3D 跟槍靶速（%）")
@@ -143,6 +146,15 @@ class AimSettingsTests(unittest.TestCase):
                        if isinstance(child, ttk.Checkbutton) and child.cget("text") == "加深遠近效果")
         auto_switch = next(child for child in controls_panel.winfo_children()
                            if isinstance(child, ttk.Checkbutton) and child.cget("text") == "啟用手把與滑鼠自動銜接")
+        help_positions = []
+        for widget in (horizontal_speed, vertical_speed, sensitivity, fullscreen.master, shading, auto_switch):
+            marker = controls_panel.grid_slaves(row=widget.grid_info()["row"], column=3)[0]
+            help_positions.append(marker.winfo_rootx())
+            self.assertLessEqual(abs(
+                marker.winfo_rooty() + marker.winfo_height() / 2
+                - widget.winfo_rooty() - widget.winfo_height() / 2,
+            ), 1)
+        self.assertEqual(len(set(help_positions)), 1)
         self.assertTrue(auto_switch.instate(["selected"]))
         self.assertTrue(shading.instate(["selected"]))
         shading.invoke()

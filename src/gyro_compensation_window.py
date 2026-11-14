@@ -1,12 +1,15 @@
 """Dialogs for testing, calculating, and applying gyro output compensation."""
 
 import time
+from configparser import Error as ConfigError
 import tkinter as tk
-from tkinter import ttk
+from tkinter import font as tkfont, ttk
 
 from dialog_layout import center_child_dialog
+from gamepad_aim_model import DEFAULT_STICK_TURN_SPEED
 from gamepad_aim_settings import LIMITS, TURN_SPEED_FIELDS
-from gyro_compensation import suggested_axis_ratio
+from gyro_compensation import DEFAULT_COMPENSATION, suggested_axis_ratio
+from runtime_status import settings_reload_result
 from settings_schema import GYRO_RATIO_MAX, GYRO_RATIO_MIN
 
 
@@ -26,6 +29,17 @@ def _dialog(owner, title):
     return window, body
 
 
+def _trace_dialog_variable(window, variable, callback):
+    trace = variable.trace_add("write", callback)
+
+    def remove_trace(event):
+        # Tcl variables outlive their widgets unless their traces are released.
+        if event.widget is window:
+            variable.trace_remove("write", trace)
+
+    window.bind("<Destroy>", remove_trace, add="+")
+
+
 def _suggestion(tr, axis, ratio):
     if GYRO_RATIO_MIN <= ratio <= GYRO_RATIO_MAX:
         return tr("建議 {axis} 補償倍率 {value:.2f}").format(axis=axis, value=ratio)
@@ -39,35 +53,52 @@ def _multiplier_range_message(tr):
 
 
 class GyroCompensationCalculator:
-    def __init__(self, owner, tr, open_gyro_settings=None, *, saved_inputs=None):
+    def __init__(self, owner, tr, open_gyro_settings=None, *, multipliers=None, saved_inputs=None):
         self.window, body = _dialog(owner, tr("陀螺儀補償計算"))
         self.window.withdraw()
         selected_axis, axis_inputs = saved_inputs if saved_inputs is not None else ("X", {})
+        multipliers = DEFAULT_COMPENSATION if multipliers is None else multipliers
         self.axis = tk.StringVar(self.window, selected_axis)
         self.inputs = {
-            axis: tuple(tk.StringVar(self.window, value) for value in axis_inputs.get(axis, ("1.00", "", "")))
+            axis: tuple(tk.StringVar(self.window, value) for value in (
+                f"{multipliers[axis]:.2f}", *axis_inputs.get(axis, ("", "")),
+            ))
             for axis, _label in AXES
         }
         axes = ttk.Frame(body)
         axes.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
         for axis, label in AXES:
             ttk.Radiobutton(axes, text=tr(label), value=axis, variable=self.axis).pack(side="left", padx=(0, 10))
-        self.entries = []
-        for row, label in enumerate(("原補償倍率", "舊設定耗時（秒）", "新設定耗時（秒）"), 1):
-            ttk.Label(body, text=tr(label)).grid(row=row, column=0, sticky="w", pady=3)
-            entry = ttk.Entry(body, width=9)
-            entry.grid(row=row, column=1, sticky="w", padx=(8, 0), pady=3)
+        ttk.Label(body, text=tr("目前補償倍率")).grid(row=1, column=0, sticky="w", pady=3)
+        multiplier = ttk.Entry(body, width=9, state="readonly")
+        multiplier.grid(row=1, column=1, sticky="e", pady=3)
+        self.entries = [multiplier]
+        for row, title in enumerate(("調整視角速度前", "調整視角速度後"), 2):
+            section = ttk.LabelFrame(body, text=tr(title), padding=(8, 4))
+            section.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+            ttk.Label(section, text=tr("耗時（秒）")).pack(side="left")
+            entry = ttk.Entry(section, width=9)
+            entry.pack(side="right", padx=(8, 0))
             self.entries.append(entry)
         ttk.Label(body, text=tr(
-            "1. 選 X 或 Y，填入原補償倍率。首次調整用 1.00。\n"
+            "1. 選 X 或 Y，確認自動帶入的補償倍率。\n"
             "2. 改遊戲視角速度前後，用相同搖桿推幅\n"
             "   從同一地標轉到另一地標，錄影並填入兩次耗時。\n"
             "3. 到 S2P 的「補償設定」輸入建議倍率。"
         ), justify="left").grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 4))
         self.result = tk.StringVar(self.window)
+        self.invalidated = False
         feedback = ttk.Label(body, textvariable=self.result, wraplength=self.window.winfo_pixels("210p"))
 
+        def show_feedback(*_args):
+            if self.result.get():
+                feedback.grid(row=5, column=0, columnspan=2, sticky="w")
+            else:
+                feedback.grid_remove()
+
         def refresh(*_args):
+            if self.invalidated:
+                return
             axis = self.axis.get()
             original, old, new = (item.get() for item in self.inputs[axis])
             try:
@@ -80,10 +111,6 @@ class GyroCompensationCalculator:
             except ValueError:
                 text = tr("請輸入大於 0 的倍率及耗時。") if all((original, old, new)) else ""
             self.result.set(text)
-            if text:
-                feedback.grid(row=5, column=0, columnspan=2, sticky="w")
-            else:
-                feedback.grid_remove()
 
         def switch_axis(*_args):
             for entry, value in zip(self.entries, self.inputs[self.axis.get()]):
@@ -92,8 +119,9 @@ class GyroCompensationCalculator:
 
         for values in self.inputs.values():
             for value in values:
-                value.trace_add("write", refresh)
-        self.axis.trace_add("write", switch_axis)
+                _trace_dialog_variable(self.window, value, refresh)
+        _trace_dialog_variable(self.window, self.result, show_feedback)
+        _trace_dialog_variable(self.window, self.axis, switch_axis)
         switch_axis()
         buttons = ttk.Frame(body)
         buttons.grid(row=6, column=0, columnspan=2, sticky="e", pady=(8, 0))
@@ -104,29 +132,57 @@ class GyroCompensationCalculator:
         ttk.Button(buttons, text=tr("關閉"), command=self.window.destroy).pack(side="left")
         center_child_dialog(self.window, owner.winfo_toplevel())
 
+    def invalidate(self, message):
+        self.invalidated = True
+        self.result.set(message)
+        self.settings_button.state(["disabled"])
+
     def snapshot_inputs(self):
         return self.axis.get(), {
-            axis: tuple(value.get() for value in values) for axis, values in self.inputs.items()
+            axis: tuple(value.get() for value in values[1:]) for axis, values in self.inputs.items()
         }
 
 
 class GyroCompensationSettings:
-    def __init__(self, owner, tr, current, apply):
+    def __init__(self, owner, tr, current, apply, *, sync_saved=None):
         self.window, body = _dialog(owner, tr("陀螺儀補償設定"))
         self.window.withdraw()
         self.compensation = {axis: tk.StringVar(self.window, current[axis]) for axis, _label in AXES}
+        self.sliders = {}
+        body.columnconfigure(1, weight=1)
         for row, (axis, label) in enumerate(AXES):
+            value = self.compensation[axis]
+            slider_value = tk.DoubleVar(self.window, GYRO_RATIO_MIN)
             ttk.Label(body, text=tr(label)).grid(row=row, column=0, sticky="w", pady=3)
+            slider = self.sliders[axis] = ttk.Scale(
+                body, from_=GYRO_RATIO_MIN, to=GYRO_RATIO_MAX, variable=slider_value,
+                command=lambda position, field=value: field.set(f"{float(position):.2f}"),
+            )
+            slider.grid(row=row, column=1, sticky="ew", padx=(12, 4))
             entry = ttk.Spinbox(body, from_=GYRO_RATIO_MIN, to=GYRO_RATIO_MAX,
-                                increment=0.01, format="%.2f", width=9, textvariable=self.compensation[axis])
-            entry.grid(row=row, column=1, padx=(8, 0), pady=3)
+                                increment=0.01, format="%.2f", width=9, textvariable=value)
+            entry.grid(row=row, column=2, padx=(8, 0), pady=3)
+
+            def update_slider(*_args, field=value, position_var=slider_value):
+                try:
+                    position = float(field.get())
+                except ValueError:
+                    return
+                if GYRO_RATIO_MIN <= position <= GYRO_RATIO_MAX:
+                    position_var.set(position)
+
+            _trace_dialog_variable(self.window, value, update_slider)
+            update_slider()
         ttk.Label(body, text=tr(
             "調高遊戲視角速度後，如果陀螺儀微瞄變得太敏感，\n"
             "可降低對應的倍率。X 調水平，Y 調垂直。\n"
             "維持 1.00 會保留原本的陀螺儀輸出。\n"
             "例如 X 設為 0.50，水平輸出在反死區前會減半。\n"
             "倍率只作用於陀螺儀，實體搖桿維持原本的輸出。"
-        ), justify="left").grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        ), justify="left").grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Label(body, text=tr("按確定後，請在主視窗按儲存／套用。"), justify="left").grid(
+            row=3, column=0, columnspan=3, sticky="w", pady=(6, 0),
+        )
         self.status = tk.StringVar(self.window)
         feedback = ttk.Label(body, textvariable=self.status, wraplength=self.window.winfo_pixels("190p"))
 
@@ -135,29 +191,35 @@ class GyroCompensationSettings:
             feedback.grid_remove()
 
         for value in self.compensation.values():
-            value.trace_add("write", clear_feedback)
+            _trace_dialog_variable(self.window, value, clear_feedback)
 
         def save(_event=None):
+            if sync_saved is not None:
+                sync_saved()
             try:
                 values = {axis: float(value.get()) for axis, value in self.compensation.items()}
                 if not all(GYRO_RATIO_MIN <= value <= GYRO_RATIO_MAX for value in values.values()):
                     raise ValueError
             except ValueError:
-                text = _multiplier_range_message(tr)
-            else:
-                formatted = {axis: f"{value:.2f}" for axis, value in values.items()}
-                apply(formatted)
-                for axis, value in formatted.items():
-                    self.compensation[axis].set(value)
-                text = tr("補償倍率已填入，請按主視窗的儲存／套用。")
-            self.status.set(text)
-            feedback.grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
+                self.status.set(_multiplier_range_message(tr))
+                feedback.grid(row=4, column=0, columnspan=3, sticky="w", pady=(6, 0))
+                return
+            apply({axis: f"{value:.2f}" for axis, value in values.items()})
+            self.close()
+
+        def restore_defaults():
+            for value in self.compensation.values():
+                value.set("1.00")
 
         buttons = ttk.Frame(body)
-        buttons.grid(row=4, column=0, columnspan=2, sticky="e", pady=(8, 0))
-        ttk.Button(buttons, text=tr("關閉"), command=self.close).pack(side="left", padx=(0, 6))
-        self.apply_button = ttk.Button(buttons, text=tr("套用"), command=save)
-        self.apply_button.pack(side="left")
+        buttons.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(8, 0))
+        buttons.columnconfigure(1, weight=1)
+        self.defaults_button = ttk.Button(buttons, text=tr("還原預設"), command=restore_defaults)
+        self.defaults_button.grid(row=0, column=0, sticky="w")
+        self.apply_button = ttk.Button(buttons, text=tr("確定"), command=save)
+        self.apply_button.grid(row=0, column=2, padx=(6, 0))
+        self.cancel_button = ttk.Button(buttons, text=tr("取消"), command=self.close)
+        self.cancel_button.grid(row=0, column=3, padx=(6, 0))
         self.window.bind("<Return>", save)
         self.window.minsize(self.window.winfo_pixels("230p"), 1)
         center_child_dialog(self.window, owner.winfo_toplevel())
@@ -167,7 +229,8 @@ class GyroCompensationSettings:
 
 
 class GyroCompensationPreview:
-    def __init__(self, owner, tr, settings, prepare, turn, close, open_gyro_settings):
+    def __init__(self, owner, tr, settings, prepare, turn, close, open_gyro_settings, *, multipliers=None,
+                 on_speed_changed, apply_measurement=None, read_reload_status=None):
         self.tr = tr
         self.prepare = prepare
         self.turn = turn
@@ -176,22 +239,44 @@ class GyroCompensationPreview:
         self.window.protocol("WM_DELETE_WINDOW", close)
         self.window.bind("<Destroy>", self._destroyed, add="+")
         self.job = None
+        self.reload_job = None
+        self._reload_feedback = ""
         self.measurement = None
-        self.original = tuple(getattr(settings, key) for key, _label in TURN_SPEED_FIELDS)
+        self.original = DEFAULT_STICK_TURN_SPEED
+        self.original_multipliers = dict(DEFAULT_COMPENSATION if multipliers is None else multipliers)
+        self.speed_source = tk.StringVar(self.window, "original")
+        self.on_speed_changed = on_speed_changed
+        self.apply_measurement = apply_measurement
+        self.read_reload_status = read_reload_status
         self.adjusted = []
+        self._adjusted_speeds = []
+        self.speed_options = []
         self.status = tk.StringVar(self.window)
         self.result = tk.StringVar(self.window)
-        self._adjusted_speeds = []
+        title_font = tkfont.nametofont("TkDefaultFont", root=self.window)
+        self.window.minsize(title_font.measure(self.window.title()) + self.window.winfo_pixels("110p"), 1)
+        saved = ttk.LabelFrame(body, text=tr("已儲存的補償倍率"), padding=(8, 4))
+        saved.pack(fill="x", pady=(0, 8))
+        self.current_multiplier_text = {axis: tk.StringVar(self.window) for axis, _ in AXES}
+        self._show_multipliers(self.original_multipliers)
+        for variable in self.current_multiplier_text.values():
+            ttk.Label(saved, textvariable=variable).pack(side="left", padx=(0, 12))
         for title, editable in (("原始視角速度", False), ("調整後視角速度", True)):
-            frame = ttk.LabelFrame(body, text=tr(title), padding=(8, 4))
+            frame = ttk.LabelFrame(body, padding=(8, 4))
+            option = ttk.Radiobutton(
+                frame, text=tr(title), variable=self.speed_source,
+                value="adjusted" if editable else "original",
+            )
+            frame.configure(labelwidget=option)
+            self.speed_options.append(option)
             frame.pack(fill="x", pady=(0, 8))
             for row, (key, label) in enumerate(TURN_SPEED_FIELDS):
                 ttk.Label(frame, text=tr(label)).grid(row=row, column=0, sticky="w", pady=3)
                 value = self.original[row]
                 if editable:
                     low, high = LIMITS[key]
-                    speed = tk.StringVar(self.window, str(value))
-                    speed.trace_add("write", self._clear_feedback)
+                    speed = tk.StringVar(self.window, str(getattr(settings, key)))
+                    _trace_dialog_variable(self.window, speed, self._adjusted_speed_changed)
                     self._adjusted_speeds.append(speed)
                     control = ttk.Spinbox(frame, from_=low, to=high, width=7, textvariable=speed)
                     self.adjusted.append(control)
@@ -216,43 +301,63 @@ class GyroCompensationPreview:
                     label.pack_forget()
 
         for variable in (self.status, self.result):
-            variable.trace_add("write", refresh_feedback)
+            _trace_dialog_variable(self.window, variable, refresh_feedback)
         refresh_feedback()
         self.measure_button = ttk.Button(buttons, text=tr("量測"), command=self.start)
         self.measure_button.grid(row=0, column=0, sticky="ew", padx=(0, 3))
-        self.cancel_button = ttk.Button(buttons, text=tr("取消量測"), command=self.cancel)
-        self.cancel_button.grid(row=0, column=1, sticky="ew", padx=(3, 0))
+        self.close_button = ttk.Button(buttons, text=tr("關閉"), command=close)
+        self.close_button.grid(row=0, column=1, sticky="ew", padx=(3, 0))
         self.settings_button = ttk.Button(buttons, text=tr("開啟 S2P 陀螺儀設定"), command=open_gyro_settings)
         self.settings_button.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         if open_gyro_settings is None:
             self.settings_button.state(["disabled"])
+        _trace_dialog_variable(self.window, self.speed_source, self.apply_selected_speeds)
 
-    def _clear_feedback(self, *_args):
-        self.status.set("")
+    def _adjusted_speed_changed(self, *_args):
+        if self.reload_job is None:
+            self.status.set(self._reload_feedback)
         self.result.set("")
+        self.apply_selected_speeds()
+
+    def apply_selected_speeds(self, *_args):
+        speeds = self.original if self.speed_source.get() == "original" else self._read_adjusted_speeds(show_error=False)
+        if speeds is not None:
+            self.on_speed_changed(speeds)
 
     def start(self):
-        if self.measurement is not None:
+        if self.measurement is not None or self.reload_job is not None:
             return
-        adjusted = []
-        for control, (key, label) in zip(self.adjusted, TURN_SPEED_FIELDS):
-            low, high = LIMITS[key]
-            try:
-                speed = int(control.get())
-            except ValueError:
-                speed = low - 1
-            if not low <= speed <= high:
-                self.result.set("")
-                self.status.set(self.tr("{label}請輸入 {low} 到 {high} 的整數。").format(
-                    label=self.tr(label), low=low, high=high,
-                ))
-                return
-            adjusted.append(speed)
+        adjusted = self._read_adjusted_speeds()
+        if adjusted is None:
+            return
+        self._reload_feedback = ""
         self.result.set("")
         self.angles = []
         self.measurement = tuple(zip(("X", "Y", "X", "Y"), (*self.original, *adjusted)))
         self._set_running(True)
         self._start_turn()
+
+    def _show_multipliers(self, ratios):
+        for axis, label in AXES:
+            self.current_multiplier_text[axis].set(f"{self.tr(label)}  {ratios[axis]:.2f}")
+
+    def _read_adjusted_speeds(self, *, show_error=True):
+        adjusted = []
+        for value, (key, label) in zip(self._adjusted_speeds, TURN_SPEED_FIELDS):
+            low, high = LIMITS[key]
+            try:
+                speed = int(value.get())
+            except ValueError:
+                speed = low - 1
+            if not low <= speed <= high:
+                if show_error:
+                    self.result.set("")
+                    self.status.set(self.tr("{label}請輸入 {low} 到 {high} 的整數。").format(
+                        label=self.tr(label), low=low, high=high,
+                    ))
+                return
+            adjusted.append(speed)
+        return tuple(adjusted)
 
     def _start_turn(self):
         self.job = None
@@ -291,16 +396,52 @@ class GyroCompensationPreview:
             return
         self.measurement = None
         self._set_running(False)
-        self.status.set(self.tr("量測完成。"))
-        suggestions = [
-            _suggestion(self.tr, axis, suggested_axis_ratio(1.0, old, new))
+        ratios = {
+            axis: suggested_axis_ratio(self.original_multipliers[axis], old, new)
             for (axis, _label), old, new in zip(AXES, self.angles[:2], self.angles[2:])
-        ]
-        suggestions.append(self.tr("以上以原補償倍率 1.00 試算。"))
-        self.result.set("\n".join(suggestions))
+        }
+        self.result.set("\n".join(_suggestion(self.tr, axis, ratio) for axis, ratio in ratios.items()))
+        if self.apply_measurement is None:
+            self.status.set(self.tr("量測完成。"))
+        elif not all(GYRO_RATIO_MIN <= ratio <= GYRO_RATIO_MAX for ratio in ratios.values()):
+            self.status.set(self.tr("建議倍率超出設定範圍，未寫入。"))
+        else:
+            try:
+                request_id = self.apply_measurement(ratios)
+            except (OSError, ValueError, ConfigError) as exc:
+                self.status.set(self.tr("無法寫入補償倍率。") + f"\n{exc}")
+            else:
+                self._show_multipliers(ratios)
+                if request_id and self.read_reload_status is not None:
+                    self.status.set(self.tr("補償倍率已儲存，等待連接程式套用。"))
+                    self.measure_button.state(["disabled"])
+                    self.reload_deadline = time.perf_counter() + 5.0
+                    self.reload_job = self.window.after(100, self._poll_reload, request_id)
+                else:
+                    self.status.set(self.tr("量測完成。補償倍率已寫入 S2P 設定。"))
+
+    def _poll_reload(self, request_id):
+        self.reload_job = None
+        result = settings_reload_result(self.read_reload_status(), request_id) or {}
+        state = result.get("state")
+        if state == "success":
+            text = self.tr("補償倍率已儲存並套用至目前連線。")
+        elif state == "failed":
+            text = self.tr("補償倍率即時套用失敗。")
+            detail = result.get("message")
+            if detail:
+                text += f"\n{detail}"
+        elif time.perf_counter() >= self.reload_deadline:
+            text = self.tr("補償倍率已儲存，尚未確認即時套用結果。")
+        else:
+            self.reload_job = self.window.after(100, self._poll_reload, request_id)
+            return
+        self._reload_feedback = text
+        self.status.set(text)
+        self.measure_button.state(["!disabled"])
 
     def _set_running(self, running):
-        for widget in (*self.adjusted, self.measure_button):
+        for widget in (*self.adjusted, *self.speed_options, self.measure_button):
             widget.state(["disabled" if running else "!disabled"])
 
     def cancel(self):
@@ -321,3 +462,6 @@ class GyroCompensationPreview:
     def _destroyed(self, event):
         if event.widget is self.window:
             self._cancel_job()
+            if self.reload_job is not None:
+                self.window.after_cancel(self.reload_job)
+                self.reload_job = None

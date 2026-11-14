@@ -108,7 +108,9 @@ class TransportShutdownTests(unittest.TestCase):
         )
         def send(command):
             events.append(command)
-            if command == "ble disconnect":
+            if command == "disc 0":
+                bridge.connected_channel = bridge._ready_channel = None
+                bridge._connection_generation += 1
                 bridge._disconnect_event.set()
             return True
         bridge.send = send
@@ -118,7 +120,7 @@ class TransportShutdownTests(unittest.TestCase):
         self.assertFalse(bridge._rumble_accepting)
         self.assertIsNone(bridge._rumble_pending)
         self.assertLess(
-            events.index("zero_rumble"), events.index("ble disconnect")
+            events.index("zero_rumble"), events.index("disc 0")
         )
 
     def test_bluetooth_zero_rumble_precedes_disconnect(self):

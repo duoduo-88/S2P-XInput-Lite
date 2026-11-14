@@ -57,6 +57,16 @@ license texts from `third_party/licenses`.
 
 ---
 
+## Aiming Test Result Fonts
+
+S2P Aim Sans Regular and Bold are renamed static subsets of Noto Sans TC
+2.004 from the [Google Fonts
+repository](https://github.com/google/fonts/tree/b950a7257470b900078f2bf3223823a8602de7e1/ofl/notosanstc).
+The files contain the glyphs needed for the aiming test results. The
+[SIL Open Font License 1.1](src/fonts/OFL.txt) is bundled alongside them.
+
+---
+
 ## ESP32-S3 Firmware Files
 
 The bundled ESP32-S3 Bluedroid bridge and standalone firmware began as a

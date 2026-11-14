@@ -147,6 +147,10 @@ def _update_rumble_tail(
     return max(target, current * max(0.0, min(1.0, decay_factor)))
 
 
+class CalibrationInProgressError(ValueError):
+    """A settings reload would replace a live or unsaved calibration."""
+
+
 class XInputController:
     GYRO_STATIONARY_SETTLE_SECONDS = 0.50
     GYRO_USABLE_SAMPLES = 16
@@ -675,6 +679,14 @@ class XInputController:
         Build an inactive snapshot instead, then transplant its Python state
         while preserving the one pad, callback, condition and worker thread.
         """
+        with self._gyro_calibration_lock:
+            if "running" in (self._gyro_calibration_state, self._mag_calibration_state, self._accel_calibration_state):
+                raise CalibrationInProgressError("calibration is running; finish it before applying settings")
+            if any(result is not None for result in (
+                self._gyro_calibration_result, self._mag_calibration_result, self._accel_calibration_result,
+            )):
+                raise CalibrationInProgressError("calibration result is waiting to be saved; apply settings again shortly")
+
         snapshot = type(self)(
             config,
             calibration,
@@ -2255,7 +2267,9 @@ class XInputController:
             or not np.all(np.isfinite(bias_values))
             or not np.all(np.isfinite(matrix_values))
             or float(np.max(np.abs(matrix_values - matrix_values.T))) > 1e-9
-            or float(np.linalg.det(matrix_values)) <= 1e-12
+            # The ellipsoid correction must be positive definite. An absolute
+            # determinant cutoff rejects valid small gains (e.g. 16384 LSB/g).
+            or float(np.min(np.linalg.eigvalsh(matrix_values))) <= 0.0
         ):
             raise ValueError("invalid accelerometer calibration")
         self._accel_bias = bias_values
@@ -2320,7 +2334,9 @@ class XInputController:
             return None
         return corrected
 
-    def set_magnetometer_calibration(self, bias, scale=None, matrix=None):
+    def set_magnetometer_calibration(
+        self, bias, scale=None, matrix=None, *, field_reference=None,
+    ):
         """Apply validated per-controller hard/soft-iron calibration."""
         if bias is None:
             self._mag_bias = [0.0, 0.0, 0.0]
@@ -2348,11 +2364,8 @@ class XInputController:
             for value in scale_values
         ):
             raise ValueError("invalid magnetometer scale")
-        self._mag_bias = list(bias_values)
-        self._mag_scale = list(scale_values)
-        if matrix is None:
-            self._mag_matrix = None
-        else:
+        matrix_values = None
+        if matrix is not None:
             matrix_values = np.asarray(matrix, dtype=np.float64)
             if matrix_values.shape != (3, 3) or not np.all(
                 np.isfinite(matrix_values)
@@ -2361,9 +2374,11 @@ class XInputController:
             determinant = float(np.linalg.det(matrix_values))
             if determinant <= 1e-12:
                 raise ValueError("invalid magnetometer matrix")
-            self._mag_matrix = matrix_values
-        self._mag_field_reference = None
-        self._mag_field_valid = False
+        self._mag_bias = list(bias_values)
+        self._mag_scale = list(scale_values)
+        self._mag_matrix = matrix_values
+        self._mag_field_reference = field_reference
+        self._mag_field_valid = field_reference is not None
         self._ahrs.reset()
         self._reset_magnetic_fusion_state()
         self._nine_axis_orientation = None
@@ -2377,6 +2392,8 @@ class XInputController:
     def start_gyro_calibration(self):
         """Begin a one-second stationary zero-bias calibration."""
         with self._gyro_calibration_lock:
+            if self._gyro_calibration_result is not None:
+                return False
             self._gyro_calibration_state = "running"
             self._gyro_calibration_message = "keep_still"
             self._gyro_calibration_started = time.perf_counter()
@@ -2385,7 +2402,6 @@ class XInputController:
             self._gyro_calibration_valid_time = 0.0
             self._gyro_calibration_last_raw = None
             self._gyro_calibration_samples = []
-            self._gyro_calibration_result = None
             self._gyro_calibration_quality = None
         self._gyro_toggle_enabled = False
         self._gyro_smoothed = (0.0, 0.0)
@@ -2399,6 +2415,7 @@ class XInputController:
         self._nine_axis_orientation = None
         self._nine_axis_quaternion = None
         self._nine_axis_has_magnetometer = False
+        return True
 
     def get_gyro_calibration_status(self):
         with self._gyro_calibration_lock:
@@ -2418,6 +2435,8 @@ class XInputController:
     def start_accelerometer_calibration(self):
         """Collect many low-motion gravity directions for ellipsoid fitting."""
         with self._gyro_calibration_lock:
+            if self._accel_calibration_result is not None:
+                return False
             self._accel_calibration_state = "running"
             self._accel_calibration_message = "move_and_pause"
             self._accel_calibration_started = time.perf_counter()
@@ -2426,13 +2445,13 @@ class XInputController:
             self._accel_orientation_bins = set()
             self._accel_calibration_last_fit = 0.0
             self._accel_calibration_last_error = ""
-            self._accel_calibration_result = None
             self._accel_calibration_quality = None
         self._gyro_toggle_enabled = False
         self._gyro_smoothed = (0.0, 0.0)
         self._gyro_was_active = False
         self._tilt_neutral = None
         self._tilt_neutral_quaternion = None
+        return True
 
     def get_accelerometer_calibration_status(self):
         with self._gyro_calibration_lock:
@@ -2541,24 +2560,17 @@ class XInputController:
                 self._accel_calibration_last_error = str(exc)
                 self._accel_calibration_message = "more_orientations"
                 return True
-            self._accel_bias = np.asarray(bias, dtype=np.float64)
-            self._accel_matrix = np.asarray(matrix, dtype=np.float64)
             self._accel_calibration_quality = quality
             self._accel_calibration_result = (bias, matrix, quality)
             self._accel_calibration_state = "success"
             self._accel_calibration_message = "ready_to_save"
-            self._ahrs.reset()
-            self._reset_magnetic_fusion_state()
-            self._nine_axis_orientation = None
-            self._nine_axis_quaternion = None
-            self._nine_axis_has_magnetometer = False
-            self._tilt_neutral = None
-            self._tilt_neutral_quaternion = None
             return True
 
     def start_magnetometer_calibration(self):
         """Begin a guided full-orientation magnetometer calibration."""
         with self._gyro_calibration_lock:
+            if self._mag_calibration_result is not None:
+                return False
             self._mag_calibration_state = "running"
             self._mag_calibration_message = "move_figure_eight"
             self._mag_calibration_started = time.perf_counter()
@@ -2566,7 +2578,6 @@ class XInputController:
             self._mag_orientation_bins = set()
             self._mag_calibration_min = [math.inf, math.inf, math.inf]
             self._mag_calibration_max = [-math.inf, -math.inf, -math.inf]
-            self._mag_calibration_result = None
             self._mag_calibration_last_fit = 0.0
             self._mag_calibration_last_error = ""
         self._gyro_toggle_enabled = False
@@ -2574,6 +2585,7 @@ class XInputController:
         self._gyro_was_active = False
         self._tilt_neutral = None
         self._tilt_neutral_quaternion = None
+        return True
 
     def get_magnetometer_calibration_status(self):
         with self._gyro_calibration_lock:
@@ -2675,21 +2687,9 @@ class XInputController:
                 self._mag_calibration_message = "more_orientations"
                 return True
 
-            self._mag_bias = list(bias)
-            self._mag_scale = [1.0, 1.0, 1.0]
-            self._mag_matrix = np.asarray(matrix, dtype=np.float64)
-            self._mag_field_reference = 1.0
-            self._mag_field_valid = True
             self._mag_calibration_result = (bias, matrix, quality)
             self._mag_calibration_state = "success"
             self._mag_calibration_message = "ready_to_save"
-            self._ahrs.reset()
-            self._reset_magnetic_fusion_state()
-            self._nine_axis_orientation = None
-            self._nine_axis_quaternion = None
-            self._nine_axis_has_magnetometer = False
-            self._tilt_neutral = None
-            self._tilt_neutral_quaternion = None
             return True
 
     def _process_gyro_calibration(self, gyroscope, accelerometer):
@@ -2757,16 +2757,10 @@ class XInputController:
                 self._gyro_calibration_message = "unstable"
                 return True
 
-            self._gyro_bias = list(bias)
-            self._gyro_bias_anchor = list(bias)
-            self._gyro_bias_samples = self.GYRO_FINAL_SAMPLES
-            self._gyro_bias_source = "manual"
-            self._gyro_stationary_samples = 0
-            self._gyro_last_raw = None
             self._gyro_calibration_result = bias
             self._gyro_calibration_quality = quality
             self._gyro_calibration_state = "success"
-            self._gyro_calibration_message = "saved"
+            self._gyro_calibration_message = "ready_to_save"
             return True
 
     @staticmethod

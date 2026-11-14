@@ -7,6 +7,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -333,6 +334,108 @@ class XusbReportTests(unittest.TestCase):
 
 
 class LiveReconfigureTests(unittest.TestCase):
+    def test_accelerometer_accepts_a_calibrated_16384_lsb_gravity_scale(self):
+        config = configparser.ConfigParser()
+        config.read(ROOT / "src" / "profiles" / "System Default.ini", encoding="utf-8")
+        controller = XInputController(config, load_stick_calibration(config), pad=_FakePad())
+        self.addCleanup(controller.close)
+        gain = 1.0 / 16384.0
+        matrix = ((gain, 0, 0), (0, gain, 0), (0, 0, gain))
+        bias = (10.0, 20.0, 30.0)
+        controller.set_accelerometer_calibration(bias, matrix)
+        self.assertEqual(tuple(controller._correct_accelerometer((10, 20, 16414))), (0.0, 0.0, 1.0))
+
+    def test_completed_sensor_measurements_keep_the_active_calibration_until_saved(self):
+        config = configparser.ConfigParser()
+        config.read(ROOT / "src" / "profiles" / "System Default.ini", encoding="utf-8")
+        controller = XInputController(config, load_stick_calibration(config), pad=_FakePad())
+        self.addCleanup(controller.close)
+        old_bias = (4.0, 5.0, 6.0)
+        bias = (1.0, 2.0, 3.0)
+        matrix = ((0.001, 0, 0), (0, 0.001, 0), (0, 0, 0.001))
+
+        with self.subTest(sensor="gyro"):
+            controller.set_gyro_bias(old_bias)
+            controller.start_gyro_calibration()
+            now = controller._gyro_calibration_started + 6.0
+            controller._gyro_calibration_valid_time = 5.0
+            controller._gyro_calibration_stable_started = now - 5.0
+            controller._gyro_calibration_last_sample_time = now - 0.01
+            controller._gyro_calibration_last_raw = bias
+            controller._gyro_calibration_samples = [bias] * 150
+            with patch("xinput_controller.time.perf_counter", return_value=now):
+                controller._process_gyro_calibration(bias, (0, 0, 4096))
+            self.assertEqual(controller.consume_gyro_calibration_result(), bias)
+            self.assertEqual(tuple(controller._gyro_bias), old_bias)
+
+        with self.subTest(sensor="accelerometer"):
+            controller.set_accelerometer_calibration(old_bias, matrix)
+            controller.start_accelerometer_calibration()
+            now = controller._accel_calibration_started + 20.0
+            controller._accel_calibration_samples = [(-4096,) * 3, (4096,) * 3] * 60
+            controller._accel_orientation_bins = set(range(controller.ACCEL_MIN_ORIENTATION_BINS))
+            with (
+                patch("xinput_controller.time.perf_counter", return_value=now),
+                patch("xinput_controller.fit_accelerometer_ellipsoid", return_value=(bias, matrix, {})),
+            ):
+                controller._process_accelerometer_calibration((0, 0, 0), (0, 0, 0))
+            self.assertEqual(controller.consume_accelerometer_calibration_result(), (bias, matrix, {}))
+            self.assertEqual(tuple(controller._accel_bias), old_bias)
+
+        with self.subTest(sensor="magnetometer"):
+            controller.set_magnetometer_calibration(old_bias, matrix=matrix)
+            controller.start_magnetometer_calibration()
+            now = controller._mag_calibration_started + 13.0
+            controller._mag_calibration_samples = [(-60,) * 3, (60,) * 3] * 150
+            controller._mag_calibration_min = [-60] * 3
+            controller._mag_calibration_max = [60] * 3
+            controller._mag_orientation_bins = set(range(controller.MAG_MIN_ORIENTATION_BINS))
+            with (
+                patch("xinput_controller.time.perf_counter", return_value=now),
+                patch("xinput_controller.fit_magnetometer_ellipsoid", return_value=(bias, matrix, {})),
+            ):
+                controller._process_magnetometer_calibration((0, 0, 0))
+            self.assertEqual(controller.consume_magnetometer_calibration_result(), (bias, matrix, {}))
+            self.assertEqual(tuple(controller._mag_bias), old_bias)
+
+    def test_calibration_start_preserves_a_result_waiting_to_save(self):
+        config = configparser.ConfigParser()
+        config.read(ROOT / "src" / "profiles" / "System Default.ini", encoding="utf-8")
+        controller = XInputController(config, load_stick_calibration(config), pad=_FakePad())
+        self.addCleanup(controller.close)
+        for prefix, sensor in (
+            ("gyro", "gyro"), ("mag", "magnetometer"), ("accel", "accelerometer"),
+        ):
+            with self.subTest(sensor=sensor):
+                start = getattr(controller, f"start_{sensor}_calibration")
+                consume = getattr(controller, f"consume_{sensor}_calibration_result")
+                result = (1, 2, 3)
+                setattr(controller, f"_{prefix}_calibration_state", "success")
+                setattr(controller, f"_{prefix}_calibration_result", result)
+                self.assertFalse(start())
+                self.assertEqual(consume(), result)
+                self.assertTrue(start())
+
+    def test_reconfigure_does_not_discard_a_completed_calibration_waiting_to_save(self):
+        config = configparser.ConfigParser()
+        config.read(ROOT / "src" / "profiles" / "System Default.ini", encoding="utf-8")
+        calibration = load_stick_calibration(config)
+        controller = XInputController(config, calibration, pad=_FakePad())
+        self.addCleanup(controller.close)
+        for prefix, consume in (
+            ("gyro", controller.consume_gyro_calibration_result),
+            ("mag", controller.consume_magnetometer_calibration_result),
+            ("accel", controller.consume_accelerometer_calibration_result),
+        ):
+            with self.subTest(sensor=prefix):
+                result = (1, 2, 3)
+                setattr(controller, f"_{prefix}_calibration_state", "success")
+                setattr(controller, f"_{prefix}_calibration_result", result)
+                with self.assertRaisesRegex(ValueError, "calibration"):
+                    controller.reconfigure(config, calibration)
+                self.assertEqual(consume(), result)
+                controller.reconfigure(config, calibration)
+
     def test_audio_updates_are_suppressed_in_game_and_deduplicated(self):
         game = configparser.ConfigParser()
         self.assertTrue(game.read(

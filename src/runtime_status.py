@@ -10,12 +10,29 @@ from pathlib import Path
 
 
 STATUS_PATH = Path(__file__).with_name("controller_status.json")
+SETTINGS_RELOAD_RESULT_LIMIT = 32
+
+
+def settings_reload_result(status, request_id):
+    """Find a completed reply, including from older connectors."""
+    if not request_id:
+        return None
+    results = status.get("settings_reload_results")
+    if isinstance(results, dict):
+        result = results.get(request_id)
+        if isinstance(result, dict) and result.get("state") in ("success", "failed"):
+            return result
+    state = status.get("settings_reload_state")
+    if status.get("settings_reload_request_id") == request_id and state in ("success", "failed"):
+        return {"state": state, "message": status.get("settings_reload_message", "")}
+    return None
 
 
 def initial_controller_status(updated_at):
     return {
         "state": "starting",
         "mode": None,
+        "connection_id": None,
         "battery_percent": None,
         "battery_voltage": None,
         "charging": False,
@@ -55,6 +72,7 @@ def initial_controller_status(updated_at):
         "settings_reload_state": "idle",
         "settings_reload_message": "",
         "settings_reload_updated_at": 0.0,
+        "settings_reload_results": {},
         "rumble": {},
         "firmware_diagnostics": {},
         "async_logging": {
@@ -94,6 +112,14 @@ class ControllerStatusPublisher:
         with self._write_lock:
             with self._state_lock:
                 self._status.update(changes)
+                request_id = changes.get("settings_reload_request_id")
+                state = changes.get("settings_reload_state")
+                if request_id and state in ("success", "failed"):
+                    results = self._status["settings_reload_results"]
+                    results.pop(request_id, None)
+                    results[request_id] = {"state": state, "message": changes.get("settings_reload_message", "")}
+                    if len(results) > SETTINGS_RELOAD_RESULT_LIMIT:
+                        del results[next(iter(results))]
                 self._status["updated_at"] = self._clock()
                 serialized = json.dumps(self._status, ensure_ascii=False)
 

@@ -20,6 +20,7 @@ EN_TEXT = {
     "3D 陀螺儀補償預覽": "3D Gyro Compensation Preview",
     "原始視角速度": "Original turn speeds",
     "調整後視角速度": "Adjusted turn speeds",
+    "按確定後，請在主視窗按儲存／套用。": "After clicking OK, click Save / Apply in the main window.",
     "開啟 S2P 陀螺儀設定": "Open S2P Gyro Settings",
     "開啟 S2P 補償設定": "Open S2P Compensation Settings",
     "無法開啟 S2P 主視窗。": "Could not open S2P settings.",
@@ -40,15 +41,39 @@ EN_TEXT = {
         "The physical stick keeps its original output.",
     "補償倍率已填入，請按主視窗的儲存／套用。":
         "Multipliers entered. Click Save/Apply in the main window.",
-    "1. 選 X 或 Y，填入原補償倍率。首次調整用 1.00。\n"
+    "1. 選 X 或 Y，確認自動帶入的補償倍率。\n"
     "2. 改遊戲視角速度前後，用相同搖桿推幅\n"
     "   從同一地標轉到另一地標，錄影並填入兩次耗時。\n"
     "3. 到 S2P 的「補償設定」輸入建議倍率。":
-        "1. Pick X or Y and enter the old multiplier. Start at 1.00.\n"
+        "1. Pick X or Y and check the current multiplier.\n"
         "2. Record turns between the same landmarks before and\n"
         "   after the speed change. Use the same stick deflection.\n"
         "3. Enter both times and use the result in S2P settings.",
     "原補償倍率": "Original compensation",
+    "目前補償倍率": "Current compensation",
+    "已儲存的補償倍率": "Saved compensation",
+    "現行設定或方案使用滑鼠輸出，無法調整搖桿補償。":
+        "The current settings or profile use mouse output. Stick compensation is unavailable.",
+    "調整視角速度前": "Before changing turn speed",
+    "調整視角速度後": "After changing turn speed",
+    "耗時（秒）": "Time (s)",
+    "目前方案已調整補償倍率": "Compensation is already adjusted",
+    "目前補償倍率為 X {x:.2f}、Y {y:.2f}。\n\n"
+    "要將目前 S2P 設定的 X／Y 補償倍率還原為 1.00 嗎？"
+    "選「否」會以目前的倍率繼續。":
+        "Current compensation is X {x:.2f}, Y {y:.2f}.\n\n"
+        "Reset both axes to 1.00 in the current S2P settings? Choose No to keep these values.",
+    "手把或方案設定已變更，請重新開啟補償視窗。":
+        "The controller or profile settings changed. Reopen the compensation window.",
+    "無法讀取或還原補償倍率": "Could not read or reset compensation",
+    "手把或方案設定已變更，請關閉後重新開啟計算器。":
+        "The controller or profile settings changed. Close and reopen the calculator.",
+    "無法驗證目前的補償設定，請關閉後重新開啟計算器。":
+        "Could not verify the current compensation settings. Close and reopen the calculator.",
+    "目前方案有尚未儲存的變更。要儲存並套用目前方案嗎？":
+        "The current profile has unsaved changes. Save and apply it now?",
+    "目前使用唯讀的系統預設。要將尚未儲存的變更另存為新方案並套用嗎？":
+        "The system default is read-only. Save and apply the changes as a new profile?",
     "補償倍率": "Compensation multiplier",
     "補償倍率須介於 {low:.2f} 和 {high:.2f}。": "Enter a multiplier between {low:.2f} and {high:.2f}.",
     "X（水平）": "X (Horizontal)",
@@ -106,6 +131,13 @@ EN_TEXT = {
     "{seconds} 秒後開始量測": "Measuring in {seconds} s",
     "正在量測 3D 預覽。": "Measuring the 3D preview.",
     "量測完成。": "Measurement complete.",
+    "量測完成。補償倍率已寫入 S2P 設定。": "Measurement complete. Compensation was saved to S2P settings.",
+    "補償倍率已儲存，等待連接程式套用。": "Compensation saved. Waiting for the connector to apply it.",
+    "補償倍率已儲存並套用至目前連線。": "Compensation saved and applied to the current connection.",
+    "補償倍率即時套用失敗。": "Could not apply the compensation to the current connection.",
+    "補償倍率已儲存，尚未確認即時套用結果。": "Compensation saved. The connector has not confirmed live application.",
+    "建議倍率超出設定範圍，未寫入。": "Suggested compensation is outside the supported range and was not saved.",
+    "無法寫入補償倍率。": "Could not save compensation.",
     "量測已取消。": "Measurement canceled.",
     "開始": "Start",
     "請先結束目前的測試再切換語言。": "End the current test before switching languages.",
@@ -179,6 +211,13 @@ EN_TEXT = {
         "You can still use the mouse without a controller.",
     "3D 點靶水平範圍": "3D target horizontal spread",
     "3D 點靶垂直範圍": "3D target vertical spread",
+    "提高後，3D 點靶會在更多不同的距離出現。": "Raise this to spawn 3D targets at a wider range of distances.",
+    "控制 3D 點靶左右的出現範圍。數值越高，越常需要大幅轉身。":
+        "Controls how far left or right 3D targets appear. Higher values require more large turns.",
+    "控制 3D 點靶上下的出現範圍。數值越高，越常需要抬高或壓低視角。":
+        "Controls how high or low 3D targets appear. Higher values require more vertical aiming.",
+    "以畫面短邊的百分比設定 2D 靶心大小。": "Sets the 2D target diameter as a percentage of the shorter screen edge.",
+    "3D 靶離視角越遠，顏色越暗。": "Darkens 3D targets as their distance from the camera increases.",
     "3D 滑鼠感度（%）": "3D mouse sensitivity (%)",
     "回合與靶": "Drills and targets",
     "視角與顯示": "Look and display",
@@ -202,6 +241,7 @@ EN_TEXT = {
     "右搖桿垂直推到底時的轉向速度，包含映射至右搖桿的陀螺儀輸出。":
         "Turn speed at full vertical right-stick output, including gyro mapped to the right stick.",
     "手把視角速度 {horizontal}／{vertical}°/秒": "Stick turn speed {horizontal}/{vertical}°/s",
+    "回合中切換手把視角速度": "Stick turn speed changed during the round",
     "100% 為預設感度，每像素轉動 0.18°。50% 為一半感度。":
         "100% is the default (0.18° per cursor pixel). 50% halves the sensitivity.",
     "滑鼠感度 {value}%": "Mouse sensitivity {value}%",
@@ -272,6 +312,7 @@ EN_TEXT = {
     "繪圖 {fps:.0f} FPS　更新 {hz:.0f} Hz": "Draw {fps:.0f} FPS   Update {hz:.0f} Hz",
     "測試已中斷，請重新開始。": "Test interrupted. Start a new round.",
     "用滑鼠或右搖桿轉動視角，追蹤移動球靶。": "Turn with the mouse or right stick to follow the moving target.",
+    "用右搖桿轉動視角，以固定靶為地標。": "Turn with the right stick and use the fixed target as a landmark.",
     "按右鍵釋放游標。": "Right-click to release the pointer.",
     "游標已釋放。按右鍵繼續用滑鼠瞄準。": "Pointer released. Right-click to resume mouse aim.",
     "用滑鼠或右搖桿轉動視角，按左鍵、RT 或空白鍵射擊。":
@@ -1657,8 +1698,16 @@ EN_TEXT = {
         "Calibration timed out. Keep the controller connected on a stable surface and try again.",
     "校正期間手把已斷線，請重新連線後再試。":
         "The controller disconnected during calibration. Reconnect and try again.",
+    "校正期間手把連線已變更。請確認手把後重新開始感測器校正。":
+        "The controller connection changed during calibration. Check your controller and restart sensor calibration.",
+    "無法確認手把連線。請確認手把後重新開始感測器校正。":
+        "The controller connection could not be verified. Check your controller and restart sensor calibration.",
+    "陀螺儀校正已完成並儲存。加速度計沿用原有資料，磁力計也沿用原有資料。":
+        "Gyro calibration was saved. The accelerometer and magnetometer keep their existing calibration data.",
     "校正完成，但無法安全寫入 config.ini。":
         "Calibration completed, but config.ini could not be written safely.",
+    "校正已儲存。請重新連線以套用新校正。":
+        "Calibration was saved. Reconnect the controller to apply it.",
     "三軸數值變動過大。請勿碰觸手把或桌面後重試。":
         "The three-axis readings varied too much. Do not touch the controller or desk, then try again.",
     "持續偵測到移動，無法取得一秒穩定資料。":

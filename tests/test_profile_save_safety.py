@@ -1,7 +1,9 @@
 import hashlib
+import json
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import Mock, patch
 
@@ -53,6 +55,67 @@ class ProfileSaveSafetyTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
         gui._active_profile_content_baseline = gui.profile_file_fingerprint("Alpha")
+
+    def test_main_window_reads_its_reload_result_after_preview_publishes_another(self):
+        path = self.config_path.with_name("controller_status.json")
+        path.write_text(json.dumps({
+            "updated_at": time.time(),
+            "settings_reload_request_id": "preview",
+            "settings_reload_state": "success",
+            "settings_reload_results": {
+                "main": {"state": "failed", "message": "calibration is running"},
+            },
+        }), encoding="utf-8")
+        gui = self.gui
+        gui.root = Mock()
+        gui.controller_status_label = Mock()
+        gui._pending_settings_reload_request = "main"
+        with patch.object(config_gui, "STATUS_PATH", path):
+            gui.update_controller_status(schedule_next=False)
+            gui.update_controller_status(schedule_next=False)
+        self.assertIsNone(gui._pending_settings_reload_request)
+        config_gui.messagebox.showerror.assert_called_once()
+        self.assertIn("calibration is running", config_gui.messagebox.showerror.call_args.args[1])
+
+    def test_leaving_main_window_offers_to_save_dirty_profile_only(self):
+        gui = self.gui
+        gui.root = Mock()
+        gui.root.state.return_value = "normal"
+        gui.root.grab_current.return_value = None
+        gui._another_app_has_focus = Mock(return_value=False)
+        gui._focus_save_prompt_open = False
+        gui.has_unsaved_changes = Mock(return_value=True)
+        gui.save_current_profile = Mock()
+
+        with patch.object(config_gui.messagebox, "askyesno", side_effect=(False, True)) as prompt:
+            gui._check_focus_save_prompt()
+            prompt.assert_not_called()
+            gui._another_app_has_focus.return_value = True
+            gui.has_unsaved_changes.return_value = False
+            gui._check_focus_save_prompt()
+            prompt.assert_not_called()
+            gui.has_unsaved_changes.return_value = True
+            gui._check_focus_save_prompt()
+            gui.save_current_profile.assert_not_called()
+            gui._check_focus_save_prompt()
+
+        gui.save_current_profile.assert_called_once_with(show_message=False)
+
+    def test_external_compensation_reset_updates_clean_values_and_keeps_local_edits(self):
+        gui = self.gui
+        gui.config.set("gyro_mapping", "x_compensation", "0.80")
+        gui.config.set("gyro_mapping", "y_compensation", "1.25")
+        x = Mock()
+        y = Mock()
+        x.get.return_value = "0.8"
+        y.get.return_value = "0.75"
+        gui.gyro_compensation_vars = {"X": x, "Y": y}
+
+        gui._sync_saved_gyro_compensation()
+
+        x.set.assert_called_once_with("1.00")
+        y.set.assert_not_called()
+        self.assertEqual(gui.config.getfloat("gyro_mapping", "y_compensation"), 1.0)
 
     def test_canceled_save_keeps_external_profile_changes(self):
         for mutation in ("edit", "delete"):

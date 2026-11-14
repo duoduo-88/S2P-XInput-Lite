@@ -63,6 +63,29 @@ class AimInputSamplerTests(unittest.TestCase):
         self.assertEqual(latest, state(8))
         self.assertEqual([value for _, value in samples], [latest])
 
+    def test_inflight_poll_cannot_queue_input_after_aim_capture_is_restarted(self):
+        self.sampler.set_aim_capture(True)
+        self.poll(state(1))
+        pressed = state(2, ("START",), 1)
+
+        def read_during_capture_restart(_device):
+            self.sampler.set_aim_capture(False)
+            self.sampler.set_aim_capture(True)
+            return pressed
+
+        self.backend.read_state.side_effect = read_during_capture_restart
+        self.sampler._poll_once()
+        latest, _, samples = self.sampler.read_aim_snapshot(self.device)
+
+        self.assertEqual(latest, pressed)
+        self.assertEqual(samples, ())
+        self.assertEqual([value for _, value in self.sampler.read_snapshot()[1]], [state(1), pressed])
+
+        self.backend.read_state.side_effect = None
+        self.poll(state(3), state(4, ("START",), 1))
+        _, _, samples = self.sampler.read_aim_snapshot(self.device)
+        self.assertEqual([value for _, value in samples], [state(3), state(4, ("START",), 1)])
+
     def test_sampler_waits_for_device_instead_of_polling_an_empty_slot(self):
         self.sampler.set_device(None)
         wake = Mock()
@@ -122,6 +145,33 @@ class AimInputRoutingTests(unittest.TestCase):
         sampler._poll_once()
         raw = replace(raw, key="raw:2", index=2, name="Raw 2")
         window._configure_native_sampler()
+
+        key, latest, pending, _ = window._read_aim_input()
+        self.assertNotEqual(key, original_key)
+        self.assertEqual(latest, pressed)
+        self.assertEqual(pending, ())
+
+    def test_switching_raw_selection_also_discards_an_inflight_read_of_the_old_selection(self):
+        raw = GamepadDevice("raw:1", "raw_hid", 1, "Raw 1", False)
+        native = GamepadDevice("xinput:0", "xinput", 0, "Controller", True)
+        window = self.make_window(raw)
+        window._selected_device = lambda: raw
+        window._native_device_for_raw_hid = lambda: native
+        window._read_aim_raw_report_rate = lambda: None
+        window._set_aim_input_active(True)
+        sampler = window.native_sampler
+        sampler._poll_once()
+        original_key, _, _, _ = window._read_aim_input()
+        pressed = state(2, ("B",))
+
+        def read_during_selection_change(_device):
+            nonlocal raw
+            raw = replace(raw, key="raw:2", index=2, name="Raw 2")
+            window._configure_native_sampler()
+            return pressed
+
+        window.backend.read_state.side_effect = read_during_selection_change
+        sampler._poll_once()
 
         key, latest, pending, _ = window._read_aim_input()
         self.assertNotEqual(key, original_key)

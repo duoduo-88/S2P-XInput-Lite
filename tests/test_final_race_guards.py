@@ -171,7 +171,7 @@ class CallbackCommitTests(unittest.TestCase):
             [
                 "connected",
                 "disconnected",
-                "ble disconnect",
+                "disc 2",
                 "restart",
             ],
         )

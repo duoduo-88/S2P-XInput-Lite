@@ -3,11 +3,13 @@ import json
 import ast
 from pathlib import Path
 import subprocess
+from contextlib import contextmanager
 import threading
 import unittest
 from unittest.mock import Mock, patch
 
 import config_gui
+import serial
 from esp32_bridge import ESP32Bridge
 
 
@@ -24,6 +26,86 @@ class BridgeHostShutdownTests(unittest.TestCase):
         bridge._release_preferred_connection_request = Mock()
         bridge.serial = Mock(is_open=True)
         return bridge
+
+    def test_queued_serial_write_does_not_follow_port_replacement(self):
+        for reopen in (False, True):
+            with self.subTest(reopen=reopen):
+                bridge = self.make_bridge()
+                original_port = bridge.serial
+                replacement_port = Mock(is_open=True) if reopen else None
+
+                @contextmanager
+                def replace_port_before_write():
+                    bridge.running = reopen
+                    bridge.serial = replacement_port
+                    yield
+
+                bridge._write_lock = replace_port_before_write()
+
+                self.assertFalse(bridge.send("status lite"))
+                original_port.write.assert_not_called()
+                if replacement_port is not None:
+                    replacement_port.write.assert_not_called()
+
+    def test_read_can_finish_after_serial_reference_is_cleared(self):
+        bridge = self.make_bridge()
+        original_port = bridge.serial
+        original_port.in_waiting = 0
+
+        def read(_size):
+            bridge.running = False
+            bridge.serial = None
+            return b"x"
+
+        original_port.read.side_effect = read
+
+        bridge._read_loop()
+
+        original_port.read.assert_called_once_with(1)
+
+    def test_usb_failure_wakes_controller_ack_waiter(self):
+        bridge = self.make_bridge()
+        bridge.bridge_disconnected_callback = Mock()
+
+        bridge._report_bridge_failure()
+        bridge._report_bridge_failure()
+
+        self.assertFalse(bridge.is_ready)
+        self.assertTrue(bridge._command_response_event.is_set())
+        bridge.bridge_disconnected_callback.assert_called_once_with()
+
+    def test_usb_failure_aborts_pending_host_handshake(self):
+        bridge = ESP32Bridge("test")
+        thread = Mock()
+        thread.start.side_effect = bridge._report_bridge_failure
+        wait = bridge._host_session_event.wait
+        with (
+            patch("esp32_bridge.serial.Serial"),
+            patch("esp32_bridge.threading.Thread", return_value=thread),
+            patch.object(bridge._host_session_event, "wait", side_effect=lambda timeout: wait(0)),
+        ):
+            with self.assertRaisesRegex(serial.SerialException, "disconnected during startup"):
+                bridge.open()
+
+        self.assertTrue(bridge._host_session_event.is_set())
+
+    def test_input_already_handed_off_is_ignored_after_connector_shutdown(self):
+        source = (Path(__file__).resolve().parents[1] / "src/main.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        handler = next(node for node in ast.walk(tree)
+                       if isinstance(node, ast.FunctionDef) and node.name == "on_input")
+        handler.body = [ast.Global(node.names) if isinstance(node, ast.Nonlocal) else node
+                        for node in handler.body]
+        module = ast.fix_missing_locations(ast.Module(body=[handler], type_ignores=[]))
+        parse = Mock(return_value=None)
+        context = dict(stop_requested=False, parse_input_report=parse)
+        exec(compile(module, "main.on_input", "exec"), context)
+
+        context["on_input"](b"live")
+        context["stop_requested"] = True
+        context["on_input"](b"stale")
+
+        parse.assert_called_once_with(b"live")
 
     def test_gui_allows_complete_cleanup_before_force_kill(self):
         gui = object.__new__(config_gui.ConfigGUI)

@@ -173,31 +173,31 @@ def read_pair(config, section, key):
     return int(x.strip()), int(y.strip())
 
 
-def load_stick_calibration(config, controller_id=None):
-    """Load per-controller calibration, falling back to legacy [sticks]."""
+def load_stick_calibration(config, controller_id=None, *, fallback_to_legacy=True):
+    """Load per-controller calibration, optionally falling back to [sticks]."""
     section = calibration_section(controller_id)
     required = (
         "left_center", "left_max", "left_min",
         "right_center", "right_max", "right_min",
     )
-    if section != "sticks" and not (
+    if fallback_to_legacy and section != "sticks" and not (
         config.has_section(section)
         and all(config.has_option(section, key) for key in required)
     ):
         section = "sticks"
 
-    return {
-        "left": {
-            "center": read_pair(config, section, "left_center"),
-            "max": read_pair(config, section, "left_max"),
-            "min": read_pair(config, section, "left_min"),
-        },
-        "right": {
-            "center": read_pair(config, section, "right_center"),
-            "max": read_pair(config, section, "right_max"),
-            "min": read_pair(config, section, "right_min"),
-        },
-    }
+    calibration = {}
+    for side in ("left", "right"):
+        values = {}
+        for field in ("center", "max", "min"):
+            key = f"{side}_{field}"
+            pair = read_pair(config, section, key)
+            minimum = 0 if field == "center" else 1
+            if any(not minimum <= value <= 4095 for value in pair):
+                raise ValueError(f"Invalid stick calibration [{section}] {key}")
+            values[field] = pair
+        calibration[side] = values
+    return calibration
 
 
 def store_stick_calibration(config, calibration, controller_id=None):

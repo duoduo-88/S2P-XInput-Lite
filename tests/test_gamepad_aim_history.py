@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
 from tkinter import ttk
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 def basis(**settings):
@@ -17,6 +17,18 @@ def basis(**settings):
 
 
 class AimHistoryTests(unittest.TestCase):
+    def test_rounds_with_live_speed_changes_are_saved_without_comparison(self):
+        from gamepad_aim_history import AimHistory
+
+        history = AimHistory(None)
+        fixed = basis(stick_horizontal_speed=560)
+        mixed = dict(fixed, stick_speed_changed=True)
+        history.add(fixed, {"hits": 8})
+        history.add(mixed, {"hits": 10})
+        self.assertEqual(history.add_with_comparison(mixed, {"hits": 9}), ((), False))
+        self.assertEqual(history.add(fixed, {"hits": 9}), (("hits", 1, True),))
+        self.assertEqual(len(history.records), 4)
+
     def test_reopened_history_matches_after_color_and_reticle_changes(self):
         from gamepad_aim_history import AimHistory
 
@@ -195,6 +207,29 @@ class AimHistoryTests(unittest.TestCase):
                 history.clear()
             self.assertEqual(len(history.records), 1)
             self.assertEqual(history.records[0]["metrics"], {"hits": 3})
+
+    def test_history_refresh_error_does_not_change_whether_save_or_clear_succeeded(self):
+        from gamepad_aim_history import AimHistory
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "history.json"
+            history = AimHistory(path)
+            history.add(basis(), {"hits": 3})
+            closed_view = Mock()
+            closed_view.refresh.side_effect = tk.TclError("history widget already closed")
+            live_view = Mock()
+            history._views.update((closed_view, live_view))
+
+            with self.assertLogs("gamepad_aim_history", level="WARNING"):
+                result = history.add_with_comparison(basis(), {"hits": 4})
+            self.assertEqual(result, ((("hits", 1.0, True),), True))
+            self.assertEqual(len(AimHistory(path).records), 2)
+            live_view.refresh.assert_called_once()
+
+            with self.assertLogs("gamepad_aim_history", level="WARNING"):
+                history.clear()
+            self.assertFalse(AimHistory(path).records)
+            self.assertEqual(live_view.refresh.call_count, 2)
 
     def test_open_instances_do_not_overwrite_each_others_records(self):
         from gamepad_aim_history import AimHistory

@@ -1,6 +1,7 @@
 """Local results for completed aim-test rounds."""
 
 import json
+import logging
 import math
 import tkinter as tk
 from contextlib import nullcontext
@@ -66,6 +67,8 @@ def _comparison_basis(basis):
 
 
 def _matching_records(records, basis):
+    if basis.get("stick_speed_changed"):
+        return ()
     comparison = _comparison_basis(basis)
     return (record for record in reversed(records) if _comparison_basis(record["basis"]) == comparison)
 
@@ -224,8 +227,15 @@ class AimHistory:
         self._refresh_views()
 
     def _refresh_views(self):
-        for view in self._views:
-            view.refresh()
+        for view in tuple(self._views):
+            try:
+                view.refresh()
+            except tk.TclError:
+                # The result is already committed. A widget can be destroyed
+                # during teardown while another history view is still open.
+                logging.getLogger(__name__).warning(
+                    "Could not refresh an aiming history view", exc_info=True
+                )
 
     def create_view(self, parent, translate, on_clear=lambda: None, *, clear_button=None) -> ttk.Frame:
         """Create a live history view for the caller to place in its layout."""
@@ -371,7 +381,8 @@ class _HistoryView(ttk.Frame):
             self.tree.insert(
                 "", "end", iid=str(index), values=(date, self._mode_text(basis["mode"]), *values),
             )
-        self.clear_button.state(["!disabled" if self.records else "disabled"])
+        if self.clear_button.winfo_exists():
+            self.clear_button.state(["!disabled" if self.records else "disabled"])
         if self.records:
             newest = str(len(self.records) - 1)
             self.tree.selection_set(newest)
@@ -435,7 +446,9 @@ class _HistoryView(ttk.Frame):
         if _MODE_LABELS[mode][0] == "3D":
             horizontal = basis.get("stick_horizontal_speed", DEFAULT_STICK_TURN_SPEED[0])
             vertical = basis.get("stick_vertical_speed", DEFAULT_STICK_TURN_SPEED[1])
-            if type(horizontal) is int and type(vertical) is int:
+            if basis.get("stick_speed_changed"):
+                options.append(self.tr("回合中切換手把視角速度"))
+            elif type(horizontal) is int and type(vertical) is int:
                 options.append(self.tr("手把視角速度 {horizontal}／{vertical}°/秒").format(
                     horizontal=horizontal, vertical=vertical,
                 ))

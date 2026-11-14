@@ -34,6 +34,44 @@ class SingleInstanceTests(unittest.TestCase):
         instance.notify_existing.assert_called_once_with()
         instance.close.assert_called_once_with()
 
+    def test_connector_without_ownership_leaves_status_and_queue_intact(self):
+        import main as connector
+
+        for primary, error in ((False, None), (True, OSError("guard unavailable"))):
+            with self.subTest(primary=primary):
+                instance = Mock(is_primary=primary, error=error)
+                with (
+                    patch.object(connector, "SingleInstance", return_value=instance),
+                    patch.object(connector, "install_async_stdio") as logging,
+                    patch.object(connector, "ControllerCommandInbox") as inbox,
+                    patch.object(connector, "ControllerStatusPublisher") as status,
+                    patch.object(connector, "print"),
+                ):
+                    self.assertEqual(connector.main(), 1)
+                logging.assert_not_called()
+                inbox.assert_not_called()
+                status.assert_not_called()
+                instance.close.assert_called_once_with()
+
+    def test_connector_releases_its_guard_and_logging_when_startup_fails(self):
+        import main as connector
+
+        events = []
+        instance = Mock(is_primary=True, error=None)
+        instance.close.side_effect = lambda: events.append("release")
+        with (
+            patch.object(connector, "SingleInstance", return_value=instance),
+            patch.object(connector, "install_async_stdio"),
+            patch.object(connector, "shutdown_async_stdio", side_effect=lambda: events.append("flush")),
+            patch.object(connector, "ControllerCommandInbox"),
+            patch.object(connector, "ControllerStatusPublisher"),
+            patch.object(connector, "load_config", side_effect=OSError("startup failed")),
+        ):
+            with self.assertRaisesRegex(OSError, "startup failed"):
+                connector.main()
+
+        self.assertEqual(events, ["flush", "release"])
+
     @unittest.skipUnless(os.name == "nt", "Windows named events required")
     def test_gyro_settings_action_is_delivered_separately_from_activation(self):
         name = f"S2P-XInput-Lite.Tests.{uuid.uuid4()}"

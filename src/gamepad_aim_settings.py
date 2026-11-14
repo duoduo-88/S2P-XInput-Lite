@@ -215,7 +215,17 @@ def show_aim_settings(parent, tr, current, apply):
         "stick_vertical_speed": "右搖桿垂直推到底時的轉向速度，包含映射至右搖桿的陀螺儀輸出。",
         "tracking_arc": "0° 使用原本的路線。180° 在左右各 90° 處折返。360° 在正後方折返，經過正面後往另一側移動。",
         "tracking_speed": "環繞路線在 100% 時為 90°/秒，最高 600% 為 540°/秒。",
+        "depth": "提高後，3D 點靶會在更多不同的距離出現。",
+        "horizontal_spread": "控制 3D 點靶左右的出現範圍。數值越高，越常需要大幅轉身。",
+        "vertical_spread": "控制 3D 點靶上下的出現範圍。數值越高，越常需要抬高或壓低視角。",
+        "target_size_2d": "以畫面短邊的百分比設定 2D 靶心大小。",
     }
+
+    def add_help(parent, row, text, *, pady=0):
+        marker = tk.Label(parent, text="?", width=2, relief="solid", borderwidth=1, cursor="question_arrow")
+        marker.grid(row=row, column=3, sticky="w", padx=(6, 0), pady=pady)
+        HoverTip(marker, tr(text))
+
     first = None
     for panel, inputs in ((drills, drill_inputs), (controls, control_inputs)):
         for row, (key, label) in enumerate(inputs):
@@ -225,7 +235,7 @@ def show_aim_settings(parent, tr, current, apply):
                                 textvariable=values[key], width=10)
             entry.grid(row=row, column=1, sticky="ew", pady=4)
             if key in input_help:
-                HoverTip(entry, tr(input_help[key]))
+                add_help(panel, row, input_help[key])
             if first is None:
                 first = entry
     ttk.Button(
@@ -257,6 +267,8 @@ def show_aim_settings(parent, tr, current, apply):
                 command=lambda value, text=reading, unit=suffix: text.set(f"{round(float(value))}{unit}"),
             ).grid(row=row, column=1, sticky="ew", pady=4)
             ttk.Label(panel, textvariable=reading, width=6).grid(row=row, column=2, sticky="w", padx=(6, 0))
+            if key in input_help:
+                add_help(panel, row, input_help[key])
     labels = dict(drill_inputs + control_inputs + drill_sliders + control_sliders)
 
     def set_color(key, button, color):
@@ -318,7 +330,7 @@ def show_aim_settings(parent, tr, current, apply):
         display, text=tr("全螢幕"), variable=fullscreen, command=sync_size_picker,
     )
     fullscreen_option.pack(side="left", padx=(8, 0))
-    HoverTip(fullscreen_option, tr("全螢幕會暫時切換螢幕解析度。關閉測試後會還原。"))
+    add_help(controls, display_row, "全螢幕會暫時切換螢幕解析度。關閉測試後會還原。")
     sync_size_picker()
 
     sound = tk.BooleanVar(dialog, current.sound)
@@ -329,12 +341,13 @@ def show_aim_settings(parent, tr, current, apply):
     ttk.Checkbutton(controls, text=tr("加深遠近效果"), variable=depth_shading).grid(
         row=display_row + 1, column=0, columnspan=3, sticky="w", pady=6,
     )
+    add_help(controls, display_row + 1, "3D 靶離視角越遠，顏色越暗。")
     auto_input_switch = tk.BooleanVar(dialog, current.auto_input_switch)
     auto_switch_option = ttk.Checkbutton(
         controls, text=tr("啟用手把與滑鼠自動銜接"), variable=auto_input_switch,
     )
     auto_switch_option.grid(row=display_row + 2, column=0, columnspan=3, sticky="w", pady=(0, 6))
-    HoverTip(auto_switch_option, tr("關閉時，偵測到手把就停用滑鼠瞄準與左鍵射擊。未偵測到手把時可用滑鼠。"))
+    add_help(controls, display_row + 2, "關閉時，偵測到手把就停用滑鼠瞄準與左鍵射擊。未偵測到手把時可用滑鼠。", pady=(0, 6))
     error = tk.StringVar(dialog)
     footer = ttk.Frame(dialog, padding=(10, 0, 10, 12))
     footer.pack(fill="x")
