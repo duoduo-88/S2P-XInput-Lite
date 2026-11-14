@@ -37,9 +37,7 @@ fixed serial; that fixed serial cannot establish a unique HID/reconnect identity
 Raw HID verification also requires its actual USB product string.
 
 Physical USB XInput, XUSB20, Microsoft OS Auto probing and the old Auto mode
-are removed because of licensing: presenting the ESP32 itself to Windows as an
-XInput/Xbox-class device requires a license this project does not hold. Do not
-reintroduce a physical XInput or XUSB personality in firmware.
+were removed because of licensing issues. Do not add them.
 Windows desktop XInput continues through Bridge and ViGEmBus,
 including mappings, game rumble and audio haptics. This preservation is an
 implementation intention backed by automated regression checks where recorded;
