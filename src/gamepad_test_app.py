@@ -11,7 +11,7 @@ import tkinter as tk
 from pathlib import Path
 
 from config_utils import CONFIG_PATH, atomic_write_config, config_file_lock, load_config
-from dialog_layout import startup_banner_geometry
+from dialog_layout import install_centered_dialogs, startup_banner_geometry
 from gamepad_test_window import GamepadTestWindow, TEST_ICON_PATH
 from localization import translate_text
 from single_instance import GYRO_SETTINGS_ACTION, SETTINGS_INSTANCE_NAME, SingleInstance, activate_tk_window
@@ -297,6 +297,8 @@ def main(instance=None):
                 splash = None
         tester = GamepadTestWindow(host)
         tester.open()
+        # System dialogs without a parent would otherwise use the hidden root.
+        install_centered_dialogs(lambda: tester.window)
         if splash is not None:
             delay_ms = max(
                 0,
