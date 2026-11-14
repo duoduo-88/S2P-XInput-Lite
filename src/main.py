@@ -240,6 +240,7 @@ def _run_connector():
     # Set only by the GUI or console shutdown request. A lost transport also
     # stops the connector, but its error must remain visible to the user.
     shutdown_requested = False
+    transport_lost = False
     controller = None
     connection_mode = None
     gui_pid = os.environ.get("S2P_GUI_PID", "")
@@ -977,10 +978,12 @@ def _run_connector():
     def on_transport_unavailable():
         """Stop the connector when its BLE radio or USB bridge is gone."""
         nonlocal stop_requested
+        nonlocal transport_lost
         nonlocal gyro_initialization_tracking
         nonlocal gyro_initialization_announced
         nonlocal active_connection
         active_connection = None
+        transport_lost = True
         stop_requested = True
         gyro_initialization_tracking = False
         gyro_initialization_announced.clear()
@@ -1686,6 +1689,27 @@ def _run_connector():
         if deferred_command is not None:
             deferred_command.finish()
         cleanup()
+
+    if transport_lost and not shutdown_requested:
+        # Without this the console closes as soon as the process exits,
+        # hiding why the connection stopped.
+        print()
+        if connection_mode == "esp32":
+            print(tr(
+                f"ESP32（{port}）已中斷，連接程式已停止。",
+                f"The ESP32 ({port}) disconnected and the connector stopped.",
+            ))
+            print(tr(
+                "請確認 USB 連接線後，在主視窗按「重啟連線」。",
+                "Check the USB cable, then click Restart in the main window.",
+            ))
+        else:
+            print(tr(
+                "藍牙已無法使用，連接程式已停止。請確認藍牙已開啟後，在主視窗按「重啟連線」。",
+                "Bluetooth is unavailable and the connector stopped. "
+                "Turn Bluetooth on, then click Restart in the main window.",
+            ))
+        wait_for_error_acknowledgment()
 
 
 if __name__ == "__main__":

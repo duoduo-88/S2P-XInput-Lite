@@ -47,7 +47,7 @@ from esp32_detection import (
     find_esp32_firmware,
     find_esp32_port,
 )
-from dialog_layout import startup_banner_geometry
+from dialog_layout import centered_message_box, install_centered_dialogs, startup_banner_geometry
 from direction_deadzones import CUSTOM_DEADZONE_KEY
 from firmware_flash_guard import FlashProbeError, probe_esp32_flash_size
 from gamepad_aim_display import DISPLAY_RESTORE_RETRY_MS
@@ -369,17 +369,22 @@ def _install_localized_messageboxes():
                     kwargs.pop("parent", None)
                     parent = None
 
-            return _original(
-                translate_text(title, _GUI_LANGUAGE),
-                translate_text(message, _GUI_LANGUAGE),
-                *args,
-                **kwargs
-            )
+            # Windows centers MessageBox on the screen; keep it over the window.
+            # A hidden focused dialog falls back to the main window.
+            with centered_message_box(parent, _GUI_ROOT):
+                return _original(
+                    translate_text(title, _GUI_LANGUAGE),
+                    translate_text(message, _GUI_LANGUAGE),
+                    *args,
+                    **kwargs
+                )
 
         setattr(messagebox, name, localized)
 
 
 _install_localized_messageboxes()
+# Message boxes are centered by the localized wrapper above.
+install_centered_dialogs(lambda: _GUI_ROOT, messageboxes=False)
 
 # 優先使用 Per-Monitor V2，讓 4K 與多螢幕環境取得正確 DPI。
 # 舊版 Windows 不支援時再逐級退回。

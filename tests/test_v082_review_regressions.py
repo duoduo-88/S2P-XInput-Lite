@@ -259,6 +259,177 @@ def _run_queued_command(command, *, reconfigure_effects=(), start_results=(), bu
     return publisher, request, xinput
 
 
+def _run_esp32_until_transport_loss(*, shutdown_first=False):
+    """Run an ESP32 session whose USB bridge disappears on the first loop pass."""
+    with tempfile.TemporaryDirectory() as tmp, ExitStack() as mocks:
+        config_path = Path(tmp) / "config.ini"
+        config = configparser.ConfigParser()
+        config.read(DEFAULT_CONFIG_PATH, encoding="utf-8")
+        with config_path.open("w", encoding="utf-8") as stream:
+            config.write(stream)
+
+        controller = Mock(controller_id=None, is_ready=True)
+        controller.open.side_effect = lambda: controller.connected_callback()
+        controller.get_rumble_diagnostics.return_value = {}
+        controller.get_firmware_diagnostics.return_value = {}
+        xinput = Mock(mapping_layers=[])
+        xinput.get_rumble_diagnostics.return_value = {}
+        xinput.get_gyro_initialization_status.return_value = {
+            "complete": True, "ready": True, "source": "saved",
+        }
+        for sensor in ("gyro", "magnetometer", "accelerometer"):
+            getattr(xinput, f"get_{sensor}_calibration_status").return_value = {
+                "state": "idle", "message": "", "progress": 0, "spans": (0, 0, 0),
+            }
+            getattr(xinput, f"consume_{sensor}_calibration_result").return_value = None
+        dispatcher = Mock()
+        dispatcher.run_exclusive.side_effect = lambda callback, timeout: callback() or True
+        handler = {}
+        sleeps = []
+
+        def sleep(_delay):
+            sleeps.append(_delay)
+            if len(sleeps) > 1:
+                raise KeyboardInterrupt
+            if shutdown_first:
+                handler["callback"]()  # The GUI asked the connector to stop.
+            controller.bridge_disconnected_callback()  # USB cable unplugged.
+
+        class Bridge:
+            """A real class keeps main's isinstance(controller, ESP32Bridge) valid."""
+
+        mocks.enter_context(patch.object(Bridge, "__new__", return_value=controller))
+        mocks.enter_context(patch.dict(os.environ, {"S2P_GUI_PID": ""}))
+        printed = Mock()
+        prompt = Mock()
+        mocks.enter_context(patch.multiple(
+            connector,
+            CONFIG_PATH=config_path,
+            config_file_lock=nullcontext,
+            find_wired_controller=Mock(return_value=None),
+            find_esp32_port=Mock(return_value="COM5"),
+            ESP32Bridge=Bridge,
+            XInputController=Mock(return_value=xinput),
+            InputDispatcher=Mock(return_value=dispatcher),
+            AudioHaptics=Mock(),
+            SharedTestTelemetry=Mock(),
+            ControllerCommandInbox=Mock(return_value=Mock(next=Mock(return_value=None))),
+            ControllerStatusPublisher=Mock(),
+            reconcile_active_hidhide=Mock(return_value={}),
+            watch_parent_process_exit=Mock(),
+            print=printed,
+            input=prompt,
+        ))
+        mocks.enter_context(patch.object(
+            connector.signal, "signal",
+            side_effect=lambda _signum, callback: handler.__setitem__("callback", callback),
+        ))
+        mocks.enter_context(patch.object(connector.time, "sleep", side_effect=sleep))
+        connector._run_connector()
+    text = " ".join(str(call.args[0]) for call in printed.call_args_list if call.args)
+    return prompt, text
+
+
+class TransportLossPromptTests(unittest.TestCase):
+    def test_unplugged_bridge_keeps_the_console_open_with_a_reason(self):
+        prompt, text = _run_esp32_until_transport_loss()
+
+        prompt.assert_called_once()
+        self.assertTrue("ESP32（COM5）已中斷" in text or "ESP32 (COM5) disconnected" in text, text)
+
+    def test_gui_shutdown_still_closes_without_waiting(self):
+        prompt, _text = _run_esp32_until_transport_loss(shutdown_first=True)
+
+        prompt.assert_not_called()
+
+
+class MessageBoxCenteringTests(unittest.TestCase):
+    def test_dialog_is_centered_over_its_owner(self):
+        from dialog_layout import centered_position
+
+        self.assertEqual(
+            centered_position((200, 100), (100, 100, 600, 400), (0, 0, 1920, 1040)), (300, 250),
+        )
+
+    def test_dialog_stays_inside_the_monitor_work_area(self):
+        from dialog_layout import centered_position
+
+        # An owner near the top-left corner must not push the dialog off screen.
+        self.assertEqual(centered_position((400, 300), (-50, -20, 200, 100), (0, 0, 1920, 1040)), (0, 0))
+        self.assertEqual(
+            centered_position((400, 300), (1800, 900, 300, 300), (0, 0, 1920, 1040)), (1520, 740),
+        )
+
+    def test_hidden_or_missing_owner_leaves_windows_default(self):
+        from dialog_layout import centered_message_box
+
+        hidden = Mock()
+        hidden.winfo_toplevel.return_value = hidden
+        hidden.winfo_viewable.return_value = False
+        with patch("dialog_layout._CenterDialogHook") as hook:
+            with centered_message_box(None):
+                pass
+            with centered_message_box(hidden):
+                pass
+        hook.assert_not_called()
+
+    def test_hidden_focused_dialog_falls_back_to_the_main_window(self):
+        import dialog_layout
+
+        hidden, main_window = Mock(name="hidden"), Mock(name="main")
+        geometry = {hidden: None, main_window: ((10, 20, 600, 400), 1234)}
+        with patch.object(dialog_layout.sys, "platform", "win32"), \
+             patch.object(dialog_layout, "_anchor_geometry", side_effect=geometry.get), \
+             patch.object(dialog_layout, "_CenterDialogHook") as hook:
+            with dialog_layout.centered_message_box(hidden, main_window):
+                pass
+
+        hook.assert_called_once_with((10, 20, 600, 400), 1234)
+        hook.return_value.close.assert_called_once()
+
+    def test_file_and_color_dialogs_are_centered_over_their_parent(self):
+        from tkinter import colorchooser, filedialog
+
+        import dialog_layout
+
+        owner, main_window = Mock(name="owner"), Mock(name="main")
+        current = {name: getattr(filedialog, name) for name in dialog_layout.FILEDIALOG_FUNCTIONS}
+        with patch.multiple(filedialog, **current), \
+             patch.object(colorchooser, "askcolor", colorchooser.askcolor), \
+             patch.object(dialog_layout, "centered_message_box") as centered:
+            # Plain functions: a Mock would report the "already wrapped" marker.
+            filedialog.askopenfilename = lambda **_kwargs: "picked.ini"
+            colorchooser.askcolor = lambda *_args, **_kwargs: ((0, 0, 0), "#000000")
+            dialog_layout.install_centered_dialogs(lambda: main_window, messageboxes=False)
+            self.assertEqual(filedialog.askopenfilename(parent=owner), "picked.ini")
+            colorchooser.askcolor("#000000", parent=owner)
+
+        self.assertEqual(centered.call_args_list, [((owner, main_window),)] * 2)
+
+    def test_settings_window_message_boxes_are_centered(self):
+        from tkinter import messagebox
+
+        import config_gui
+        from dialog_layout import MESSAGEBOX_FUNCTIONS
+
+        owner = Mock()
+        show = Mock(return_value="ok")
+        # Install a fresh wrapper over a stand-in so no real dialog opens and
+        # other tests' wrappers cannot intercept the call; patch.multiple
+        # restores every tkinter function afterwards.
+        current = {name: getattr(messagebox, name) for name in MESSAGEBOX_FUNCTIONS}
+        with patch.multiple(messagebox, **current), \
+             patch.dict(config_gui._MESSAGEBOX_FUNCTIONS), \
+             patch.object(config_gui, "centered_message_box") as centered:
+            messagebox.showinfo = show
+            config_gui._install_localized_messageboxes()
+            result = messagebox.showinfo("title", "message", parent=owner)
+
+        self.assertEqual(result, "ok")
+        centered.assert_called_once_with(owner, config_gui._GUI_ROOT)
+        show.assert_called_once()
+
+
 class ReloadAfterCalibrationTests(unittest.TestCase):
     def run_reload(self, reconfigure_effects):
         publisher, request, _xinput = _run_queued_command(
