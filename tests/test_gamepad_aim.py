@@ -197,6 +197,51 @@ class AimOutputTests(unittest.TestCase):
         window._configure_native_sampler()
         self.assertIsNone(window._read_aim_output())
 
+    def _raw_stream_aim_window(self, samples, *, stream_path="raw-path"):
+        from gamepad_devices import GamepadDevice
+        from gamepad_test_window import GamepadTestWindow
+
+        window = object.__new__(GamepadTestWindow)
+        window._aim_selected_device = GamepadDevice("raw_hid:s2p", "raw_hid", 0, "S2P Mobile Gamepad", False)
+        window._aim_native_device = None  # No provable WinMM/XInput twin.
+        window._aim_input_active = True
+        window._aim_raw_rate_sample = None
+        window.native_sampler = None
+        window._selected_raw_hid_device = lambda: SimpleNamespace(path="raw-path")
+        window._raw_hid_stream_path = stream_path
+        window.raw_hid_stream = Mock(active=True, status=Mock(return_value={}))
+        window.raw_hid_stream.read_samples.side_effect = lambda cursor, **_kwargs: (
+            samples.pop(0) if samples else ((), cursor, 0)
+        )
+        return window
+
+    def test_s2p_raw_hid_aim_reads_its_own_stream(self):
+        full_report = (1.0, (0.1, 0.2), (0.5, -0.5), 7, 0x3F, (0.0, 1.0), 0x1000 | 0x0001)
+        triggers_only = (1.1, (0.0, 0.0), (0.0, 0.0), 8, 0x30, (0.0, 0.5), 0)
+        window = self._raw_stream_aim_window([((full_report, triggers_only), 8, 0)])
+
+        key, state, samples, _rate = window._read_aim_input()
+
+        self.assertEqual(key[:3], ("raw_hid:s2p", 0, "raw-stream"))
+        self.assertEqual(state.right, (0.5, -0.5))
+        self.assertEqual(state.buttons, ("↑", "A"))
+        self.assertEqual(state.right_trigger, 1.0)
+        # The trigger-only report is not a stick sample.
+        self.assertEqual([stamp for stamp, _ in samples], [1.0])
+        self.assertEqual(window._aim_raw_stream_cursor, 8)
+
+        key_again, held, samples_again, _rate = window._read_aim_input()
+        self.assertEqual(key_again, key)
+        self.assertIs(held, state)  # Keep the last state between reports.
+        self.assertEqual(samples_again, ())
+
+    def test_raw_hid_aim_ignores_a_stream_for_another_collection(self):
+        report = (1.0, (0.0, 0.0), (0.5, 0.5), 1, 0x3F, (0.0, 0.0), 0)
+        window = self._raw_stream_aim_window([((report,), 1, 0)], stream_path="other-path")
+
+        self.assertIsNone(window._read_aim_input())
+        window.raw_hid_stream.read_samples.assert_not_called()
+
     def test_s2p_aim_reads_the_published_xinput_slot(self):
         from gamepad_devices import GamepadDevice, GamepadState
         from gamepad_test_window import GamepadTestWindow

@@ -41,6 +41,7 @@ from gamepad_trail_photo import TrailPhotoUploader
 from gamepad_trail_worker import TrailRasterWorker, TrailStyle
 from gamepad_devices import (
     GamepadDevice,
+    GamepadState,
     NINTENDO_PRO2_PID,
     NINTENDO_PRO2_PROFILE,
     NINTENDO_PRO2_VID,
@@ -91,6 +92,8 @@ MAX_CANVAS_TRAIL_ITEMS = 2000
 TRIGGER_EVENT_THRESHOLD = 30.0 / 255.0
 SWITCH_RAW_HID_BUTTONS = tuple((mask, name) for name, mask in SWITCH_BUTTONS.items())
 SHAPE_TRACE_REFRESH_HZ = 60.0
+# Raw HID reports the aim test reads per tick (about 0.5 s at 1 kHz).
+AIM_RAW_STREAM_BATCH = 512
 SHAPE_CAPTURE_SETTLE_SECONDS = 1.0
 TRAIL_COLOR = "#1976D2"
 RIGHT_TRAIL_COLOR = "#D32F2F"
@@ -6647,6 +6650,13 @@ class GamepadTestWindow:
         sampler = self.native_sampler
         device = self._aim_selected_device
         native = self._aim_native_device
+        if (
+            device is not None and device.kind == "raw_hid" and native is None
+            and self._aim_input_active
+        ):
+            # S2P Mobile Gamepad has no provable WinMM/XInput twin, so read
+            # the selected collection's own Raw HID reports instead.
+            return self._read_aim_raw_stream(device)
         if sampler is None or device is None or native is None or not self._aim_input_active:
             return None
         state, generation, samples = sampler.read_aim_snapshot(native)
@@ -6663,6 +6673,56 @@ class GamepadTestWindow:
         # Generation changes on disconnect and packet-counter resets. The
         # pane then establishes a fresh button baseline for the new device.
         return (device.key, device.index, native.key, generation), state, samples, source_rate
+
+    def _read_aim_raw_stream(self, device):
+        """Turn the selected Raw HID stream into aim-pane states.
+
+        The input monitor drains the same ring with its own cursor; this one
+        only reads, so neither view consumes the other's reports.
+        """
+        raw_device = self._selected_raw_hid_device()
+        stream = getattr(self, "raw_hid_stream", None)
+        path = getattr(self, "_raw_hid_stream_path", None)
+        if (
+            raw_device is None or stream is None or not stream.active
+            or path is None or raw_device.path != path
+        ):
+            return None
+        if getattr(self, "_aim_raw_stream_path", None) != path:
+            # A new stream restarts its sequence numbers; begin a new baseline.
+            self._aim_raw_stream_path = path
+            self._aim_raw_stream_cursor = 0
+            self._aim_raw_stream_state = None
+            self._aim_raw_stream_generation = getattr(self, "_aim_raw_stream_generation", 0) + 1
+        samples, newest, _dropped = stream.read_samples(
+            self._aim_raw_stream_cursor,
+            # After the tab was hidden, keep only fresh reports.
+            maximum=AIM_RAW_STREAM_BATCH,
+            include_axes=True, include_controls=True, include_buttons=True,
+        )
+        self._aim_raw_stream_cursor = newest
+        states = []
+        for sample_time, left, right, sequence, axes_mask, triggers, buttons_mask in samples:
+            # Interleaved reports without both sticks are not aim samples.
+            if axes_mask & 0x0F != 0x0F:
+                continue
+            state = GamepadState(
+                packet_number=int(sequence) & 0xFFFFFFFF,
+                buttons_mask=int(buttons_mask),
+                buttons=tuple(name for mask, name in XINPUT_BUTTON_NAMES if buttons_mask & mask),
+                left=tuple(left),
+                right=tuple(right),
+                left_trigger=triggers[0] if axes_mask & 0x10 else None,
+                right_trigger=triggers[1] if axes_mask & 0x20 else None,
+            )
+            states.append((sample_time, state))
+        if states:
+            self._aim_raw_stream_state = states[-1][1]
+        state = getattr(self, "_aim_raw_stream_state", None)
+        if state is None:
+            return None
+        key = (device.key, device.index, "raw-stream", self._aim_raw_stream_generation)
+        return key, state, tuple(states), self._read_aim_raw_report_rate()
 
     def _read_aim_raw_report_rate(self):
         now = time.perf_counter()
