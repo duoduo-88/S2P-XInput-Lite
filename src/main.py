@@ -14,7 +14,11 @@ from bluetooth_controller import (
 )
 from wired_controller import WiredController, find_wired_controller
 from switch2_input import battery_led_mask, SensorModeTracker, parse_input_report
-from xinput_controller import CalibrationInProgressError, XInputController
+from xinput_controller import (
+    CalibrationInProgressError,
+    CalibrationResultPendingError,
+    XInputController,
+)
 from audio_haptics import AudioHaptics
 from input_dispatcher import InputDispatcher
 import serial
@@ -62,6 +66,9 @@ from runtime_logging import (
     write_interactive_prompt,
 )
 
+# Loop passes a live reload may wait for a finished calibration to be saved.
+RELOAD_RETRY_LIMIT = 3
+
 HIDHIDE_APPLICATION_PATHS = (
     Path(sys.executable),
     Path(__file__).with_name("raw_hid_probe.exe"),
@@ -89,8 +96,22 @@ def load_runtime_stick_calibration(config, controller_id=None):
             ))
     # Once device profiles exist, [sticks] may contain another pad's last save.
     defaults = configparser.ConfigParser()
-    defaults.read(DEFAULT_CONFIG_PATH, encoding="utf-8")
-    return load_stick_calibration(defaults)
+    try:
+        defaults.read(DEFAULT_CONFIG_PATH, encoding="utf-8")
+        return load_stick_calibration(defaults)
+    except (OSError, ValueError, configparser.Error) as exc:
+        # A damaged default profile must not make every connection fail.
+        print(tr(
+            f"預設搖桿校正無法讀取，改用中立校正：{exc}",
+            f"Default stick calibration is unreadable. Using a neutral calibration: {exc}",
+        ))
+        return neutral_stick_calibration()
+
+
+def neutral_stick_calibration():
+    """Match the bundled System Default [sticks] section."""
+    side = {"center": (2048, 2048), "max": (2047, 2047), "min": (2048, 2048)}
+    return {"left": dict(side), "right": dict(side)}
 
 
 def _enable_console_colors():
@@ -202,19 +223,23 @@ def main():
 def _run_connector():
     process_started_at = time.time()
     stop_requested = False
+    # Set only by the GUI or console shutdown request. A lost transport also
+    # stops the connector, but its error must remain visible to the user.
+    shutdown_requested = False
     controller = None
     connection_mode = None
     gui_pid = os.environ.get("S2P_GUI_PID", "")
     gui_pid = int(gui_pid) if gui_pid.isdecimal() else 0
 
     def handle_shutdown_signal(_signum=None, _frame=None):
-        nonlocal stop_requested
+        nonlocal stop_requested, shutdown_requested
+        shutdown_requested = True
         stop_requested = True
         if connection_mode == "esp32" and controller is not None:
             controller.request_shutdown()
 
     def wait_for_error_acknowledgment():
-        if stop_requested:
+        if shutdown_requested:
             return
         prompt = tr("\n按 Enter 鍵關閉...", "\nPress Enter to close...")
         if not gui_pid:
@@ -223,7 +248,7 @@ def _run_connector():
             import msvcrt
 
             write_interactive_prompt(prompt)
-            while not stop_requested:
+            while not shutdown_requested:
                 if msvcrt.kbhit() and msvcrt.getwch() in ("\r", "\n"):
                     break
                 time.sleep(0.05)
@@ -1056,21 +1081,32 @@ def _run_connector():
 
         except (serial.SerialException, OSError, RuntimeError):
             cleanup()
-            if stop_requested:
+            if shutdown_requested:
                 return
             print()
-            print(
-                tr(f"無法開啟 {port}。", f"Could not open {port}.")
-            )
-            print(
-                tr("此連接埠可能正在被其他程式使用。", "The serial port may be in use by another program.")
-            )
-            print(
-                tr(
-                    "請關閉原本的連接程式或校正程式後再試。",
-                    "Close the existing connection or calibration program and try again.",
+            if stop_requested:
+                # The bridge stopped answering during the ownership handshake.
+                print(tr(
+                    f"ESP32（{port}）在啟動期間中斷連線。",
+                    f"The ESP32 ({port}) disconnected during startup.",
+                ))
+                print(tr(
+                    "請確認 USB 連接線與 ESP32 後再試。",
+                    "Check the USB cable and the ESP32, then try again.",
+                ))
+            else:
+                print(
+                    tr(f"無法開啟 {port}。", f"Could not open {port}.")
                 )
-            )
+                print(
+                    tr("此連接埠可能正在被其他程式使用。", "The serial port may be in use by another program.")
+                )
+                print(
+                    tr(
+                        "請關閉原本的連接程式或校正程式後再試。",
+                        "Close the existing connection or calibration program and try again.",
+                    )
+                )
 
             wait_for_error_acknowledgment()
             return
@@ -1118,6 +1154,10 @@ def _run_connector():
             wait_for_error_acknowledgment()
             return
 
+    # A reload that arrives just after a calibration finishes is retried
+    # once this loop has saved that result, instead of being reported failed.
+    deferred_reload = None
+    deferred_reload_attempts = 0
     try:
         last_heartbeat = 0.0
         last_battery_led_mask = None
@@ -1201,7 +1241,11 @@ def _run_connector():
                         f"閒置自動斷線失敗：{exc}",
                         f"Idle disconnect failed: {exc}",
                     ))
-            pending_command = command_inbox.next()
+            if deferred_reload is not None:
+                pending_command, deferred_reload = deferred_reload, None
+            else:
+                pending_command = command_inbox.next()
+                deferred_reload_attempts = 0
             if pending_command is not None:
                 try:
                     command = pending_command.command
@@ -1312,18 +1356,27 @@ def _run_connector():
                                 pending_command.connection_id, pending_command.compensation_signature,
                             )
                         except Exception as exc:
-                            publish_status(
-                                settings_reload_state="failed",
-                                settings_reload_message=str(exc),
-                                settings_reload_updated_at=time.time(),
-                                settings_reload_request_id=request_id,
-                            )
-                            print(tr(
-                                f"執行中的連線未能套用新設定，目前暫時沿用先前設定；"
-                                f"磁碟設定已保留：{exc}",
-                                f"The live connection could not apply the new settings and is "
-                                f"temporarily using the previous settings; disk settings were kept: {exc}",
-                            ))
+                            if (
+                                isinstance(exc, CalibrationResultPendingError)
+                                and deferred_reload_attempts < RELOAD_RETRY_LIMIT
+                            ):
+                                # The result is saved later in this iteration;
+                                # retry the same request on the next pass.
+                                deferred_reload_attempts += 1
+                                deferred_reload = pending_command
+                            else:
+                                publish_status(
+                                    settings_reload_state="failed",
+                                    settings_reload_message=str(exc),
+                                    settings_reload_updated_at=time.time(),
+                                    settings_reload_request_id=request_id,
+                                )
+                                print(tr(
+                                    f"執行中的連線未能套用新設定，目前暫時沿用先前設定；"
+                                    f"磁碟設定已保留：{exc}",
+                                    f"The live connection could not apply the new settings and is "
+                                    f"temporarily using the previous settings; disk settings were kept: {exc}",
+                                ))
                         else:
                             enabled_layer_count = sum(
                                 1 for layer in xinput.mapping_layers
@@ -1357,7 +1410,9 @@ def _run_connector():
                         f"處理控制器指令失敗：{exc}"
                     )
                 finally:
-                    pending_command.finish()
+                    # A deferred reload keeps its claimed request until it is retried.
+                    if deferred_reload is not pending_command:
+                        pending_command.finish()
 
             if gyro_initialization_tracking and controller_is_connected():
                 initialization = xinput.get_gyro_initialization_status()
@@ -1632,6 +1687,8 @@ def _run_connector():
         print(tr("\n正在關閉程式...", "\nClosing program..."))
 
     finally:
+        if deferred_reload is not None:
+            deferred_reload.finish()
         cleanup()
 
 

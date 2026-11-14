@@ -5769,6 +5769,8 @@ class ConfigGUI:
                             draft.set(text)
                     except ValueError:
                         pass  # Keep incomplete input for the dialog's validation.
+            if not self.config.has_section("gyro_mapping"):
+                self.config.add_section("gyro_mapping")
             self.config.set("gyro_mapping", key, text)
 
     def open_gyro_settings(self):

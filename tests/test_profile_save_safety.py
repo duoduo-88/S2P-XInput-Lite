@@ -1,3 +1,4 @@
+import configparser
 import hashlib
 import json
 from pathlib import Path
@@ -116,6 +117,25 @@ class ProfileSaveSafetyTests(unittest.TestCase):
         x.set.assert_called_once_with("1.00")
         y.set.assert_not_called()
         self.assertEqual(gui.config.getfloat("gyro_mapping", "y_compensation"), 1.0)
+
+    def test_external_compensation_sync_creates_a_missing_mapping_section(self):
+        gui = self.gui
+        gui.config.remove_section("gyro_mapping")
+        latest = configparser.ConfigParser()
+        latest.read_dict({
+            "gui": {"active_profile": gui.config.get("gui", "active_profile", fallback="")},
+            "gyro_mapping": {"x_compensation": "0.80"},
+        })
+        x = Mock()
+        y = Mock()
+        x.get.return_value = "1.00"
+        y.get.return_value = "1.00"
+        gui.gyro_compensation_vars = {"X": x, "Y": y}
+
+        gui._sync_saved_gyro_compensation(latest=latest)
+
+        x.set.assert_called_once_with("0.80")
+        self.assertEqual(gui.config.getfloat("gyro_mapping", "x_compensation"), 0.8)
 
     def test_canceled_save_keeps_external_profile_changes(self):
         for mutation in ("edit", "delete"):

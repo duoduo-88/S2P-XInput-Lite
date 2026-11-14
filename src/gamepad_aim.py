@@ -1208,7 +1208,9 @@ class AimTestPane:
                 self.owner, self.tr, self.settings, self._prepare_compensation_preview,
                 self._turn_compensation_preview, self._close_test_and_compensation,
                 self._handoff_to_gyro_settings if self.open_gyro_settings is not None else None,
-                multipliers=snapshot.multipliers, on_speed_changed=self.scene.set_stick_turn_speed,
+                # _reset() replaces the scene; always target the current one.
+                multipliers=snapshot.multipliers,
+                on_speed_changed=lambda speeds: self.scene.set_stick_turn_speed(speeds),
                 apply_measurement=apply_measurement if self.apply_gyro_compensation is not None else None,
                 read_reload_status=self.read_gyro_reload_status,
             )

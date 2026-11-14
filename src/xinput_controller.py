@@ -151,6 +151,10 @@ class CalibrationInProgressError(ValueError):
     """A settings reload would replace a live or unsaved calibration."""
 
 
+class CalibrationResultPendingError(CalibrationInProgressError):
+    """A finished calibration result has not been saved by the connector yet."""
+
+
 class XInputController:
     GYRO_STATIONARY_SETTLE_SECONDS = 0.50
     GYRO_USABLE_SAMPLES = 16
@@ -685,7 +689,7 @@ class XInputController:
             if any(result is not None for result in (
                 self._gyro_calibration_result, self._mag_calibration_result, self._accel_calibration_result,
             )):
-                raise CalibrationInProgressError("calibration result is waiting to be saved; apply settings again shortly")
+                raise CalibrationResultPendingError("calibration result is waiting to be saved; apply settings again shortly")
 
         snapshot = type(self)(
             config,

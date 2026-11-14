@@ -474,10 +474,12 @@ class ESP32Bridge:
         with self._state_lock:
             channel = self.connected_channel
             generation = self._connection_generation
+        # close() can clear self.serial between checks; read the port once.
+        port = self.serial
         if (
             not self.running
-            or self.serial is None
-            or not self.serial.is_open
+            or port is None
+            or not port.is_open
             or channel is None
         ):
             return False
