@@ -565,6 +565,54 @@ class GuiCalibrationTests(unittest.TestCase):
                 self.showerror.assert_called_once()
                 self.gui.gyro_calibration_button.state.assert_called_with(["!disabled"])
 
+    def test_non_object_status_ends_the_calibration_flow_with_an_error(self):
+        for stage in ("start", "after prompt", "while polling"):
+            with self.subTest(stage=stage):
+                self.status = {
+                    "updated_at": 100.0, "state": "connected",
+                    "controller_id": "001122334455", "connection_id": "first-connection",
+                }
+                self.enqueue.reset_mock()
+                self.showerror.reset_mock()
+                self.gui.root.after.reset_mock()
+                self.gui.gyro_calibration_button.reset_mock()
+                if stage == "start":
+                    self.status = []
+                    self.confirm.side_effect = None
+                    self.confirm.return_value = True
+                elif stage == "after prompt":
+                    def confirm(_title, _message):
+                        self.status = []
+                        return True
+
+                    self.confirm.side_effect = confirm
+                else:
+                    self.confirm.side_effect = None
+                    self.confirm.return_value = True
+
+                self.gui.calibrate_gyro()
+                if stage == "while polling":
+                    self.status = []
+                    self.gui.root.after.call_args.args[1]()
+
+                self.showerror.assert_called_once()
+                if stage == "while polling":
+                    self.enqueue.assert_called_once()
+                    self.gui.gyro_calibration_button.state.assert_called_with(["!disabled"])
+                else:
+                    self.enqueue.assert_not_called()
+
+    def test_busy_connector_ends_gyro_calibration_without_a_running_state(self):
+        self.confirm.return_value = True
+        self.gui.calibrate_gyro()
+        self.status.update(gyro_calibration_state="failed", gyro_calibration_message="busy")
+
+        self.gui.root.after.call_args.args[1]()
+
+        self.showerror.assert_called_once()
+        self.assertIn("忙碌", self.showerror.call_args.args[1])
+        self.gui.gyro_calibration_button.state.assert_called_with(["!disabled"])
+
     def test_skipping_both_optional_steps_reports_only_gyro_as_saved(self):
         self.confirm.side_effect = [True, False, False]
         self._finish_gyro()

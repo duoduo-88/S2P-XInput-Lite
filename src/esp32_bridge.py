@@ -1751,6 +1751,13 @@ class ESP32Bridge:
             return
         with self._state_lock:
             if not self._matches_connection_attempt_locked(event):
+                # A late or foreign link would otherwise stay attached to the
+                # ESP32 untracked, hiding the controller from later scans.
+                if (
+                    self.running and not self._closing
+                    and channel != self.connected_channel
+                ):
+                    self.send(f"disc {channel}")
                 return
             self.connected_channel = channel
             self._ready_channel = None
