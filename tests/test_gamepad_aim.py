@@ -433,6 +433,21 @@ class AimPaneTests(unittest.TestCase):
         self.assertFalse(pane.test_open)
         self.assertFalse(overlay.window.winfo_exists())
 
+    def test_preview_speed_selection_follows_a_replaced_scene(self):
+        from gamepad_aim import AimTestPane
+
+        pane = AimTestPane(self.root, str, lambda: None)
+        self.root.deiconify()
+        self.root.update()
+        pane._open_compensation_preview()
+        overlay = pane.compensation_window
+        replacement = Mock()
+        pane.scene = replacement  # _reset() builds a new scene object
+
+        overlay.speed_source.set("adjusted")
+
+        replacement.set_stick_turn_speed.assert_called()
+
     def test_switching_aim_dimension_closes_the_compensation_preview(self):
         from gamepad_aim import AimTestPane
 
