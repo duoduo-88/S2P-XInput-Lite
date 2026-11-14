@@ -36,8 +36,8 @@ firmware can be discovered for upgrade using its known version and historical
 fixed serial; that fixed serial cannot establish a unique HID/reconnect identity.
 Raw HID verification also requires its actual USB product string.
 
-Physical USB XInput, XUSB20, Microsoft OS Auto probing and the old Auto mode
-were removed because of licensing issues. Do not add them.
+Physical USB XInput has licensing issues. Do not add it. XUSB20, Microsoft OS
+Auto probing and the old Auto mode are not part of the firmware.
 Windows desktop XInput continues through Bridge and ViGEmBus,
 including mappings, game rumble and audio haptics. This preservation is an
 implementation intention backed by automated regression checks where recorded;

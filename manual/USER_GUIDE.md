@@ -81,8 +81,7 @@ The controller connects to the ESP32-S3 over BLE. The bridge then sends controll
 v0.7.14 / S2P-FW 1.0.7 retains Bridge and Android USB HID standalone only.
 Android HID does not require the Windows application to remain open. Use Bridge
 for desktop XInput through ViGEmBus, game rumble and audio haptics.
-Physical USB XInput (the previous PC XInput and Auto modes) was removed because
-of licensing issues. Do not add it. On Windows, standalone mode is an ordinary
+Physical USB XInput has licensing issues. Do not add it. On Windows, standalone mode is an ordinary
 HID gamepad; use Bridge when games need an Xbox controller.
 
 The controller's four player LEDs show the measured battery level

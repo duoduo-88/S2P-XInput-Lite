@@ -77,7 +77,7 @@ ZIP 根目錄只保留 **S2P-XInput-Lite.exe**、**GamepadTester.exe**、
 
 v0.7.14 / S2P-FW 1.0.7 僅保留 Bridge 與 Android USB HID 獨立模式。
 Android 模式不需要持續開啟 Windows 程式；Windows 桌面 XInput、ViGEmBus、
-震動及音訊震動請使用 Bridge。實體 USB XInput（舊 PC XInput／Auto）有授權問題移除，請勿加入。
+震動及音訊震動請使用 Bridge。實體 USB XInput 有授權問題，請勿加入。
 獨立模式接在 Windows 上時是一般 HID 手把；要在 Windows 遊戲中當成 Xbox 手把使用，請改用 Bridge。
 
 控制器四顆玩家燈會累進顯示實測電量：低電量亮一顆、中低亮兩顆、中高亮三顆、
