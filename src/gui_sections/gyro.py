@@ -41,14 +41,17 @@ def build_gyro_section(gui, mapping_notebook):
         row=0, column=2, padx=(2, 7)
     )
     for column, (text, value) in enumerate((
-        ("關閉", "OFF"), ("按住", "HOLD"), ("切換", "TOGGLE")
+        ("關閉|off", "OFF"), ("按住", "HOLD"), ("切換", "TOGGLE")
     ), start=3):
-        ttk.Radiobutton(
+        radio = ttk.Radiobutton(
             activation_content,
-            text=text,
+            text=gui.tr(text),
             value=value,
             variable=gui.gyro_activation_mode_var,
-        ).grid(row=0, column=column, padx=2)
+        )
+        # apply_language() translates from this key, not the shown text.
+        radio._s2p_zh_text = text
+        radio.grid(row=0, column=column, padx=2)
     gui.create_help(
         activation_content,
         "關閉：不產生任何陀螺儀映射輸出。\n\n"

@@ -2039,7 +2039,16 @@ PHRASES = (
 )
 
 
+# Keys for Chinese words that need a different English word in another
+# context. The text before "|" is the Chinese shown in the UI.
+CONTEXT_TEXT = {
+    "關閉|off": "Off",
+}
+
+
 def translate_text(text, language):
+    if isinstance(text, str) and text in CONTEXT_TEXT:
+        return CONTEXT_TEXT[text] if language == "en" else text.split("|", 1)[0]
     if language != "en" or not isinstance(text, str):
         return text
     translated = EN_TEXT.get(text)

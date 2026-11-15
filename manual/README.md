@@ -5,8 +5,8 @@ Traditional Chinese manuals shipped in releases.
 
 The guides cover desktop v0.8.2 and bundled S2P-FW 1.0.9.
 
-`assets/v0.7.14/` contains English-interface screenshots shared by both guides.
-The written procedures cover the current controls.
+`assets/v0.8.2/` contains the v0.8.2 English-interface screenshots shared by
+both guides.
 
 `build_manual.py` and `assets/raw/` preserve the source for the archived
 v0.5.3 DOCX manual. They are not used by the current release package. The

@@ -69,7 +69,7 @@ standalone. On Windows, Bridge mode provides XInput through ViGEmBus.
   intervals, distribution statistics, and a timeline.
 - **Stick trails** rasterize reports from the selected source on a native background
   worker. The plot's FPS tracks visible updates,
-  while Report Rate Test measures input reports. [Stick plots guide](manual/USER_GUIDE.md#92-stick-plots)
+  while Report Rate Test measures input reports. [Stick plots guide](manual/USER_GUIDE.md#82-stick-plots)
 - **Aim Test** offers Tracking, Targets, and Timed Targets in both 2D
   and 3D. Compare completed rounds with your best result under the same
   conditions. [Aim Test guide](manual/USER_GUIDE.md#aim-test-guide)

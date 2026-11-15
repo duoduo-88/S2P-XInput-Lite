@@ -234,8 +234,8 @@ Copy-CuratedTree `
     -Extensions @(".png", ".jpg", ".jpeg", ".ico") `
     -DestinationRoot $packageRoot
 Copy-CuratedTree `
-    -SourceRoot (Join-Path $repoRoot "manual\assets\v0.7.14") `
-    -RelativeRoot "manual\assets\v0.7.14" `
+    -SourceRoot (Join-Path $repoRoot "manual\assets\v0.8.2") `
+    -RelativeRoot "manual\assets\v0.8.2" `
     -Extensions @(".png") `
     -DestinationRoot $packageRoot
 foreach ($name in @("USER_GUIDE.md", "USER_GUIDE_zh-TW.md")) {

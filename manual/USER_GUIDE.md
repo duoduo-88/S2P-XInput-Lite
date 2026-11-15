@@ -1,39 +1,43 @@
-# S2P-XInput-Lite v0.8.0 User Guide
+# S2P-XInput-Lite v0.8.2 User Guide
 
 [繁體中文](USER_GUIDE_zh-TW.md)
 
-This guide covers installation, connections, profiles, stick tuning, mapping,
-gyro controls, rumble, HidHide, ESP32-S3 bridge and standalone operation, and
-Gamepad Test, including Aim Test, report-rate measurements, and diagnostics.
+S2P-XInput-Lite turns a Switch 2 Pro Controller into an Xbox (XInput)
+controller that Windows games accept directly. It provides stick curves,
+button and direction mapping, mapping layers, gyro, rumble, and audio-driven
+rumble. The bundled Gamepad Tester checks input, rumble, and report rate, and
+includes an Aim Test.
 
-The feature screenshots show the English v0.7.14 interface; profile values are examples.
-
-This guide covers desktop v0.8.2 and the bundled S2P-FW 1.0.9. The firmware
-sections describe the scope of Windows and Android hardware validation.
-
-The screenshots use the English interface. Select **中 / En** in the lower-left corner of the main window to switch languages without changing the layout.
+This guide covers desktop **v0.8.2** and the bundled ESP32-S3 firmware
+**S2P-FW 1.0.9**. Screenshots show the English interface. Select **中／En** at
+the lower left of the main window to switch languages. Profiles and values in
+the screenshots are examples.
 
 > [!IMPORTANT]
-> After changing a value, select **Save/Apply** to write it to the current profile and apply it to the active connection. Switching profiles or closing the window does not save pending changes.
+> After changing a value, select **Save/Apply** to write it to the current
+> profile and apply it to the connection. Switching profiles or closing the
+> window does not save your changes.
 
 > [!TIP]
-> Create a personal profile before experimenting. **System Default** is a read-only reference profile and cannot be overwritten.
+> Create your own profile with **Save New** before tuning. `System Default` is
+> a read-only baseline and cannot be overwritten.
 
 ## Contents
 
 - [1. Getting started](#1-getting-started)
 - [2. Main window and profiles](#2-main-window-and-profiles)
 - [3. Stick settings](#3-stick-settings)
-- [4. Button and direction mapping](#4-button-and-direction-mapping)
-- [5. Mapping Layers](#5-mapping-layers)
-- [6. Gyro mapping](#6-gyro-mapping)
-- [7. Rumble settings](#7-rumble-settings)
-- [8. HidHide and ESP32-S3](#8-hidhide-and-esp32-s3)
-- [9. Gamepad Test](#9-gamepad-test)
-  - [9.9 Aim Test](#aim-test-guide)
+- [4. Button mapping and Stick Map](#4-button-mapping-and-stick-map)
+- [5. Layers](#5-layers)
+- [6. Gyro Map](#6-gyro-map)
+- [7. Rumble](#7-rumble)
+- [8. Gamepad Tester](#8-gamepad-tester)
+  - [8.8 Aim Test](#aim-test-guide)
+- [9. ESP32-S3](#9-esp32-s3)
+  - [9.2 Flash firmware](#flash-esp32-s3)
 - [10. Quick controls](#10-quick-controls)
 - [11. Troubleshooting](#11-troubleshooting)
-- [Appendix: recommended tuning order](#appendix-recommended-tuning-order)
+- [Appendix: Recommended tuning order](#appendix-recommended-tuning-order)
 
 ---
 
@@ -42,229 +46,287 @@ The screenshots use the English interface. Select **中 / En** in the lower-left
 ### 1.1 Requirements
 
 - Windows 10 or Windows 11.
-- A Switch 2 Pro Controller and a data-capable USB-C cable.
-- ViGEmBus 1.22.0 for creating the virtual XInput controller.
-- HidHide is recommended for wired USB to prevent games from receiving both the physical HID device and the virtual XInput controller.
-- A compatible ESP32-S3 board is required for ESP32 bridge mode.
+- A Switch 2 Pro Controller and a USB-C cable that carries data.
+- ViGEmBus 1.22.0, which creates the XInput-compatible virtual controller.
+- HidHide is recommended for wired USB, so games do not read both the
+  physical controller and the virtual one.
+- A compatible ESP32-S3 board for ESP32 mode.
 
-### 1.2 First launch
+### 1.2 Install and first launch
 
-The ZIP's main folder contains **S2P-XInput-Lite.exe**, **GamepadTester.exe**,
-**START_HERE.txt**, and **app/**. Open the first EXE for Settings or the second
-for the standalone tester. Keep the app folder beside the EXEs; it contains
-the runtime, firmware, drivers, licenses and full manuals.
+The release ZIP contains **S2P-XInput-Lite.exe**, **GamepadTester.exe**,
+**START_HERE.txt**, and the **app** folder. The first EXE opens the main
+program and the second opens the standalone Gamepad Tester. The runtime,
+firmware, drivers, license notices, and manuals are inside **app**, so keep it
+beside both EXEs.
 
-1. Extract the complete release archive into a new folder. Do not run the application from inside the archive.
-2. If ViGEmBus is missing, run `app\driver\Install-ViGEmBus.bat`.
-3. Connect the controller or ESP32-S3.
+1. Extract the full ZIP to a new folder. Do not run it from inside the archive.
+2. If ViGEmBus is not installed, run `app\driver\Install-ViGEmBus.bat`.
+3. Connect the controller or the ESP32-S3 (see [1.3 Connection modes](#13-connection-modes)).
 4. Run `S2P-XInput-Lite.exe`.
-5. Confirm that **ViGEm: Ready** appears in green at the bottom of the window.
-6. Select a profile, adjust the settings, and select **Save/Apply**.
-
-The connector opens a separate black command window with live pairing, connection, input, and transport status. Keep that command window open while playing; closing it stops the active connection. Minimizing the settings UI moves only its main window into the Windows notification area. The black command window stays visible and the connection continues. Click the notification icon to restore Settings, or right-click it for **Show Settings** and **Exit**.
-
-The settings UI and Gamepad Tester each allow only one running instance. Launching either one again restores and foregrounds its existing window instead of creating another process that could compete for the controller.
+5. Check that `ViGEm: Ready` at the bottom of the window is green.
+6. Choose a profile, adjust it, then select **Save/Apply**.
 
 > [!NOTE]
-> When updating, extract into a new folder and use **Import Settings** to select the old folder containing its EXEs. Both older `src/` and newer `app/src/` installations are supported. To transfer only config.ini manually, copy it into the new `app/src/config.ini` while the application is closed.
+> Right after the controller connects (or reconnects), a stick may rest
+> slightly outside the center deadzone and produce a small leftover output.
+> As with many controllers after power-on, flick both sticks once after
+> connecting so they settle back to center.
 
-### 1.3 Connection methods
+### 1.3 Connection modes
 
-#### Wired USB
+| Mode | Description |
+|---|---|
+| **Wired USB** | Connect the controller to the PC with USB-C. Low latency and a steady report rate. HidHide is recommended. |
+| **ESP32-S3** | The controller connects to the ESP32-S3 over BLE, and the ESP32-S3 forwards data to the PC over USB. See [9. ESP32-S3](#9-esp32-s3). |
+| **Windows BLE** | Turn on Windows Bluetooth, start the program, and hold `SYNC` on the controller. The program pairs and connects it, so you do not add the device in Windows Settings. Report rate and stability depend on the Bluetooth hardware and the wireless environment. |
 
-Connect the controller directly to the PC with USB-C. This normally provides low latency and a stable update rate. HidHide is recommended.
+The ESP32-S3 runs in one of two ways. **Bridge** keeps the Windows program
+running, outputs XInput through ViGEmBus, and handles rumble and audio rumble.
+**Android USB HID standalone mode** needs no Windows program, because the
+ESP32-S3 itself acts as a USB HID controller. Physical USB XInput has
+licensing issues and must not be added.
 
-#### ESP32-S3 bridge
+### 1.4 Connector window and notification area
 
-The controller connects to the ESP32-S3 over BLE. The bridge then sends controller data to the PC over USB.
+Connecting opens a separate black connector (CMD) window that shows pairing,
+connection, input, and transport status. Keep it open while you play, because
+closing it ends the connection. If the ESP32 disconnects, the window stays
+open and shows the reason.
 
-v0.7.14 / S2P-FW 1.0.7 retains Bridge and Android USB HID standalone only.
-Android HID does not require the Windows application to remain open. Use Bridge
-for desktop XInput through ViGEmBus, game rumble and audio haptics.
-Physical USB XInput has licensing issues. Do not add it. On Windows, standalone mode is an ordinary
-HID gamepad; use Bridge when games need an Xbox controller.
+Minimizing the settings window moves only that window to the Windows
+notification area. The connector window and the connection are unaffected.
+Click the notification icon to restore the settings window, or right-click it
+to choose **Show Settings** or **Exit**.
 
-The controller's four player LEDs show the measured battery level
-cumulatively: one LED for low, two for medium-low, three for medium-high, and
-four for high. This display also works in standalone mode with bundled
-S2P-FW 1.0.8, without keeping the Windows application open.
+Only one settings window and one Gamepad Tester can run at a time. Starting
+either again brings the existing window forward instead of starting another
+process or taking over the controller.
 
-#### Windows BLE
+### 1.5 Upgrading
 
-Enable Windows Bluetooth and start the application. For first-time pairing,
-hold the controller's **SYNC** button and let this application establish the
-connection; do not manually pair it in Windows Bluetooth settings. Wake an
-already paired controller with a button. Update rate and stability depend on
-the Bluetooth adapter and wireless environment.
+1. Extract the new ZIP to a **new folder**.
+2. Open the new main program, select **Import Settings**, and choose the old
+   program folder that contains its EXEs. See [2.4 Import Settings](#24-import-settings).
+3. If you use an ESP32-S3, check its firmware with **Flash FW**. See [9.2 Flash firmware](#flash-esp32-s3).
+
+To copy `config.ini` by hand instead, close the program and copy it to the
+new version's `app\src\config.ini`.
 
 ---
 
 ## 2. Main window and profiles
 
-![Main window overview](assets/v0.7.14/main-buttons.png)
+![Main window overview](assets/v0.8.2/main-buttons.png)
 
-- **Stick settings** — Drag curve control points and adjust output, stabilizer, and basic rumble options.
-- **Feature tabs** — Switch between Buttons, Stick Map, Layers, Advanced Rumble, and Gyro Map. The screenshot shows Xbox button mapping.
-- **Status row** — Check ViGEm, WASAPI, HidHide, controller, and ESP32 status.
-- **Profile selector** — Choose the profile to edit or apply.
-- **Import Settings** — Migrate compatible settings from another S2P-XInput-Lite installation.
+The main window has four areas:
 
-The remaining footer controls save or create profiles, import one profile, change
-language, restore defaults, calibrate, flash firmware, restart, and Pin.
+- **Stick Settings** (upper left): stick curves, output shape, stabilizer,
+  and deadzones. See [3. Stick settings](#3-stick-settings).
+- **Rumble** (lower left): basic rumble strength, curves, frequencies, and
+  maximum amplitude. See [7.1 Basic rumble](#71-basic-rumble).
+- **Tabs** (right): **Buttons**, **Stick Map**, **Layers**, **Advanced Rumble**,
+  and **Gyro Map**. The screenshot shows the Buttons tab.
+- **Bottom**: the status bar, the profile selector, and action buttons.
 
-### 2.1 Status indicators
+### 2.1 Status bar
 
-- **ViGEm: Ready** — The virtual XInput controller is available.
-- **WASAPI: Ready** — System-output audio capture is available.
-- **HidHide: Ready** — HidHide is installed and configured.
-- **HidHide: Missing** — HidHide is not installed.
-- **Pad: Searching** — No controller has been detected yet.
-- **ESP32** — The ESP32-S3 bridge is active or being detected.
+| Status | Meaning |
+|---|---|
+| `ViGEm: Ready` | The virtual XInput controller is available. |
+| `WASAPI: Ready` | System audio capture is available, so audio rumble can work. |
+| `HidHide: Ready` | HidHide is installed and hides the physical controller. |
+| `HidHide: Idle` | HidHide is installed, but no USB controller needs hiding, for example over ESP32 or Bluetooth. |
+| `HidHide: Off / Setup` | HidHide is installed but hiding is not set up. Click the status to set it up. |
+| `HidHide: Missing` | HidHide is not installed. Click the status to open the download page. |
+| `HidHide: Error` | HidHide settings could not be read or changed. See [11. Troubleshooting](#11-troubleshooting). |
+| `ESP32 · Connected · Bat … · 129Hz · 9-axis` | Connected through the ESP32, showing battery level, input report rate, and sensor mode. |
+| `ESP32 · Idle; press any button to wake` | The controller disconnected after being idle. Press any button to wake it. See [2.6](#26-idle-disc). |
+| `Pad: Searching` | No controller has been detected yet. |
 
-### 2.2 Profile controls
+### 2.2 Bottom buttons
 
-- **Profile** — Select a saved profile.
-- **Save/Apply** — Save the current profile and apply it immediately.
-- **Save New** — Create a new profile from the values currently shown.
-- **Import Profile** — Import an external `.ini` profile.
-- **Import Settings** — Migrate settings from an older or same-version S2P-XInput-Lite installation.
+| Button | Purpose |
+|---|---|
+| **Profile** | Choose the profile to edit or apply. Right-click the selector to rename or delete a profile. |
+| **Save/Apply** | Save the current profile and apply it to the connection immediately. |
+| **Save New** | Create a new profile from the values on screen. |
+| **Import Profile** | Import an external `.ini` profile. |
+| **Import Settings** | Migrate settings from another S2P-XInput-Lite installation. |
+| **Gamepad Test** | Open Gamepad Tester. See [8. Gamepad Tester](#8-gamepad-tester). |
+| **中／En** | Switch the interface language. |
+| **Pin** | Make the detected controller the preferred device. The controller vibrates when this succeeds. |
+| **Defaults** | Reset everything on screen to defaults. See [Restore a stable setup](#restore-a-stable-setup). |
+| **Calibrate** | Calibrate the sticks. See [3.4 Stick calibration](#34-stick-calibration). |
+| **Flash FW** | Check and flash the ESP32-S3 firmware. See [9.2](#flash-esp32-s3). |
+| **ESP32 ▼** | Write the profile and switch to Android USB HID standalone mode, or switch back to Bridge. See [9.5](#95-write-settings-and-enable-android-usb-hid). |
+| **Restart** | Restart the desktop connection with the saved settings. Nothing is written to the ESP32. |
+| **Idle Disc.** | Choose how long a wireless connection may stay idle before it disconnects. See [2.6](#26-idle-disc). |
 
-Saving or switching profiles asks the running connection to apply the settings
-without reconnecting. If application fails, the saved settings take effect at
-the next connection; use **Restart** when needed.
+### 2.3 Profiles
 
-### 2.3 Import Settings
+- **Switch profiles**: choose a saved profile from **Profile**.
+- **Save and apply**: select **Save/Apply**. A running connection applies the
+  new settings without reconnecting. If the live update fails, the saved
+  settings take effect on the next connection, or select **Restart**.
+- **Create a profile**: select **Save New** and enter a name. This is the only
+  way to keep changes made to `System Default`.
 
-![Import Settings button at the bottom of the main window](assets/v0.7.14/main-buttons.png)
+### 2.4 Import Settings
 
-Select **Import Settings** at the bottom of the main window. After choosing a source folder, the preview lists compatible data, skipped items, and conflicts.
+![Import Settings conflicts and preview](assets/v0.8.2/import-settings-preview.png)
 
-1. Select **Import Settings**.
-2. Choose the previous or same-version S2P-XInput-Lite **application root**; do not choose its `src` folder.
-3. Review the preview of application settings, persistent controller calibration, user profiles, and managed Mapping Layers.
-4. If names or Layer IDs conflict, explicitly choose **Overwrite all** or **Skip all**.
-5. Confirm the import. The GUI, profile list, and Layer list refresh when it completes.
+1. Select **Import Settings**. If the screen has unsaved changes, you are asked
+   whether to save them first.
+2. Choose the **program root** (the folder with the EXEs) of an older or the
+   same S2P-XInput-Lite version, not `src`. Both the older `src\` layout and
+   the current `app\src\` layout can be imported.
+3. Check the preview: application settings, controller calibration, and the
+   number of profiles and mapping layers, plus anything skipped.
+4. If profile names or layer IDs conflict, as in the screenshot, choose
+   **Yes** (overwrite all), **No** (skip all), or **Cancel** (do not import).
+5. Confirm the import. The profile and layer lists refresh afterward.
 
-The current version supplies the schema and defaults, so this is not a downgrade
-or a raw folder copy. Missing newer keys keep current defaults. **System
-Default** is never overwritten; runtime caches, logs, firmware, executables,
-and build output are not imported. A failed validated write rolls back
-`config.ini`, user profiles, and managed Layers together.
+The import uses the current version's settings structure and defaults, so
+settings added in newer versions use their defaults. `System Default` is never
+overwritten. Runtime caches, logs, firmware, EXEs, and build output are not
+imported. If any write fails, `config.ini`, user profiles, and mapping layers
+are all rolled back. Invalid values, unfinished shortcut recordings, and
+unsupported mappings are rejected so they cannot replace a working profile.
 
-Invalid numeric values, unfinished shortcut recordings and unsupported mappings
-are rejected before replacing a profile. Calibration added to the destination
-while the preview is open is retained unless the imported source explicitly
-replaces that same calibration.
+### 2.5 Unsaved changes and external edits
 
-> [!WARNING]
-> **System Default** is read-only. Use **Save New** to create an editable profile from it.
+- When switching profiles with unsaved changes, you can save, discard, or
+  cancel. **Cancel** keeps the current profile and your edits. Closing the
+  window does not save automatically.
+- If another program changes the current profile, **Yes** reloads the external
+  version, **No** overwrites it with what is on screen, and **Cancel** keeps
+  your edits without writing the file.
+- Fix invalid input before saving. A validation error means the change has not
+  been saved or applied.
+- If you see "Your settings were saved, but the profile list could not be
+  refreshed", the file was saved. Open the profile list again later.
 
-### 2.4 Unsaved edits and external file changes
+### 2.6 Idle Disc.
 
-- When switching with unsaved edits, choose whether to save, discard or cancel.
-  **Cancel** keeps the current profile and edits. Closing does not save edits automatically.
-- If another program changes the active profile, the conflict dialog offers
-  **Yes** to reload the external version, **No** to overwrite it with the values
-  on screen, or **Cancel** to keep editing without writing the file.
-- A change that arrives during loading or immediately after saving still needs
-  a decision before the next overwrite. Reopen or reload the latest version
-  when you want to keep the external changes.
-- Correct invalid input before saving again. A validation error does not mean
-  the displayed edits have been saved or applied.
-- A message saying the settings were saved but the profile list could not be
-  refreshed means the files are already saved. Reopen the profile menu later;
-  the selected profile remains the saved one.
+Select **Idle Disc.** to choose how long a wireless connection may stay idle
+before it disconnects: **Off**, 5, 10, 15, 30, or 60 minutes. The default is
+15 minutes. This is a global setting that does not change with the profile.
+After it disconnects, the status bar shows
+`ESP32 · Idle; press any button to wake`. Press any controller button to wake
+and reconnect.
 
 ---
 
 ## 3. Stick settings
 
-![Expanded stick curve editor](assets/v0.7.14/stick-zoom.png)
+![Zoomed stick curve editor](assets/v0.8.2/stick-zoom.png)
 
-Select **Zoom** under Stick Settings in the main window to open this editor.
+**Stick Settings** at the upper left of the main window has **Left** and
+**Right** tabs for each stick. Select **Zoom** to open the separate, larger
+editor shown above for fine curve adjustments.
 
-- **25% point** — Controls response for small stick movement.
-- **50% point** — Controls the middle of the response.
-- **75% point** — Controls response near the outer range.
-- **Shape and Stab.** — Adjust response shape and slope-based stabilization.
+### 3.1 Curve
 
-### 3.1 Curve controls
+The horizontal axis is stick travel and the vertical axis is output.
 
-- Drag a point to change the curve.
-- The left stick is blue and the right stick is red.
-- Double-click a point to restore its default.
-- Right-click a point to enter exact X and Y coordinates.
-- Select **Zoom** for the large curve editor.
-- **Lin.** connects points linearly.
-- **Smo.** uses a smooth curve.
+- Drag a control point to reshape the curve. The `0.25`, `0.50`, and `0.75`
+  points affect small, middle, and near-edge movement.
+- Double-click a control point to restore its default.
+- Right-click a control point to type its X and Y coordinates.
+- **Curve Mode**: `Lin.` connects the points with straight lines and `Smo.`
+  uses a smooth curve.
+- The light red bands on the left and right are the center and outer deadzones.
 
 ### 3.2 Deadzones
 
-- **CTR DZ** — Center deadzone used to remove drift near the neutral position.
-- **OUT DZ** — Outer deadzone used to reach 100% before the stick reaches its physical limit.
+- `CTR DZ` (center deadzone) ignores small offsets around the stick center.
+- `OUT DZ` (outer deadzone) lets the stick reach 100% output before it hits the edge.
+- `Scl.` (scale): when checked, the curve's 0% start (or 100% end) moves to the
+  deadzone edge and the whole curve is spread over the remaining travel.
 
-Large deadzones shorten the usable stick range. Increase them only enough to solve center drift or insufficient outer travel.
-
-> [!NOTE]
-> Right after the controller connects (or reconnects), a stick may rest slightly outside the center deadzone and produce a small leftover output.
-> As with many controllers after power-on, flick each stick once after connecting so it settles back to center. There is no need to enlarge the deadzone for this.
+Large deadzones shorten the usable travel, so increase them only enough to
+remove drift or reach full output. A small leftover value right after the
+controller connects clears when you flick the stick, so there is no need to
+enlarge the deadzone for it (see the note in [1.2](#12-install-and-first-launch)).
 
 ### 3.3 Shape and Stab.
 
-**Shape** adjusts the overall response character.
-
-**Stab.** adds stabilization only where the curve slope is greater than 1:1:
-
-- `0.0` — Off.
-- `1.0` — Standard compensation.
-- `2.0` — Stronger compensation.
-- `3.0` — Maximum compensation.
-
-Higher values are steadier but can feel smoother or less immediate.
+- **Shape** adjusts the outline of the stick's output. Higher values apply a
+  stronger shape correction. Check the result with
+  [Output shape](#83-output-shape) in Gamepad Tester.
+- **Stab.** (stabilizer) adds smoothing where the curve is steeper than 1:1.
+  `0.0` is off, `1.0` standard, `2.0` stronger, and `3.0` strongest. Higher
+  values are steadier but feel smoother.
 
 ### 3.4 Stick calibration
 
-1. Select **Calibrate** at the bottom of the main window.
-2. Follow the command-window instructions and leave the sticks centered when requested.
-3. Slowly rotate each stick around its complete outer range.
-4. Return to the settings window and test the result.
+1. Select **Calibrate** at the bottom of the main window, then press any
+   controller button when the calibration console asks.
+2. Release the button and both sticks and keep them still. Center capture
+   starts after 3 seconds.
+3. When prompted, rotate both sticks fully around their outer edges until the
+   left and right countdowns both finish.
+4. Check the center and edges in [Gamepad Tester](#8-gamepad-tester). If the
+   calibration was not saved, press any controller button to retry.
 
 > [!TIP]
-> Recommended order: calibration → center deadzone → outer deadzone → response curve → stabilizer.
+> Tune in this order: calibration → center deadzone → outer deadzone → curve → stabilizer.
 
 ---
 
-## 4. Button and direction mapping
+## 4. Button mapping and Stick Map
 
 ### 4.1 Buttons
 
-The **Buttons** tab maps physical controller buttons to Xbox 360 outputs.
+The **Buttons** tab (shown in the [main window screenshot](#2-main-window-and-profiles))
+maps the controller's physical buttons to Xbox outputs.
 
-- The physical input is shown on the left.
-- Select the Xbox output from the list on the right.
-- `NONE` disables the output.
-- **Reset** restores the mappings on this tab.
-- Select **Save/Apply** to keep the changes.
+- The left column lists the Switch 2 Pro buttons, and each menu on the right
+  chooses the XInput / Xbox output.
+- `NONE` sends nothing.
+- **Reset** restores this tab's mapping.
+- A typical profile swaps A/B and X/Y to match Xbox button positions. Extra
+  buttons such as CAPT, C, GR, and GL can map to Xbox buttons, stick clicks,
+  or `NONE`.
+- With a menu open, scroll the list with the mouse wheel. Scrolling does not
+  pick an option. After choosing one, select **Save/Apply**.
 
-The common layout swaps A/B and X/Y to match Xbox button positions. CAPT, C, GR, GL, and other extra buttons can also be assigned or disabled.
+#### Record keyboard or mouse input
 
-Choose **Shortcut** to record a keyboard or mouse input. Labels use short names such as `KB:1`, `KB:Ctrl+S`, and `M:Wheel↓`; hover over a short name to see the full mapping. An expanded dropdown scrolls when the wheel is over its list items. Scrolling does not apply a choice; select an item to apply it, then use **Save/Apply** to save.
+![Recording a custom input](assets/v0.8.2/shortcut-capture.png)
+
+Choose **Shortcut** in a menu to open the recording window. Press the key or
+key combination to map, such as F12, Ctrl+S, or Ctrl+Shift+S. The field shows
+short forms such as `KB:1`, `KB:Ctrl+S`, and `M:Wheel↓`. Hover over it to see
+the full mapping.
 
 ### 4.2 Stick Map
 
 ![Stick Map with the left stick in 8WAY using custom direction gaps](assets/v0.8.2/main-stick-map.png)
 
-- **Mode** — Select the direction mode, such as `4WAY` or `8WAY`.
-- **Direction arrows and menus** — Choose an output for each direction. `NONE` sends nothing.
-- **Direction diagram (radar thumbnail)** — Red sectors are the gaps between
-  directions. The solid blue circle is the trigger threshold and the dashed gray
-  circle is the release threshold.
-- **DZ / Trig / Rel** — Direction deadzone, trigger threshold, and release threshold.
-- **Independent sticks** — The left and right sticks can be configured and reset separately.
+Stick Map uses stick directions as buttons, for example turning the left stick
+into a D-pad. Each stick has its own settings and its own **Reset**.
+
+- **Mode**:
+  - `4WAY` / `8WAY`: output stick directions as buttons.
+  - **Mouse**: move the pointer with the stick, with adjustable speed and deadzone.
+  - **Linear Mouse Wheel**, **Linear LT** / **Linear RT**: turn stick travel
+    into wheel or trigger output.
+  - **Map to R Stick** / **Map to L Stick**: output this stick as the other stick.
+- **Direction arrows and menus**: choose an output for each direction. `NONE` sends nothing.
+- **Direction diagram (radar thumbnail)**: red sectors are the gaps between
+  directions. The solid blue circle is the trigger threshold and the dashed
+  gray circle is the release threshold.
+- **DZ / Trig / Rel**: direction deadzone, trigger threshold, and release threshold.
 
 In the screenshot, the left stick uses `8WAY` with custom gaps, so its **DZ**
 slider is disabled and shows **SET**. The right stick still uses the uniform
 `4WAY` deadzone.
+
+> [!TIP]
+> Keep **Trig** above **Rel**. The resulting hysteresis prevents repeated
+> activation when the stick rests on a direction boundary.
 
 #### Set custom direction gaps in the radar editor
 
@@ -278,19 +340,19 @@ slider is disabled and shows **SET**. The right stick still uses the uniform
 3. Read the radar: arrows mark the directions, red sectors are the gaps
    between them, the outline is the current output shape, and the solid blue
    and dashed gray circles are the trigger and release thresholds.
-4. **Rotate a gap** — Drag a red sector to shift that gap toward one side. The
+4. **Rotate a gap**: drag a red sector to shift that gap toward one side. The
    sector darkens while you drag. Each gap keeps a small margin from the
    direction centers and stops at its limit.
-5. **Set a width** — The field outside each sector sets that gap's full width
+5. **Set a width**: the field outside each sector sets that gap's full width
    as 0–90% of the angle between adjacent directions. Adjacent `8WAY`
    directions are 45° apart, so 20% is a 9° gap. Adjacent `4WAY` directions
-   are 90° apart, so 20% is 18°. Type a value and press Enter, or drag left
-   or right on the field. Right-click a field to restore its saved or default value.
+   are 90° apart, so 20% is 18°. Type a value and press Enter, or drag left or
+   right on the field. Right-click a field to restore its saved or default value.
 6. **Bottom fields**:
-   - **Uniform deadzone (°)** — The half-width shared by every gap, 0–20°.
+   - **Uniform deadzone (°)**: the half-width shared by every gap, 0–20°.
      It is disabled while custom gaps are in use.
-   - **Trig (%)** — 10–100%.
-   - **Rel (%)** — At least 3 percentage points below Trig.
+   - **Trig (%)**: 10–100%.
+   - **Rel (%)**: at least 3 percentage points below Trig.
 7. Select **OK** to send the values to the main window, or **Cancel** or Esc to discard them.
 8. Select **Save/Apply** in the main window to save and apply them.
 
@@ -305,534 +367,413 @@ the disabled **DZ** slider in the main window also opens the radar.
 > is open, **OK** reports that the settings changed. Close the radar and open
 > it again to continue editing.
 
-> [!TIP]
-> Keep **Trig** above **Rel**. The resulting hysteresis prevents repeated activation when the stick rests on a direction boundary.
-
 ---
 
-## 5. Mapping Layers
+## 5. Layers
 
-![Mapping Layers](assets/v0.7.14/main-layers.png)
+![The Layers list](assets/v0.8.2/main-layers.png)
 
-- **Enable check box** — Enables or disables the layer.
-- **Activation** — Assigns the activation button and Toggle/Hold behavior.
-- **Layer actions** — Edit, Rename, and Delete.
-- **Layer tools** — Add, Import, and Layer Manager.
+A mapping layer is a set of button and stick-direction mappings you can turn
+on at any time. For example, while a button is held, ZR and L can become the
+left and right mouse buttons and the right stick can move the mouse. An
+enabled layer overrides the main mapping for every item it sets.
 
-### 5.1 Creating a layer
+Each row has:
+
+- **Checkbox**: enables the layer.
+- **Activation button** and **Hold / Toggle**: the button and the way it switches the layer.
+- **↑ / ↓**: change the order in the list.
+- **Edit**, **Rename**, and **Delete**.
+
+Below the list, **+ Add** creates a layer, **Import** imports layer files, and
+**Layer Mgr.** opens the layer folder.
+
+### 5.1 Create and edit a layer
+
+![Editing a mapping layer](assets/v0.8.2/layer-editor.png)
 
 1. Select **+ Add** and enter a recognizable name.
-2. Select **Edit** and configure button, keyboard, or mouse mappings.
-3. Assign the activation button.
-4. Select **Hold** or **Toggle**.
-5. Enable the check box beside the layer.
-6. Select **Save/Apply**.
+2. Select **Edit** on its row to open the editor shown above.
+3. Set button outputs under **Button Mapping** on the left and both sticks
+   under **Stick-Direction Mapping** on the right. The stick options match
+   [Stick Map](#42-stick-map). **Copy Main Mapping** copies the main window's
+   mapping as a starting point.
+4. Select **OK** to close the editor.
+5. Choose the activation button, select **Hold** or **Toggle**, and check the
+   box at the left to enable the layer.
+6. Select **Save/Apply** in the main window.
 
-- **Hold** — Active only while the assigned button is held.
-- **Toggle** — Each press alternates between enabled and disabled.
+- **Hold**: the layer is active while the activation button is held.
+- **Toggle**: each press turns the layer on or off.
 
 > [!WARNING]
-> Layer edits remain in memory until **Save/Apply** succeeds. The layer files and profile state are not permanently saved before that point.
-
-The editor's left and right stick number controls are independent. **Cancel**
-closes an editor without applying its edits. If files are changed or deleted
-externally while an editor, rename or delete prompt is open, the application
-checks the intended layer again. A changed-layer warning means you should
-reopen the operation from the refreshed list.
+> Layer edits stay in memory until **Save/Apply** succeeds. Canceling the
+> editor discards that edit. If a layer changes or is deleted outside the
+> program while you edit it, reopen the latest version before editing again.
 
 ---
 
-## 6. Gyro mapping
+## 6. Gyro Map
 
-![Gyro mapping](assets/v0.7.14/main-gyro.png)
+![The Gyro Map tab](assets/v0.8.2/main-gyro.png)
 
-- **Activation** — Assign an activation button and select Off, Hold, or Toggle.
-- **Target** — Left Stick, Right Stick, or Mouse.
-- **Control Mode** — Aim (Center) or Wheel (Tilt).
-- **Gyro Response** — Sensitivity, X/Y ratios, deadzone, anti-deadzone, and smoothing.
-- **Stability and calibration** — Stability controls, Sensor Cal, and sensitivity curve.
+Gyro Map turns controller motion into stick or mouse output, commonly for
+motion aiming in shooters. From top to bottom the tab has Activation, Target,
+Control Mode, Gyro Response, and Stability sections. The **?** beside a field
+explains it in detail.
 
-### 6.1 Activation and target
+### 6.1 Activation
 
-- **Off** — Gyro mapping is disabled.
-- **Hold** — Gyro mapping is active while the assigned button is held.
-- **Toggle** — Press once to enable and again to disable.
-- **Left Stick / Right Stick** — Converts gyro motion into stick output.
-- **Mouse** — Converts gyro motion into mouse movement.
-- **Invert X / Y** — Reverses either axis.
+- **Button**: select **…** to choose one or more activation buttons. Their
+  original Xbox or keyboard mappings still apply.
+- **Off**: no gyro output.
+- **Hold**: active while an activation button is held.
+- **Toggle**: each press turns the gyro on or off.
 
-### 6.2 Control modes
+### 6.2 Target
 
-- **Aim (Center)** — Center-referenced aiming, normally used for shooters.
-- **Wheel (Tilt)** — Output based on controller tilt, suitable for steering-style control.
+- **Left Stick** / **Right Stick**: output to the virtual controller's stick.
+  Aiming usually uses the right stick.
+- **Mouse**: output mouse movement.
+- **Invert X / Invert Y**: reverse horizontal or vertical movement.
+- **Tilt Axis Comp.**: corrects left/right and up/down when the controller is
+  held at an angle, reducing axis cross-talk. When off, the sensor's fixed X
+  and Z axes are used. Available in Aim (Center) mode only.
 
-### 6.3 Response settings
+### 6.3 Control Mode
 
-- **Stick Sens** — Gyro-to-stick sensitivity.
-- **X Ratio / Y Ratio** — Horizontal and vertical scaling.
-- **DZ** — Removes small center drift.
-- **Anti DZ** — Raises the minimum output for small intentional movement.
-- **Smooth ms** — Smoothing time. Higher values are steadier but feel less immediate.
+- **Aim (Center)**: output follows turn speed and returns to center when you
+  stop turning. Suited to aiming.
+- **Wheel (Tilt)**: the stick follows how far the controller is tilted from
+  where it was when the gyro was activated. Suited to steering, and limited to
+  stick output. Choose **Horizontal** or **H + V**. **Recenter** and
+  **Shortcut** reset the neutral angle. A shortcut assigned here only resets
+  the neutral angle and no longer sends its game mapping.
 
-### 6.4 Recommended setup
+### 6.4 Gyro Response
 
-1. Place the controller on a stable surface and run **Sensor Cal**.
-2. Select the target and activation behavior.
-3. Start with low sensitivity.
-4. Use X/Y Ratio to balance horizontal and vertical speed.
-5. Add DZ only when the center drifts.
-6. Add a small Anti DZ only when small motion does not register.
-7. Adjust Smooth ms last.
+Only the fields that apply to the current target and control mode are shown.
+
+| Field | Description |
+|---|---|
+| **Stick Sens** | In Aim (Center) mode, how much turn speed moves the stick. |
+| **Mouse Sens** | With mouse output, how far the pointer moves per degree of rotation. |
+| **Max Tilt** | In Wheel (Tilt) mode, the tilt angle that gives full output. |
+| **X Ratio / Y Ratio** | Relative horizontal and vertical gain, `0.10–2.00`. `1.00` leaves it unchanged. |
+| **DZ** | In Aim (Center) mode, a radial deadzone on the combined horizontal and vertical turn speed, so diagonal turns keep their direction. Unit: °/s. |
+| **Anti-DZ** | Compensates for the game's built-in stick deadzone. Applies only to gyro stick output. Default `0`. |
+| **Tilt DZ** | In Wheel (Tilt) mode, ignores small tilts near neutral. |
+| **Smooth ms** | Speed-adaptive smoothing in Aim (Center) mode. Slow movement uses this value and fast turns drop to about 5 ms. `0` turns it off. |
+| **Tilt Smooth** | Smoothing time in Wheel (Tilt) mode. |
+
+Buttons below the fields:
+
+- **Sensor Cal**: place the controller flat on a steady surface first. It
+  calibrates the gyro's zero point.
+- **Sens. Curve**: available only in Aim (Center) mode with the gyro enabled
+  and stick output.
+- **Compensation Settings**: per-axis gyro output multipliers. Hidden for mouse output.
+
+#### Sensitivity curve
+
+![Gyro sensitivity curve](assets/v0.8.2/gyro-curve.png)
+
+The horizontal axis is the gyro's base output and the vertical axis is the
+output after the curve. **Mode** chooses **Lin.**, **Late** (accelerates near
+the end), or **Early** (accelerates at the start). **Lvl** sets how strongly
+the curve bends. Select **OK**, then **Save/Apply** in the main window.
+
+#### Compensation settings
+
+![Gyro compensation settings](assets/v0.8.2/gyro-compensation-settings.png)
+
+If raising the in-game look speed makes gyro aim too sensitive, lower **X**
+for horizontal or **Y** for vertical aim. `1.00` keeps the original output.
+At `0.50`, for example, horizontal output is halved before anti-deadzone. The
+multipliers apply after smoothing and the sensitivity curve, and only to the
+gyro. The physical stick keeps its original output. Select **OK**, then
+**Save/Apply** in the main window.
+
+To work out a suitable multiplier, use
+[Gyro Preview and Calculator](#gyro-preview-and-calculator) in Gamepad Tester.
+
+### 6.5 Stability
+
+| Field | Description |
+|---|---|
+| **Accel Sup** | Reduces the accelerometer's pull on orientation during fast turns or vibration. `0` is off. |
+| **Adaptive DZ** | Keeps the deadzone at rest in Aim (Center) mode and shrinks it during deliberate turns. `0` keeps it fixed. |
+| **Freeze ms** | Guard time after an extra key is pressed or released. `0` is off. |
+| **Button guard** | **Freeze output** (default) pauses gyro output during the guard time, so the view may stop briefly. **Suppress spikes** keeps your movement and limits only the spike at the button press. Try 20 ms first. |
+| **Extra Key** | Buttons that tend to shake the controller, such as the triggers. Pressing or releasing one starts the guard. Their mappings still apply. |
+
+**Reset Gyro Defaults** restores this tab's defaults.
+
+### 6.6 Recommended setup order
+
+1. Place the controller flat on a steady surface and run **Sensor Cal**.
+2. Choose the **Target**.
+3. Choose activation buttons and **Hold** or **Toggle**.
+4. Start testing with a low sensitivity.
+5. Use **X Ratio / Y Ratio** to balance horizontal and vertical speed.
+6. Increase **DZ** only if the view drifts while the controller is still.
+7. Add a little **Anti-DZ** only if small movements do nothing in the game.
+8. Adjust **Smooth ms** last.
+
+Check the response with the [Aim Test](#aim-test-guide) in Gamepad Tester.
 
 > [!WARNING]
-> During magnetometer calibration, move away from speakers, magnets, large metal objects, and powered equipment. Follow the prompt and rotate the controller through a complete three-dimensional figure-eight.
+> For magnetometer calibration, keep away from speakers, magnets, large metal
+> objects, and powered equipment, and turn the controller in a 3D figure-eight
+> in several directions as prompted.
 
 ---
 
-## 7. Rumble settings
+## 7. Rumble
 
 ### 7.1 Basic rumble
 
-- **LF Strength / HF Strength** — Low- and high-frequency path strength.
-- **LF Curve / HF Curve** — Response from small to large rumble commands.
-- **HF → LF Mix / LF → HF Mix** — Cross-feed between the two paths.
-- **LF Frequency / HF Frequency** — The two active frequency commands.
-- **Max Amp** — Final amplitude limit.
+The **Rumble** section at the lower left of the main window:
 
-### 7.2 Max Amp and mechanical noise
+| Field | Description |
+|---|---|
+| **LF Strength** | Strength of the low-frequency path. |
+| **HF Strength** | Strength of the high-frequency path. |
+| **LF Curve / HF Curve** | Response curve from small to large signals. |
+| **HF → LF Mix** | Blends part of the high-frequency path into low frequency. |
+| **LF → HF Mix** | Blends part of the low-frequency path into high frequency. |
+| **LF Frequency / HF Frequency** | The two vibration frequency commands. |
+| **Max Amp** | Caps the final amplitude. Range `0–1023`, default `500`. |
 
-The amplitude field has a protocol range of `0–1023`. The default is `500`, approximately 49% of the field maximum.
-
-Testing across multiple bridge implementations and controllers indicates that stronger output makes a linear actuator more likely to produce a light mechanical impact during rapid changes. The effect is usually minor during normal use.
-
-The default of `500` retains clear feedback while reducing excessive-output noise. It is not a certified continuous hardware safety limit.
+Testing with several bridge programs and controllers showed that higher
+strength makes the linear motors more likely to produce a faint knocking sound
+when rumble changes quickly. There is no documented safe hardware limit, so
+`500` (about 49% of the field range) is the general default. It keeps clear
+feedback while reducing the chance of noise.
 
 > [!CAUTION]
-> The `0–1023` field range does not mean every controller should run continuously at the maximum. Reduce Max Amp, LF/HF Strength, or the affected audio bands if you hear impacts, sharp buzzing, or unnatural vibration.
+> `0–1023` is the protocol field range, not a recommendation to run every
+> controller at the maximum for long periods. If you hear knocking, sharp
+> noise, or unnatural vibration, lower **Max Amp**, **LF/HF Strength**, or the
+> related band gains.
 
-### 7.3 Game, Audio, and Mix
+### 7.2 Advanced Rumble: Game
 
-![Advanced Rumble in Game mode](assets/v0.7.14/main-rumble-game.png)
+![Advanced Rumble in Game mode](assets/v0.8.2/main-rumble-game.png)
 
-- **Source** — Game, Audio, or Mix.
-- **Six-band curve** — Gain for each audio range.
-- **LF/HF Balance** — Routes the middle bands toward LF or HF.
-- **Final Output** — Tail and decay behavior.
+**Source** chooses where rumble comes from:
 
-- **Game** — Uses native game rumble only.
-- **Audio** — Converts the Windows default output into rumble.
-- **Mix** — Softly combines game and audio rumble without simple hard clipping.
+- **Game**: native game rumble only. Audio Response and 6-Band EQ are disabled.
+- **Audio**: converts sound from the Windows default output device into rumble.
+- **Mix**: blends game and audio rumble with soft saturation instead of adding
+  them directly, to avoid clipping.
 
-### 7.4 Audio Response
+Under **Final Output**, **Tail** and **Decay ms** control the rumble's tail
+and fade. **Reset Defaults** restores this tab.
 
-![Advanced Rumble in Audio mode](assets/v0.7.14/main-rumble-audio.png)
+### 7.3 Audio and Mix
 
-- **Audio source**
-- **Lvl / Gate / Atk / Rel**
-- **Low, L-Mid, Mid, H-Mid, High, and Ultra bands**
-- **LF/HF Balance**
+![Advanced Rumble in Audio mode](assets/v0.8.2/main-rumble-audio.png)
 
-- **Lvl** — Overall audio-to-rumble sensitivity.
-- **Gate** — Rejects quiet background audio.
-- **Atk** — Attack speed; lower values respond faster.
-- **Rel** — Release time after the sound ends.
+**Audio Response**:
 
-### 7.5 Six-band EQ
+| Field | Description | Adjusting |
+|---|---|---|
+| **Lvl** | Overall sensitivity of audio-to-rumble. | Raise it if rumble is weak; lower it if sounds start too strong. |
+| **Gate** | Noise threshold. | Raise it if quiet scenes still rumble; lower it if only loud sounds react. |
+| **Atk** | Attack speed. | Lower values respond faster. |
+| **Rel.** | Release time after a sound ends. | Higher values give a longer tail. |
 
-| Band | Range | Typical content |
+### 7.4 6-Band EQ
+
+| Band | Range | Main content |
 |---|---:|---|
 | Low | 20–120 Hz | Deep impacts and sub-bass |
-| L-Mid | 120–300 Hz | Low-frequency body |
-| Mid | 300–700 Hz | Low-mid detail |
-| H-Mid | 700–2000 Hz | High-mid detail |
+| L-Mid | 120–300 Hz | Low-end body |
+| Mid | 300–700 Hz | Lower-mid detail |
+| H-Mid | 700–2000 Hz | Upper-mid detail |
 | High | 2000–4000 Hz | Friction and vocal edges |
-| Ultra | 4000–8000 Hz | Sharp alerts and ultra-high detail |
+| Ultra | 4000–8000 Hz | Sharp cues and very high detail |
 
-- Drag a point to adjust its gain.
-- Double-click a point to restore that band.
-- `1.00` is neutral gain.
-- These controls affect Audio and Mix, not Game-only rumble.
+- Drag a point to set that band's gain, or double-click to restore it. `1.00` is neutral.
+- Hover over the text below the graph for the full band ranges and controls.
+- These settings affect Audio and Mix only, not Game.
 
-### 7.6 LF/HF Balance
+**LF/HF Balance** only changes how the middle bands are routed and does not
+change the six band gains. `-1.00` favors LF, `0.00` is balanced, and `+1.00`
+favors HF. Start between `-0.15` and `+0.15`.
 
-- `-1.00` favors LF.
-- `0.00` is balanced.
-- `+1.00` favors HF.
-- Start within `-0.15` to `+0.15`.
+### 7.5 High-frequency noise
 
-This control changes the routing of the middle bands; it does not change the six gain values.
+If Audio or Mix produces a constant high-pitched sound:
 
-### 7.7 High-frequency noise
-
-If Audio or Mix produces continuous high-frequency noise:
-
-1. Lower the High and Ultra bands.
-2. Move LF/HF Balance slightly toward LF.
-3. Raise Gate to reject quiet background audio.
-4. Lower Lvl if every sound begins too strongly.
-5. If needed, reduce HF Strength or Max Amp.
+1. Lower the **High** and **Ultra** gains.
+2. Move **LF/HF Balance** slightly toward LF.
+3. Raise **Gate** to filter quiet background sound.
+4. If every sound starts too strong, lower **Lvl**.
+5. If the noise remains, lower **HF Strength** or **Max Amp**.
 
 ---
 
-## 8. HidHide and ESP32-S3
+## 8. Gamepad Tester
 
-### 8.1 HidHide
+![Gamepad Tester Input Monitor](assets/v0.8.2/tester-input.png)
 
-In wired mode, a game may see both the physical controller HID and the virtual XInput controller, producing duplicate input. HidHide hides the physical HID while allowing S2P-XInput-Lite to keep reading it.
-
-- **HidHide: Ready** — Installed and configured.
-- **HidHide: Missing** — Not installed. Select the status text to open the download page.
-- **HidHide: Off / Setup** — Installed but not configured.
-- **HidHide: Error** — The configuration could not be read or changed.
-
-If you dismiss an automatic reminder, it will not appear on every launch. Select the HidHide status at the bottom of the window to open the action again.
-
-> [!WARNING]
-> Close HidHide Configuration Client before retrying a failed setup. Enabling global cloaking can also affect other devices already present in the HidHide list.
-
-<a name="flash-esp32-s3"></a>
-
-### 8.2 Flashing ESP32-S3 firmware
-
-1. Select **Flash FW**.
-2. The application reads the connected firmware version and compares it with
-   the bundled `S2P-FW 1.0.9`.
-3. Review the installed and bundled versions, then choose whether to flash or
-   cancel. Cancelling resumes the connector if it was paused for detection.
-4. After confirming, connect the ESP32-S3 OTG port and hold **BOOT**.
-5. Press **RESET / EN** once, release **RESET / EN**, then release **BOOT**.
-6. The application identifies the ESP32-S3 ROM port by its USB identity even
-   when that COM port was already present, then flashes the firmware.
-7. After a successful flash, the ESP32 returns to bridge mode and the desktop
-   connector starts automatically after USB re-enumeration.
-8. If the bridge does not reappear after several seconds, press **RESET / EN**
-   or reconnect the board.
-
-> [!CAUTION]
-> Do not disconnect the ESP32-S3 or close the application while firmware is being written.
-
-### 8.2.1 Bridge shutdown protection
-
-Bridge shutdown protection in v0.7.14 requires both the updated desktop
-application and S2P-FW 1.0.7.
-In bridge mode, use **Exit** to request release and wait for confirmation that
-all BLE links are released. After session establishment, continuous CDC loss
-for 3 seconds or no host heartbeat for 8 seconds starts automatic BLE release.
-Android USB HID keeps working without the desktop application
-or CDC/DTR, with its existing idle disconnect and button-wake behavior.
-Hardware sleep-current and shutdown validation for this fix is still pending;
-see the [hardware checklist](../docs/bridge-host-shutdown.md).
-
-### 8.3 Pairing the controller
-
-1. Connect the ESP32-S3 and start S2P-XInput-Lite.
-2. Put the controller into pairing mode.
-3. Hold **SYNC** when a new pairing is required.
-4. The application detects the SYNC connection and writes the ESP32 pairing data.
-5. Confirm that the Pad/ESP32 status changes to connected.
-
-### 8.4 Two ESP32 operating modes
-
-| Mode | Windows application required | USB output | Identifier |
-|---|---|---|---|
-| ESP32 Bridge | Yes | CDC; desktop XInput through ViGEmBus | `303A:4001` |
-| Android USB HID standalone | No | CDC + standard HID, `S2P Mobile Gamepad` | `303A:4005` |
-
-Both modes retain CDC configuration, diagnostics and recovery. These are shared
-Espressif/TinyUSB defaults; USB metadata alone does not establish S2P identity.
-The desktop validates firmware identity and compatible capabilities. Legacy
-`CAFE:4020/4021/4022` identifiers are upgrade candidates only.
-
-Existing NVS values `0=Bridge` and `2=HID` retain their meanings. Old `1=XInput`
-and `3=Auto` migrate to HID with a desktop notice: PC XInput/Auto standalone was
-removed; Android USB HID is selected, and desktop XInput requires Bridge.
-Unknown values or read errors start in Bridge. Migration itself does not reboot.
-
-### 8.5 Writing a profile and enabling Android USB HID
-
-1. Select a profile and select **Save/Apply** after adjusting its settings.
-2. Confirm that the connected ESP32 runs bundled `S2P-FW 1.0.8` to apply
-   per-direction 4WAY and 8WAY deadzones in standalone mode.
-3. Open **ESP32 ▼ → Write and enable Android USB HID standalone**
-   (**寫入並啟用 Android USB HID 獨立模式** in Traditional Chinese).
-4. Review compatibility warnings. Cancel and correct Windows-only outputs, or
-   confirm omission of unsupported items.
-5. Wait for transfer, length/CRC validation, runtime apply and controlled restart.
-   Keep USB power connected throughout.
-6. Connect the ESP32 to an Android USB host with a data cable and OTG adapter
-   when required. The system and game must support USB HID controllers;
-   compatibility remains subject to hardware testing.
-
-Save pending edits first; use **Save New** after changing **System Default**.
-A/B storage retains the previous valid profile until the new slot passes
-validation. Do not assume a failed write or mode save changed the device.
-The obsolete Auto menu screenshot has been removed from this section.
-
-Only one ESP32 write or mode change can run at a time. Repeated requests are
-blocked while the operation is active, and Settings stays open until it finishes.
-Read the completion message before disconnecting the device.
-
-### 8.6 Returning to Bridge and recovery
-
-- **Desktop menu:** Connect the ESP32 to Windows and choose **ESP32 ▼ → Return
-  to ESP32 bridge mode**. Wait for USB re-enumeration and automatic desktop
-  search. Reconnect USB or use **Restart Connection** if recovery is still needed.
-- **Connected controller:** Hold **HOME+X for 3 seconds, then release** to save
-  Bridge; hold **HOME+A for 3 seconds, then release** to save Android USB HID.
-  HOME+Y is removed. Chords read raw input before mappings and layers. Selecting
-  the current mode leaves recovery available to other controllers. In Bridge,
-  a controller can request HID while CDC output is stalled. The ESP32 restarts
-  once it saves the new mode successfully.
-- **No controller:** CDC remains available in both modes. Send `mode bridge`,
-  then `restart` after the mode is saved. Close the desktop connector before
-  opening the same COM port in a serial terminal.
-- **No working CDC:** Enter the chip's ROM Download Mode. Check the board's
-  native USB port and BOOT/RESET (EN) controls. Typically hold **BOOT**, press
-  and release **RESET/EN**, then release **BOOT**. Boards without RESET may
-  require holding BOOT while reconnecting USB. Follow the board manufacturer's
-  wiring and timing instructions. Use the existing flashing workflow after ROM
-  enumeration; chip identification and the 16 MB flash check still apply. After
-  flashing, release BOOT and press RESET/EN or power cycle to start the application.
-  ROM does not implement the S2P application protocol.
-
-Returning to Bridge retains the last stored standalone profile. **Restart
-Connection** only restarts the desktop connection.
-
-Connection, stick calibration and firmware operations also avoid competing for
-the same device. Close the calibration program before starting a connection or
-flashing firmware. When a version check or write is canceled, a connection that
-was waiting to restart can resume; wait for the current operation to finish
-before retrying another action.
-
-### 8.7 Standalone support and validation limits
-
-HID reuses stick calibration, curves, center/outer deadzones, per-direction
-4WAY and 8WAY deadzones on both sticks and enabled mapping layers, output shape,
-stabilization/smoothing, button and direction mapping, compatible Mapping
-Layers, linear triggers, gyro-to-stick, idle disconnect and BLE reconnect.
-Its input report retains buttons, four stick axes, a hat, separate analog
-triggers and digital L2/R2 compatibility output.
-
-Standalone does not execute Windows keyboard/mouse output, Audio/Mix haptics,
-process-based profile switching or gyro mouse output. HID has no rumble output
-report: Android game rumble is not promised, and BLE HID is not provided.
-Windows game rumble and audio haptics continue through the Bridge desktop path.
-
-No physical hardware was exercised for this revision. Windows/Android descriptor
-enumeration and input, ViGEmBus, rumble/audio haptics, USB unplug/replug,
-sleep/remote wake, idle disconnect, BLE reconnect, actual NVS upgrades, controller
-chords and ROM recovery are all pending. Historical measurements do not validate
-the new firmware. Apple devices are outside current support; Android support
-varies by device, OS and game. See [validation and official references](../docs/usb-hid-standardization.md).
-
----
-
-## 9. Gamepad Test
-
-![Gamepad Test input monitor](assets/v0.7.14/tester-input.png)
-
-*The screenshot shows a connected S2P-XInput-Lite Bridge. Available controls and data depend on the device.*
-
-- **Device and refresh**: Select the controller to inspect or rescan devices.
-- **Function tabs**: Open Input Monitor, Aim Test, Rumble Test, Report Rate Test,
-   Diagnostics, or About.
-- **Stick source and zoom**: Select each stick's source and adjust its view.
-- **Left and right stick plots**: Show live position, trails, output shape,
-   and guides.
-- **Sampling and trail controls**: Adjust sampling, trail duration, and
-   overlays.
-- **Trigger input**: Shows current LT and RT values and their input type.
-- **Button events**: Lists button state, held time, effective mapping, and
-   active layer.
-
-Select **Gamepad Test** at the bottom of the main window to open the standalone
-tester. It runs separately from the settings window so high-rate drawing does
-not delay settings input. Selecting the button again raises the existing tester
-instead of opening a duplicate. The standalone Gamepad Tester application can
-also be launched directly without opening the settings window first.
+Select **Gamepad Test** at the bottom of the main window, or run
+`GamepadTester.exe`, to open the standalone tester. It runs separately from
+the settings window, so its high-rate drawing does not slow down settings.
+Selecting the button again brings the existing tester forward.
 
 > [!IMPORTANT]
-> Gamepad Tester is designed primarily for a Switch 2 Pro Controller connected
-> and processed by S2P-XInput-Lite. Other XInput, WinMM, or Raw HID controllers
-> can still run basic input, vibration, and report-rate tests, but they do not
-> publish S2P shared telemetry. Physical/processed sources, effective mappings,
-> Mapping Layers, battery, sensors, transport status, and ESP32 diagnostics may
-> therefore be unavailable. This is expected.
-
-### 9.1 Selecting a source
-
-- **S2P-XInput-Lite** tests the current virtual XInput output and exposes
-  physical, processed, and combined sources.
-- Other entries are XInput or generic game controllers detected by Windows;
-  only information exposed by that interface is shown, without S2P-only data.
-- Duplicate names include the interface type and device number.
-- **Refresh** rescans devices. Changing the device or plotted source clears the
-  old measurement so unrelated samples are not combined.
+> Gamepad Tester is built for the Switch 2 Pro Controller as connected and
+> processed by S2P-XInput-Lite. Other XInput, WinMM, and Raw HID controllers
+> support basic input, rumble, and report-rate tests, but they do not provide
+> S2P's shared telemetry. Physical and processed sources, effective mappings,
+> layers, battery, sensors, and ESP32 diagnostics may be missing. This is expected.
 
 **Quick test:**
 
-1. Connect and wake the controller. To test S2P output, start the main application and confirm its connection first.
-2. Launch `GamepadTester.exe`, or select **Gamepad Test** in the main window.
-3. Select **Refresh**, then choose the device at the top. If it is missing, check the Windows connection and scan again.
-4. Open **Input Monitor**, move both sticks, and press buttons and triggers; check that the dots and event table change.
-5. Use **Rumble Test**, **Report Rate Test**, or **Diagnostics** as needed. Each requires an appropriate device interface as described below.
+1. Wake the controller. To test S2P output, start the main program first and
+   check that it is connected.
+2. Open Gamepad Tester and choose **S2P-XInput-Lite (Bridge)** under
+   **Device** at the top. If it is missing, select **↻** to rescan.
+3. On **Input Monitor**, move both sticks and press buttons and triggers.
+   Check that the dots and the event list change.
+4. Switch to **Aim Test**, **Rumble Test**, **Report Rate Test**, or
+   **Diagnostics** as needed.
 
-### 9.2 Stick plots
+### 8.1 Choose a test source
 
-Each stick has its own source selector. The centre crosshair is zero, the dark
-outer circle is the 100% reference, and the live dot is the current value.
+- **S2P-XInput-Lite (Bridge)**: the virtual controller output by the main
+  program, with physical, gyro, and final sources.
+- **Other controllers**: XInput or generic game controllers detected by
+  Windows. Only the data that interface provides is shown.
+- **Raw HID**: entries containing `Raw HID` are HID interfaces, used for the
+  [Report Rate Test](#86-report-rate-test). **S2P Mobile Gamepad (Raw HID)** is
+  an ESP32-S3 in Android USB HID standalone mode. It shows every button and the
+  D-pad, and works in the Aim Test.
+- When several devices share a name, the list adds the interface type and a
+  number. Switching devices clears old measurements so data is not mixed.
 
-- **Trail samples** controls the percentage of real reports drawn.
-- **Trail length** controls how many seconds remain visible.
-- `-`, `+`, and **Reset** control plot zoom.
-- S2P output sources can also show the applied deadzone, outer limit, response
-  curve, and gyro guides.
+### 8.2 Stick plots
 
-The trail uses the reports received from the selected source. It draws each
-selected sample at its recorded position and merges overlapping pixels. The
-corner FPS counter measures plot updates that change the image. Use **Report
-Rate Test** to measure reports from a selected Raw HID interface. On supported
-Windows runtimes, a native background worker rasterizes the points for Canvas
-composition. The plot falls back to Tk image tiles if needed.
+The two plots show the left and right sticks. The crosshair center is zero,
+the black circle is the 100% reference, the dot is the current position, and
+the dots behind it are the recent trail. Below each plot are the current
+coordinates and the radius **R**.
 
-### 9.3 Output-shape capture
+- The source menu above each plot offers **Stick**, **Gyro**, and **Final**
+  for S2P, or **Input** for other controllers. `-` and `+` zoom, and **Reset**
+  restores the view.
+- **Trail** sets how many seconds the trail lasts, and **Samples** sets what
+  share of the actual reports is drawn.
+- **Gyro** shows the gyro reference lines.
+- The FPS at the upper right counts display updates that changed, not the
+  controller's report rate. Use the [Report Rate Test](#86-report-rate-test) for that.
 
-![Output-shape measurement from a connected controller](assets/v0.7.14/tester-shape.png)
+### 8.3 Output shape
 
-Enable **Shape**, then rotate the stick slowly around its outer
-edge. The purple line records the maximum output reached in every direction and
-reports coverage, roundness error, and maximum radius.
+![Measured stick output shape](assets/v0.8.2/tester-shape.png)
 
-- Coverage reaches 100% after every 5-degree sector has a real sample.
-- After the displayed line catches the latest maxima and no sector expands for
-  one second, the capture locks and stops redrawing to avoid idle rendering
-  overhead.
-- Toggle **Shape** off and back on, or change the source or settings to start a new capture.
-- **Reset** clears the current measurements and restores the defaults for that row.
-  Enable **Shape** again to start a new shape capture.
+Check **Shape**, then rotate each stick slowly around its edge a few times.
+The purple line records the maximum output reached in each direction. Below
+the plot are **Cov** (coverage), **Circ err** (circularity error), and **Max** (maximum radius).
 
-### 9.4 Buttons and triggers
+- Coverage reaches 100% once every 5° segment has a real sample.
+- When the purple line stops expanding for one second, the measurement locks
+  and stops redrawing, so a long-open tester does not keep using resources.
+- Uncheck and recheck **Shape**, or change the source or settings, to start a
+  new measurement. **Reset** clears the current one.
 
-The event table shows the source button, pressed/released state, held duration,
-effective mapping, and active mapping layer. LT and RT show both raw trigger
-input and final output. S2P Mobile USB HID uses its button, axis, trigger and
-POV map only when associated with the exact verified CDC device; otherwise
-the tester retains generic HID behavior.
+### 8.4 Buttons and triggers
 
-### 9.5 Vibration Test
+- **Triggers**: the current LT and RT values and their input type.
+- **Button Events**: **Source**, **State** (pressed or released), **Time**
+  (how long), **Mapping** (the output that took effect), and **Layers**.
 
-![Gamepad Test vibration page](assets/v0.7.14/tester-rumble.png)
+### 8.5 Rumble Test
 
-- **Manual output**: Adjust LF and HF motor strength directly.
-- **Motor levels**: Show the current output percentage for both bands.
-- **Test patterns**: Select pulse, alternate, impact, engine, wave, and other
-   preset effects.
-- **Playback controls**: Set repeat, LF/HF routing, rate, and strength.
-- **Stop controls**: Reset the settings or immediately stop all vibration.
+![Rumble Test](assets/v0.8.2/tester-rumble.png)
 
-Choose S2P-XInput-Lite (Bridge) or an XInput device that supports vibration, then open **Rumble Test**. Start with low LF/HF levels or choose a pattern. Enable **Repeat** if needed and select **Stop All Rumble** when finished. If `No XInput rumble` appears or controls are disabled, check that the virtual controller is active or select a supported XInput device. Bridge tests use the current profile's LF/HF settings; game rumble patterns do not output in Audio-only mode.
+1. Under **Device**, choose **S2P-XInput-Lite (Bridge)** or an XInput device
+   that supports rumble, then open **Rumble Test**.
+2. **Manual Output**: start low and move **LF Motor** and **HF Motor**.
+3. **Patterns**: select any pattern, such as Impact, Engine, or Machine Gun.
+   **Repeat** loops it, **LF / HF** choose the bands, and **Rate** and
+   **Strength** set its pace and strength.
+4. Select **Stop All Rumble** when finished. **Reset** restores this tab.
 
-If the output connection changes, the running rumble test stops rather than
-moving to the new connection. Check the selected device before starting again.
+A Bridge test uses the current profile's LF/HF settings. With **Source** set
+to Audio only, game rumble patterns are not output. If the tab shows
+`No XInput rumble` or its controls are gray, check that the virtual controller
+is enabled or choose an XInput device that supports rumble. The tester stops
+rumble when you change devices, the output connection changes, or the tester
+closes. Android USB HID standalone mode is input only and does not send game
+rumble back to the controller.
 
-The **Rumble Test** tab sends test patterns to Windows devices that expose
-XInput rumble. Stopping or closing the tester sends zero vibration. Mobile USB
-HID currently provides input only and does not relay web or game rumble to the
-controller.
+### 8.6 Report Rate Test
 
-### 9.6 Report Rate
+![Report Rate Test](assets/v0.8.2/tester-rate.png)
 
-![Gamepad Test report-rate page](assets/v0.7.14/tester-rate.png)
+1. Under **Device**, choose an interface containing `Raw HID`, then open **Report Rate Test**.
+2. Choose **Duration (s)** and select **Start**.
+3. Keep moving one stick in large circles until it finishes, or select **Stop Early**.
+4. Compare **HID Report Rate** with **Effective Report Rate**, and check the
+   P50, P95, and P99 values and the distribution under **Time Between Reports**.
+   An interpretation appears below the graph.
 
-*The selected Raw HID interface is a virtual controller. Its results describe that interface, not the physical controller's raw BLE rate.*
+The screenshot measures the virtual controller's Raw HID interface. The values
+describe that interface's reports, not the physical controller's or BLE's raw
+rate. One physical device can expose several interfaces. If there is no valid
+data, choose the interface whose values change when you move the controller.
 
-- **Measurement settings**: Select the duration, start, or stop early.
-- **Live summary**: Shows HID rate, effective rate, report count, and time
-   remaining.
-- **Interval statistics**: Lists P50, P95, P99, minimum, mean, and maximum.
-- **Interval distribution**: Plots report-interval distribution and timeline.
-- **Reading status**: Shows whether measurement is active and its result state.
+### 8.7 Diagnostics
 
-1. Select a Raw HID collection in **Device** and open **Report Rate Test**.
-2. Set **Duration (s)**, select **Start**, and move one stick through wide circles until the test ends; use **Stop Early** if needed.
-3. Compare **HID Report Rate** with **Effective Report Rate** and inspect the intervals. If there is no usable data, try another collection.
+![ESP32 Diagnostics](assets/v0.8.2/tester-diagnostics.png)
 
-Open **Report Rate** to measure a Raw HID collection without display-frame
-sampling. Select the collection and test duration, start the measurement, then
-move one stick continuously through wide circles. The result shows total HID
-reports, reports containing usable stick data, effective rate, P50/P95/P99
-intervals, distribution statistics, and a timeline. Select the collection that
-actually changes when the controller moves; interfaces from the same physical
-device may expose different reports.
+**Diagnostics** runs a 30, 60, or 120 second ESP32 health check:
 
-### 9.7 Diagnostics
+1. Choose the S2P device under **Device** and pick a **Duration**.
+2. Select **Start Diagnostics**. Keep the controller awake and move the
+   sticks, turn the controller, and trigger rumble during the test.
+3. When it finishes, **Diagnostic assessment** summarizes the overall result,
+   findings, and recommendations. **Diagnostic details** lists the connection,
+   input, latency, calibration, sensor, and rumble checks.
+4. To report a problem, select **Export Support Log** to save a UTF-8 text file.
 
-![Gamepad Test ESP32 diagnostics page](assets/v0.7.14/tester-diagnostics.png)
-
-*This example shows a completed diagnosis with a BLE input-gap warning. Results depend on the connection.*
-
-- **Diagnostic controls**: Start or stop diagnostics and select the duration.
-- **Diagnostic status**: Shows the current phase and progress.
-- **Diagnostic assessment**: Summarizes the verdict, findings, and advice.
-- **Diagnostic details**: Lists connection, input, sensor, and rumble checks.
-- **Export Support Log**: Saves diagnostic data for a support report.
-
-The **Diagnostics** tab runs a 30, 60, or 120 second ESP32 health check. Keep
-the controller awake and exercise the sticks, sensors, and rumble during the
-run. The summary covers firmware mode, connection and input continuity,
-latency, calibration, motion sensors, gyro processing, rumble, and an overall
-pass/warn/fail verdict. **Export Support Log** saves the displayed report as UTF-8
-text.
-
-Bridge mode temporarily uses the application's active serial connection.
-Standalone modes open the ESP32 diagnostic channel directly. The complete
-diagnostic command set requires the bundled `S2P-FW 1.0.8`.
-
-### 9.8 About
-
-![About page showing the license agreement](assets/v0.7.14/tester-about.png)
-
-![About page showing third-party software notices](assets/v0.7.14/tester-third-party.png)
-
-- **Product identity**: Shows the icon, product name, and version.
-- **Project links**: Opens GitHub, sponsorship, and development-support links.
-- **Document tabs**: Switches between the license and third-party notices.
-- **Document content**: Scrolls through the complete bundled notices.
-
-The **About** tab keeps the logo, version, GitHub, and Ko-fi links visible on
-the left. The right side contains scrollable **License Agreement** and
-**Third-Party Software** tabs loaded from the files included with the release.
-
----
+In Bridge mode the test briefly uses the main program's serial connection. In
+standalone mode it opens the ESP32's diagnostic channel directly. The full
+diagnostic commands require the bundled S2P-FW 1.0.9.
 
 <a name="aim-test-guide"></a>
 
-### 9.9 Aim Test
+### 8.8 Aim Test
 
-![The Aim Test tab in Gamepad Tester](assets/v0.8.2/aim-test-tab.png)
+![The Aim Test tab](assets/v0.8.2/aim-test-tab.png)
 
 The **Aim Test** tab has four areas:
 
-- **Upper left** — Choose **2D Mode** or **3D Mode**, then **Tracking**,
+- **Upper left**: choose **2D Mode** or **3D Mode**, then **Tracking**,
   **Targets**, or **Timed Targets**. The **?** explains the controls and
   comparison rules.
-- **Upper right** — **Gyro Preview**, **Calculator**, **Clear History**,
+- **Upper right**: **Gyro Preview**, **Calculator**, **Clear History**,
   **Test Settings**, and **Start**.
-- **Center** — Saved rounds. Select one to see how it compares with the best match.
-- **Bottom** — The current test conditions and the change from the best round
+- **Center**: saved rounds. Select one to see how it compares with the best match.
+- **Bottom**: the current test conditions and the change from the best round
   with the same settings.
 
 #### Test mapped gyro output
 
-1. Connect the controller through S2P-XInput-Lite. In **Gyro Map**, set **Target**
-   to **Right Stick** and **Control Mode** to **Aim (Center)**. Assign a button
-   and choose **Hold** or **Toggle**, then select **Save/Apply**.
-2. Open **Gamepad Test** and select **S2P-XInput-Lite (Bridge)** from the device
-   list. Aim Test reads that virtual controller's right-stick output as Windows
-   sees it, so the active profile's mapping, deadzone, and response settings apply.
-3. Open **Aim Test**, choose **3D Mode → Tracking**, and select **Start**. Activate
-   the gyro and rotate the controller with your thumb off the right stick to check
-   its response. For a shooting drill, choose **Targets** or **Timed Targets**.
+1. Connect the controller through S2P-XInput-Lite. In **Gyro Map**, set
+   **Target** to **Right Stick** and **Control Mode** to **Aim (Center)**.
+   Assign a button, choose **Hold** or **Toggle**, then select **Save/Apply**.
+2. Open Gamepad Tester and choose **S2P-XInput-Lite (Bridge)** under
+   **Device**. Aim Test reads the virtual controller's right-stick output as
+   Windows sees it, so the active profile's mapping, deadzone, and response
+   settings apply.
+3. Choose **3D Mode → Tracking** and select **Start**. Activate the gyro and
+   rotate the controller with your thumb off the right stick to check its
+   response. For a shooting drill, choose **Targets** or **Timed Targets**.
 
 #### Choose and run a drill
 
@@ -843,35 +784,36 @@ upper left, **Restart** and **Close** are at the upper right, the control hint
 is at the lower left, and **FPS** and **99% Low** are at the lower right. Move
 the center reticle onto the ball and shoot to hit it.
 
-In **2D Mode**, the mouse or right stick moves the reticle. In **3D Mode**,
-it turns the camera. A detected controller has priority by default, so use
-RT or Space to shoot. With no controller detected, use the mouse to aim and
-left-click or press Space to shoot. To use both devices in the same round,
-enable **Auto-switch between controller and mouse** in **Test Settings**.
-Stick values set reticle or camera speed proportionally. The default drill
-is **3D Mode → Targets**.
+In **2D Mode**, the mouse or right stick moves the reticle. In **3D Mode**, it
+turns the camera. A detected controller has priority by default, so use RT or
+Space to shoot. With no controller detected, use the mouse to aim and
+left-click or press Space to shoot. To use both in the same round, enable
+**Auto-switch between controller and mouse** in **Test Settings**. Stick
+values set reticle or camera speed proportionally. The default drill is
+**3D Mode → Targets**.
 
 | Drill | 2D Mode | 3D Mode |
 |---|---|---|
 | **Tracking** | Follow the moving target with the reticle. | Turn the camera to follow the moving ball. |
 | **Targets** | Click or shoot one target at a time. | Shoot one ball at a time. |
-| **Timed Targets** | Shoot as many of the replenishing targets as you can. | Shoot as many of the replenishing balls as you can. |
+| **Timed Targets** | Hit as many replenishing targets as you can. | Hit as many replenishing balls as you can. |
 
 Tracking runs for the configured duration. In Targets, a hit advances to the
-next target. The round ends at the configured hit count or optional time limit. Timed Targets starts
-with two targets. Each stays until hit and is replaced after a brief delay.
-When 3D targets overlap, the shot hits the first ball surface along the
-crosshair ray. The timer ends the round and the score shows the total hits.
+next target, and the round ends at the configured hit count or optional time
+limit. Timed Targets starts with two targets. Each stays until hit and is
+replaced after a brief delay, and the timer ends the round with the total hit
+count. When 3D targets overlap, the shot hits the first ball surface along the
+crosshair ray.
 
 Select **Start**, press Enter, or press controller START. Scoring starts after
-the 3, 2, 1 countdown. If RT was held during the countdown, release it before
-pressing it to shoot. Use the top-right **Restart** button, Enter, or START to
-run the drill again. Use **Close**, Esc, or controller B to return to Gamepad
-Tester. A fullscreen test also closes when you switch away, restoring the
-previous display mode. When mouse aim is available in 3D, right-click to release
-the pointer for the window controls. Right-click in the play area again to resume mouse aim.
+a 3, 2, 1 countdown. If RT was held during the countdown, release it before
+pressing it to shoot. Use **Restart**, Enter, or START to run the drill again,
+and **Close**, Esc, or controller B to return to the tester. When mouse aim is
+available in 3D, right-click to release the pointer for the window controls,
+then right-click in the play area to resume mouse aim. A fullscreen test also
+closes when you switch away, restoring the previous display mode.
 
-#### Test settings and performance
+#### Test settings
 
 ![Aim Test settings](assets/v0.8.2/aim-test-settings.png)
 
@@ -881,49 +823,44 @@ left sets target counts, durations, the layout seed, and target placement.
 resolution. The **?** beside a field explains it. Select **Save** to keep the
 changes, or **Restore Defaults** and then **Save** to reset every test setting.
 
-- **Fullscreen** is enabled by default. In windowed mode, **Auto (Highest)** fits the test window, including its title bar,
-  to the current monitor's work area above or beside the Windows taskbar.
-  In **Fullscreen**, **Auto (Highest)** uses the highest resolution Windows validates on
-  that monitor. You can select a specific size for either mode.
-- Set the target count, the optional Targets time limit, and the Tracking and
-  Timed Targets durations in **Test Settings**. A Targets time limit of `0`
-  lets the round continue until you hit every target.
-- A layout seed of `0` uses the built-in Targets sequence or Tracking path.
-  Timed Targets uses a repeatable sequence even with seed `0`. Select **↻** for
-  a new seed, then save it to replay the same sequence.
-- Adjust the reticle's color and size in any drill. The 2D target diameter is a
-  percentage of the viewport's shorter edge. The depth and horizontal and
-  vertical spread sliders control placement in 3D Targets and Timed Targets.
+- **Fullscreen** is enabled by default. In windowed mode, **Auto (Highest)**
+  fits the test window, including its title bar, to the current monitor's work
+  area and leaves the Windows taskbar visible. In fullscreen, **Auto (Highest)**
+  uses the highest resolution Windows validates for that monitor. Either mode
+  accepts a specific size.
+- A Targets time limit of `0` lets the round continue until you hit every target.
+- A layout seed of `0` uses the built-in Targets sequence and Tracking path.
+  Timed Targets also uses a repeatable sequence with seed `0`. Select **↻**
+  for a new seed, then save it to replay the same layout.
+- Every drill lets you set the reticle's color and size. The 2D target
+  diameter is a percentage of the shorter screen edge. Depth variation and
+  horizontal and vertical spread control where 3D Targets and Timed Targets appear.
 - **3D mouse sensitivity (%)** defaults to 100%, which turns the camera by
-  0.18° per cursor pixel. Set it to 50% to halve the turn per pixel.
+  0.18° per pixel of pointer movement.
 - **3D horizontal / vertical turn speed (°/s)** sets the camera turn rate at
   full right-stick deflection. It also applies to gyro mapped to the right
   stick. The defaults are 140°/s horizontal and 115°/s vertical.
 - **3D tracking arc (°)** at 0° keeps the original path. At 180° the target
   turns back 90° to each side. At 360° it turns back directly behind you after
   crossing the front. Select **↻** beside the layout seed to pick a random
-  starting direction. The same seed replays the path, and seed 0 always starts to the right.
+  starting direction. Seed 0 always starts to the right.
 - **3D tracking target speed (%)** ranges from 10% to 600%. The arc path moves
   at 90°/s at 100% and 540°/s at 600%.
-- **Darken distant targets** is enabled by default. It uses the drill's target
-  distance range, so the nearest target is brightest and farther targets
-  become darker while remaining visible against the background. Turn it off
-  to display outlines on the 3D balls.
-- Tracking changes the target color and gives light feedback while you stay on
-  it. In Targets and Timed Targets, the reticle changes color when on target.
-  Hits trigger a short burst, sound, and vibration on a supported controller.
-  Misses use a distinct sound. Set vibration strength to `0` to turn it off,
-  or use the sound checkbox to mute the cues. Select **Restore Defaults** and
-  save to reset the test settings.
+- **Darken distant targets** is enabled by default. The nearest 3D ball is
+  brightest and farther balls get darker. Turn it off to show outlines on the balls.
+- In Tracking, the target changes color and gives light vibration while you
+  stay on it. In Targets and Timed Targets, the reticle changes color on
+  target. Hits play a sound, show a short burst, and vibrate. Misses use a
+  different sound. Set **Vibration strength** to `0` to turn off vibration, or
+  use the checkbox to mute the sounds.
 
-The timer is at the upper left. The lower right shows **FPS**, based on
-successful Direct2D submissions or Tk drawing updates. **99% Low** converts the
-P99 interval between updates to FPS, so dips show up even when average FPS stays
-high. The target follows the monitor's current refresh rate. Actual display
-presentation also depends on Windows and the GPU. Use **Report Rate Test**
-for controller report intervals.
+The **FPS** at the lower right counts successful Direct2D submissions or Tk
+drawing updates. **99% Low** converts the P99 interval between updates to FPS,
+so dips show up even when the average is high. The drawing target follows the
+monitor's current refresh rate, and actual presentation also depends on
+Windows and the GPU.
 
-#### Gyro compensation preview and calculator
+#### Gyro Preview and Calculator
 
 Raising the in-game look speed also speeds up gyro mapped to the right stick.
 A compensation multiplier scales the gyro output down so fine aim feels the
@@ -944,17 +881,17 @@ asked whether to reset them to 1.00 first.
 3. **Original turn speeds** are fixed at the defaults of 140°/s horizontal and 115°/s vertical.
 4. Enter the new horizontal and vertical speeds under **Adjusted turn speeds**.
    They start from the current test settings.
-5. Select **Original turn speeds** or **Adjusted turn speeds** and turn the
-   camera with the right stick to compare the two.
+5. Choose the original or adjusted speeds and turn the camera with the right
+   stick to compare how they feel.
 6. Select **Measure**. With the same stick output, the preview turns through
    the original X and Y speeds and then the adjusted ones, then shows the
-   suggested X and Y multipliers. A suggestion within 0.10–2.00 is written
+   suggested X and Y multipliers. A suggestion within `0.10–2.00` is written
    straight to the current S2P settings and profile and sent to the active
    connection. The panel reports whether it was applied live.
 7. Select **Apply to Aim Test** to use the adjusted speeds in later Aim Test
    rounds. This changes only the Aim Test's 3D turn speeds, not the S2P settings.
 8. Select **Close** or press Esc to end the preview. **Open S2P Gyro Settings**
-   switches to the gyro settings in the S2P main window.
+   switches to Gyro Map in the main window.
 
 ![The Gyro Compensation Calculator](assets/v0.8.2/aim-test-compensation-calculator.png)
 
@@ -969,130 +906,328 @@ asked whether to reset them to 1.00 first.
    **After changing turn speed** to get the suggested multiplier. With an
    original multiplier of 1.00, 3 seconds before and 2 seconds after gives 0.67.
 5. Select **Open S2P Compensation Settings**, or open **Compensation Settings**
-   from the S2P **Gyro Map** tab. Enter the X and Y multipliers, select **OK**,
-   and then select **Save/Apply** in the main window.
+   from **Gyro Map** in the main window. Enter the X and Y multipliers, select
+   **OK**, then select **Save/Apply**.
 
 #### Read and compare results
 
 ![The end screen of a 3D Targets round](assets/v0.8.2/aim-test-result.png)
 
 **Accuracy** is hits divided by shots. **Mean Error** is the average distance
-from the reticle to the target center, measured in pixels in 2D and degrees in
-3D. Shooting averages shots taken with a target present, including misses. In
-Timed Targets, a shot during a gap between targets still counts toward accuracy.
-Tracking weights error by time. **On Target** is the percentage of the round
-spent within the target.
+from the reticle to the target center, in pixels for 2D and degrees for 3D.
+Targets averages every shot taken while a target is present, including misses.
+In Timed Targets, a shot during the gap between targets still counts toward
+accuracy. Tracking weights error by time, and **On Target** is the share of
+the round spent within the target. When 3D Tracking receives right-stick
+input, the result also shows the peak horizontal output and the longest
+continuous full-deflection time in milliseconds. That timer stops when
+horizontal output leaves full deflection or reverses.
 
-The end screen shows your result and changes from the best earlier round in
-the center. Saved rounds appear in the **Aim Test** tab. The comparison uses the mode,
-viewport, seed, vibration and sound, and relevant drill settings such as target
-count, duration, target size, depth, and spread. You can compare results across
-changes to colors, reticle size, or 3D mouse sensitivity.
+The end screen shows your result in the center and the change from the best
+earlier round under the same conditions. The comparison uses the mode, screen
+size, seed, vibration, sound, and the relevant target count, duration, target
+size, depth, and spread. 3D records also compare the controller turn speeds,
+and 3D Tracking compares the arc and target speed. Results remain comparable
+across changes to colors, reticle size, or 3D mouse sensitivity.
 
-**Targets** ranks by hits, then accuracy, completion time, and mean error.
-Completion time is compared when both rounds hit every target. **Timed Targets**
-ranks by hits, then accuracy and mean error. **Tracking** ranks by time on target,
-then mean error. Arrows indicate the direction of change, green means better,
-and red means worse. Accuracy and On Target changes use percentage points.
-Select a result to see its comparison, or use **Clear History** to remove saved
-rounds. The **?** beside the mode controls explains the comparison rules.
+- **Targets** ranks by hits, then accuracy, completion time, and mean error.
+  Completion time is compared only when both rounds hit every target.
+- **Timed Targets** ranks by hits, then accuracy and mean error.
+- **Tracking** ranks by time on target, then mean error.
+
+Arrows show the direction of change. Green means better and red means worse.
+Accuracy and On Target changes are in percentage points. **Clear History**
+removes saved rounds.
+
+### 8.9 About
+
+![About: License](assets/v0.8.2/tester-about.png)
+
+The left side shows the version, **Check for Updates**,
+**Automatically check for updates**, and links to GitHub and Ko-fi. The
+**License** and **Third-Party Software** tabs on the right show the full
+notices shipped with the release.
+
+![About: Third-Party Software](assets/v0.8.2/tester-third-party.png)
+
+---
+
+## 9. ESP32-S3
+
+### 9.1 Two operating modes
+
+| Mode | Windows program must stay open | USB output | ID |
+|---|---|---|---|
+| **ESP32 Bridge** | Yes | CDC; the desktop outputs XInput through ViGEmBus | `303A:4001` |
+| **Android USB HID standalone** | No | CDC plus standard HID, shown as `S2P Mobile Gamepad` | `303A:4005` |
+
+Both modes keep the CDC channel for settings, diagnostics, and recovery. These
+are Espressif / TinyUSB shared default VID/PIDs, so the ID or product name
+alone does not prove a device is S2P. The desktop verifies the firmware's
+identity and capabilities. The older `CAFE:4020/4021/4022` IDs are only used
+to recognize upgrade candidates and cannot enable the removed PC XInput or
+Auto modes.
+
+Older NVS values keep their meaning for `0=Bridge` and `2=HID`. `1=XInput` and
+`3=Auto` become HID after upgrading, and the desktop explains that standalone
+PC XInput / Auto was removed and that desktop XInput needs Bridge. Unknown
+values or read errors start in Bridge.
+
+The controller's four player lights show the measured battery level: one for
+low, two for mid-low, three for mid-high, and four for high. Standalone mode
+shows this too, without the Windows program.
+
+<a name="flash-esp32-s3"></a>
+
+### 9.2 Flash firmware
+
+1. Select **Flash FW** at the bottom of the main window.
+2. The program reads the installed firmware version and compares it with the
+   bundled **S2P-FW 1.0.9**.
+3. The confirmation lists both versions. Choose to flash or cancel. If the
+   version check paused the connector, canceling resumes it.
+4. After confirming, connect the ESP32-S3's OTG port to the PC and hold `BOOT`.
+5. Press `RESET / EN` once. Release `RESET / EN` first, then `BOOT`.
+6. The program finds the ESP32-S3 ROM flashing port by its USB identity, even
+   if that COM port already existed, and flashes automatically.
+7. After a successful flash the ESP32 returns to Bridge. Once USB re-enumerates,
+   the connector starts automatically and searches for the controller.
+8. If the bridge does not appear after a few seconds, press `RESET / EN` or
+   reconnect the ESP32-S3.
+
+> [!CAUTION]
+> Do not unplug the ESP32-S3 or close the program while flashing.
+
+If you use standalone mode, write your profile to the ESP32 again after
+flashing, as described in [9.5](#95-write-settings-and-enable-android-usb-hid).
+
+### 9.3 Pair the controller with the ESP32-S3
+
+1. Connect the ESP32-S3 to the PC and start S2P-XInput-Lite.
+2. To create a new pairing, hold `SYNC` on the controller.
+3. When the program detects the SYNC pairing connection, it writes the
+   ESP32-S3's pairing data to the controller.
+4. Check that ESP32 in the status bar changes to `Connected`.
+
+### 9.4 Close a bridge connection
+
+Exit a normal bridge session with **Exit** in the notification area, and wait
+until all BLE connections are released. Once a host session is established,
+the ESP32 releases BLE automatically when CDC is absent for 3 seconds or the
+host heartbeat times out after 8 seconds. Android USB HID does not need the
+desktop program or CDC/DTR, and keeps its idle disconnect and wake-on-button
+behavior. See the [hardware checklist](../docs/bridge-host-shutdown.md).
+
+### 9.5 Write settings and enable Android USB HID
+
+Only one ESP32 write or mode switch can run at a time. Stay connected and wait
+for the completion message before closing the program or starting another operation.
+
+1. Choose the profile to write, finish your changes, and select **Save/Apply**.
+   Changes to `System Default` must first be saved with **Save New**.
+2. Check that the ESP32 is connected and has the bundled S2P-FW 1.0.9.
+3. Select **ESP32 ▼ → Write and enable Android USB HID standalone**.
+4. Review the compatibility notice. If the profile uses Windows-only outputs,
+   cancel to change them or confirm skipping the unsupported items.
+5. Wait for the write, length / CRC check, apply, and controlled restart, and
+   keep USB powered throughout. After the restart, the desktop verifies the
+   device, USB mode, and profile.
+6. Connect an Android device that supports USB host mode, using a data cable
+   and an OTG adapter if needed. The system and the game must support USB HID controllers.
+
+The ESP32 keeps the previous valid settings in A/B slots and switches to the
+new slot only after it validates. If a write or mode save fails, do not assume
+the switch happened.
+
+### 9.6 Return to Bridge and recovery
+
+- **Desktop menu**: reconnect the ESP32 to Windows and choose
+  **ESP32 ▼ → Return to ESP32 bridge mode**. Wait for USB re-enumeration
+  and the automatic search. If it does not recover, reconnect it or select **Restart**.
+- **From the controller**: hold **HOME+X for 3 seconds, then release** to save
+  and return to Bridge, or **HOME+A for 3 seconds, then release** to save and
+  switch to Android USB HID. The chords read raw buttons before mappings and
+  layers apply, and still switch to HID if Bridge CDC output stalls. The ESP32
+  restarts only after it saves the new mode.
+- **No controller**: in either mode, the CDC console accepts `mode bridge`;
+  after it saves, `restart` performs a controlled restart. Close any desktop
+  connection using that COM port before opening a serial terminal.
+- **CDC is unavailable too**: put the chip in ROM Download Mode. Usually you
+  hold **BOOT**, press and release **RESET/EN**, then release **BOOT**. On
+  boards without a reset button, hold BOOT while reconnecting USB. Wiring and
+  timing vary by board, so follow the vendor's instructions. Once the ROM
+  device appears, use the flashing procedure in [9.2](#flash-esp32-s3). The
+  chip and 16 MB flash checks still run before writing.
+
+Returning to Bridge keeps the last saved standalone settings. **Restart** only
+restarts the desktop connection.
+
+### 9.7 Standalone mode scope
+
+**Supported**: stick calibration, curves, center and outer deadzones, output
+shape, stabilizer and smoothing, button and direction mapping (including
+per-direction 4WAY / 8WAY gaps for both sticks and enabled layers), compatible
+mapping layers, linear triggers, gyro-to-stick (including the radial deadzone,
+spike suppression, and independent X / Y compensation), idle disconnect, and
+BLE reconnect. HID provides buttons, four axes, a D-pad, independent analog
+triggers, and digital L2/R2 compatibility output.
+
+**Not supported**: Windows keyboard / mouse output, Audio / Mix audio rumble,
+per-application profile switching, and gyro mouse. HID has no rumble output
+report, so Android game rumble and BLE HID are not provided. Windows game
+rumble and audio rumble still go through Bridge.
+
+Android compatibility depends on the device, system, and game. Apple devices
+are not supported. For hardware validation status, see
+[validation and official references](../docs/usb-hid-standardization.md).
+
+---
 
 ## 10. Quick controls
 
 ### 10.1 Sliders and values
 
-- Select the displayed slider value to open the parameter-entry window.
-- The window shows the valid range, step size, and help text.
-- Hold a parameter label and drag right to increase or left to decrease.
-- Each parameter follows its own discrete step sequence.
+- Click the value to the right of a slider to open a dialog that shows its
+  range, step, and description.
+- Press and drag right on a parameter name to increase it, or left to
+  decrease it. Each change uses that parameter's own step.
 
-### 10.2 Right-click restore menu
+### 10.2 Right-click to restore
 
-- **Restore Last Saved Value** — Discards the unsaved change.
-- **Restore System Default** — Uses the value from System Default.
+Right-click a supported parameter to choose:
 
-### 10.3 Curve points
+- **Restore Saved**: discards unsaved changes.
+- **Restore Default**: uses the `System Default` value.
 
-- Double-click to restore a point.
-- Right-click to enter exact X and Y coordinates.
-- Drag to adjust visually.
+### 10.3 Curve control points
 
-### 10.4 Six-band help
+- Drag: move the point.
+- Double-click: restore the point's default.
+- Right-click: type its X and Y coordinates.
 
-Hover over the six-band description to display a question-mark cursor and the complete guide for:
+### 10.4 Help
 
-- Frequency ranges.
-- Band-name mappings.
-- LF/HF Balance.
-- Drag and double-click controls.
-
-### 10.5 Restart and Pin
-
-- **Restart Connection** — Restarts the desktop connector and reloads saved settings; it does not write to the ESP32.
-- **ESP32 ▼** — Writes the current profile and selects standalone output, or returns to bridge mode.
-- **Pin** — Makes the currently detected controller the preferred device. A successful action produces a notification rumble.
+The **?** beside a field explains it. Hover over the text below the 6-band
+graph for band ranges, what LF/HF Balance does, and the point controls.
 
 > [!WARNING]
-> Select **Save/Apply** before Restart or pending changes may not be applied.
+> Select **Save/Apply** before **Restart**. Otherwise unsaved changes on screen are not applied.
 
 ---
 
 ## 11. Troubleshooting
 
-| Symptom | What to check |
-|---|---|
-| ViGEm is not Ready | Reinstall ViGEmBus, restart Windows, and launch the application again. |
-| Duplicate game input | Configure HidHide and check whether Steam Input is also remapping the device. |
-| Controller not found | Use a data-capable cable. For native BLE, enable Bluetooth, start this application and hold SYNC for first-time pairing; let the application handle pairing. |
-| ESP32 remains Searching | Check the OTG port, firmware, USB connection, and controller pairing state. |
-| ESP32 received old settings | Select Save/Apply first. Modified System Default settings must be saved with Save New. |
-| Device is missing after a mode change | Wait for automatic USB re-enumeration and reconnection. If the bridge still does not appear, reconnect the ESP32; use Restart Connection only as a manual fallback. |
-| Phone detects the controller but a game ignores triggers | Use Mobile USB HID firmware from v0.6.0; it exposes both analog trigger axes and digital L2/R2 buttons. |
-| Audio rumble does not react | Confirm WASAPI is Ready, select Audio or Mix, and check the Windows default output device. |
-| Quiet audio still vibrates | Raise Gate, lower Lvl, and reduce High/Ultra. |
-| Mechanical impact noise | Lower Max Amp, LF/HF Strength, or the band that triggers the noise. |
-| High-frequency noise in Audio/Mix | Lower High/Ultra, move Balance toward LF, raise Gate, and reduce HF Strength. |
-| Gyro drift | Run Sensor Cal on a stable surface and avoid magnetic or powered objects. |
-| Profile cannot be overwritten | System Default is read-only; use Save New. |
-| Settings disappear after restart | Select Save/Apply and ensure the application folder is writable. |
-| A profile or layer changed externally | Reopen the operation and decide whether to reload, overwrite or cancel. Keep the external version if you need its changes. |
-| Settings saved, but the list could not refresh | The files are already saved. Open the profile menu again after the folder becomes available. |
-| Another device operation is in progress | Wait for it to finish. Close stick calibration before starting a connection or flashing firmware. |
+### Save and operation messages
 
-### Restoring a stable configuration
+- **Profile changed outside the program**: reload it, overwrite it with your
+  edits, or cancel and keep editing.
+- **Mapping layer changed**: close the editor and reopen the latest layer.
+- **Saved, but the list could not update**: the file was saved. Reopen the profile list later.
+- **Another operation is in progress**: connection, calibration, flashing,
+  and ESP32 writes run one at a time. Wait for the current one to finish.
 
-1. Restore the suspicious parameter to its last saved value.
-2. Compare the result with **System Default**.
-3. Use **Defaults** only when a complete adjustable-settings reset is intended.
+### ViGEm is not Ready
+
+1. Reinstall ViGEmBus.
+2. Restart Windows.
+3. Run S2P-XInput-Lite again.
+
+### The game receives double input
+
+- In USB mode, install and set up HidHide.
+- Check whether Steam Input converts the input again.
+- Make sure the game does not read both the physical controller and the
+  virtual XInput controller.
+
+### HidHide shows Error
+
+Close HidHide Configuration Client, then try again in S2P-XInput-Lite. If
+HidHide already lists other devices, enabling global hiding may also affect them.
+
+### Controller not found
+
+- Use a USB cable that carries data, and reconnect it.
+- Windows BLE: remove the old pairing in Windows, start the program, and hold
+  `SYNC` on the controller to pair again.
+- ESP32: check the firmware version and pairing. See [9. ESP32-S3](#9-esp32-s3).
+
+### ESP32 stays on Searching
+
+- Make sure the ESP32-S3 uses the correct USB port and has compatible firmware.
+- Reconnect the ESP32-S3.
+- Put the controller in pairing mode again.
+
+### A stick shows a leftover value after connecting
+
+Flick both sticks once after the controller connects so they settle back to
+center. See the note in [1.2](#12-install-and-first-launch).
+
+### The ESP32 received old settings
+
+- Select **Save/Apply** after changing values, and do not skip the save when prompted.
+- After changing `System Default`, create your own profile with **Save New**.
+
+### The device does not appear after switching modes
+
+- Wait for the ESP32 to restart and USB to re-enumerate, or reconnect it.
+- Returning to Bridge starts the connection automatically. If it does not
+  recover, select **Restart**.
+- HID mode appears as `S2P Mobile Gamepad` and keeps a CDC COM port. Bridge provides CDC only.
+
+### Audio rumble does not respond
+
+- Check `WASAPI: Ready` and the Windows default output device.
+- Set **Source** to **Audio** or **Mix**.
+- Lower **Gate** or raise **Lvl**.
+
+### Rumble continues in quiet scenes
+
+- Raise **Gate** and lower **Lvl**.
+- Lower the **High** and **Ultra** bands.
+- Make sure microphone monitoring or system sounds are not sent to the default output.
+
+### Rumble makes a knocking sound
+
+- Lower **Max Amp** and **LF/HF Strength**.
+- Lower the band gains that cause the noise.
+- Avoid running near the `1023` maximum for long periods.
+
+### Gyro drift
+
+- Place the controller flat and run **Sensor Cal** again.
+- Keep away from speakers, magnets, and large metal objects.
+- Increase **DZ** slightly if needed.
+
+### A profile cannot be overwritten
+
+`System Default` is read-only. Create your own profile with **Save New**.
+
+### Settings are gone after restarting
+
+- Check that you selected **Save/Apply** after the change.
+- Make sure the program folder is writable and the program is not running
+  from inside the ZIP.
+
+### Restore a stable setup
+
+1. Right-click suspicious parameters and restore their last saved values.
+2. If the problem remains, switch to `System Default` to compare.
+3. Select **Defaults** only when you want to reset everything.
 4. Select **Save/Apply**.
-5. Select **Restart** and retest input and rumble.
+5. Select **Restart** and test input and rumble again.
 
 > [!NOTE]
-> A full reset retains stick calibration and saved profiles, but disables Mapping Layers and removes this application's HidHide entries.
+> **Defaults** does not change stick calibration or saved profiles, but it
+> disables mapping layers and removes this program's HidHide hiding.
 
 ---
 
-## Appendix: recommended tuning order
+## Appendix: Recommended tuning order
 
-### Sticks
-
-Calibration → center deadzone → outer deadzone → curve → stabilizer.
-
-### Gyro
-
-Calibration → target → activation → sensitivity → X/Y ratios → deadzone → smoothing.
-
-### Game rumble
-
-Start with Game mode and Max Amp `800`. Reduce Max Amp or LF/HF Strength if the controller produces mechanical noise.
-
-### Audio rumble
-
-Gate → Lvl → six bands → LF/HF Balance → Tail/Decay.
-
-### Profiles
-
-Keep one verified stable profile and use **Save New** for experimental settings.
-
-> [!NOTE]
-> This guide applies to S2P-XInput-Lite v0.8.0. For later releases, see the in-app help and release notes.
+| Area | Order |
+|---|---|
+| Sticks | Calibration → center deadzone → outer deadzone → curve → stabilizer |
+| Gyro | Sensor Cal → Target → activation → sensitivity → X/Y ratio → deadzone → smoothing → compensation |
+| Game rumble | Test Game mode at the default Max Amp `500`; lower Max Amp or LF/HF Strength if you hear noise |
+| Audio rumble | Gate → Lvl → 6 bands → LF/HF Balance → Tail / Decay |
+| Profiles | Keep one verified stable profile and save experiments with **Save New** |

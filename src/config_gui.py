@@ -7856,7 +7856,7 @@ class ConfigGUI:
         selected = tk.IntVar(value=self.idle_disconnect_minutes)
         for minutes in IDLE_DISCONNECT_OPTIONS:
             label = (
-                self.tr("關閉")
+                self.tr("關閉|off")
                 if minutes == 0
                 else self.tr("{minutes} 分鐘").format(minutes=minutes)
             )
@@ -9615,12 +9615,18 @@ class ConfigGUI:
             enabled_var = tk.BooleanVar(value=layer.get("enabled", True))
             enabled = ttk.Checkbutton(top_row, variable=enabled_var)
             enabled.grid(row=0, column=0, sticky="w", padx=(0, 2))
+            mode_labels = (self.tr("按住"), self.tr("切換"))
+            # English "Toggle" needs a wider box. Give the room from the
+            # name so the row keeps its width in both languages.
+            mode_width = max(4, max(len(label) for label in mode_labels))
+            name_width = 14 - (mode_width - 4)
             full_name = layer.get("name", f"Layer {index + 1}")
             display_name = (
-                full_name if len(full_name) <= 14 else full_name[:13] + "…"
+                full_name if len(full_name) <= name_width
+                else full_name[:name_width - 1] + "…"
             )
             ttk.Label(
-                top_row, text=display_name, anchor="w", width=14
+                top_row, text=display_name, anchor="w", width=name_width
             ).grid(row=0, column=1, sticky="ew", padx=(0, 3))
             activation_text = "+".join(layer.get("activation_buttons", ())) or self.tr("未設定")
             if len(activation_text) > 9:
@@ -9644,9 +9650,9 @@ class ConfigGUI:
             mode_combo = ttk.Combobox(
                 top_row,
                 textvariable=mode_var,
-                values=(self.tr("按住"), self.tr("切換")),
+                values=mode_labels,
                 state="readonly",
-                width=4,
+                width=mode_width,
             )
             mode_combo.grid(row=0, column=3, sticky="e", padx=(2, 0))
 
