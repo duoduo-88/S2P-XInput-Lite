@@ -252,19 +252,58 @@ Choose **Shortcut** to record a keyboard or mouse input. Labels use short names 
 
 ### 4.2 Stick Map
 
-![Stick direction mapping](assets/v0.7.14/main-stick-map.png)
+![Stick Map with the left stick in 8WAY using custom direction gaps](assets/v0.8.2/main-stick-map.png)
 
-- **Mode** — Select the direction mode, such as `4WAY`.
-- **Direction diagram** — Shows the active direction regions and boundary gaps.
+- **Mode** — Select the direction mode, such as `4WAY` or `8WAY`.
+- **Direction arrows and menus** — Choose an output for each direction. `NONE` sends nothing.
+- **Direction diagram (radar thumbnail)** — Red sectors are the gaps between
+  directions. The solid blue circle is the trigger threshold and the dashed gray
+  circle is the release threshold.
 - **DZ / Trig / Rel** — Direction deadzone, trigger threshold, and release threshold.
 - **Independent sticks** — The left and right sticks can be configured and reset separately.
 
-In `4WAY` or `8WAY`, click the direction diagram to open the radar editor.
-Drag a red sector to rotate its gap. The nearby field sets its full width as
-0–90% of the angle between adjacent directions. For example, 20% in `8WAY`
-is a 9° gap. The main control shows **SET** for custom gaps. Select
-**Use uniform deadzone** in the editor to return to one setting for all gaps
-in that mode. Confirm the edit, then select **Save/Apply** in the main window.
+In the screenshot, the left stick uses `8WAY` with custom gaps, so its **DZ**
+slider is disabled and shows **SET**. The right stick still uses the uniform
+`4WAY` deadzone.
+
+#### Set custom direction gaps in the radar editor
+
+![Direction gap radar editor](assets/v0.8.2/stick-map-radar-editor.png)
+
+1. Set **Mode** to `4WAY` or `8WAY` and choose an output for each direction.
+   Other modes have no radar.
+2. Click the radar thumbnail to open the **Dir. Gap** window. Its border turns
+   blue when the pointer is over it. You can also Tab to the thumbnail and
+   press Enter or Space.
+3. Read the radar: arrows mark the directions, red sectors are the gaps
+   between them, the outline is the current output shape, and the solid blue
+   and dashed gray circles are the trigger and release thresholds.
+4. **Rotate a gap** — Drag a red sector to shift that gap toward one side. The
+   sector darkens while you drag. Each gap keeps a small margin from the
+   direction centers and stops at its limit.
+5. **Set a width** — The field outside each sector sets that gap's full width
+   as 0–90% of the angle between adjacent directions. Adjacent `8WAY`
+   directions are 45° apart, so 20% is a 9° gap. Adjacent `4WAY` directions
+   are 90° apart, so 20% is 18°. Type a value and press Enter, or drag left
+   or right on the field. Right-click a field to restore its saved or default value.
+6. **Bottom fields**:
+   - **Uniform deadzone (°)** — The half-width shared by every gap, 0–20°.
+     It is disabled while custom gaps are in use.
+   - **Trig (%)** — 10–100%.
+   - **Rel (%)** — At least 3 percentage points below Trig.
+7. Select **OK** to send the values to the main window, or **Cancel** or Esc to discard them.
+8. Select **Save/Apply** in the main window to save and apply them.
+
+To return to one setting for every gap, open the radar, select
+**Use uniform deadzone**, then select **OK**. The button is available only
+while custom gaps are set. `4WAY` and `8WAY` keep their own custom gaps, so
+switching modes does not overwrite either one. With custom gaps set, clicking
+the disabled **DZ** slider in the main window also opens the radar.
+
+> [!NOTE]
+> If the mode, thresholds, or profile change in the main window while the radar
+> is open, **OK** reports that the settings changed. Close the radar and open
+> it again to continue editing.
 
 > [!TIP]
 > Keep **Trig** above **Rel**. The resulting hysteresis prevents repeated activation when the stick rests on a direction boundary.
@@ -770,6 +809,19 @@ the left. The right side contains scrollable **License Agreement** and
 
 ### 9.9 Aim Test
 
+![The Aim Test tab in Gamepad Tester](assets/v0.8.2/aim-test-tab.png)
+
+The **Aim Test** tab has four areas:
+
+- **Upper left** — Choose **2D Mode** or **3D Mode**, then **Tracking**,
+  **Targets**, or **Timed Targets**. The **?** explains the controls and
+  comparison rules.
+- **Upper right** — **Gyro Preview**, **Calculator**, **Clear History**,
+  **Test Settings**, and **Start**.
+- **Center** — Saved rounds. Select one to see how it compares with the best match.
+- **Bottom** — The current test conditions and the change from the best round
+  with the same settings.
+
 #### Test mapped gyro output
 
 1. Connect the controller through S2P-XInput-Lite. In **Gyro Map**, set **Target**
@@ -783,6 +835,13 @@ the left. The right side contains scrollable **License Agreement** and
    its response. For a shooting drill, choose **Targets** or **Timed Targets**.
 
 #### Choose and run a drill
+
+![A 3D Targets round](assets/v0.8.2/aim-test-3d.png)
+
+The screenshot shows **3D Mode → Targets** in a window. The timer is at the
+upper left, **Restart** and **Close** are at the upper right, the control hint
+is at the lower left, and **FPS** and **99% Low** are at the lower right. Move
+the center reticle onto the ball and shoot to hit it.
 
 In **2D Mode**, the mouse or right stick moves the reticle. In **3D Mode**,
 it turns the camera. A detected controller has priority by default, so use
@@ -814,6 +873,14 @@ the pointer for the window controls. Right-click in the play area again to resum
 
 #### Test settings and performance
 
+![Aim Test settings](assets/v0.8.2/aim-test-settings.png)
+
+Select **Test Settings** to open this window. **Drills and targets** on the
+left sets target counts, durations, the layout seed, and target placement.
+**Look and display** on the right sets turn speeds, the reticle, colors, and
+resolution. The **?** beside a field explains it. Select **Save** to keep the
+changes, or **Restore Defaults** and then **Save** to reset every test setting.
+
 - **Fullscreen** is enabled by default. In windowed mode, **Auto (Highest)** fits the test window, including its title bar,
   to the current monitor's work area above or beside the Windows taskbar.
   In **Fullscreen**, **Auto (Highest)** uses the highest resolution Windows validates on
@@ -829,6 +896,15 @@ the pointer for the window controls. Right-click in the play area again to resum
   vertical spread sliders control placement in 3D Targets and Timed Targets.
 - **3D mouse sensitivity (%)** defaults to 100%, which turns the camera by
   0.18° per cursor pixel. Set it to 50% to halve the turn per pixel.
+- **3D horizontal / vertical turn speed (°/s)** sets the camera turn rate at
+  full right-stick deflection. It also applies to gyro mapped to the right
+  stick. The defaults are 140°/s horizontal and 115°/s vertical.
+- **3D tracking arc (°)** at 0° keeps the original path. At 180° the target
+  turns back 90° to each side. At 360° it turns back directly behind you after
+  crossing the front. Select **↻** beside the layout seed to pick a random
+  starting direction. The same seed replays the path, and seed 0 always starts to the right.
+- **3D tracking target speed (%)** ranges from 10% to 600%. The arc path moves
+  at 90°/s at 100% and 540°/s at 600%.
 - **Darken distant targets** is enabled by default. It uses the drill's target
   distance range, so the nearest target is brightest and farther targets
   become darker while remaining visible against the background. Turn it off
@@ -847,7 +923,58 @@ high. The target follows the monitor's current refresh rate. Actual display
 presentation also depends on Windows and the GPU. Use **Report Rate Test**
 for controller report intervals.
 
+#### Gyro compensation preview and calculator
+
+Raising the in-game look speed also speeds up gyro mapped to the right stick.
+A compensation multiplier scales the gyro output down so fine aim feels the
+same as before. The physical stick output is unchanged.
+
+**Gyro Preview** and **Calculator** appear only when the test source is
+**S2P-XInput-Lite (Bridge)** and its gyro is available. Gyro Preview requires
+**3D Mode**. If the current profile already has adjusted multipliers, you are
+asked whether to reset them to 1.00 first.
+
+![The Gyro Preview panel](assets/v0.8.2/aim-test-compensation-preview.png)
+
+**Measure with Gyro Preview:**
+
+1. Select **Gyro Preview**. The test scene fills the screen without a border,
+   and the preview panel appears at the upper right.
+2. **Saved compensation** shows the current S2P X (horizontal) and Y (vertical) multipliers.
+3. **Original turn speeds** are fixed at the defaults of 140°/s horizontal and 115°/s vertical.
+4. Enter the new horizontal and vertical speeds under **Adjusted turn speeds**.
+   They start from the current test settings.
+5. Select **Original turn speeds** or **Adjusted turn speeds** and turn the
+   camera with the right stick to compare the two.
+6. Select **Measure**. With the same stick output, the preview turns through
+   the original X and Y speeds and then the adjusted ones, then shows the
+   suggested X and Y multipliers. A suggestion within 0.10–2.00 is written
+   straight to the current S2P settings and profile and sent to the active
+   connection. The panel reports whether it was applied live.
+7. Select **Apply to Aim Test** to use the adjusted speeds in later Aim Test
+   rounds. This changes only the Aim Test's 3D turn speeds, not the S2P settings.
+8. Select **Close** or press Esc to end the preview. **Open S2P Gyro Settings**
+   switches to the gyro settings in the S2P main window.
+
+![The Gyro Compensation Calculator](assets/v0.8.2/aim-test-compensation-calculator.png)
+
+**Convert an in-game test with the Calculator:**
+
+1. Select **Calculator**, choose **X (Horizontal)** or **Y (Vertical)**, and
+   check **Current compensation**.
+2. Before changing the in-game look speed, record a turn from landmark A to
+   landmark B with a fixed right-stick deflection and aim state.
+3. Change the in-game look speed and record the same turn again.
+4. Enter both times in seconds under **Before changing turn speed** and
+   **After changing turn speed** to get the suggested multiplier. With an
+   original multiplier of 1.00, 3 seconds before and 2 seconds after gives 0.67.
+5. Select **Open S2P Compensation Settings**, or open **Compensation Settings**
+   from the S2P **Gyro Map** tab. Enter the X and Y multipliers, select **OK**,
+   and then select **Save/Apply** in the main window.
+
 #### Read and compare results
+
+![The end screen of a 3D Targets round](assets/v0.8.2/aim-test-result.png)
 
 **Accuracy** is hits divided by shots. **Mean Error** is the average distance
 from the reticle to the target center, measured in pixels in 2D and degrees in
