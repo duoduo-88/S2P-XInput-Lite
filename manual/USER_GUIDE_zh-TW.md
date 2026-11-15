@@ -1,4 +1,4 @@
-# S2P-XInput-Lite v0.8.2 使用手冊
+# S2P-XInput-Lite v0.8 使用手冊
 
 [English](USER_GUIDE.md)
 
@@ -6,7 +6,7 @@ S2P-XInput-Lite 把 Switch 2 Pro Controller 轉成 Windows 遊戲可直接使用
 並提供搖桿曲線、按鍵與方向映射、映射層、陀螺儀、震動與音訊震動等設定。隨附的手把測試程式
 可檢查輸入、震動、回報率，也能做瞄準測試。
 
-本手冊適用於桌面版 **v0.8.2** 與隨附的 ESP32-S3 韌體 **S2P-FW 1.0.9**。
+本手冊適用於桌面版 **v0.8** 與隨附的 ESP32-S3 韌體 **S2P-FW 1.0.9**。
 
 截圖使用英文介面；按主視窗左下角的 **中／En** 可切換語言。文中以「英文名稱（中文介面名稱）」
 標示同一個項目，例如 **Save/Apply**（儲存/套用）。畫面中的方案與數值僅供示意。
@@ -29,7 +29,7 @@ S2P-XInput-Lite 把 Switch 2 Pro Controller 轉成 Windows 遊戲可直接使用
 - [6. Gyro Map（陀螺儀映射）](#6-gyro-map陀螺儀映射)
 - [7. 震動設定](#7-震動設定)
 - [8. 手把測試](#8-手把測試)
-  - [8.8 瞄準測試](#aim-test-guide)
+  - [8.5 瞄準測試](#aim-test-guide)
 - [9. ESP32-S3](#9-esp32-s3)
   - [9.2 刷入韌體](#flash-esp32-s3)
 - [10. 快速操作技巧](#10-快速操作技巧)
@@ -545,7 +545,7 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
 
 - **S2P-XInput-Lite (Bridge)**：測試主程式目前輸出的虛擬手把，可顯示套用前、套用後與合成結果。
 - **其他手把**：Windows 偵測到的 XInput 或一般遊戲手把，只顯示該介面實際提供的資料。
-- **Raw HID**：名稱含 `Raw HID` 的項目是 HID 介面，用於 [回報率量測](#86-report-rate-test回報率量測)。
+- **Raw HID**：名稱含 `Raw HID` 的項目是 HID 介面，用於 [回報率量測](#87-report-rate-test回報率量測)。
   **S2P Mobile Gamepad (Raw HID)** 是 Android USB HID 獨立模式的 ESP32-S3，會顯示所有按鍵與十字鍵，也能用於瞄準測試。
 - 同名裝置超過一支時，選單會加上介面類型與編號。切換裝置時會清除舊的量測，避免資料混在一起。
 
@@ -558,7 +558,7 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
   其他手把則有 **Input**（實際輸入）。S2P 來源才有實體與陀螺儀的分別。`-`、`+` 縮放，**Reset**（重設）恢復圖面。
 - **Trail**（軌跡長度）設定軌跡保留秒數，**Samples**（採樣點）設定有多少比例的實際報告畫入軌跡。
 - **Gyro**（陀螺儀圖例）顯示陀螺儀相關的參考線。
-- 右上角的 FPS 是有變化的畫面更新次數，不是手把回報率；量測回報率請用 [回報率量測](#86-report-rate-test回報率量測)。
+- 右上角的 FPS 是有變化的畫面更新次數，不是手把回報率；量測回報率請用 [回報率量測](#87-report-rate-test回報率量測)。
 
 ### 8.3 輸出形狀
 
@@ -577,52 +577,9 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
 - **Button Events**（按鍵與映射事件）：列出 **Source**（來源按鍵）、**State**（按下／放開）、
   **Time**（持續時間）、**Mapping**（實際生效的映射）與 **Layers**（映射層）。
 
-### 8.5 Rumble Test（震動測試）
-
-![震動測試](assets/v0.8.2/tester-rumble.png)
-
-1. 在 **Device** 選擇 **S2P-XInput-Lite (Bridge)** 或支援震動的 XInput 裝置，開啟 **Rumble Test**。
-2. **Manual Output**（手動震動輸出）：以低強度開始，分別拉動 **LF Motor** 與 **HF Motor**。
-3. **Patterns**（震動模板）：按任一模板播放，例如 Impact、Engine、Machine Gun。
-   **Repeat**（重複播放）連續播放，**LF／HF** 選擇頻段，**Rate**（播放頻率）與 **Strength**（模板強度）調整節奏與強度。
-4. 結束時按 **Stop All Rumble**（停止所有震動）。**Reset**（重設）還原本頁設定。
-
-Bridge 測試會套用目前方案的 LF／HF 設定；Source 為純 Audio 時，遊戲震動模板不會輸出。
-若顯示 `No XInput rumble` 或控制項呈灰色，請確認虛擬手把已啟用，或改選支援震動的 XInput 裝置。
-更換測試裝置、輸出連線變動或關閉測試時，程式會停止原裝置的震動。Android USB HID 獨立模式只提供輸入，
-不會把遊戲震動傳回手把。
-
-### 8.6 Report Rate Test（回報率量測）
-
-![回報率量測](assets/v0.8.2/tester-rate.png)
-
-1. 在 **Device** 選擇名稱含 `Raw HID` 的介面，開啟 **Report Rate Test**。
-2. 選擇 **Duration (s)**（量測秒數）並按 **Start**（開始量測）。
-3. 量測期間持續大幅度繞圈移動一支搖桿，直到結束；需要時可按 **Stop Early**（提前停止）。
-4. 比較 **HID Report Rate**（HID 回報率）與 **Effective Report Rate**（有效回報率），
-   並查看 **Time Between Reports**（回報間隔）的 P50／P95／P99 與分布圖。圖下方會附上判讀說明。
-
-上圖量測的是虛擬手把的 Raw HID 介面，數值代表該介面的回報，不能直接視為實體手把或 BLE 的原始回報率。
-同一實體裝置可能有多個介面，若沒有有效資料，請改選移動手把時資料確實會變化的介面。
-
-### 8.7 Diagnostics（診斷模式）
-
-![ESP32 診斷頁](assets/v0.8.2/tester-diagnostics.png)
-
-**Diagnostics** 可執行 30、60 或 120 秒的 ESP32 健康檢查：
-
-1. 在 **Device** 選擇 S2P 裝置，選擇 **Duration**（診斷時間）。
-2. 按 **Start Diagnostics**（開始診斷）。測試期間請保持手把喚醒，並操作搖桿、轉動手把、觸發震動。
-3. 完成後，**Diagnostic assessment**（診斷評估）會摘要整體判定、發現項目與建議處理方式，
-   **Diagnostic details**（診斷細節）列出連線、輸入、延遲、校正、感測器與震動的檢查結果。
-4. 需要回報問題時，按 **Export Support Log**（匯出支援 Log）存成 UTF-8 文字檔。
-
-橋接模式會暫時使用主程式目前的序列連線；獨立模式則直接開啟 ESP32 的診斷通道。完整的診斷命令
-需要隨附的 S2P-FW 1.0.9。
-
 <a name="aim-test-guide"></a>
 
-### 8.8 Aim Test（瞄準測試）
+### 8.5 Aim Test（瞄準測試）
 
 ![瞄準測試分頁](assets/v0.8.2/aim-test-tab.png)
 
@@ -758,6 +715,49 @@ Bridge 測試會套用目前方案的 LF／HF 設定；Source 為純 Audio 時�
 
 箭頭表示數值上升或下降，綠色代表進步，紅色代表退步；命中率與跟靶率的差異以百分點顯示。
 **Clear History**（清除紀錄）可移除已儲存的回合。
+
+### 8.6 Rumble Test（震動測試）
+
+![震動測試](assets/v0.8.2/tester-rumble.png)
+
+1. 在 **Device** 選擇 **S2P-XInput-Lite (Bridge)** 或支援震動的 XInput 裝置，開啟 **Rumble Test**。
+2. **Manual Output**（手動震動輸出）：以低強度開始，分別拉動 **LF Motor** 與 **HF Motor**。
+3. **Patterns**（震動模板）：按任一模板播放，例如 Impact、Engine、Machine Gun。
+   **Repeat**（重複播放）連續播放，**LF／HF** 選擇頻段，**Rate**（播放頻率）與 **Strength**（模板強度）調整節奏與強度。
+4. 結束時按 **Stop All Rumble**（停止所有震動）。**Reset**（重設）還原本頁設定。
+
+Bridge 測試會套用目前方案的 LF／HF 設定；Source 為純 Audio 時，遊戲震動模板不會輸出。
+若顯示 `No XInput rumble` 或控制項呈灰色，請確認虛擬手把已啟用，或改選支援震動的 XInput 裝置。
+更換測試裝置、輸出連線變動或關閉測試時，程式會停止原裝置的震動。Android USB HID 獨立模式只提供輸入，
+不會把遊戲震動傳回手把。
+
+### 8.7 Report Rate Test（回報率量測）
+
+![回報率量測](assets/v0.8.2/tester-rate.png)
+
+1. 在 **Device** 選擇名稱含 `Raw HID` 的介面，開啟 **Report Rate Test**。
+2. 選擇 **Duration (s)**（量測秒數）並按 **Start**（開始量測）。
+3. 量測期間持續大幅度繞圈移動一支搖桿，直到結束；需要時可按 **Stop Early**（提前停止）。
+4. 比較 **HID Report Rate**（HID 回報率）與 **Effective Report Rate**（有效回報率），
+   並查看 **Time Between Reports**（回報間隔）的 P50／P95／P99 與分布圖。圖下方會附上判讀說明。
+
+上圖量測的是虛擬手把的 Raw HID 介面，數值代表該介面的回報，不能直接視為實體手把或 BLE 的原始回報率。
+同一實體裝置可能有多個介面，若沒有有效資料，請改選移動手把時資料確實會變化的介面。
+
+### 8.8 Diagnostics（診斷模式）
+
+![ESP32 診斷頁](assets/v0.8.2/tester-diagnostics.png)
+
+**Diagnostics** 可執行 30、60 或 120 秒的 ESP32 健康檢查：
+
+1. 在 **Device** 選擇 S2P 裝置，選擇 **Duration**（診斷時間）。
+2. 按 **Start Diagnostics**（開始診斷）。測試期間請保持手把喚醒，並操作搖桿、轉動手把、觸發震動。
+3. 完成後，**Diagnostic assessment**（診斷評估）會摘要整體判定、發現項目與建議處理方式，
+   **Diagnostic details**（診斷細節）列出連線、輸入、延遲、校正、感測器與震動的檢查結果。
+4. 需要回報問題時，按 **Export Support Log**（匯出支援 Log）存成 UTF-8 文字檔。
+
+橋接模式會暫時使用主程式目前的序列連線；獨立模式則直接開啟 ESP32 的診斷通道。完整的診斷命令
+需要隨附的 S2P-FW 1.0.9。
 
 ### 8.9 About（關於）
 

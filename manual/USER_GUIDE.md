@@ -1,4 +1,4 @@
-# S2P-XInput-Lite v0.8.2 User Guide
+# S2P-XInput-Lite v0.8 User Guide
 
 [繁體中文](USER_GUIDE_zh-TW.md)
 
@@ -8,7 +8,7 @@ button and direction mapping, mapping layers, gyro, rumble, and audio-driven
 rumble. The bundled Gamepad Tester checks input, rumble, and report rate, and
 includes an Aim Test.
 
-This guide covers desktop **v0.8.2** and the bundled ESP32-S3 firmware
+This guide covers desktop **v0.8** and the bundled ESP32-S3 firmware
 **S2P-FW 1.0.9**. Screenshots show the English interface. Select **中／En** at
 the lower left of the main window to switch languages. Profiles and values in
 the screenshots are examples.
@@ -32,7 +32,7 @@ the screenshots are examples.
 - [6. Gyro Map](#6-gyro-map)
 - [7. Rumble](#7-rumble)
 - [8. Gamepad Tester](#8-gamepad-tester)
-  - [8.8 Aim Test](#aim-test-guide)
+  - [8.5 Aim Test](#aim-test-guide)
 - [9. ESP32-S3](#9-esp32-s3)
   - [9.2 Flash firmware](#flash-esp32-s3)
 - [10. Quick controls](#10-quick-controls)
@@ -649,7 +649,7 @@ Selecting the button again brings the existing tester forward.
 - **Other controllers**: XInput or generic game controllers detected by
   Windows. Only the data that interface provides is shown.
 - **Raw HID**: entries containing `Raw HID` are HID interfaces, used for the
-  [Report Rate Test](#86-report-rate-test). **S2P Mobile Gamepad (Raw HID)** is
+  [Report Rate Test](#87-report-rate-test). **S2P Mobile Gamepad (Raw HID)** is
   an ESP32-S3 in Android USB HID standalone mode. It shows every button and the
   D-pad, and works in the Aim Test.
 - When several devices share a name, the list adds the interface type and a
@@ -669,7 +669,7 @@ coordinates and the radius **R**.
   share of the actual reports is drawn.
 - **Gyro** shows the gyro reference lines.
 - The FPS at the upper right counts display updates that changed, not the
-  controller's report rate. Use the [Report Rate Test](#86-report-rate-test) for that.
+  controller's report rate. Use the [Report Rate Test](#87-report-rate-test) for that.
 
 ### 8.3 Output shape
 
@@ -691,63 +691,9 @@ the plot are **Cov** (coverage), **Circ err** (circularity error), and **Max** (
 - **Button Events**: **Source**, **State** (pressed or released), **Time**
   (how long), **Mapping** (the output that took effect), and **Layers**.
 
-### 8.5 Rumble Test
-
-![Rumble Test](assets/v0.8.2/tester-rumble.png)
-
-1. Under **Device**, choose **S2P-XInput-Lite (Bridge)** or an XInput device
-   that supports rumble, then open **Rumble Test**.
-2. **Manual Output**: start low and move **LF Motor** and **HF Motor**.
-3. **Patterns**: select any pattern, such as Impact, Engine, or Machine Gun.
-   **Repeat** loops it, **LF / HF** choose the bands, and **Rate** and
-   **Strength** set its pace and strength.
-4. Select **Stop All Rumble** when finished. **Reset** restores this tab.
-
-A Bridge test uses the current profile's LF/HF settings. With **Source** set
-to Audio only, game rumble patterns are not output. If the tab shows
-`No XInput rumble` or its controls are gray, check that the virtual controller
-is enabled or choose an XInput device that supports rumble. The tester stops
-rumble when you change devices, the output connection changes, or the tester
-closes. Android USB HID standalone mode is input only and does not send game
-rumble back to the controller.
-
-### 8.6 Report Rate Test
-
-![Report Rate Test](assets/v0.8.2/tester-rate.png)
-
-1. Under **Device**, choose an interface containing `Raw HID`, then open **Report Rate Test**.
-2. Choose **Duration (s)** and select **Start**.
-3. Keep moving one stick in large circles until it finishes, or select **Stop Early**.
-4. Compare **HID Report Rate** with **Effective Report Rate**, and check the
-   P50, P95, and P99 values and the distribution under **Time Between Reports**.
-   An interpretation appears below the graph.
-
-The screenshot measures the virtual controller's Raw HID interface. The values
-describe that interface's reports, not the physical controller's or BLE's raw
-rate. One physical device can expose several interfaces. If there is no valid
-data, choose the interface whose values change when you move the controller.
-
-### 8.7 Diagnostics
-
-![ESP32 Diagnostics](assets/v0.8.2/tester-diagnostics.png)
-
-**Diagnostics** runs a 30, 60, or 120 second ESP32 health check:
-
-1. Choose the S2P device under **Device** and pick a **Duration**.
-2. Select **Start Diagnostics**. Keep the controller awake and move the
-   sticks, turn the controller, and trigger rumble during the test.
-3. When it finishes, **Diagnostic assessment** summarizes the overall result,
-   findings, and recommendations. **Diagnostic details** lists the connection,
-   input, latency, calibration, sensor, and rumble checks.
-4. To report a problem, select **Export Support Log** to save a UTF-8 text file.
-
-In Bridge mode the test briefly uses the main program's serial connection. In
-standalone mode it opens the ESP32's diagnostic channel directly. The full
-diagnostic commands require the bundled S2P-FW 1.0.9.
-
 <a name="aim-test-guide"></a>
 
-### 8.8 Aim Test
+### 8.5 Aim Test
 
 ![The Aim Test tab](assets/v0.8.2/aim-test-tab.png)
 
@@ -938,6 +884,60 @@ across changes to colors, reticle size, or 3D mouse sensitivity.
 Arrows show the direction of change. Green means better and red means worse.
 Accuracy and On Target changes are in percentage points. **Clear History**
 removes saved rounds.
+
+### 8.6 Rumble Test
+
+![Rumble Test](assets/v0.8.2/tester-rumble.png)
+
+1. Under **Device**, choose **S2P-XInput-Lite (Bridge)** or an XInput device
+   that supports rumble, then open **Rumble Test**.
+2. **Manual Output**: start low and move **LF Motor** and **HF Motor**.
+3. **Patterns**: select any pattern, such as Impact, Engine, or Machine Gun.
+   **Repeat** loops it, **LF / HF** choose the bands, and **Rate** and
+   **Strength** set its pace and strength.
+4. Select **Stop All Rumble** when finished. **Reset** restores this tab.
+
+A Bridge test uses the current profile's LF/HF settings. With **Source** set
+to Audio only, game rumble patterns are not output. If the tab shows
+`No XInput rumble` or its controls are gray, check that the virtual controller
+is enabled or choose an XInput device that supports rumble. The tester stops
+rumble when you change devices, the output connection changes, or the tester
+closes. Android USB HID standalone mode is input only and does not send game
+rumble back to the controller.
+
+### 8.7 Report Rate Test
+
+![Report Rate Test](assets/v0.8.2/tester-rate.png)
+
+1. Under **Device**, choose an interface containing `Raw HID`, then open **Report Rate Test**.
+2. Choose **Duration (s)** and select **Start**.
+3. Keep moving one stick in large circles until it finishes, or select **Stop Early**.
+4. Compare **HID Report Rate** with **Effective Report Rate**, and check the
+   P50, P95, and P99 values and the distribution under **Time Between Reports**.
+   An interpretation appears below the graph.
+
+The screenshot measures the virtual controller's Raw HID interface. The values
+describe that interface's reports, not the physical controller's or BLE's raw
+rate. One physical device can expose several interfaces. If there is no valid
+data, choose the interface whose values change when you move the controller.
+
+### 8.8 Diagnostics
+
+![ESP32 Diagnostics](assets/v0.8.2/tester-diagnostics.png)
+
+**Diagnostics** runs a 30, 60, or 120 second ESP32 health check:
+
+1. Choose the S2P device under **Device** and pick a **Duration**.
+2. Select **Start Diagnostics**. Keep the controller awake and move the
+   sticks, turn the controller, and trigger rumble during the test.
+3. When it finishes, **Diagnostic assessment** summarizes the overall result,
+   findings, and recommendations. **Diagnostic details** lists the connection,
+   input, latency, calibration, sensor, and rumble checks.
+4. To report a problem, select **Export Support Log** to save a UTF-8 text file.
+
+In Bridge mode the test briefly uses the main program's serial connection. In
+standalone mode it opens the ESP32's diagnostic channel directly. The full
+diagnostic commands require the bundled S2P-FW 1.0.9.
 
 ### 8.9 About
 
