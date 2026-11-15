@@ -11,6 +11,7 @@ import sys
 import time
 import tkinter as tk
 from collections import deque
+from dataclasses import replace
 from functools import lru_cache
 from pathlib import Path
 from tkinter import font as tkfont, messagebox, ttk
@@ -1213,6 +1214,7 @@ class AimTestPane:
                 on_speed_changed=lambda speeds: self.scene.set_stick_turn_speed(speeds),
                 apply_measurement=apply_measurement if self.apply_gyro_compensation is not None else None,
                 read_reload_status=self.read_gyro_reload_status,
+                apply_to_aim_test=self._apply_turn_speed_to_settings,
             )
             overlay.window.bind("<Configure>", self._position_compensation_preview, add="+")
             overlay.window.update_idletasks()
@@ -1220,6 +1222,20 @@ class AimTestPane:
             overlay.apply_selected_speeds()
             self._position_compensation_preview()
             overlay.window.lift()
+
+    def _apply_turn_speed_to_settings(self, speeds):
+        """Save preview speeds as the aim test's stick turn speeds.
+
+        Unlike _save_settings(), this keeps the preview open. The next round
+        rebuilds its scene from these settings in _reset().
+        """
+        horizontal, vertical = speeds
+        settings = replace(
+            self.settings, stick_horizontal_speed=int(horizontal), stick_vertical_speed=int(vertical),
+        )
+        if self.settings_path is not None:
+            settings.save(self.settings_path)
+        self.settings = settings
 
     def _test_focus_windows(self):
         if self._compensation_preview and self.compensation_window is not None:

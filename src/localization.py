@@ -52,6 +52,10 @@ EN_TEXT = {
     "原補償倍率": "Original compensation",
     "目前補償倍率": "Current compensation",
     "已儲存的補償倍率": "Saved compensation",
+    "套用至瞄準測試": "Apply to Aim Test",
+    "已套用至瞄準測試：水平 {horizontal}／垂直 {vertical}°/秒。":
+        "Applied to the Aim Test: horizontal {horizontal} / vertical {vertical}°/s.",
+    "無法套用至瞄準測試。": "Could not apply to the Aim Test.",
     "現行設定或方案使用滑鼠輸出，無法調整搖桿補償。":
         "The current settings or profile use mouse output. Stick compensation is unavailable.",
     "調整視角速度前": "Before changing turn speed",

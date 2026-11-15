@@ -534,6 +534,42 @@ class AimPaneTests(unittest.TestCase):
             pane._sample_input(104)
             start.assert_called_once_with(at=104)
 
+    def test_compensation_preview_applies_adjusted_speed_to_the_aim_test(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_settings import AimSettings
+
+        folder = TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        path = Path(folder.name) / "aim.json"
+        AimSettings(fullscreen=False, stick_horizontal_speed=180, stick_vertical_speed=95).save(path)
+        with patch("gamepad_aim.AimSettings", AimSettings):
+            pane = AimTestPane(self.root, str, lambda: None, settings_path=path)
+        self.root.deiconify()
+        self.root.update()
+        pane._open_compensation_preview()
+        overlay = pane.compensation_window
+        self.assertEqual(overlay.window.title(), "補償預覽")
+
+        overlay.adjusted[0].set("1081")
+        overlay.aim_test_button.invoke()
+        self.assertIn("1080", overlay.status.get())
+        self.assertEqual(AimSettings.load(path).stick_horizontal_speed, 180)
+
+        overlay.adjusted[0].set("560")
+        overlay.adjusted[1].set("300")
+        overlay.aim_test_button.invoke()
+
+        self.assertEqual((pane.settings.stick_horizontal_speed, pane.settings.stick_vertical_speed), (560, 300))
+        saved = AimSettings.load(path)
+        self.assertEqual((saved.stick_horizontal_speed, saved.stick_vertical_speed), (560, 300))
+        self.assertTrue(pane._compensation_preview)  # The preview stays open.
+        self.assertTrue(overlay.window.winfo_exists())
+        self.assertIn("560", overlay.status.get())
+
+        overlay.measure_button.invoke()
+        self.assertTrue(overlay.aim_test_button.instate(("disabled",)))
+        overlay.close_button.invoke()
+
     def test_compensation_preview_uses_current_settings_without_saving_adjustments(self):
         from gamepad_aim import AimTestPane
         from gamepad_aim_settings import AimSettings

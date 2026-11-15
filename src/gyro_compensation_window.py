@@ -230,11 +230,12 @@ class GyroCompensationSettings:
 
 class GyroCompensationPreview:
     def __init__(self, owner, tr, settings, prepare, turn, close, open_gyro_settings, *, multipliers=None,
-                 on_speed_changed, apply_measurement=None, read_reload_status=None):
+                 on_speed_changed, apply_measurement=None, read_reload_status=None,
+                 apply_to_aim_test=None):
         self.tr = tr
         self.prepare = prepare
         self.turn = turn
-        self.window, body = _dialog(owner, tr("3D 陀螺儀補償預覽"))
+        self.window, body = _dialog(owner, tr("補償預覽"))
         self.window.bind("<Escape>", close)
         self.window.protocol("WM_DELETE_WINDOW", close)
         self.window.bind("<Destroy>", self._destroyed, add="+")
@@ -248,6 +249,8 @@ class GyroCompensationPreview:
         self.on_speed_changed = on_speed_changed
         self.apply_measurement = apply_measurement
         self.read_reload_status = read_reload_status
+        self.apply_to_aim_test = apply_to_aim_test
+        self.aim_test_button = None
         self.adjusted = []
         self._adjusted_speeds = []
         self.speed_options = []
@@ -283,6 +286,15 @@ class GyroCompensationPreview:
                 else:
                     control = ttk.Label(frame, text=str(value))
                 control.grid(row=row, column=1, sticky="w", padx=(8, 0), pady=3)
+            if editable:
+                self.aim_test_button = ttk.Button(
+                    frame, text=tr("套用至瞄準測試"), command=self.apply_adjusted_to_aim_test,
+                )
+                self.aim_test_button.grid(
+                    row=len(TURN_SPEED_FIELDS), column=0, columnspan=2, sticky="ew", pady=(6, 2),
+                )
+                if apply_to_aim_test is None:
+                    self.aim_test_button.state(["disabled"])
         buttons = ttk.Frame(body)
         buttons.columnconfigure((0, 1), weight=1, uniform="measurement")
         status_label = ttk.Label(body, textvariable=self.status, justify="left",
@@ -323,6 +335,22 @@ class GyroCompensationPreview:
         speeds = self.original if self.speed_source.get() == "original" else self._read_adjusted_speeds(show_error=False)
         if speeds is not None:
             self.on_speed_changed(speeds)
+
+    def apply_adjusted_to_aim_test(self):
+        """Save the adjusted speeds as the aim test's stick turn speeds."""
+        if self.apply_to_aim_test is None or self.measurement is not None:
+            return
+        speeds = self._read_adjusted_speeds()
+        if speeds is None:
+            return
+        try:
+            self.apply_to_aim_test(speeds)
+        except OSError as exc:
+            self.status.set(self.tr("無法套用至瞄準測試。") + f"\n{exc}")
+            return
+        self.status.set(self.tr("已套用至瞄準測試：水平 {horizontal}／垂直 {vertical}°/秒。").format(
+            horizontal=speeds[0], vertical=speeds[1],
+        ))
 
     def start(self):
         if self.measurement is not None or self.reload_job is not None:
@@ -443,6 +471,8 @@ class GyroCompensationPreview:
     def _set_running(self, running):
         for widget in (*self.adjusted, *self.speed_options, self.measure_button):
             widget.state(["disabled" if running else "!disabled"])
+        if self.aim_test_button is not None and self.apply_to_aim_test is not None:
+            self.aim_test_button.state(["disabled" if running else "!disabled"])
 
     def cancel(self):
         if self.measurement is not None:
