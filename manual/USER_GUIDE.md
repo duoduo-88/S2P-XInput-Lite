@@ -205,6 +205,10 @@ Select **Zoom** under Stick Settings in the main window to open this editor.
 
 Large deadzones shorten the usable stick range. Increase them only enough to solve center drift or insufficient outer travel.
 
+> [!NOTE]
+> Right after the controller connects (or reconnects), a stick may rest slightly outside the center deadzone and produce a small leftover output.
+> As with many controllers after power-on, flick each stick once after connecting so it settles back to center. There is no need to enlarge the deadzone for this.
+
 ### 3.3 Shape and Stab.
 
 **Shape** adjusts the overall response character.
