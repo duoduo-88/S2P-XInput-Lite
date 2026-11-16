@@ -13,6 +13,7 @@ from dialog_layout import center_child_dialog
 from gamepad_aim_display import available_resolutions, highest_resolution, window_work_area
 from gamepad_aim_model import DEFAULT_STICK_TURN_SPEED, TIMED_MODES, TRACKING_MODES
 from readable_combobox import ReadableCombobox
+from parameter_controls import bind_drag_adjust, bind_restore_menu
 from tooltip_layout import HoverTip
 
 
@@ -226,14 +227,31 @@ def show_aim_settings(parent, tr, current, apply):
         marker.grid(row=row, column=3, sticky="w", padx=(6, 0), pady=pady)
         HoverTip(marker, tr(text))
 
+    defaults = AimSettings()
+
+    def bind_parameter(key, name_label, apply, *controls, value_label=None):
+        """Drag the item name (or reading) to adjust; right-click to restore."""
+        low, high = LIMITS[key]
+        for widget in (name_label, value_label):
+            if widget is not None:
+                bind_drag_adjust(widget, values[key], low, high, apply, step=1)
+        bind_restore_menu(
+            (name_label, value_label, *controls), tr, apply,
+            getattr(current, key), getattr(defaults, key),
+        )
+
     first = None
     for panel, inputs in ((drills, drill_inputs), (controls, control_inputs)):
         for row, (key, label) in enumerate(inputs):
-            ttk.Label(panel, text=tr(label)).grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
+            name_label = ttk.Label(panel, text=tr(label))
+            name_label.grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
             values[key] = tk.StringVar(dialog, str(getattr(current, key)))
             entry = ttk.Spinbox(panel, from_=LIMITS[key][0], to=LIMITS[key][1],
                                 textvariable=values[key], width=10)
             entry.grid(row=row, column=1, sticky="ew", pady=4)
+            bind_parameter(
+                key, name_label, lambda number, field=key: values[field].set(str(round(number))), entry,
+            )
             if key in input_help:
                 add_help(panel, row, input_help[key])
             if first is None:
@@ -257,16 +275,25 @@ def show_aim_settings(parent, tr, current, apply):
         (controls, control_sliders, len(control_inputs)),
     ):
         for row, (key, label) in enumerate(sliders, start=start):
-            ttk.Label(panel, text=tr(label)).grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
+            name_label = ttk.Label(panel, text=tr(label))
+            name_label.grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
             values[key] = tk.DoubleVar(dialog, getattr(current, key))
             suffix = " px" if key == "reticle_size" else "%"
             reading = tk.StringVar(dialog, f"{int(values[key].get())}{suffix}")
             slider_texts[key] = reading, suffix
-            ttk.Scale(
+            scale = ttk.Scale(
                 panel, from_=LIMITS[key][0], to=LIMITS[key][1], variable=values[key],
                 command=lambda value, text=reading, unit=suffix: text.set(f"{round(float(value))}{unit}"),
-            ).grid(row=row, column=1, sticky="ew", pady=4)
-            ttk.Label(panel, textvariable=reading, width=6).grid(row=row, column=2, sticky="w", padx=(6, 0))
+            )
+            scale.grid(row=row, column=1, sticky="ew", pady=4)
+            value_label = ttk.Label(panel, textvariable=reading, width=6)
+            value_label.grid(row=row, column=2, sticky="w", padx=(6, 0))
+
+            def set_slider(number, field=key, text=reading, unit=suffix):
+                values[field].set(round(number))
+                text.set(f"{round(number)}{unit}")
+
+            bind_parameter(key, name_label, set_slider, scale, value_label=value_label)
             if key in input_help:
                 add_help(panel, row, input_help[key])
     labels = dict(drill_inputs + control_inputs + drill_sliders + control_sliders)

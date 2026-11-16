@@ -9,6 +9,7 @@ from dialog_layout import center_child_dialog
 from gamepad_aim_model import DEFAULT_STICK_TURN_SPEED
 from gamepad_aim_settings import LIMITS, TURN_SPEED_FIELDS
 from gyro_compensation import DEFAULT_COMPENSATION, suggested_axis_ratio
+from parameter_controls import bind_drag_adjust, bind_restore_menu
 from runtime_status import settings_reload_result
 from settings_schema import GYRO_RATIO_MAX, GYRO_RATIO_MIN
 
@@ -144,7 +145,7 @@ class GyroCompensationCalculator:
 
 
 class GyroCompensationSettings:
-    def __init__(self, owner, tr, current, apply, *, sync_saved=None):
+    def __init__(self, owner, tr, current, apply, *, sync_saved=None, saved=None):
         self.window, body = _dialog(owner, tr("陀螺儀補償設定"))
         self.window.withdraw()
         self.compensation = {axis: tk.StringVar(self.window, current[axis]) for axis, _label in AXES}
@@ -153,7 +154,8 @@ class GyroCompensationSettings:
         for row, (axis, label) in enumerate(AXES):
             value = self.compensation[axis]
             slider_value = tk.DoubleVar(self.window, GYRO_RATIO_MIN)
-            ttk.Label(body, text=tr(label)).grid(row=row, column=0, sticky="w", pady=3)
+            name_label = ttk.Label(body, text=tr(label))
+            name_label.grid(row=row, column=0, sticky="w", pady=3)
             slider = self.sliders[axis] = ttk.Scale(
                 body, from_=GYRO_RATIO_MIN, to=GYRO_RATIO_MAX, variable=slider_value,
                 command=lambda position, field=value: field.set(f"{float(position):.2f}"),
@@ -162,6 +164,17 @@ class GyroCompensationSettings:
             entry = ttk.Spinbox(body, from_=GYRO_RATIO_MIN, to=GYRO_RATIO_MAX,
                                 increment=0.01, format="%.2f", width=9, textvariable=value)
             entry.grid(row=row, column=2, padx=(8, 0), pady=3)
+
+            def set_ratio(number, field=value):
+                if number is not None:
+                    field.set(f"{float(number):.2f}")
+
+            bind_drag_adjust(name_label, value, GYRO_RATIO_MIN, GYRO_RATIO_MAX, set_ratio, step=0.01)
+            bind_restore_menu(
+                (name_label, slider, entry), tr, set_ratio,
+                (lambda field=axis: (saved() or {}).get(field)) if saved is not None else None,
+                DEFAULT_COMPENSATION[axis],
+            )
 
             def update_slider(*_args, field=value, position_var=slider_value):
                 try:
@@ -274,7 +287,8 @@ class GyroCompensationPreview:
             self.speed_options.append(option)
             frame.pack(fill="x", pady=(0, 8))
             for row, (key, label) in enumerate(TURN_SPEED_FIELDS):
-                ttk.Label(frame, text=tr(label)).grid(row=row, column=0, sticky="w", pady=3)
+                name_label = ttk.Label(frame, text=tr(label))
+                name_label.grid(row=row, column=0, sticky="w", pady=3)
                 value = self.original[row]
                 if editable:
                     low, high = LIMITS[key]
@@ -283,6 +297,15 @@ class GyroCompensationPreview:
                     self._adjusted_speeds.append(speed)
                     control = ttk.Spinbox(frame, from_=low, to=high, width=7, textvariable=speed)
                     self.adjusted.append(control)
+
+                    def set_speed(number, field=speed):
+                        field.set(str(round(number)))
+
+                    bind_drag_adjust(name_label, speed, low, high, set_speed, step=1, state_widget=control)
+                    bind_restore_menu(
+                        (name_label, control), tr, set_speed,
+                        getattr(settings, key), DEFAULT_STICK_TURN_SPEED[row], state_widget=control,
+                    )
                 else:
                     control = ttk.Label(frame, text=str(value))
                 control.grid(row=row, column=1, sticky="w", padx=(8, 0), pady=3)

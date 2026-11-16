@@ -123,6 +123,12 @@ from settings_schema import SECTION_SCHEMAS, SettingValidationError, normalize_c
 from gyro_compensation import COMPENSATION_FIELDS, profile_compensation
 from gyro_compensation_window import GyroCompensationSettings
 from runtime_status import settings_reload_result
+from parameter_controls import (
+    bind_drag_adjust,
+    scrub_numeric_value,
+    show_restore_menu,
+    widget_is_disabled,
+)
 from single_instance import GYRO_SETTINGS_ACTION, SETTINGS_INSTANCE_NAME, SingleInstance, activate_tk_window
 from system_tray import SystemTrayIcon
 from gui_settings import (
@@ -524,47 +530,6 @@ def normalize_slider_input(value, minimum, maximum, step=None, allowed_values=No
         ) * step
         numeric = max(float(minimum), min(float(maximum), numeric))
     return numeric
-
-
-def scrub_numeric_value(
-    start_value,
-    step_count,
-    minimum,
-    maximum,
-    step=None,
-    allowed_values=None,
-):
-    """Move a numeric value by normal or discrete slider steps."""
-    minimum = float(minimum)
-    maximum = float(maximum)
-    start_value = float(start_value)
-    if not math.isfinite(start_value):
-        start_value = minimum
-    start_value = max(minimum, min(maximum, start_value))
-    step_count = int(step_count)
-
-    if allowed_values:
-        choices = tuple(float(item) for item in allowed_values)
-        if not choices:
-            raise ValueError("allowed_values must not be empty")
-        start_index = min(
-            range(len(choices)),
-            key=lambda index: (abs(choices[index] - start_value), index),
-        )
-        target_index = max(
-            0,
-            min(len(choices) - 1, start_index + step_count),
-        )
-        numeric = choices[target_index]
-    elif step is not None:
-        step = float(step)
-        if step <= 0:
-            raise ValueError("step must be positive")
-        numeric = start_value + step_count * step
-    else:
-        numeric = start_value
-
-    return max(minimum, min(maximum, numeric))
 
 
 def draw_output_shape_preview(canvas, shape_steps):
@@ -5748,9 +5713,18 @@ class ConfigGUI:
                 self.root, self.tr,
                 {axis: variable.get() for axis, variable in self.gyro_compensation_vars.items()},
                 apply=apply_ratios, sync_saved=self._sync_saved_gyro_compensation,
+                saved=self._saved_gyro_compensation,
             )
         overlay.window.lift()
         overlay.window.focus_set()
+
+    def _saved_gyro_compensation(self):
+        """Return the last saved X/Y multipliers for the dialog's restore menu."""
+        saved = {}
+        for axis, variable in self.gyro_compensation_vars.items():
+            binding = getattr(self, "parameter_saved_registry", {}).get(str(variable))
+            saved[axis] = binding[1] if binding else None
+        return saved
 
     def _sync_saved_gyro_compensation(self, *, latest=None):
         """Accept tester changes without overwriting unsaved edits in this window."""
@@ -6443,15 +6417,7 @@ class ConfigGUI:
     @staticmethod
     def parameter_widget_is_disabled(widget):
         """Return whether a Tk/ttk parameter control rejects user edits."""
-        try:
-            if widget.instate(["disabled"]):
-                return True
-        except (AttributeError, tk.TclError):
-            pass
-        try:
-            return str(widget.cget("state")).strip().lower() == "disabled"
-        except (AttributeError, tk.TclError):
-            return False
+        return widget_is_disabled(widget)
 
     def show_parameter_reset_context_menu(self, event):
         if self.parameter_widget_is_disabled(event.widget):
@@ -6463,23 +6429,7 @@ class ConfigGUI:
         return self.popup_parameter_reset_menu(event, variable.set, saved_value, system_default)
 
     def popup_parameter_reset_menu(self, event, setter, saved_value, system_default):
-        if self.parameter_widget_is_disabled(event.widget):
-            return "break"
-        menu = tk.Menu(event.widget.winfo_toplevel(), tearoff=False)
-        menu.add_command(
-            label=self.tr("還原上次儲存"),
-            command=lambda: setter(saved_value),
-        )
-        menu.add_separator()
-        menu.add_command(
-            label=self.tr("還原系統預設"),
-            command=lambda: setter(system_default),
-        )
-        try:
-            menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            menu.grab_release()
-        return "break"
+        return show_restore_menu(event, self.tr, setter, saved_value, system_default)
 
     def _capture_profile_folder_snapshot(self):
         """Return a lightweight snapshot used to detect external file changes."""
@@ -8569,75 +8519,24 @@ class ConfigGUI:
         text_entry=False,
     ):
         """Bind drag adjustment, preserving native clicks and horizontal motion on entries."""
-        pixels_per_step = 8
-        state = {
-            "start_x": 0,
-            "start_y": 0,
-            "start_value": float(minimum),
-            "last_steps": 0,
-            "dragged": False,
-        }
-        widget.configure(cursor="sb_h_double_arrow")
-
-        def begin(event):
-            interaction_enabled = not self.parameter_widget_is_disabled(
-                widget
-            )
-            state["interaction_enabled"] = interaction_enabled
-            if not interaction_enabled:
-                if on_disabled_click is not None:
-                    on_disabled_click()
-                return "break"
-            try:
-                start_value = float(variable.get())
-            except (TypeError, ValueError, tk.TclError):
-                start_value = float(minimum)
-            state.update({
-                "start_x": event.x_root,
-                "start_y": event.y_root,
-                "start_value": start_value,
-                "last_steps": 0,
-                "dragged": False,
-            })
-            return None if text_entry else "break"
-
-        def drag(event):
-            if not state.get("interaction_enabled", False):
-                return "break"
-            delta_x = event.x_root - state["start_x"]
-            delta_y = event.y_root - state["start_y"]
-            distance = delta_x if text_entry or abs(delta_x) >= abs(delta_y) else -delta_y
-            step_count = int(distance / pixels_per_step)
-            if step_count == 0 and not text_entry:
-                return "break"
-            if step_count == state["last_steps"]:
-                return "break"
-            state["dragged"] = True
-            state["last_steps"] = step_count
-            numeric = scrub_numeric_value(
-                state["start_value"],
-                step_count,
-                minimum,
-                maximum,
-                step=step,
-                allowed_values=allowed_values,
-            )
+        def apply(numeric):
             if setter is None:
                 variable.set(format(numeric, number_format))
             else:
                 setter(numeric)
-            return "break"
 
-        def finish(_event):
-            if not state.get("interaction_enabled", False):
-                return "break"
-            if not state["dragged"] and click_command is not None:
-                click_command()
-            return None if text_entry else "break"
-
-        widget.bind("<ButtonPress-1>", begin)
-        widget.bind("<B1-Motion>", drag)
-        widget.bind("<ButtonRelease-1>", finish)
+        bind_drag_adjust(
+            widget,
+            variable,
+            minimum,
+            maximum,
+            apply,
+            step=step,
+            allowed_values=allowed_values,
+            on_disabled_click=on_disabled_click,
+            click_command=click_command,
+            text_entry=text_entry,
+        )
 
     def open_slider_value_editor(
         self,

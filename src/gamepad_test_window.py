@@ -71,6 +71,7 @@ from settings_schema import GYRO_RATIO_MAX, GYRO_RATIO_MIN
 from switch2_input import SWITCH_BUTTONS
 from support_log import format_support_log
 from test_telemetry import SharedTestTelemetry
+from parameter_controls import bind_drag_adjust, bind_restore_menu
 from tooltip_layout import HoverTip
 from update_manager import (
     UpdateCheckError,
@@ -443,6 +444,16 @@ def shape_ease_amount(delta_seconds, time_constant=0.05):
     delta = max(0.0, min(0.1, float(delta_seconds)))
     constant = max(1e-6, float(time_constant))
     return 1.0 - math.exp(-delta / constant)
+
+
+# Defaults shared by the reset buttons and the right-click restore menus.
+DEFAULT_TRAIL_SECONDS = 2.5
+DEFAULT_RAW_HID_SECONDS = 10
+RAW_HID_DURATION_CHOICES = ("5", "10", "30", "60")
+DIAGNOSTIC_DURATION_CHOICES = ("30", "60", "120")
+DEFAULT_SAMPLE_PERCENT = 100.0
+DEFAULT_RUMBLE_REPEAT_HZ = 1.0
+DEFAULT_RUMBLE_STRENGTH = 100.0
 
 
 def normalize_test_parameter(value, minimum, maximum, step):
@@ -2263,7 +2274,7 @@ class GamepadTestWindow:
         self._nintendo_winmm_pair_key = None
         self._nintendo_winmm_pair_score = 0
         self.raw_hid_devices = {}
-        self.raw_hid_duration_var = tk.StringVar(value="10")
+        self.raw_hid_duration_var = tk.StringVar(value=str(DEFAULT_RAW_HID_SECONDS))
         self.raw_hid_state_var = tk.StringVar(value=self.gui.tr("尚未量測"))
         self.raw_hid_rate_var = tk.StringVar(value="— Hz")
         self.raw_hid_effective_rate_var = tk.StringVar(value="— Hz")
@@ -2634,9 +2645,10 @@ class GamepadTestWindow:
         )
         self.raw_hid_stream_toggle = raw_hid_stream_toggle
         raw_hid_stream_toggle.grid(row=0, column=3, padx=(0, 7))
-        ttk.Label(
+        trail_name_label = ttk.Label(
             display_controls, text=self.gui.tr("軌跡")
-        ).grid(row=0, column=4, padx=(0, 3))
+        )
+        trail_name_label.grid(row=0, column=4, padx=(0, 3))
         trail_scale = ttk.Scale(
             display_controls,
             from_=0.5,
@@ -2663,10 +2675,13 @@ class GamepadTestWindow:
             number_format=".1f",
             on_change=self._update_trail_length_text,
             state_widget=trail_scale,
+            name_label=trail_name_label,
+            default=DEFAULT_TRAIL_SECONDS,
         )
-        ttk.Label(
+        sample_name_label = ttk.Label(
             display_controls, text=self.gui.tr("採樣點")
-        ).grid(row=0, column=7, padx=(0, 3))
+        )
+        sample_name_label.grid(row=0, column=7, padx=(0, 3))
         sample_scale = ttk.Scale(
             display_controls,
             from_=1.0,
@@ -2694,6 +2709,8 @@ class GamepadTestWindow:
             number_format=".0f",
             on_change=self._update_sample_display_percent,
             state_widget=sample_scale,
+            name_label=sample_name_label,
+            default=DEFAULT_SAMPLE_PERCENT,
         )
         sample_help = tk.Label(
             display_controls,
@@ -2899,16 +2916,24 @@ class GamepadTestWindow:
         controls.grid(row=0, column=0, sticky="ew")
         controls.columnconfigure(3, weight=1, uniform="raw_actions")
         controls.columnconfigure(4, weight=1, uniform="raw_actions")
-        ttk.Label(
+        raw_hid_duration_name = ttk.Label(
             controls, text=self.gui.tr("量測秒數")
-        ).grid(row=0, column=0, padx=(0, 5))
+        )
+        raw_hid_duration_name.grid(row=0, column=0, padx=(0, 5))
         self.raw_hid_duration_combo = ReadableCombobox(
             controls,
             textvariable=self.raw_hid_duration_var,
-            values=("5", "10", "30", "60"),
+            values=RAW_HID_DURATION_CHOICES,
             width=5,
         )
         self.raw_hid_duration_combo.grid(row=0, column=1)
+        self._bind_choice_parameter(
+            raw_hid_duration_name,
+            self.raw_hid_duration_combo,
+            self.raw_hid_duration_var,
+            RAW_HID_DURATION_CHOICES,
+            DEFAULT_RAW_HID_SECONDS,
+        )
         raw_hid_help = tk.Label(
             controls,
             text="?",
@@ -3977,79 +4002,63 @@ class GamepadTestWindow:
         number_format,
         on_change,
         state_widget=None,
+        name_label=None,
+        default=None,
     ):
-        """Add click-to-enter and four-direction scrubbing to a value label."""
-        pixels_per_step = 8
+        """Let a parameter be dragged by its value or name and restored by right-click.
+
+        Clicking the value text opens the numeric editor. The name text only
+        drags, like the settings window. Tester parameters are not saved, so
+        the right-click menu offers only the default.
+        """
         state_widget = state_widget or widget
-        state = {
-            "start_x": 0,
-            "start_y": 0,
-            "start_value": float(minimum),
-            "last_steps": 0,
-            "dragged": False,
-            "enabled": False,
-        }
-        widget.configure(cursor="sb_h_double_arrow")
 
-        def begin(event):
-            state["enabled"] = not self._parameter_control_is_disabled(
-                state_widget
-            )
-            if not state["enabled"]:
-                return "break"
-            try:
-                start_value = float(variable.get())
-            except (TypeError, ValueError, tk.TclError):
-                start_value = float(minimum)
-            state.update({
-                "start_x": event.x_root,
-                "start_y": event.y_root,
-                "start_value": start_value,
-                "last_steps": 0,
-                "dragged": False,
-            })
-            return "break"
-
-        def drag(event):
-            if not state["enabled"]:
-                return "break"
-            delta_x = event.x_root - state["start_x"]
-            delta_y = event.y_root - state["start_y"]
-            distance = delta_x if abs(delta_x) >= abs(delta_y) else -delta_y
-            step_count = int(distance / pixels_per_step)
-            if step_count == 0 or step_count == state["last_steps"]:
-                return "break"
-            state["dragged"] = True
-            state["last_steps"] = step_count
+        def apply(numeric):
             self._apply_parameter_value(
+                variable, numeric, minimum, maximum, step, on_change,
+            )
+
+        def open_editor():
+            self._open_parameter_editor(
                 variable,
-                state["start_value"] + step_count * float(step),
+                title,
                 minimum,
                 maximum,
-                step,
-                on_change,
+                step=step,
+                number_format=number_format,
+                on_change=on_change,
+                state_widget=state_widget,
             )
-            return "break"
 
-        def finish(_event):
-            if not state["enabled"]:
-                return "break"
-            if not state["dragged"]:
-                self._open_parameter_editor(
-                    variable,
-                    title,
-                    minimum,
-                    maximum,
-                    step=step,
-                    number_format=number_format,
-                    on_change=on_change,
-                    state_widget=state_widget,
-                )
-            return "break"
+        bind_drag_adjust(
+            widget, variable, minimum, maximum, apply,
+            step=step, state_widget=state_widget, click_command=open_editor,
+        )
+        if name_label is not None:
+            bind_drag_adjust(
+                name_label, variable, minimum, maximum, apply,
+                step=step, state_widget=state_widget,
+            )
+        if default is not None:
+            bind_restore_menu(
+                (widget, name_label, state_widget), self.gui.tr, apply, None, default,
+                state_widget=state_widget,
+            )
 
-        widget.bind("<ButtonPress-1>", begin)
-        widget.bind("<B1-Motion>", drag)
-        widget.bind("<ButtonRelease-1>", finish)
+    def _bind_choice_parameter(self, name_label, combo, variable, choices, default):
+        """Step through a duration list by dragging its name; right-click restores the default."""
+        numbers = tuple(int(choice) for choice in choices)
+
+        def apply(number):
+            variable.set(str(int(round(number))))
+
+        bind_drag_adjust(
+            name_label, variable, min(numbers), max(numbers), apply,
+            allowed_values=numbers, state_widget=combo,
+        )
+        bind_restore_menu(
+            (name_label, combo), self.gui.tr, apply, None, default, state_widget=combo,
+        )
 
     def _open_parameter_editor(
         self,
@@ -4577,16 +4586,25 @@ class GamepadTestWindow:
             command=self.export_diagnostic_log,
         )
         self.diagnostic_export_button.grid(row=0, column=2, padx=(0, 12))
-        ttk.Label(controls, text=self.gui.tr("診斷時間")).grid(
-            row=0, column=3, padx=(0, 5)
+        diagnostic_duration_name = ttk.Label(
+            controls, text=self.gui.tr("診斷時間")
         )
-        ReadableCombobox(
+        diagnostic_duration_name.grid(row=0, column=3, padx=(0, 5))
+        diagnostic_duration = ReadableCombobox(
             controls,
             textvariable=self.diagnostic_duration_var,
-            values=("30", "60", "120"),
+            values=DIAGNOSTIC_DURATION_CHOICES,
             state="readonly",
             width=5,
-        ).grid(row=0, column=4)
+        )
+        diagnostic_duration.grid(row=0, column=4)
+        self._bind_choice_parameter(
+            diagnostic_duration_name,
+            diagnostic_duration,
+            self.diagnostic_duration_var,
+            DIAGNOSTIC_DURATION_CHOICES,
+            DEFAULT_DIAGNOSTIC_SECONDS,
+        )
         diagnostic_help = tk.Label(
             controls,
             text="?",
@@ -5760,9 +5778,8 @@ class GamepadTestWindow:
             ("LF（左馬達）", self.manual_lf_var, self.manual_lf_text),
             ("HF（右馬達）", self.manual_hf_var, self.manual_hf_text),
         )):
-            ttk.Label(manual_group, text=self.gui.tr(label), width=14).grid(
-                row=row, column=0, sticky="w", padx=(0, 8)
-            )
+            name_label = ttk.Label(manual_group, text=self.gui.tr(label), width=14)
+            name_label.grid(row=row, column=0, sticky="w", padx=(0, 8))
             scale = ttk.Scale(
                 manual_group,
                 from_=0.0,
@@ -5789,6 +5806,8 @@ class GamepadTestWindow:
                 number_format=".0f",
                 on_change=self._on_manual_rumble_changed,
                 state_widget=scale,
+                name_label=name_label,
+                default=0.0,
             )
             self.manual_rumble_widgets.append(scale)
 
@@ -5883,9 +5902,8 @@ class GamepadTestWindow:
             sticky="ew", pady=(8, 0)
         )
         controls.columnconfigure(1, weight=1)
-        ttk.Label(controls, text=self.gui.tr("播放頻率"), width=14).grid(
-            row=0, column=0, sticky="w", padx=(0, 8)
-        )
+        repeat_rate_name = ttk.Label(controls, text=self.gui.tr("播放頻率"), width=14)
+        repeat_rate_name.grid(row=0, column=0, sticky="w", padx=(0, 8))
         repeat_rate = ttk.Scale(
             controls,
             from_=0.1,
@@ -5914,10 +5932,11 @@ class GamepadTestWindow:
             number_format=".1f",
             on_change=self._on_repeat_rate_changed,
             state_widget=repeat_rate,
+            name_label=repeat_rate_name,
+            default=DEFAULT_RUMBLE_REPEAT_HZ,
         )
-        ttk.Label(controls, text=self.gui.tr("模板強度"), width=14).grid(
-            row=1, column=0, sticky="w", padx=(0, 8), pady=(8, 0)
-        )
+        strength_name = ttk.Label(controls, text=self.gui.tr("模板強度"), width=14)
+        strength_name.grid(row=1, column=0, sticky="w", padx=(0, 8), pady=(8, 0))
         strength = ttk.Scale(
             controls,
             from_=0.0,
@@ -5944,6 +5963,8 @@ class GamepadTestWindow:
             number_format=".0f",
             on_change=self._on_rumble_strength_changed,
             state_widget=strength,
+            name_label=strength_name,
+            default=DEFAULT_RUMBLE_STRENGTH,
         )
         self.rumble_option_widgets.extend(
             (repeat, template_lf, template_hf, repeat_rate, strength)
@@ -5995,10 +6016,10 @@ class GamepadTestWindow:
         self.manual_lf_text.set("0%")
         self.manual_hf_text.set("0%")
         self.repeat_rumble_var.set(False)
-        self.rumble_repeat_hz_var.set(1.0)
-        self.rumble_repeat_hz_text.set("1.0 Hz")
-        self.rumble_strength_var.set(100.0)
-        self.rumble_strength_text.set("100%")
+        self.rumble_repeat_hz_var.set(DEFAULT_RUMBLE_REPEAT_HZ)
+        self.rumble_repeat_hz_text.set(f"{DEFAULT_RUMBLE_REPEAT_HZ:.1f} Hz")
+        self.rumble_strength_var.set(DEFAULT_RUMBLE_STRENGTH)
+        self.rumble_strength_text.set(f"{DEFAULT_RUMBLE_STRENGTH:.0f}%")
         self.template_lf_enabled_var.set(True)
         self.template_hf_enabled_var.set(True)
 
@@ -7313,9 +7334,9 @@ class GamepadTestWindow:
         self._shape_capture_signature = None
         self.show_gyro_legend_var.set(True)
         self.raw_hid_stream_enabled_var.set(True)
-        self.trail_length_var.set(2.5)
+        self.trail_length_var.set(DEFAULT_TRAIL_SECONDS)
         self._update_trail_length_text()
-        self.sample_display_percent_var.set(100.0)
+        self.sample_display_percent_var.set(DEFAULT_SAMPLE_PERCENT)
         self._update_sample_display_percent()
 
     def reset_input_monitor(self):

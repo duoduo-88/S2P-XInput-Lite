@@ -1091,6 +1091,10 @@ are not supported. For hardware validation status, see
   range, step, and description.
 - Press and drag right on a parameter name to increase it, or left to
   decrease it. Each change uses that parameter's own step.
+- Gamepad Tester parameters, including the Aim Test settings and the
+  compensation windows, drag and restore the same way. Live values such as
+  Input Monitor and Rumble Test settings are not saved, so their
+  **Restore Saved** item is grayed out.
 
 ### 10.2 Right-click to restore
 
