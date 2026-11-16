@@ -266,6 +266,8 @@ class GyroCompensationPreview:
         self.aim_test_button = None
         self.adjusted = []
         self._adjusted_speeds = []
+        # Last speeds saved to the aim test; "Restore Saved" follows each apply.
+        self._saved_speeds = [getattr(settings, key) for key, _label in TURN_SPEED_FIELDS]
         self.speed_options = []
         self.status = tk.StringVar(self.window)
         self.result = tk.StringVar(self.window)
@@ -304,7 +306,8 @@ class GyroCompensationPreview:
                     bind_drag_adjust(name_label, speed, low, high, set_speed, step=1, state_widget=control)
                     bind_restore_menu(
                         (name_label, control), tr, set_speed,
-                        getattr(settings, key), DEFAULT_STICK_TURN_SPEED[row], state_widget=control,
+                        lambda index=row: self._saved_speeds[index], DEFAULT_STICK_TURN_SPEED[row],
+                        state_widget=control,
                     )
                 else:
                     control = ttk.Label(frame, text=str(value))
@@ -371,6 +374,7 @@ class GyroCompensationPreview:
         except OSError as exc:
             self.status.set(self.tr("無法套用至瞄準測試。") + f"\n{exc}")
             return
+        self._saved_speeds = list(speeds)
         self.status.set(self.tr("已套用至瞄準測試：水平 {horizontal}／垂直 {vertical}°/秒。").format(
             horizontal=speeds[0], vertical=speeds[1],
         ))

@@ -5719,12 +5719,16 @@ class ConfigGUI:
         overlay.window.focus_set()
 
     def _saved_gyro_compensation(self):
-        """Return the last saved X/Y multipliers for the dialog's restore menu."""
-        saved = {}
-        for axis, variable in self.gyro_compensation_vars.items():
-            binding = getattr(self, "parameter_saved_registry", {}).get(str(variable))
-            saved[axis] = binding[1] if binding else None
-        return saved
+        """Return the last saved X/Y multipliers for the dialog's restore menu.
+
+        Read ``self.config`` rather than the saved-value registry: the tester
+        can save new multipliers (see ``_sync_saved_gyro_compensation``),
+        which updates the config but does not rebuild the registry.
+        """
+        return {
+            axis: f"{value:.2f}"
+            for axis, value in profile_compensation(self.config).items()
+        }
 
     def _sync_saved_gyro_compensation(self, *, latest=None):
         """Accept tester changes without overwriting unsaved edits in this window."""

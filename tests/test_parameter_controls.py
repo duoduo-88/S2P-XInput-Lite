@@ -162,5 +162,35 @@ class TesterParameterRowTests(unittest.TestCase):
             self.assertIn("<Button-3>", widget.callbacks)
 
 
+class SavedValueTests(unittest.TestCase):
+    def test_compensation_restore_saved_follows_the_config_after_a_tester_save(self):
+        import configparser
+        from config_gui import ConfigGUI
+
+        gui = object.__new__(ConfigGUI)
+        gui.config = configparser.ConfigParser()
+        gui.config.read_dict({"gyro_mapping": {"x_compensation": "1.00", "y_compensation": "1.00"}})
+        # A stale registry must not win over the config the tester updated.
+        gui.parameter_saved_registry = {}
+        gui.config.set("gyro_mapping", "x_compensation", "1.25")
+
+        self.assertEqual(gui._saved_gyro_compensation(), {"X": "1.25", "Y": "1.00"})
+
+    def test_preview_restore_saved_follows_the_last_apply_to_aim_test(self):
+        from gyro_compensation_window import GyroCompensationPreview
+
+        preview = object.__new__(GyroCompensationPreview)
+        preview.tr = lambda text: text
+        preview.measurement = None
+        preview.apply_to_aim_test = Mock()
+        preview.status = FakeVariable("")
+        preview._saved_speeds = [180, 120]
+        preview._read_adjusted_speeds = lambda: (240, 150)
+
+        preview.apply_adjusted_to_aim_test()
+
+        self.assertEqual(preview._saved_speeds, [240, 150])
+
+
 if __name__ == "__main__":
     unittest.main()
