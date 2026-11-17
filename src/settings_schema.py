@@ -182,6 +182,7 @@ GYRO_SCHEMA = {
     "y_ratio": _float("陀螺儀 Y 比例", "gyro Y ratio", GYRO_RATIO_MIN, GYRO_RATIO_MAX, 2),
     "x_compensation": _float("X 補償倍率", "X compensation multiplier", GYRO_RATIO_MIN, GYRO_RATIO_MAX, 2),
     "y_compensation": _float("Y 補償倍率", "Y compensation multiplier", GYRO_RATIO_MIN, GYRO_RATIO_MAX, 2),
+    "compensation_keep_limit": _bool("補償保留速度上限", "keep compensated speed limit"),
     "accel_suppression": _float("加速度抑制", "acceleration suppression", 0.0, 100.0),
     "adaptive_deadzone": _float("自適應死區", "adaptive deadzone", 0.0, 100.0),
     "button_stabilization_mode": _enum("按鍵防晃模式", "button stabilization mode", "FREEZE", "SPIKE"),

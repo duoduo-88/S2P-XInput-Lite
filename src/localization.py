@@ -1198,6 +1198,17 @@ EN_TEXT = {
         "vertical axis mixing.\nWhen enabled, axes follow controller orientation; disable it to use fixed X/Z axes."
     ),    "手把傾斜時，自動修正左右與上下的方向，減少斜拿手把造成的串軸。\n關閉後會固定使用感測器的 X／Z 軸。":
         "Automatically corrects horizontal and vertical directions as the controller tilts, reducing axis mixing when held at an angle.\nWhen disabled, the sensor's fixed X/Z axes are used.",
+    "補償保留速度上限": "Keep Speed Cap",
+    "調高遊戲視角速度並使用補償倍率後，陀螺儀的最快轉速仍維持調整前的上限。\n"
+    "開啟：手感與調整前一致，快速轉動時會在原本的速度封頂。\n"
+    "關閉：陀螺儀可用到新視角速度的完整範圍，快速轉動時不封頂。\n"
+    "補償倍率為 1.00 時沒有差別；實體搖桿不受影響。": (
+        "After raising the in-game turn speed and applying a compensation multiplier, "
+        "the gyro's fastest turn stays at the original limit.\n"
+        "On: feels the same as before the change; fast turns stop at the original speed.\n"
+        "Off: the gyro can use the full range of the new turn speed; fast turns are not capped.\n"
+        "No effect at a 1.00 multiplier; the physical stick is not affected."
+    ),
     "陀螺儀反應": "Gyro Response",
     "搖桿感度": "Stick Sens",
     "滑鼠感度": "Mouse Sens",
@@ -1702,6 +1713,8 @@ EN_TEXT = {
         "This ESP32 firmware has a gyro ratio minimum of 0.50. Update the firmware to use a lower ratio.",
     "目前 ESP32 韌體不支援陀螺儀輸出補償，請先更新韌體。":
         "Update the ESP32 firmware to use gyro output compensation.",
+    "目前 ESP32 韌體不支援「補償保留速度上限」，請先更新韌體。":
+        "Update the ESP32 firmware to keep the speed limit when compensating.",
     "目前 ESP32 韌體不支援陀螺儀突波抑制，請先更新韌體。":
         "The current ESP32 firmware does not support gyro spike suppression. Update the firmware first.",
     "只有搖桿模式選擇「映射為滑鼠」時生效。\n\n代表搖桿推到最外圈時每秒移動的游標像素數。\n設定範圍：100 ～ 3000；數值越高，游標移動越快。":

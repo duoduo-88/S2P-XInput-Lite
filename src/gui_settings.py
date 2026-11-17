@@ -141,6 +141,7 @@ def _gyro_values(gui) -> dict[str, Any]:
         "y_ratio": _value(gui.gyro_y_ratio_var),
         "x_compensation": _value(gui.gyro_compensation_vars["X"]),
         "y_compensation": _value(gui.gyro_compensation_vars["Y"]),
+        "compensation_keep_limit": _value(gui.gyro_compensation_keep_limit_var),
         "accel_suppression": _value(gui.gyro_accel_suppression_var),
         "adaptive_deadzone": _value(gui.gyro_adaptive_deadzone_var),
         "button_stabilization_mode": _value(gui.gyro_button_stabilization_mode_var),

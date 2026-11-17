@@ -184,7 +184,7 @@ GYRO_DEFAULT_KEYS = (
     "mouse_sensitivity", "deadzone", "stick_anti_deadzone",
     "response_curve", "curve_strength", "smoothing_ms", "invert_x",
     "invert_y", "x_ratio", "y_ratio", "accel_suppression",
-    "x_compensation", "y_compensation",
+    "x_compensation", "y_compensation", "compensation_keep_limit",
     "adaptive_deadzone", "button_stabilization_mode", "button_freeze_ms",
     "stabilization_buttons",
     "player_space",
@@ -3480,6 +3480,11 @@ class ConfigGUI:
             axis: tk.StringVar(value=self.config.get("gyro_mapping", f"{axis.lower()}_compensation", fallback="1.00"))
             for axis in ("X", "Y")
         }
+        self.gyro_compensation_keep_limit_var = tk.BooleanVar(
+            value=self.config.getboolean(
+                "gyro_mapping", "compensation_keep_limit", fallback=False
+            )
+        )
         self.gyro_invert_x_var = tk.BooleanVar(
             value=self.config.getboolean(
                 "gyro_mapping", "invert_x", fallback=False
@@ -10985,7 +10990,9 @@ class ConfigGUI:
                 self.gyro_stabilization_button_options,
             )
         )
-        for key in ("invert_x", "invert_y", "player_space"):
+        for key in (
+            "invert_x", "invert_y", "player_space", "compensation_keep_limit",
+        ):
             defaults[key] = profile.getboolean(section, key)
         return defaults
 
@@ -11008,6 +11015,9 @@ class ConfigGUI:
         self.gyro_y_ratio_var.set(defaults["y_ratio"])
         for axis, variable in self.gyro_compensation_vars.items():
             variable.set(defaults[f"{axis.lower()}_compensation"])
+        self.gyro_compensation_keep_limit_var.set(
+            defaults["compensation_keep_limit"]
+        )
         self.gyro_deadzone_var.set(defaults["deadzone"])
         self.gyro_stick_anti_deadzone_var.set(defaults["stick_anti_deadzone"])
         self.gyro_response_curve_var.set(defaults["response_curve"])
@@ -11096,6 +11106,10 @@ class ConfigGUI:
             ),
             str(self.gyro_player_space_var): (
                 self.gyro_player_space_var, "player_space"
+            ),
+            str(self.gyro_compensation_keep_limit_var): (
+                self.gyro_compensation_keep_limit_var,
+                "compensation_keep_limit",
             ),
         }
         pair = pairs.get(variable_name)

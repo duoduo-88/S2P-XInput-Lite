@@ -331,6 +331,7 @@ typedef struct {
     float y_ratio;
     float x_compensation;
     float y_compensation;
+    bool compensation_keep_limit;
     float accel_suppression;
     float adaptive_deadzone;
     float button_freeze_ms;
@@ -980,6 +981,8 @@ static void parse_gyro_config(
     config->y_compensation = clampf(
         (float)json_number(gyro, "y_compensation", 1.0), 0.10f, 2.0f
     );
+    config->compensation_keep_limit =
+        json_bool(gyro, "compensation_keep_limit", false);
     config->accel_suppression = clampf(
         (float)json_number(gyro, "accel_suppression", 0.0) / 100.0f,
         0.0f, 1.0f
@@ -3194,6 +3197,11 @@ static void apply_gyro_to_report_runtime(
                 magnitude + delta * gyro->curve_strength;
             x *= mapped / magnitude;
             y *= mapped / magnitude;
+        }
+        if (gyro->compensation_keep_limit) {
+            /* Cap at full stick before compensation, so the compensated
+             * gyro keeps the turn-speed ceiling of the original game setting. */
+            clamp_vector_to_shape(&x, &y, stick->output_shape / 10.0f);
         }
     }
 

@@ -155,6 +155,44 @@ class ControllerProfileLoadingTests(unittest.TestCase):
             self.assertAlmostEqual(actual_x, x * 0.16)
             self.assertAlmostEqual(actual_y, y * 0.50)
 
+    def test_compensation_keep_limit_caps_before_scaling(self):
+        config = configparser.ConfigParser()
+        config.read(SRC_DIR / "profiles" / "FPS-COMP.ini", encoding="utf-8")
+        gyro = config["gyro_mapping"]
+        gyro.update(deadzone="0", adaptive_deadzone="0", smoothing_ms="0",
+                    player_space="false", response_curve="LINEAR",
+                    stick_sensitivity="1.35",
+                    x_compensation="0.19", y_compensation="1.00")
+        calibration = dict.fromkeys(
+            ("left", "right"), ((2048.0, 2048.0), (4095.0, 4095.0), (0.0, 0.0))
+        )
+        uncapped = XInputController(config, calibration, activate_runtime=False)
+        gyro["compensation_keep_limit"] = "true"
+        capped = XInputController(config, calibration, activate_runtime=False)
+        self.assertFalse(uncapped.gyro_compensation_keep_limit)
+        self.assertTrue(capped.gyro_compensation_keep_limit)
+        for controller in (uncapped, capped):
+            controller.set_gyro_bias((0, 0, 0))
+
+        def output(controller, rates):
+            state = types.SimpleNamespace(
+                buttons=SWITCH_BUTTONS["ZL"], gyroscope=rates,
+                accelerometer=(0, 0, 4096), magnetometer=(0, 0, 0),
+            )
+            return controller._get_gyro_output(state, 0.008)[:2]
+
+        # Micro-aim below full stick is identical with the option on or off.
+        slow = output(uncapped, (0, 0, -20))
+        self.assertGreater(abs(slow[0]), 0.0)
+        for actual, expected in zip(output(capped, (0, 0, -20)), slow):
+            self.assertAlmostEqual(actual, expected)
+        # A fast turn stops at the compensated full stick instead of passing it.
+        fast_uncapped = output(uncapped, (0, 0, -2000))
+        fast_capped = output(capped, (0, 0, -2000))
+        self.assertGreater(abs(fast_uncapped[0]), 0.19)
+        self.assertAlmostEqual(abs(fast_capped[0]), 0.19)
+        self.assertAlmostEqual(fast_capped[1], 0.0)
+
     def test_all_profiles_build_runtime_snapshot(self):
         calibration = {
             "left": ((2048.0, 2048.0), (4095.0, 4095.0), (0.0, 0.0)),

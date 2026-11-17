@@ -532,6 +532,14 @@ multipliers apply after smoothing and the sensitivity curve, and only to the
 gyro. The physical stick keeps its original output. Select **OK**, then
 **Save/Apply** in the main window.
 
+Compensation only scales the output, so the fastest turn is still capped by
+the new in-game look speed. For example, after raising the game from 140°/s
+to 720°/s with a multiplier of `0.19`, slow aim feels the same, but fast turns
+that used to stop at 140°/s can now speed up to 720°/s. To keep the original
+feel exactly, turn on **Keep Speed Cap** below the **Gyro Response** fields.
+The gyro then stops at the original speed. It appears only in Aim (Center)
+mode with stick output and is off by default.
+
 To work out a suitable multiplier, use
 [Gyro Preview and Calculator](#gyro-preview-and-calculator) in Gamepad Tester.
 

@@ -1817,6 +1817,7 @@ class StickPlot:
                 gyro.get("y_ratio"),
                 gyro.get("x_compensation", 1.0),
                 gyro.get("y_compensation", 1.0),
+                gyro.get("compensation_keep_limit", False),
                 gyro.get("smoothing_ms"),
                 gyro.get("tilt_smoothing_ms"),
                 gyro.get("adaptive_deadzone"),
@@ -6506,6 +6507,7 @@ class GamepadTestWindow:
                 gyro.get("y_ratio"),
                 gyro.get("x_compensation", 1.0),
                 gyro.get("y_compensation", 1.0),
+                gyro.get("compensation_keep_limit", False),
             ))
         return tuple(signature)
 

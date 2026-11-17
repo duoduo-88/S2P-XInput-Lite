@@ -1245,7 +1245,7 @@ static void send_capabilities_response(void) {
         "\"standalone_custom_deadzones\":1,"
         "\"standalone_gyro_spike_guard\":1,"
         "\"standalone_extended_gyro_ratio\":1,"
-        "\"standalone_gyro_output_compensation\":1,"
+        "\"standalone_gyro_output_compensation\":2,"
         "\"standalone_gamepad_combo\":1,"
         "\"standalone_usb_xinput\":0,"
         "\"standalone_usb_hid\":1,"

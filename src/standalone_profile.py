@@ -715,6 +715,17 @@ def write_standalone_profile(
             )
         if (
             gyro["activation_mode"] != "OFF"
+            and gyro["motion_mode"] == "CENTER"
+            and gyro["compensation_keep_limit"]
+            and (gyro["x_compensation"], gyro["y_compensation"]) != (1.0, 1.0)
+            # Firmware reports version 2 of this feature once it can cap first.
+            and int(features.get("standalone_gyro_output_compensation") or 0) < 2
+        ):
+            raise StandaloneTransferError(
+                "目前 ESP32 韌體不支援「補償保留速度上限」，請先更新韌體。"
+            )
+        if (
+            gyro["activation_mode"] != "OFF"
             and min(gyro["x_ratio"], gyro["y_ratio"]) < 0.50
             and not features.get("standalone_extended_gyro_ratio")
         ):

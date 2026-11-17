@@ -49,6 +49,27 @@ class StandaloneProfileTests(unittest.TestCase):
                 write_standalone_profile("COM5", 2_000_000, compiled, target_mode="standalone_hid")
         self.assertEqual(port.commands, ["status lite", "capabilities"])
 
+    def test_compensation_keep_limit_requires_firmware_support(self):
+        settings = _settings()
+        settings["sections"]["gyro_mapping"].update(
+            activation_mode="HOLD", x_compensation="0.19", compensation_keep_limit="true",
+        )
+        settings["gyro_activation_buttons"] = ["ZL"]
+        compiled = compile_standalone_profile("FPS-COMP", settings)
+        self.assertIs(compiled.document["gyro_mapping"]["compensation_keep_limit"], True)
+        for supported in (False, True):
+            with self.subTest(supported=supported):
+                status = identity()
+                status["features"]["standalone_gyro_output_compensation"] = 2 if supported else 1
+                port = FakeSerial(status)
+                with patch("standalone_profile.serial.Serial", return_value=port):
+                    # FakeSerial provides capabilities but does not implement profile writes.
+                    with self.assertRaises(StandaloneTransferError) as raised:
+                        write_standalone_profile("COM5", 2_000_000, compiled, target_mode="standalone_hid")
+                self.assertEqual(any(cmd.startswith("profile begin ") for cmd in port.commands), supported)
+                if not supported:
+                    self.assertIn("補償保留速度上限", str(raised.exception))
+
     def test_low_gyro_ratios_require_firmware_support_before_staging(self):
         settings = _settings()
         settings["sections"]["gyro_mapping"].update(

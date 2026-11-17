@@ -531,6 +531,7 @@ class XInputController:
         self.gyro_y_ratio = gyro_settings["y_ratio"]
         self.gyro_x_compensation = gyro_settings["x_compensation"]
         self.gyro_y_compensation = gyro_settings["y_compensation"]
+        self.gyro_compensation_keep_limit = gyro_settings["compensation_keep_limit"]
         self.gyro_invert_x = gyro_settings["invert_x"]
         self.gyro_invert_y = gyro_settings["invert_y"]
         self._gyro_toggle_enabled = False
@@ -1046,6 +1047,7 @@ class XInputController:
                 "y_ratio": self.gyro_y_ratio,
                 "x_compensation": self.gyro_x_compensation,
                 "y_compensation": self.gyro_y_compensation,
+                "compensation_keep_limit": self.gyro_compensation_keep_limit,
                 "response_curve": self.gyro_response_curve,
                 "curve_strength": self.gyro_curve_strength,
                 "smoothing_ms": self.gyro_smoothing_ms,
@@ -3945,6 +3947,15 @@ class XInputController:
                 self.gyro_response_curve,
                 self.gyro_curve_strength,
             )
+            if getattr(self, "gyro_compensation_keep_limit", False):
+                # Cap at full stick before compensation, so the compensated
+                # gyro keeps the turn-speed ceiling of the original game setting.
+                target_side = (
+                    "left" if self.gyro_target == "LEFT_STICK" else "right"
+                )
+                stick_x, stick_y = _clamp_vector_to_shape(
+                    stick_x, stick_y, self.stick_output_shape[target_side]
+                )
         return (
             stick_x * self.gyro_x_compensation,
             stick_y * self.gyro_y_compensation,
