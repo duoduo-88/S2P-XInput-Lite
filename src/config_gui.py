@@ -2449,7 +2449,7 @@ class ConfigGUI:
                 progress.start(12)
                 self._flash_progress_bar = progress
                 self._flash_progress_detail = ttk.Label(
-                    content, anchor="center", justify="center", wraplength=wrap,
+                    content, anchor="w", justify="left", wraplength=wrap,
                 )
                 self._flash_progress_detail.pack(fill="x")
                 self._flash_progress_window = window
