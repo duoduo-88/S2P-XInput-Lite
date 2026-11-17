@@ -5725,10 +5725,11 @@ class ConfigGUI:
         can save new multipliers (see ``_sync_saved_gyro_compensation``),
         which updates the config but does not rebuild the registry.
         """
-        return {
-            axis: f"{value:.2f}"
-            for axis, value in profile_compensation(self.config).items()
-        }
+        try:
+            saved = profile_compensation(self.config)
+        except (ValueError, configparser.Error):
+            return {}  # An unreadable value leaves Restore Saved disabled.
+        return {axis: f"{value:.2f}" for axis, value in saved.items()}
 
     def _sync_saved_gyro_compensation(self, *, latest=None):
         """Accept tester changes without overwriting unsaved edits in this window."""
@@ -5968,21 +5969,9 @@ class ConfigGUI:
             system_default = defaults.getfloat(
                 "gyro_mapping", "curve_strength"
             )
-            menu = tk.Menu(window, tearoff=False)
-            menu.add_command(
-                label=self.tr("還原上次儲存"),
-                command=lambda: reset_strength(saved_strength),
+            return show_restore_menu(
+                event, self.tr, reset_strength, saved_strength, system_default,
             )
-            menu.add_separator()
-            menu.add_command(
-                label=self.tr("還原系統預設"),
-                command=lambda: reset_strength(system_default),
-            )
-            try:
-                menu.tk_popup(event.x_root, event.y_root)
-            finally:
-                menu.grab_release()
-            return "break"
 
         strength_scale.bind("<Button-3>", show_strength_reset_menu)
         strength_value_label.bind(

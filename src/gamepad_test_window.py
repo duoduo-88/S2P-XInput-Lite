@@ -71,7 +71,7 @@ from settings_schema import GYRO_RATIO_MAX, GYRO_RATIO_MIN
 from switch2_input import SWITCH_BUTTONS
 from support_log import format_support_log
 from test_telemetry import SharedTestTelemetry
-from parameter_controls import bind_drag_adjust, bind_restore_menu
+from parameter_controls import bind_drag_adjust, bind_restore_menu, widget_is_disabled
 from tooltip_layout import HoverTip
 from update_manager import (
     UpdateCheckError,
@@ -3965,10 +3965,9 @@ class GamepadTestWindow:
 
     @staticmethod
     def _parameter_control_is_disabled(widget):
-        try:
-            return bool(widget.instate(["disabled"]))
-        except (AttributeError, tk.TclError):
-            return False
+        # Same check as dragging, so a click never opens the editor for a
+        # control that dragging treats as disabled.
+        return widget_is_disabled(widget)
 
     def _apply_parameter_value(
         self,
