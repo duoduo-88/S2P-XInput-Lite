@@ -998,22 +998,67 @@ shows this too, without the Windows program.
 
 ### 9.2 Flash firmware
 
-1. Select **Flash FW** at the bottom of the main window.
-2. The program reads the installed firmware version and compares it with the
-   bundled **S2P-FW 1.0.9**.
-3. The confirmation lists both versions. Choose to flash or cancel. If the
-   version check paused the connector, canceling resumes it.
-4. After confirming, connect the ESP32-S3's OTG port to the PC and hold `BOOT`.
-5. Press `RESET / EN` once. Release `RESET / EN` first, then `BOOT`.
-6. The program finds the ESP32-S3 ROM flashing port by its USB identity, even
-   if that COM port already existed, and flashes automatically.
-7. After a successful flash the ESP32 returns to Bridge. Once USB re-enumerates,
-   the connector starts automatically and searches for the controller.
-8. If the bridge does not appear after a few seconds, press `RESET / EN` or
+Before you start, have ready:
+
+- An ESP32-S3 board with 16 MB flash. Other sizes are rejected by the check, and
+  nothing is written.
+- A USB data cable connected to the board's **USB / OTG** port, not the
+  **UART / COM** port.
+- The board's `BOOT` and `RESET` buttons. `RESET` may be labeled `EN` or `RST`.
+
+**1. Check the version**
+
+Select **Flash FW** at the bottom of the main window. The program reads the
+installed firmware version first and shows "Reading the current ESP32-S3
+firmware version…" for a few seconds.
+
+![Confirm the firmware version](assets/v0.8.2/flash-confirm.png)
+
+The confirmation lists the installed version and the bundled **S2P-FW 1.0.9**.
+Choose **Yes** to continue or **No** to cancel. If the version check paused the
+connector, canceling resumes it. You can also reflash the same version.
+
+**2. Put the ESP32-S3 into flash mode**
+
+![Flash mode instructions](assets/v0.8.2/flash-mode.png)
+
+1. Select **OK** in the instructions.
+2. Hold `BOOT`.
+3. Press and release `RESET / EN`.
+4. Release `BOOT`.
+
+On a board without a `RESET` button, hold `BOOT` while plugging in the USB
+cable, then release `BOOT`.
+
+![Waiting for flash mode](assets/v0.8.2/flash-wait.png)
+
+The program counts down and waits up to 30 seconds. It finds the ESP32-S3 ROM
+flashing port by its USB identity, even if that COM port already existed. If it
+times out, "Flash Port Not Found" appears. Select **Flash FW** again.
+
+**3. Check the chip and flash capacity**
+
+When the port is found, the program shows its name. Select **OK** to start the
+check.
+
+![Checking the chip and flash capacity](assets/v0.8.2/flash-check.png)
+
+The check takes 5 to 20 seconds and only reads from the board. Flashing is
+canceled if the chip is not an ESP32-S3 or the flash is not 16 MB.
+
+**4. Flash and reconnect**
+
+1. After the check, an esptool window opens and shows the flashing progress.
+2. "Firmware flashing completed" appears when it finishes, and the ESP32 returns
+   to Bridge.
+3. Once USB re-enumerates, the connector starts automatically and searches for
+   the controller.
+4. If the bridge does not appear after a few seconds, press `RESET / EN` or
    reconnect the ESP32-S3.
 
 > [!CAUTION]
-> Do not unplug the ESP32-S3 or close the program while flashing.
+> Do not unplug the ESP32-S3 or close the program while flashing. If flashing
+> fails, the esptool exit code is shown. Enter flash mode again and retry.
 
 If you use standalone mode, write your profile to the ESP32 again after
 flashing, as described in [9.5](#95-write-settings-and-enable-android-usb-hid).
