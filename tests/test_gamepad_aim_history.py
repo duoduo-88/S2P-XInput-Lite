@@ -17,17 +17,38 @@ def basis(**settings):
 
 
 class AimHistoryTests(unittest.TestCase):
-    def test_rounds_with_live_speed_changes_are_saved_without_comparison(self):
+    def test_input_and_feedback_settings_do_not_split_comparisons(self):
         from gamepad_aim_history import AimHistory
 
         history = AimHistory(None)
-        fixed = basis(stick_horizontal_speed=560)
-        mixed = dict(fixed, stick_speed_changed=True)
-        history.add(fixed, {"hits": 8})
-        history.add(mixed, {"hits": 10})
-        self.assertEqual(history.add_with_comparison(mixed, {"hits": 9}), ((), False))
-        self.assertEqual(history.add(fixed, {"hits": 9}), (("hits", 1, True),))
-        self.assertEqual(len(history.records), 4)
+        history.add(basis(stick_horizontal_speed=560), {"hits": 8})
+        changed = basis(
+            stick_horizontal_speed=360, stick_vertical_speed=120,
+            stick_speed_changed=True, mouse_sensitivity=150, rumble=0, sound=False,
+        )
+        self.assertEqual(history.add_with_comparison(changed, {"hits": 9}),
+                         ((("hits", 1, True),), True))
+
+    def test_target_settings_still_split_comparisons(self):
+        from gamepad_aim_history import AimHistory
+
+        history = AimHistory(None)
+        history.add(basis(), {"hits": 8})
+        for key, value in (
+            ("seed", 7), ("viewport", [1920, 1080]), ("targets", 20), ("seconds", 60), ("depth", 0),
+            ("horizontal_spread", 72), ("vertical_spread", 72), ("version", 4),
+            ("mode", "timed-shooting"),
+        ):
+            with self.subTest(key=key):
+                self.assertFalse(history.has_matching_record(basis(**{key: value})))
+        tracking = basis(mode="tracking", targets=0, depth=0)
+        history.add(tracking, {"tracking": 50})
+        for key, value in (("tracking_arc", 180), ("tracking_speed", 200)):
+            with self.subTest(key=key):
+                self.assertFalse(history.has_matching_record(dict(tracking, **{key: value})))
+        cursor = basis(mode="cursor-shooting", depth=0)
+        history.add(cursor, {"hits": 8})
+        self.assertFalse(history.has_matching_record(dict(cursor, target_size_2d=14)))
 
     def test_reopened_history_matches_after_color_and_reticle_changes(self):
         from gamepad_aim_history import AimHistory
@@ -54,7 +75,7 @@ class AimHistoryTests(unittest.TestCase):
             history.add(basis(), {"hits": 10, "accuracy": 80, "seconds": 12, "error": 2})
             for changed in (
                 basis(mode="cursor-mouse"), basis(targets=15), basis(seconds=45),
-                basis(seed=1), basis(depth=60), basis(viewport=[800, 480]), basis(stick="left"),
+                basis(seed=1), basis(depth=60), basis(viewport=[800, 480]),
             ):
                 self.assertEqual(history.add(changed, {"hits": 10, "accuracy": 100}), ())
 

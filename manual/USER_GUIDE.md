@@ -744,7 +744,7 @@ The **Aim Test** tab has four areas:
   **Test Settings**, and **Start**.
 - **Center**: saved rounds. Select one to see how it compares with the best match.
 - **Bottom**: the current test conditions and the change from the best round
-  with the same settings.
+  with the same target settings.
 
 #### Test mapped gyro output
 
@@ -801,10 +801,16 @@ closes when you switch away, restoring the previous display mode.
 
 ![Aim Test settings](assets/v0.8.2/aim-test-settings.png)
 
-Select **Test Settings** to open this window. **Drills and targets** on the
-left sets target counts, durations, the layout seed, and target placement.
-**Look and display** on the right sets turn speeds, the reticle, colors, and
-resolution. The **?** beside a field explains it. Select **Save** to keep the
+Select **Test Settings** to open this window. It has three panels:
+
+- **Drills and targets (compared)** on the left sets the resolution,
+  target counts, durations, the layout seed, and target placement. Only these
+  settings decide which earlier rounds a result is compared with.
+- **Look and display** at the upper right sets turn speeds, mouse
+  sensitivity, the reticle, and colors.
+- **Rumble and sound** at the lower right sets hit feedback.
+
+The **?** beside a field explains it. Select **Save** to keep the
 changes, or **Restore Defaults** and then **Save** to reset every test setting.
 
 - **Fullscreen** is enabled by default. In windowed mode, **Auto (Highest)**
@@ -908,11 +914,12 @@ continuous full-deflection time in milliseconds. That timer stops when
 horizontal output leaves full deflection or reverses.
 
 The end screen shows your result in the center and the change from the best
-earlier round under the same conditions. The comparison uses the mode, screen
-size, seed, vibration, sound, and the relevant target count, duration, target
-size, depth, and spread. 3D records also compare the controller turn speeds,
-and 3D Tracking compares the arc and target speed. Results remain comparable
-across changes to colors, reticle size, or 3D mouse sensitivity.
+earlier round with the same target settings. The comparison uses only the
+settings in the **Drills and targets (compared)** panel of Test Settings: the
+mode, resolution, seed, and the relevant target count, duration, 2D target
+size, depth, and spread. 3D Tracking also compares the arc and target speed.
+Results remain comparable across changes to controller turn speed, mouse
+sensitivity, colors, reticle, vibration, and sound.
 
 - **Targets** ranks by hits, then accuracy, completion time, and mean error.
   Completion time is compared only when both rounds hit every target.

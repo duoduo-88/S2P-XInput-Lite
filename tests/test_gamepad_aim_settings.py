@@ -110,6 +110,17 @@ class AimSettingsTests(unittest.TestCase):
         controls_panel = body.grid_slaves(row=0, column=1)[0]
         self.assertGreater(controls_panel.winfo_rootx(), drills.winfo_rootx())
         self.assertEqual(controls_panel.winfo_rooty(), drills.winfo_rooty())
+        # Rumble and sound sit under Look and display, apart from the compared settings.
+        feedback = body.grid_slaves(row=1, column=1)[0]
+        self.assertEqual(feedback.winfo_rootx(), controls_panel.winfo_rootx())
+        self.assertGreater(feedback.winfo_rooty(), controls_panel.winfo_rooty())
+        feedback_texts = {child.cget("text") for child in feedback.winfo_children()
+                          if isinstance(child, (ttk.Label, ttk.Checkbutton))}
+        self.assertTrue({"震動強度", "命中與跟靶音效"} <= feedback_texts)
+        drill_texts = {child.cget("text") for child in drills.winfo_children()
+                       if isinstance(child, ttk.Label)}
+        self.assertIn("解析度", drill_texts)
+        self.assertNotIn("震動強度", drill_texts)
 
         def spinbox(container, label):
             widget = next(
@@ -135,19 +146,24 @@ class AimSettingsTests(unittest.TestCase):
         randomize.invoke()
         self.assertGreater(int(seed_input.get()), 0)
         self.assertEqual(dialog.title(), "測試設定")
+        # The resolution sets the compared viewport, so it sits with the drill settings.
         controls = [
-            child for container in controls_panel.winfo_children()
+            child for container in drills.winfo_children()
             if isinstance(container, ttk.Frame) for child in container.winfo_children()
         ]
         size_picker = next(child for child in controls if isinstance(child, ttk.Combobox))
-        fullscreen = next(child for child in controls
+        fullscreen = next(child for child in drills.winfo_children()
                           if isinstance(child, ttk.Checkbutton) and child.cget("text") == "全螢幕")
+        self.assertEqual(fullscreen.grid_info()["row"], size_picker.master.grid_info()["row"] + 1)
         shading = next(child for child in controls_panel.winfo_children()
                        if isinstance(child, ttk.Checkbutton) and child.cget("text") == "加深遠近效果")
         auto_switch = next(child for child in controls_panel.winfo_children()
                            if isinstance(child, ttk.Checkbutton) and child.cget("text") == "啟用手把與滑鼠自動銜接")
+        for widget in (seed_input, fullscreen):
+            marker = drills.grid_slaves(row=widget.grid_info()["row"], column=3)[0]
+            self.assertEqual(marker.cget("text"), "?")
         help_positions = []
-        for widget in (horizontal_speed, vertical_speed, sensitivity, fullscreen.master, shading, auto_switch):
+        for widget in (horizontal_speed, vertical_speed, sensitivity, shading, auto_switch):
             marker = controls_panel.grid_slaves(row=widget.grid_info()["row"], column=3)[0]
             help_positions.append(marker.winfo_rootx())
             self.assertLessEqual(abs(
@@ -221,9 +237,9 @@ class AimSettingsTests(unittest.TestCase):
             dialog = show_aim_settings(owner, str, AimSettings(fullscreen=True), saved.append)
         canvas = next(child for child in dialog.winfo_children()[0].winfo_children() if isinstance(child, tk.Canvas))
         body = canvas.winfo_children()[0]
-        controls_panel = body.grid_slaves(row=0, column=1)[0]
+        drills = body.grid_slaves(row=0, column=0)[0]
         controls = (
-            child for frame in controls_panel.winfo_children()
+            child for frame in drills.winfo_children()
             if isinstance(frame, ttk.Frame) for child in frame.winfo_children()
         )
         size_picker = next(child for child in controls if isinstance(child, ttk.Combobox))
@@ -275,17 +291,22 @@ class AimSettingsTests(unittest.TestCase):
         history.add(dict(current, version=4), {"hits": 5})
         self.assertFalse(history.has_matching_record(current))
 
-    def test_3d_history_only_matches_the_same_stick_turn_speed(self):
+    def test_3d_history_matches_across_turn_speed_but_not_window_size(self):
         from gamepad_aim_history import AimHistory
         from gamepad_aim_settings import AimSettings
 
-        viewport = (800, 450)
-        default = AimSettings().basis("tracking", viewport)
-        faster = AimSettings(stick_horizontal_speed=360).basis("tracking", viewport)
+        default = AimSettings().basis("tracking", (800, 450))
+        changed = AimSettings(
+            stick_horizontal_speed=360, stick_vertical_speed=120, mouse_sensitivity=150,
+            rumble=0, sound=False,
+        ).basis("tracking", (800, 450))
         history = AimHistory(None)
         history.add(default, {"tracking": 50})
-        self.assertTrue(history.has_matching_record(default))
-        self.assertFalse(history.has_matching_record(faster))
+        self.assertTrue(history.has_matching_record(changed))
+        self.assertFalse(history.has_matching_record(AimSettings().basis("tracking", (1920, 1080))))
+        self.assertFalse(history.has_matching_record(
+            AimSettings(tracking_speed=200).basis("tracking", (800, 450))
+        ))
 
     def test_only_3d_tracking_history_uses_orbit_settings(self):
         from gamepad_aim_history import AimHistory

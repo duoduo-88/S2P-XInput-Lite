@@ -189,11 +189,15 @@ def show_aim_settings(parent, tr, current, apply):
     scrollbar = ttk.Scrollbar(content, orient="vertical", command=canvas.yview)
     canvas.configure(yscrollcommand=scrollbar.set)
     body.columnconfigure((0, 1), weight=1)
-    drills = ttk.LabelFrame(body, text=tr("回合與靶"), padding=(10, 5))
-    drills.grid(row=0, column=0, sticky="nsew")
+    body.rowconfigure(1, weight=1)
+    # Only the round-and-target panel feeds the history comparison basis.
+    drills = ttk.LabelFrame(body, text=tr("回合與靶（列入成績比對）"), padding=(10, 5))
+    drills.grid(row=0, column=0, rowspan=2, sticky="nsew")
     controls = ttk.LabelFrame(body, text=tr("視角與顯示"), padding=(10, 5))
     controls.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
-    for panel in (drills, controls):
+    feedback = ttk.LabelFrame(body, text=tr("震動與音效"), padding=(10, 5))
+    feedback.grid(row=1, column=1, sticky="nsew", padx=(10, 0), pady=(8, 0))
+    for panel in (drills, feedback, controls):
         panel.columnconfigure(1, weight=1)
     values = {}
     drill_inputs = (
@@ -266,12 +270,13 @@ def show_aim_settings(parent, tr, current, apply):
         ("horizontal_spread", "3D 點靶水平範圍"),
         ("vertical_spread", "3D 點靶垂直範圍"),
         ("target_size_2d", "2D 靶心大小（畫面短邊）"),
-        ("rumble", "震動強度"),
     )
+    feedback_sliders = (("rumble", "震動強度"),)
     control_sliders = (("reticle_size", "準心大小"),)
     slider_texts = {}
     for panel, sliders, start in (
         (drills, drill_sliders, len(drill_inputs)),
+        (feedback, feedback_sliders, 0),
         (controls, control_sliders, len(control_inputs)),
     ):
         for row, (key, label) in enumerate(sliders, start=start):
@@ -296,7 +301,7 @@ def show_aim_settings(parent, tr, current, apply):
             bind_parameter(key, name_label, set_slider, scale, value_label=value_label)
             if key in input_help:
                 add_help(panel, row, input_help[key])
-    labels = dict(drill_inputs + control_inputs + drill_sliders + control_sliders)
+    labels = dict(drill_inputs + control_inputs + drill_sliders + feedback_sliders + control_sliders)
 
     def set_color(key, button, color):
         values[key].set(color.lower())
@@ -319,15 +324,16 @@ def show_aim_settings(parent, tr, current, apply):
         swatch.configure(command=lambda field=key, widget=swatch: choose_color(field, widget))
         swatch.grid(row=row, column=1, sticky="ew", pady=4)
 
-    display = ttk.Frame(controls)
-    display_row = colors_row + len(COLORS)
-    display.grid(row=display_row, column=0, columnspan=3, sticky="w", pady=4)
-    ttk.Label(display, text=tr("解析度")).pack(side="left", padx=(0, 8))
+    # The window size sets the round's viewport, so it belongs with the compared settings.
+    display_row = len(drill_inputs) + len(drill_sliders)
+    ttk.Label(drills, text=tr("解析度")).grid(row=display_row, column=0, sticky="w", padx=(0, 8), pady=4)
+    display = ttk.Frame(drills)
+    display.grid(row=display_row, column=1, columnspan=2, sticky="w", pady=4)
     auto_size = tr("自動（最高）")
     window_size = tk.StringVar(dialog, current.window_size or auto_size)
     fullscreen_size = tk.StringVar(dialog, current.fullscreen_size or auto_size)
     fullscreen = tk.BooleanVar(dialog, current.fullscreen)
-    size_picker = ReadableCombobox(display, textvariable=window_size, width=11, state="readonly")
+    size_picker = ReadableCombobox(display, textvariable=window_size, width=14, state="readonly")
     size_picker.pack(side="left")
     try:
         fullscreen_sizes = tuple(size for size in available_resolutions(parent.winfo_id()) if _valid_resolution(size))
@@ -353,28 +359,30 @@ def show_aim_settings(parent, tr, current, apply):
         else:
             size_picker.configure(textvariable=window_size, values=(auto_size, *windowed_sizes))
 
+    # A row of its own keeps the drill panel narrow enough for small work areas.
     fullscreen_option = ttk.Checkbutton(
-        display, text=tr("全螢幕"), variable=fullscreen, command=sync_size_picker,
+        drills, text=tr("全螢幕"), variable=fullscreen, command=sync_size_picker,
     )
-    fullscreen_option.pack(side="left", padx=(8, 0))
-    add_help(controls, display_row, "全螢幕會暫時切換螢幕解析度。關閉測試後會還原。")
+    fullscreen_option.grid(row=display_row + 1, column=1, columnspan=2, sticky="w", pady=(0, 4))
+    add_help(drills, display_row + 1, "全螢幕會暫時切換螢幕解析度。關閉測試後會還原。", pady=(0, 4))
     sync_size_picker()
 
     sound = tk.BooleanVar(dialog, current.sound)
-    ttk.Checkbutton(drills, text=tr("命中與跟靶音效"), variable=sound).grid(
-        row=len(drill_inputs) + len(drill_sliders), column=0, columnspan=3, sticky="w", pady=6,
+    ttk.Checkbutton(feedback, text=tr("命中與跟靶音效"), variable=sound).grid(
+        row=len(feedback_sliders), column=0, columnspan=3, sticky="w", pady=6,
     )
+    options_row = colors_row + len(COLORS)
     depth_shading = tk.BooleanVar(dialog, current.depth_shading)
     ttk.Checkbutton(controls, text=tr("加深遠近效果"), variable=depth_shading).grid(
-        row=display_row + 1, column=0, columnspan=3, sticky="w", pady=6,
+        row=options_row, column=0, columnspan=3, sticky="w", pady=6,
     )
-    add_help(controls, display_row + 1, "3D 靶離視角越遠，顏色越暗。")
+    add_help(controls, options_row, "3D 靶離視角越遠，顏色越暗。")
     auto_input_switch = tk.BooleanVar(dialog, current.auto_input_switch)
     auto_switch_option = ttk.Checkbutton(
         controls, text=tr("啟用手把與滑鼠自動銜接"), variable=auto_input_switch,
     )
-    auto_switch_option.grid(row=display_row + 2, column=0, columnspan=3, sticky="w", pady=(0, 6))
-    add_help(controls, display_row + 2, "關閉時，偵測到手把就停用滑鼠瞄準與左鍵射擊。未偵測到手把時可用滑鼠。", pady=(0, 6))
+    auto_switch_option.grid(row=options_row + 1, column=0, columnspan=3, sticky="w", pady=(0, 6))
+    add_help(controls, options_row + 1, "關閉時，偵測到手把就停用滑鼠瞄準與左鍵射擊。未偵測到手把時可用滑鼠。", pady=(0, 6))
     error = tk.StringVar(dialog)
     footer = ttk.Frame(dialog, padding=(10, 0, 10, 12))
     footer.pack(fill="x")
@@ -447,9 +455,14 @@ def show_aim_settings(parent, tr, current, apply):
     window_margin = dialog.winfo_pixels("36p")
     height_limit = bounds[3] - bounds[1] - window_margin
     dialog.update_idletasks()
+    # Line the rumble slider up with the reticle slider above it.
+    for column in (0, 2, 3):
+        feedback.columnconfigure(column, minsize=controls.grid_bbox(column, 0)[2])
+    dialog.update_idletasks()
     if body.winfo_reqwidth() > bounds[2] - bounds[0] - window_margin:
-        drills.grid_configure(columnspan=2)
+        drills.grid_configure(rowspan=1, columnspan=2)
         controls.grid_configure(row=1, column=0, columnspan=2, padx=0, pady=(8, 0))
+        feedback.grid_configure(row=2, column=0, columnspan=2, padx=0, pady=(8, 0))
 
     def fit_content(_event=None):
         width, height = body.winfo_reqwidth(), body.winfo_reqheight()
@@ -483,7 +496,8 @@ def show_aim_settings(parent, tr, current, apply):
     canvas.bind("<Configure>", lambda event: canvas.itemconfigure(body_window, width=event.width))
     footer.bind("<Configure>", fit_content)
     # Spinboxes and comboboxes handle the wheel before the dialog's binding.
-    for widget in (*drills.winfo_children(), *controls.winfo_children(), *display.winfo_children()):
+    for widget in (*drills.winfo_children(), *feedback.winfo_children(),
+                   *controls.winfo_children(), *display.winfo_children()):
         widget.bind("<MouseWheel>", scroll_settings, add="+")
     dialog.bind("<MouseWheel>", scroll_settings)
     dialog.bind("<FocusIn>", reveal_focused_setting)

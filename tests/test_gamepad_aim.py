@@ -2438,7 +2438,7 @@ class AimPaneTests(unittest.TestCase):
         text = tip.winfo_children()[0].cget("text").replace("\n", "")
         self.assertIn("跟靶率", text)
         self.assertIn("同設定", text)
-        self.assertIn("靶色、準心顏色與大小不影響比對", text)
+        self.assertIn("手把視角速度、滑鼠感度、顏色、準心、震動與音效不影響比對", text)
         self.assertIn("綠色代表進步，紅色代表退步", text)
         self.assertIn("−14.4 pp", text)
         self.assertIn("平均偏差是準心與靶心的平均距離", text)

@@ -35,7 +35,13 @@ _MODE_LABELS = {
     "timed-cursor-mouse": ("2D", "限時 · Windows 游標"),
 }
 _METRIC_UNITS = {"hits": "", "accuracy": "%", "seconds": " s", "tracking": "%"}
-_COMPARISON_IGNORED_KEYS = {"reticle", "reticle_size", "target_color", "mouse_sensitivity"}
+# Rounds compare only when the targets and screen are the same. Input speed,
+# colors, reticle, rumble, and sound do not change them.
+_COMPARISON_KEYS = (
+    "version", "mode", "viewport", "targets", "seconds", "seed", "depth",
+    "horizontal_spread", "vertical_spread", "tracking_arc", "tracking_speed",
+    "target_size_2d",
+)
 
 
 def _precision(key, unit):
@@ -63,12 +69,10 @@ def _metric_unit(key, mode):
 
 
 def _comparison_basis(basis):
-    return {key: value for key, value in basis.items() if key not in _COMPARISON_IGNORED_KEYS}
+    return {key: basis.get(key) for key in _COMPARISON_KEYS}
 
 
 def _matching_records(records, basis):
-    if basis.get("stick_speed_changed"):
-        return ()
     comparison = _comparison_basis(basis)
     return (record for record in reversed(records) if _comparison_basis(record["basis"]) == comparison)
 

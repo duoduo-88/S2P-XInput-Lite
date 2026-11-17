@@ -172,15 +172,12 @@ EN_TEXT = {
     "點靶時按滑鼠左鍵、RT 或空白鍵射擊。按 Enter 或手把 START 可開始或重測。":
         "In Targets, left-click or press RT or Space to shoot. "
         "Press Enter or controller START to start or retry.",
-    "同設定的紀錄須使用相同的模式、畫面尺寸、出靶種子、震動與音效。"
-    "也會比對該模式的靶數、秒數、靶心大小、遠近與出靶範圍。"
-    "靶色、準心顏色與大小不影響比對。"
-    "3D 紀錄也會比對水平與垂直的手把視角速度。不同滑鼠感度的成績可以互相比較。":
-        "History matches the mode, viewport size, layout seed, vibration, and sound settings. "
-        "It also matches any target count, duration, target size, depth, and spread that apply. "
-        "Target color, reticle color, and reticle size are ignored. "
-        "3D history also matches horizontal and vertical controller turn speeds. "
-        "Scores can be compared across mouse sensitivity settings.",
+    "比對只看「回合與靶」的設定：模式、解析度、出靶種子，以及該模式的靶數、秒數、靶心大小、"
+    "遠近、出靶範圍、環繞範圍與靶速。"
+    "手把視角速度、滑鼠感度、顏色、準心、震動與音效不影響比對。":
+        "History matches only the Drills and targets settings: the mode, resolution, layout seed, "
+        "and any target count, duration, target size, depth, spread, arc, and target speed that apply. "
+        "Controller turn speed, mouse sensitivity, colors, reticle, vibration, and sound are ignored.",
     "成績與同設定的歷史最佳回合比較。點靶依序比命中數、命中率、完成耗時與平均偏差。"
     "跟槍依序比跟靶率與平均偏差。":
         "Results are compared with the best earlier round using the same settings. "
@@ -223,7 +220,8 @@ EN_TEXT = {
     "以畫面短邊的百分比設定 2D 靶心大小。": "Sets the 2D target diameter as a percentage of the shorter screen edge.",
     "3D 靶離視角越遠，顏色越暗。": "Darkens 3D targets as their distance from the camera increases.",
     "3D 滑鼠感度（%）": "3D mouse sensitivity (%)",
-    "回合與靶": "Drills and targets",
+    "回合與靶（列入成績比對）": "Drills and targets (compared)",
+    "震動與音效": "Rumble and sound",
     "視角與顯示": "Look and display",
     "3D 水平視角速度（°/秒）": "3D horizontal turn speed (°/s)",
     "3D 垂直視角速度（°/秒）": "3D vertical turn speed (°/s)",
