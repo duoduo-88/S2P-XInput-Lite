@@ -292,6 +292,24 @@ maps the controller's physical buttons to XInput outputs.
 - With a menu open, scroll the list with the mouse wheel. Scrolling does not
   pick an option. After choosing one, select **Save/Apply**.
 
+Menu items:
+
+| Item | Output |
+|---|---|
+| `NONE` | Nothing |
+| `A`, `B`, `X`, `Y` | XInput face buttons |
+| `LB`, `RB`, `LT`, `RT` | Bumpers and triggers; `LT` / `RT` press fully |
+| `START`, `BACK`, `GUIDE` | Menu buttons and the Guide button |
+| `L_STK`, `R_STK` | Left / right stick click |
+| `UP`, `DOWN`, `LEFT`, `RIGHT` | D-pad |
+| `LS:↑`, `LS:↓`, `LS:←`, `LS:→` | Left stick pushed fully in that direction |
+| `RS:↑`, `RS:↓`, `RS:←`, `RS:→` | Right stick pushed fully in that direction |
+| **Shortcut** | Records a key, key combination, or left / right / middle mouse button. See [below](#record-keyboard-or-mouse-input). |
+| **Gamepad Combo** | Presses 2 to 4 XInput buttons together. See [below](#press-several-xinput-buttons-at-once). |
+
+A custom item shows its setting in the field, such as `KB:Ctrl+S`, `M:Left`,
+or `Pad:X+Y`.
+
 #### Record keyboard or mouse input
 
 ![Recording a custom input](assets/v0.8.2/shortcut-capture.png)
@@ -332,6 +350,9 @@ into a D-pad. Each stick has its own settings and its own **Reset**.
     into wheel or trigger output.
   - **Map to R Stick** / **Map to L Stick**: output this stick as the other stick.
 - **Direction arrows and menus**: choose an output for each direction. `NONE` sends nothing.
+  The items match the [4.1](#41-buttons) button menu without the `LS` / `RS`
+  stick directions. **Shortcut** records a key, key combination, or mouse
+  wheel up / down.
 - **Direction diagram (radar thumbnail)**: red sectors are the gaps between
   directions. The solid blue circle is the trigger threshold and the dashed
   gray circle is the release threshold.
