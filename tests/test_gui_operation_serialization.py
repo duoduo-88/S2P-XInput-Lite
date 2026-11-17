@@ -40,6 +40,9 @@ class _ScheduledRoot:
     def after_cancel(self, job):
         self._jobs.pop(job, None)
 
+    def update(self):
+        pass
+
     def run_all(self):
         while self._jobs:
             _job, callback = self._jobs.popitem()
@@ -95,6 +98,37 @@ class GuiOperationSerializationTests(unittest.TestCase):
             with patch.object(gui, "_cached_esp32_firmware_info", return_value=None):
                 gui.inspect_esp32_firmware()
         self.assertIn("韌體版本", gui._set_flash_progress.call_args.args[0])
+        gui._close_flash_progress.assert_called_once_with()
+
+    def test_version_probe_runs_off_the_tk_thread_while_tk_keeps_updating(self):
+        import threading
+
+        gui = self.make_gui()
+        gui._close_flash_progress = Mock()
+        gui._show_esp32_mode_migration = Mock()
+        tk_updated = threading.Event()
+        gui.root.update = tk_updated.set
+        probe_threads = []
+
+        def probe():
+            probe_threads.append(threading.current_thread())
+            # Finishing requires the Tk loop to run while the probe is busy.
+            self.assertTrue(tk_updated.wait(5))
+            return {"version": "1.0.0"}
+
+        with patch.object(config_gui, "find_esp32_firmware", side_effect=probe):
+            with patch.object(gui, "_cached_esp32_firmware_info", return_value=None):
+                firmware, _resume = gui.inspect_esp32_firmware()
+        self.assertEqual(firmware, {"version": "1.0.0"})
+        self.assertIsNot(probe_threads[0], threading.main_thread())
+        gui._close_flash_progress.assert_called_once_with()
+
+    def test_version_probe_error_still_returns_none(self):
+        gui = self.make_gui()
+        gui._close_flash_progress = Mock()
+        with patch.object(config_gui, "find_esp32_firmware", side_effect=OSError("busy")):
+            with patch.object(gui, "_cached_esp32_firmware_info", return_value=None):
+                self.assertEqual(gui.inspect_esp32_firmware(), (None, False))
         gui._close_flash_progress.assert_called_once_with()
 
     def test_repeated_restart_keeps_only_one_pending_start(self):

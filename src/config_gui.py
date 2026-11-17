@@ -2249,7 +2249,7 @@ class ConfigGUI:
             if connector_was_running:
                 self.stop_main_process()
             try:
-                firmware = find_esp32_firmware()
+                firmware = self._run_while_flash_progress_animates(find_esp32_firmware)
             except Exception as exc:
                 LOGGER.warning("Could not inspect ESP32 firmware: %s", exc)
                 return None, connector_was_running
@@ -2466,6 +2466,39 @@ class ConfigGUI:
             window.update_idletasks()
         except tk.TclError:
             self._flash_progress_window = None
+
+    def _run_while_flash_progress_animates(self, work):
+        """Run blocking serial work off the Tk thread and keep the progress window live.
+
+        The caller still gets the result synchronously. The progress window takes the
+        input grab meanwhile, as the window stayed frozen before this probe moved off
+        the Tk thread.
+        """
+        result = queue.Queue(maxsize=1)
+
+        def run():
+            try:
+                result.put((work(), None))
+            except Exception as exc:
+                result.put((None, exc))
+
+        threading.Thread(target=run, daemon=True, name="ESP32FirmwareVersionProbe").start()
+        window = getattr(self, "_flash_progress_window", None)
+        if window is not None:
+            try:
+                window.grab_set()
+            except tk.TclError:
+                pass
+        while result.empty():
+            try:
+                self.root.update()
+            except tk.TclError:
+                break  # The app closed; wait for the probe to release the port.
+            time.sleep(0.015)
+        value, error = result.get()
+        if error is not None:
+            raise error
+        return value
 
     def _close_flash_progress(self):
         window = getattr(self, "_flash_progress_window", None)
