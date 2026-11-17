@@ -301,6 +301,23 @@ key combination to map, such as F12, Ctrl+S, or Ctrl+Shift+S. The field shows
 short forms such as `KB:1`, `KB:Ctrl+S`, and `M:Wheel↓`. Hover over it to see
 the full mapping.
 
+#### Press several Xbox buttons at once
+
+![Choosing a gamepad combo](assets/v0.8.2/gamepad-combo.png)
+
+Choose **Gamepad Combo** in a button or Stick Map menu to have one input press
+2 to 4 Xbox buttons together, such as X + Y. Select the buttons and then **OK**.
+The field shows the combo as `Pad:X+Y`. Choose **Gamepad Combo** again to
+change it.
+
+- The buttons press and release together in the same report, for as long as
+  you hold the input. There is no delay, order, turbo, or repeat.
+- Combos work in mapping layers and in ESP32-S3 standalone mode. Writing a
+  profile with combos needs the bundled S2P-FW; flash it with **Flash FW**
+  first if the ESP32 reports that combos are not supported.
+- Some games and tournament rules forbid one input triggering several actions.
+  Check before you use a combo there.
+
 ### 4.2 Stick Map
 
 ![Stick Map with the left stick in 8WAY using custom direction gaps](assets/v0.8.2/main-stick-map.png)

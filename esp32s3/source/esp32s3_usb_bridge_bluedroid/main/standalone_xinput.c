@@ -573,7 +573,7 @@ static bool json_bool(
     return fallback;
 }
 
-static uint32_t target_from_name(const char *name) {
+static uint32_t single_target_from_name(const char *name) {
     if (!name || strcmp(name, "NONE") == 0) return 0;
     if (strcmp(name, "UP") == 0) return 0x0001u;
     if (strcmp(name, "DOWN") == 0) return 0x0002u;
@@ -593,6 +593,36 @@ static uint32_t target_from_name(const char *name) {
     if (strcmp(name, "LT") == 0) return TARGET_LT;
     if (strcmp(name, "RT") == 0) return TARGET_RT;
     return 0;
+}
+
+#define COMBO_TARGET_PREFIX "COMBO:"
+#define COMBO_TARGET_MIN_MEMBERS 2
+#define COMBO_TARGET_MAX_MEMBERS 4
+
+/* A gamepad combo such as "COMBO:X+Y" ORs 2-4 targets into the same report.
+ * It has no timing, order, or repeat. Invalid or duplicate members map the
+ * whole combo to nothing, matching the desktop validation. */
+static uint32_t target_from_name(const char *name) {
+    const size_t prefix_length = sizeof(COMBO_TARGET_PREFIX) - 1;
+    if (!name || strncmp(name, COMBO_TARGET_PREFIX, prefix_length) != 0)
+        return single_target_from_name(name);
+    uint32_t targets = 0;
+    int count = 0;
+    const char *cursor = name + prefix_length;
+    while (*cursor) {
+        char member[8];
+        size_t length = strcspn(cursor, "+");
+        if (length == 0 || length >= sizeof(member)) return 0;
+        memcpy(member, cursor, length);
+        member[length] = '\0';
+        uint32_t target = single_target_from_name(member);
+        if (!target || (targets & target)) return 0;
+        targets |= target;
+        if (++count > COMBO_TARGET_MAX_MEMBERS) return 0;
+        cursor += length;
+        if (*cursor == '+' && *++cursor == '\0') return 0;
+    }
+    return count >= COMBO_TARGET_MIN_MEMBERS ? targets : 0;
 }
 
 static uint32_t source_mask_from_name(const char *name) {

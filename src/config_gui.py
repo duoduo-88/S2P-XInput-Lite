@@ -111,7 +111,13 @@ from settings_import import (
     scan_settings_import,
 )
 from mapping_targets import (
+    COMBO_MAX_MEMBERS,
+    COMBO_MEMBER_ORDER,
+    COMBO_MIN_MEMBERS,
+    COMBO_PENDING_TARGET,
     button_source_error,
+    combo_members,
+    format_combo_target,
     button_target_error,
     direction_target_error,
     stick_analog_direction_error,
@@ -3031,6 +3037,9 @@ class ConfigGUI:
 
             # 自定義鍵盤
             "CUSTOM_KEYBOARD",
+
+            # 自訂手把組合（同一幀按下多個 Xbox 按鍵）
+            COMBO_PENDING_TARGET,
         ]
 
         # =========================
@@ -3067,6 +3076,7 @@ class ConfigGUI:
             "L_STK", "R_STK",
             "UP", "DOWN", "LEFT", "RIGHT",
             "CUSTOM_KEYBOARD",
+            COMBO_PENDING_TARGET,
         ]
 
         # 8 個可能方向
@@ -7914,11 +7924,8 @@ class ConfigGUI:
 
     @staticmethod
     def _is_pending_custom_mapping(value):
-        return (
-            str(value)
-            .strip()
-            .upper()
-            == "CUSTOM_KEYBOARD"
+        return str(value).strip().upper() in (
+            "CUSTOM_KEYBOARD", COMBO_PENDING_TARGET,
         )
 
     def _track_custom_mapping_variable(self, variable):
@@ -8417,6 +8424,116 @@ class ConfigGUI:
 
         self._center_child_window(capture_window)
         self._bring_child_to_front(capture_window)
+
+    def open_custom_mapping(self, variable, mouse_mode=None):
+        """Open the recorder or combo picker for a just-selected custom option."""
+        value = str(variable.get()).strip().upper()
+        if value == "CUSTOM_KEYBOARD":
+            self.open_keyboard_capture(variable, mouse_mode=mouse_mode)
+        elif value == COMBO_PENDING_TARGET:
+            self.open_gamepad_combo_dialog(variable)
+
+    def open_gamepad_combo_dialog(self, variable):
+        """Pick 2-4 Xbox buttons that one input presses in the same report."""
+        self._track_custom_mapping_variable(variable)
+        previous_mapping = getattr(variable, "_s2p_last_valid_mapping", "NONE")
+        state = {"committed": False}
+        dialog = tk.Toplevel(self.root)
+        dialog.withdraw()
+        dialog.transient(self.root)
+        dialog.title(self.tr("手把組合鍵"))
+        dialog.resizable(False, False)
+        frame = ttk.Frame(dialog, padding=12)
+        frame.pack(fill="both", expand=True)
+        columns = 4
+        ttk.Label(
+            frame,
+            text=self.tr("勾選要同時按下的 Xbox 按鍵（{low} 到 {high} 個）。").format(
+                low=COMBO_MIN_MEMBERS, high=COMBO_MAX_MEMBERS,
+            ),
+        ).grid(row=0, column=0, columnspan=columns, sticky="w", pady=(0, 8))
+
+        selected = set(combo_members(previous_mapping))
+        variables = {}
+        checkbuttons = {}
+        # One row per button group: face, shoulders/triggers, system, sticks, D-pad.
+        groups = (COMBO_MEMBER_ORDER[0:4], COMBO_MEMBER_ORDER[4:8],
+                  COMBO_MEMBER_ORDER[8:11], COMBO_MEMBER_ORDER[11:13],
+                  COMBO_MEMBER_ORDER[13:17])
+        for group_index, group in enumerate(groups):
+            for column, name in enumerate(group):
+                variables[name] = tk.BooleanVar(dialog, name in selected)
+                checkbuttons[name] = ttk.Checkbutton(
+                    frame, text=name, variable=variables[name],
+                    command=lambda: refresh(),
+                )
+                checkbuttons[name].grid(
+                    row=1 + group_index, column=column, sticky="w", padx=6, pady=3,
+                )
+        next_row = 1 + len(groups)
+
+        preview_var = tk.StringVar(dialog)
+        ttk.Label(frame, textvariable=preview_var, font=("", 11, "bold")).grid(
+            row=next_row, column=0, columnspan=columns, sticky="w", pady=(10, 4),
+        )
+        ttk.Label(
+            frame,
+            text=self.tr(
+                "組合內的按鍵會在同一幀一起按下、一起放開，不含延遲、順序或連發。\n"
+                "部分遊戲或比賽規則禁止一鍵觸發多個動作，使用前請自行確認。"
+            ),
+            justify="left",
+            wraplength=dialog.winfo_pixels("300p"),
+        ).grid(row=next_row + 1, column=0, columnspan=columns, sticky="w", pady=(0, 4))
+
+        controls = ttk.Frame(frame)
+        controls.grid(row=next_row + 2, column=0, columnspan=columns, sticky="e", pady=(8, 0))
+        ttk.Button(controls, text=self.tr("取消"), command=dialog.destroy).pack(
+            side="right", padx=(6, 0)
+        )
+        accept_button = ttk.Button(controls, text=self.tr("確定"))
+        accept_button.pack(side="right")
+
+        def chosen():
+            return [name for name in COMBO_MEMBER_ORDER if variables[name].get()]
+
+        def refresh():
+            members = chosen()
+            preview_var.set(
+                " + ".join(members) if members else self.tr("尚未選擇按鍵")
+            )
+            full = len(members) >= COMBO_MAX_MEMBERS
+            for name, checkbutton in checkbuttons.items():
+                checkbutton.state(
+                    ["disabled"] if full and not variables[name].get() else ["!disabled"]
+                )
+            accept_button.state(
+                ["!disabled"]
+                if COMBO_MIN_MEMBERS <= len(members) <= COMBO_MAX_MEMBERS
+                else ["disabled"]
+            )
+
+        def accept(_event=None):
+            members = chosen()
+            if not COMBO_MIN_MEMBERS <= len(members) <= COMBO_MAX_MEMBERS:
+                return
+            state["committed"] = True
+            variable.set(format_combo_target(members))
+            dialog.destroy()
+
+        def restore_on_cancel(event):
+            if event.widget is not dialog:
+                return
+            if not state["committed"] and self._is_pending_custom_mapping(variable.get()):
+                variable.set(previous_mapping)
+
+        accept_button.configure(command=accept)
+        dialog.bind("<Return>", accept)
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        dialog.bind("<Destroy>", restore_on_cancel, add="+")
+        refresh()
+        self._center_child_window(dialog)
+        self._bring_child_to_front(dialog)
 
     def create_help(self, parent, text, illustration=None):
         label = tk.Label(
@@ -9893,9 +10010,9 @@ class ConfigGUI:
             )
             combo.bind(
                 "<<ComboboxSelected>>",
-                lambda _event, var=variable: self.open_keyboard_capture(
+                lambda _event, var=variable: self.open_custom_mapping(
                     var, mouse_mode="buttons"
-                ) if var.get() == "CUSTOM_KEYBOARD" else None,
+                ),
             )
         button_inner.columnconfigure(1, weight=1)
 
@@ -9995,9 +10112,9 @@ class ConfigGUI:
                     diagonal_cells.append(cell)
                 combo.bind(
                     "<<ComboboxSelected>>",
-                    lambda _event, var=variable: self.open_keyboard_capture(
+                    lambda _event, var=variable: self.open_custom_mapping(
                         var, mouse_mode="wheel"
-                    ) if var.get() == "CUSTOM_KEYBOARD" else None,
+                    ),
                 )
 
             center = ttk.Frame(page)

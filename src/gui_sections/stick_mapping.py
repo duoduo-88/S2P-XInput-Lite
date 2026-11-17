@@ -153,14 +153,10 @@ def build_stick_mapping_section(gui, mapping_notebook):
                 event,
                 current_variable=direction_variable
             ):
-                if (
-                    current_variable.get()
-                    == "CUSTOM_KEYBOARD"
-                ):
-                    gui.open_keyboard_capture(
-                        current_variable,
-                        mouse_mode="wheel",
-                    )
+                gui.open_custom_mapping(
+                current_variable,
+                mouse_mode="wheel",
+            )
 
             combo.bind(
                 "<<ComboboxSelected>>",

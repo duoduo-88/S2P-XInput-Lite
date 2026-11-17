@@ -1371,9 +1371,16 @@ EN_TEXT = {
     "確定要刪除這個方案嗎？": "Delete this profile?",
     "自定義鍵盤映射": "Custom Key Map",
     "自定義輸入映射": "Custom Input Map",
-    "選擇「自訂按鍵」後，按下要映射的輸入。\n\n支援鍵盤單鍵、Ctrl／Shift／Alt／Win 複合鍵，以及滑鼠左鍵、右鍵與中鍵。\n例如：F12、Ctrl + S、Win + D。":
-        "Choose Shortcut, then press the input to map.\n\nSupports single keys; Ctrl/Shift/Alt/Win combinations; and left, right, or middle mouse buttons.\nExamples: F12, Ctrl + S, Win + D.",
+    "選擇「自訂按鍵」後，按下要映射的輸入。\n\n支援鍵盤單鍵、Ctrl／Shift／Alt／Win 複合鍵，以及滑鼠左鍵、右鍵與中鍵。\n例如：F12、Ctrl + S、Win + D。\n\n選擇「自訂手把組合」可讓一個按鍵同時按下 2 到 4 個 Xbox 按鍵，例如 X + Y。":
+        "Choose Shortcut, then press the input to map.\n\nSupports single keys; Ctrl/Shift/Alt/Win combinations; and left, right, or middle mouse buttons.\nExamples: F12, Ctrl + S, Win + D.\n\nChoose Gamepad Combo to have one button press 2 to 4 Xbox buttons together, such as X + Y.",
     "等待按鍵...": "Press a key...",
+    "自訂手把組合": "Gamepad Combo",
+    "手把組合鍵": "Gamepad Combo",
+    "勾選要同時按下的 Xbox 按鍵（{low} 到 {high} 個）。":
+        "Select the Xbox buttons to press together ({low} to {high}).",
+    "尚未選擇按鍵": "No buttons selected",
+    "組合內的按鍵會在同一幀一起按下、一起放開，不含延遲、順序或連發。\n部分遊戲或比賽規則禁止一鍵觸發多個動作，使用前請自行確認。":
+        "The buttons press and release together in the same report, with no delay, order, or repeat.\nSome games and tournament rules forbid one input triggering several actions. Check before you use it.",
     "請按下要映射的鍵盤按鍵或複合按鍵。\n\n例如：F12、Ctrl + S、Ctrl + Shift + S":
         "Press a key or key combination to map.\n\nExamples: F12, Ctrl + S, Ctrl + Shift + S",
     "請按下要映射的鍵盤按鍵、複合按鍵或滑鼠按鍵。\n\n可使用滑鼠左鍵、右鍵及中鍵（滾輪按下）。":
@@ -1880,6 +1887,11 @@ PHRASES = (
     ("鍵盤按鍵不可空白", "Keyboard key cannot be blank"),
     ("鍵盤組合包含空白按鍵", "Keyboard combination contains a blank key"),
     ("不支援的鍵盤按鍵：", "Unsupported keyboard key: "),
+    ("手把組合尚未完成選擇", "Gamepad combo has no buttons selected"),
+    ("手把組合包含空白按鍵", "Gamepad combo contains a blank button"),
+    ("不支援的手把組合按鍵：", "Unsupported gamepad combo button: "),
+    ("手把組合不可重複同一個按鍵", "Gamepad combo cannot repeat a button"),
+    ("手把組合須包含 2 到 4 個按鍵", "Gamepad combo needs 2 to 4 buttons"),
     ("按鍵映射資料類型不正確", "Button mapping data has an invalid type"),
     ("搖桿設定資料類型不正確", "Stick settings have an invalid type"),
     (

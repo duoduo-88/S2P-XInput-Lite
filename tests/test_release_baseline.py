@@ -131,7 +131,7 @@ class ReleaseBaselineTests(unittest.TestCase):
                 "7f00b6c042a89b15b0cac534f82ed988caf29278ff5700b0c511eb1b5bb7c820"
             ),
             "esp32s3_bluedroid_bridge.bin": (
-                "576abcf1b173c9821df0ebf045c52a374bd225a8418f8dc7887f12c6f1c397c3"
+                "be613c854bf5f8bc7f4821b4ea5669ce0e0b039b109ce73c8dd77480c9cfa17d"
             ),
         }
         firmware_dir = ROOT / "esp32s3" / "firmware"

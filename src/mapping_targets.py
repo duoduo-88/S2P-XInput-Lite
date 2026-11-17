@@ -71,6 +71,20 @@ KEYBOARD_KEY_NAMES = frozenset({
     *(chr(code) for code in range(ord("A"), ord("Z") + 1)),
 })
 
+# A gamepad combo presses several XInput buttons in the same report, for as
+# long as the physical input is held. It has no delay, order, or repeat.
+COMBO_PREFIX = "COMBO:"
+COMBO_PENDING_TARGET = "CUSTOM_COMBO"
+COMBO_MEMBER_ORDER = (
+    "A", "B", "X", "Y",
+    "LB", "RB", "LT", "RT",
+    "BACK", "START", "GUIDE",
+    "L_STK", "R_STK",
+    "UP", "DOWN", "LEFT", "RIGHT",
+)
+COMBO_MIN_MEMBERS = 2
+COMBO_MAX_MEMBERS = 4
+
 BUTTON_FIXED_TARGETS = frozenset(("NONE",)) | XINPUT_BUTTON_TARGETS | BUTTON_AXIS_TARGETS
 DIRECTION_FIXED_TARGETS = frozenset(("NONE",)) | XINPUT_BUTTON_TARGETS
 
@@ -150,16 +164,67 @@ def keyboard_combo_error(value):
     return ""
 
 
+def is_combo_target(value):
+    return normalize_mapping_target(value).startswith(COMBO_PREFIX)
+
+
+def _combo_tokens(value):
+    combo = normalize_mapping_target(value)[len(COMBO_PREFIX):].strip()
+    return [token.strip() for token in combo.split("+")] if combo else []
+
+
+def combo_target_error(value):
+    """Return an error reason for COMBO: targets, or an empty string."""
+    if not is_combo_target(value):
+        return "不是手把組合"
+    tokens = _combo_tokens(value)
+    if any(not token for token in tokens):
+        return "手把組合包含空白按鍵"
+    unsupported = [token for token in tokens if token not in COMBO_MEMBER_ORDER]
+    if unsupported:
+        return "不支援的手把組合按鍵：" + ", ".join(unsupported)
+    if len(set(tokens)) != len(tokens):
+        return "手把組合不可重複同一個按鍵"
+    if not COMBO_MIN_MEMBERS <= len(tokens) <= COMBO_MAX_MEMBERS:
+        return f"手把組合須包含 {COMBO_MIN_MEMBERS} 到 {COMBO_MAX_MEMBERS} 個按鍵"
+    return ""
+
+
+def combo_members(value):
+    """Return a valid combo's buttons in canonical order, or ``()``."""
+    if combo_target_error(value):
+        return ()
+    members = set(_combo_tokens(value))
+    return tuple(name for name in COMBO_MEMBER_ORDER if name in members)
+
+
+def format_combo_target(members):
+    """Serialize buttons as ``COMBO:A+B`` in canonical order."""
+    chosen = {normalize_mapping_target(name) for name in members}
+    return COMBO_PREFIX + "+".join(name for name in COMBO_MEMBER_ORDER if name in chosen)
+
+
+def _custom_target_error(normalized):
+    if normalized == "CUSTOM_KEYBOARD":
+        return "CUSTOM_KEYBOARD 尚未完成輸入錄製"
+    if normalized == COMBO_PENDING_TARGET:
+        return "手把組合尚未完成選擇"
+    if normalized.startswith("KEYBOARD:"):
+        return keyboard_combo_error(normalized)
+    if normalized.startswith(COMBO_PREFIX):
+        return combo_target_error(normalized)
+    return None
+
+
 def button_target_error(value):
     normalized = normalize_mapping_target(value)
     if not normalized:
         return "按鍵映射目標不可空白"
-    if normalized == "CUSTOM_KEYBOARD":
-        return "CUSTOM_KEYBOARD 尚未完成輸入錄製"
     if normalized in BUTTON_FIXED_TARGETS or normalized in MOUSE_BUTTON_TARGETS:
         return ""
-    if normalized.startswith("KEYBOARD:"):
-        return keyboard_combo_error(normalized)
+    custom_error = _custom_target_error(normalized)
+    if custom_error is not None:
+        return custom_error
     return "不支援的按鍵映射目標"
 
 
@@ -167,12 +232,11 @@ def direction_target_error(value):
     normalized = normalize_mapping_target(value)
     if not normalized:
         return "搖桿方向映射目標不可空白"
-    if normalized == "CUSTOM_KEYBOARD":
-        return "CUSTOM_KEYBOARD 尚未完成輸入錄製"
     if normalized in DIRECTION_FIXED_TARGETS or normalized in MOUSE_WHEEL_TARGETS:
         return ""
-    if normalized.startswith("KEYBOARD:"):
-        return keyboard_combo_error(normalized)
+    custom_error = _custom_target_error(normalized)
+    if custom_error is not None:
+        return custom_error
     return "不支援的搖桿方向映射目標"
 
 

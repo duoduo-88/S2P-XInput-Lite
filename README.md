@@ -13,8 +13,8 @@ bundled Gamepad Tester checks input, rumble, and report rate, and includes a
 
 > [!IMPORTANT]
 > **v0.8.2 bundles ESP32-S3 firmware S2P-FW 1.0.9.** It brings the radial
-> gyro deadzone, button spike suppression, and per-axis gyro compensation to
-> Android USB HID standalone mode. If you use the ESP32-S3 bridge, open
+> gyro deadzone, button spike suppression, per-axis gyro compensation, and
+> gamepad combos to Android USB HID standalone mode. If you use the ESP32-S3 bridge, open
 > **Flash FW** in the main window to check and update your firmware.
 > [Flashing instructions](manual/USER_GUIDE.md#flash-esp32-s3)
 

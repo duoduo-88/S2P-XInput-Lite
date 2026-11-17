@@ -63,6 +63,18 @@ class FirmwareUsbModesTests(unittest.TestCase):
         host_tests.BridgeFirmwareWatchdogTests.compile_and_run(
             self, ROOT / 'tests/firmware_stick_direction_test.c', 'stick_direction')
 
+    def test_gamepad_combo_targets_match_desktop_validation(self):
+        source = (MAIN / 'standalone_xinput.c').read_text(encoding='utf-8')
+        defines = re.findall(r'^#define (?:TARGET_|COMBO_TARGET_)\w+[^\n]*', source, re.M)
+        functions = [extract_function(source, name) for name in (
+            'single_target_from_name', 'target_from_name')]
+        output = ROOT / 'build/bridge-host-tests'
+        output.mkdir(parents=True, exist_ok=True)
+        (output / 'firmware_combo_target.inc').write_text(
+            '\n'.join(defines + functions), encoding='utf-8')
+        host_tests.BridgeFirmwareWatchdogTests.compile_and_run(
+            self, ROOT / 'tests/firmware_combo_target_test.c', 'combo_target')
+
     def test_actual_mode_migration_and_failure_recovery(self):
         source = (MAIN / 'standalone_xinput.c').read_text(encoding='utf-8')
         functions = [extract_function(source, name) for name in (

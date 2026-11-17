@@ -59,6 +59,7 @@ from desktop_output import (
 )
 from mapping_runtime import (
     MAP_BUTTON,
+    MAP_COMBO,
     MAP_KEYBOARD,
     MAP_LT,
     MAP_LX,
@@ -71,6 +72,7 @@ from mapping_runtime import (
     MappingRuntime,
     MappingRuntimeManager,
     compile_button_mapping,
+    compile_combo_output,
 )
 
 
@@ -121,6 +123,9 @@ XB_BUTTONS = {
 XB_BUTTON_NAMES = {
     int(mask): name for name, mask in XB_BUTTONS.items()
 }
+# Stick directions keep their target strings; compile each combo once.
+_DIRECTION_COMBO_CACHE = {}
+_MISSING = object()
 
 def _soft_mix(first, second, maximum):
     """Combine amplitudes without the harsh clipping of plain addition."""
@@ -811,6 +816,8 @@ class XInputController:
             return f"鍵盤 {value}"
         if kind == MAP_BUTTON:
             return f"XInput {XB_BUTTON_NAMES.get(int(value), value)}"
+        if kind == MAP_COMBO:
+            return f"XInput {'+'.join(value.members)}"
         if kind == MAP_LT:
             return "XInput LT"
         if kind == MAP_RT:
@@ -822,6 +829,25 @@ class XInputController:
             MAP_RY: "XInput 右搖桿 Y",
         }
         return axis_names.get(kind, "無")
+
+    @staticmethod
+    def _apply_combo_output(report, combo):
+        """Add a combo's buttons and triggers to this report only."""
+        if combo is None:
+            return
+        report.wButtons |= combo.buttons
+        if combo.left_trigger:
+            report.bLeftTrigger = 255
+        if combo.right_trigger:
+            report.bRightTrigger = 255
+
+    @staticmethod
+    def _direction_combo_output(target):
+        combo = _DIRECTION_COMBO_CACHE.get(target, _MISSING)
+        if combo is _MISSING:
+            combo = compile_combo_output(target, XB_BUTTONS)
+            _DIRECTION_COMBO_CACHE[target] = combo
+        return combo
 
     @staticmethod
     def _test_direction_target(target):
@@ -842,6 +868,8 @@ class XInputController:
             return names.get(mouse_value, f"滑鼠 {mouse_value}")
         if target in ("LT", "RT"):
             return f"XInput {target}"
+        if target.startswith("COMBO:"):
+            return f"XInput {target[len('COMBO:'):]}"
         if target in XB_BUTTONS:
             return f"XInput {target}"
         return target
@@ -4214,6 +4242,8 @@ class XInputController:
                 report.bRightTrigger = 255
             elif kind == MAP_BUTTON:
                 report.wButtons |= value
+            elif kind == MAP_COMBO:
+                self._apply_combo_output(report, value)
 
         # =========================
         # 搖桿
@@ -4407,8 +4437,14 @@ class XInputController:
             ):
                 continue
 
+            # 手把組合：同一幀同時按下多個 Xbox 按鍵
+            if target.startswith("COMBO:"):
+                self._apply_combo_output(
+                    report, self._direction_combo_output(target)
+                )
+
             # LT
-            if target == "LT":
+            elif target == "LT":
                 report.bLeftTrigger = 255
 
             # RT

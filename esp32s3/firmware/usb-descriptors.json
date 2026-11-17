@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "evidence": "compiled ELF descriptor bytes; hardware enumeration pending",
-  "application_sha256": "576abcf1b173c9821df0ebf045c52a374bd225a8418f8dc7887f12c6f1c397c3",
+  "application_sha256": "be613c854bf5f8bc7f4821b4ea5669ce0e0b039b109ce73c8dd77480c9cfa17d",
   "personalities": {
     "bridge": {
       "vid_pid": "303A:4001",

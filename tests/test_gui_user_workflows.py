@@ -372,6 +372,51 @@ class GUIUserWorkflowTests(unittest.TestCase):
         self.assertEqual(self.gui.button_vars["A"].get(), "KEYBOARD:CTRL+A")
         self.assertFalse(self.gui.has_unsaved_changes())
 
+    def _open_combo_picker(self, variable):
+        before_children = set(self.root.winfo_children())
+        variable.set("CUSTOM_COMBO")
+        with patch.object(self.gui, "_bring_child_to_front"):
+            self.gui.open_custom_mapping(variable, mouse_mode="buttons")
+        dialog = next(child for child in self.root.winfo_children()
+                      if child not in before_children and isinstance(child, tk.Toplevel))
+        boxes = {widget.cget("text"): widget for widget in self.descendants(dialog)
+                 if isinstance(widget, ttk.Checkbutton)}
+        buttons = {widget.cget("text"): widget for widget in self.descendants(dialog)
+                   if isinstance(widget, ttk.Button)}
+        return dialog, boxes, buttons
+
+    def test_gamepad_combo_picker_saves_and_cancel_restores(self):
+        variable = self.gui.button_vars["A"]
+        variable.set("B")
+        dialog, _boxes, buttons = self._open_combo_picker(variable)
+        dialog.destroy()  # Closing the window cancels like the Cancel button.
+        self.assertEqual(variable.get(), "B")
+
+        dialog, boxes, buttons = self._open_combo_picker(variable)
+        accept = buttons[self.gui.tr("確定")]
+        self.assertTrue(accept.instate(["disabled"]))
+        boxes["X"].invoke()
+        self.assertTrue(accept.instate(["disabled"]))  # One button is not a combo.
+        for name in ("Y", "LB", "RB"):
+            boxes[name].invoke()
+        self.assertTrue(boxes["A"].instate(["disabled"]))  # Four is the limit.
+        accept.invoke()
+        self.assertFalse(dialog.winfo_exists())
+        self.assertEqual(variable.get(), "COMBO:X+Y+LB+RB")
+
+        dialog, boxes, buttons = self._open_combo_picker(variable)
+        self.assertTrue(boxes["X"].instate(["selected"]))  # Reopening keeps the combo.
+        boxes["X"].invoke()
+        buttons[self.gui.tr("取消")].invoke()
+        self.assertFalse(dialog.winfo_exists())
+        self.assertEqual(variable.get(), "COMBO:X+Y+LB+RB")
+
+        self.assertTrue(self.gui.save_current_profile(show_message=False))
+        self.close_gui()
+        self.open_gui()
+        self.assertEqual(self.gui.button_vars["A"].get(), "COMBO:X+Y+LB+RB")
+        self.pump()
+
     @staticmethod
     def descendants(widget):
         yield widget
