@@ -1225,7 +1225,7 @@ EN_TEXT = {
     "額外按鍵": "Extra Key",
     "校正陀螺儀": "Calibrate Gyro",
     "校正中...": "Calibrating...",
-    "感測器校正": "Sensor Cal",
+    "感測器校正": "Sensor Calibration",
     "靜止校正中...": "Still Cal...",
     "立體翻轉": "3D Rotate",
     "無法校正感測器": "Sensor Calibration Unavailable",
@@ -1250,7 +1250,8 @@ EN_TEXT = {
         "Could not safely write config.ini.\n\nDetails: {error}"
     ),
     "還原": "Reset",
-    "校正搖桿": "Calibrate",
+    "校正": "Calibrate",
+    "校正搖桿": "Stick Calibration",
     "刷入相容韌體": "Flash FW",
     "確認韌體版本": "Confirm Firmware Version",
     "目前韌體：": "Current firmware: ",
@@ -1276,6 +1277,86 @@ EN_TEXT = {
     "另存新方案": "Save New",
     "匯入方案": "Import Profile",
     "匯入設定": "Import Settings",
+    "擴充工具": "Extensions",
+    "啟用擴充工具": "Enable Extensions",
+    "權限": "Permissions",
+    "允許提交輸入": "Allow input",
+    "允許讀取控制器狀態": "Allow reading controller state",
+    "選擇擴充工具": "Select Extension Tool",
+    "執行檔": "Executables",
+    "Python 腳本（開發用）": "Python scripts (development)",
+    "工具": "Tool",
+    "輸入": "Input",
+    "讀取": "Read",
+    "未載入": "Not loaded",
+    "新增工具...": "Add Tool...",
+    "移除": "Remove",
+    "啟用／停用": "Enable/Disable",
+    "衝突檢查": "Conflict check",
+    "未發現衝突": "No conflicts",
+    "「{name}」重複加入清單": "\"{name}\" is listed more than once",
+    "最多同時啟用 {count} 個工具，「{name}」不會載入": (
+        "Up to {count} tools can be enabled at once; \"{name}\" will not load"
+    ),
+    "「{name}」沒有任何權限，無法連線": "\"{name}\" has no permission and cannot connect",
+    "「{name}」與「{other}」同時要求控制{stick}": (
+        "\"{name}\" and \"{other}\" both want to control the {stick}"
+    ),
+    "最多可同時啟用 {count} 個工具。請先停用其他工具。": (
+        "Up to {count} tools can be enabled at once. Disable another tool first."
+    ),
+    "「{name}」已在清單中。": "\"{name}\" is already in the list.",
+    "工具至少需要一項權限才能連線。": "A tool needs at least one permission to connect.",
+    "搖桿控制衝突": "stick control conflict",
+    "開啟": "Open",
+    "內建": "Built-in",
+    "內建工具，隨 S2P 提供": "Built-in tool, included with S2P",
+    "設定已變更，等待工具重新連線": "settings changed; waiting for the tool to reconnect",
+    "擴充工具注意事項：": "Notes on extension tools:",
+    "擴充工具是另外安裝的獨立程式，只能依你允許的權限提交輸入或讀取控制器狀態。": (
+        "Extension tools are separately installed programs that can only submit input or "
+        "read controller state with the permissions you allow."
+    ),
+    "請只安裝信任來源的工具。擴充工具由其開發者提供，使用後的操作與結果由使用者自行負責。": (
+        "Install tools only from sources you trust. Tools are provided by their own "
+        "developers, and you are responsible for how you use them."
+    ),
+    "部分遊戲或線上服務可能禁止外部輸入或自動化操作，使用前請先確認相關規範。": (
+        "Some games and online services prohibit external input or automation; check "
+        "their rules before use."
+    ),
+    "S2P 仍是唯一的虛擬手把輸出；同一支搖桿只能由一個工具控制，實體搖桿優先。": (
+        "S2P stays the only virtual controller output; each stick can be controlled by "
+        "only one tool, and the physical stick has priority."
+    ),
+    "工具關閉、逾時或當機時會立即清除其輸入；停用擴充工具即恢復原本操作。": (
+        "Tool input is cleared immediately when a tool closes, times out or crashes; "
+        "disabling Extensions restores normal operation."
+    ),
+    "未啟用": "Disabled",
+    "等待連線": "Waiting for connection",
+    "等待連線（連接程式未啟動）": "Waiting for connection (connector not running)",
+    "已中斷（{reason}）": "Disconnected ({reason})",
+    "連線失敗：{reason}": "Connection failed: {reason}",
+    "已連接": "Connected",
+    "已中斷": "Disconnected",
+    "連線失敗": "Connection failed",
+    "連接程式尚未啟動。請先在主視窗按「重啟連線」。": (
+        "The connector is not running. Click Restart in the main window first."
+    ),
+    "工具已關閉連線": "the tool closed the connection",
+    "已手動中斷": "disconnected manually",
+    "未授權的程式，請確認清單中的工具": "unauthorized program; check the tool list",
+    "工具的通訊協定版本不相容": "the tool uses an incompatible protocol version",
+    "工具未在時限內完成連線": "the tool did not finish connecting in time",
+    "工具送出無效資料": "the tool sent invalid data",
+    "工具送出的資料過大": "the tool sent an oversized message",
+    "通訊管道已被其他程式占用": "the pipe is already used by another program",
+    "通訊管道發生錯誤": "pipe error",
+    "找不到工具 EXE": "tool EXE not found",
+    "無法啟動工具": "could not launch the tool",
+    "工具要求的權限未開啟": "the requested permission is not allowed",
+    "輸入逾時，已清除工具輸入": "input timed out and was cleared",
     "目前畫面有尚未儲存的變更。匯入會以選取安裝的設定重新載入畫面。\n\n是：先儲存目前變更\n否：放棄目前變更並匯入\n取消：返回設定畫面": (
         "The current screen has unsaved changes. Importing reloads settings from "
         "the selected installation.\n\nYes: save current changes first\n"
@@ -2016,7 +2097,7 @@ PHRASES = (
     ("控制器已準備完成，可以開始使用。", "Controller ready."),
     ("提醒：連線期間請勿關閉此視窗。", "Keep this window open while connected."),
     ("若需要中斷連線，請關閉此視窗。", "Close this window to disconnect."),
-    ("如需校正搖桿，請先關閉本程式，再按下「校正搖桿」按鈕。", "To calibrate sticks, close this program and click Stick Calibration."),
+    ("如需校正搖桿，請先關閉本程式，再按下「校正」並選擇「校正搖桿」。", "To calibrate sticks, close this program, click Calibrate, and choose Stick Calibration."),
     ("接著依照校正程序的畫面提示操作即可。", "Then follow the calibration prompts."),
     ("Switch 2 Pro Controller 原生藍牙已中斷。", "Switch 2 Pro Controller native Bluetooth disconnected."),
     ("震動傳送失敗：", "Rumble transmission failed: "),

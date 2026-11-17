@@ -1,6 +1,9 @@
 import importlib.util
 import tkinter as tk
+from tkinter import font as tkfont
 from tkinter import ttk
+
+DROPDOWN_BUTTON_STYLE = "Dropdown.TButton"
 
 def build_status_and_footer(gui, right_frame):
     """Build status rows and the fixed action footer."""
@@ -148,12 +151,13 @@ def build_status_and_footer(gui, right_frame):
         text="匯入設定",
         command=gui.import_settings_folder,
     ).grid(row=0, column=5, sticky="nsew", padx=3, ipady=5)
-    gui.gamepad_test_button = ttk.Button(
+    # Gamepad Tester is now a built-in entry of the Extensions list.
+    gui.extensions_button = ttk.Button(
         profile_row,
-        text=gui.tr("手把測試"),
-        command=gui.open_gamepad_test_window,
+        text=gui.tr("擴充工具"),
+        command=gui.open_extensions_window,
     )
-    gui.gamepad_test_button.grid(
+    gui.extensions_button.grid(
         row=0, column=6, sticky="nsew", padx=3, ipady=5
     )
 
@@ -186,11 +190,19 @@ def build_status_and_footer(gui, right_frame):
         command=gui.reset_to_defaults
     ).grid(row=1, column=1, sticky="nsew", padx=3, ipady=5)
 
-    ttk.Button(
+    gui.calibration_button = _build_dropdown_button(
+        gui,
         footer_frame,
-        text="校正搖桿",
-        command=gui.run_calibration
-    ).grid(row=1, column=2, sticky="nsew", padx=3, ipady=5)
+        "校正",
+        lambda: (
+            ("校正搖桿", gui.run_calibration),
+            ("感測器校正", gui.calibrate_gyro),
+        ),
+    )
+    # Sensor calibration reports its progress on this button and disables it
+    # while running, which also keeps stick calibration from overlapping.
+    gui.gyro_calibration_button = gui.calibration_button
+    gui.calibration_button.grid(row=1, column=2, sticky="nsew", padx=3, ipady=5)
 
     ttk.Button(
         footer_frame,
@@ -200,8 +212,10 @@ def build_status_and_footer(gui, right_frame):
 
     gui.write_esp32_button = ttk.Button(
         footer_frame,
-        text=f"{gui.tr('寫入 ESP32')} ▼",
+        text=gui.tr("寫入 ESP32"),
+        style=ensure_dropdown_button_style(gui),
     )
+    gui.write_esp32_button._s2p_dropdown_source = "寫入 ESP32"
     gui.write_esp32_menu = tk.Menu(
         gui.write_esp32_button,
         tearoff=False,
@@ -258,3 +272,79 @@ def build_status_and_footer(gui, right_frame):
     # 所有元件建立完成後，
     # 再依照實際螢幕可用高度調整視窗。
     gui.request_adaptive_window_update()
+
+
+def _arrow_image(master, size, color):
+    """Draw a solid down-pointing triangle; the rest stays transparent."""
+    red, green, blue = (value // 256 for value in master.winfo_rgb(color))
+    fill = f"#{red:02x}{green:02x}{blue:02x}"
+    height = (size + 1) // 2
+    image = tk.PhotoImage(master=master, width=size, height=height)
+    for row in range(height):
+        image.put(fill, to=(row, row, size - row, row + 1))
+    return image
+
+
+def ensure_dropdown_button_style(gui):
+    """Create the shared menu-button style: centered text, arrow at the right.
+
+    ttk centers a button's whole caption, so a "▼" inside the text cannot be
+    right-aligned.  The arrow is instead an image element placed on the right
+    of the standard Button layout; it turns gray with the disabled state.
+    """
+    if getattr(gui, "_dropdown_arrow_images", None) is not None:
+        return DROPDOWN_BUTTON_STYLE
+    style = ttk.Style(gui.root)
+    try:
+        linespace = tkfont.nametofont("TkDefaultFont").metrics("linespace")
+    except tk.TclError:
+        linespace = 16
+    size = max(7, round(linespace * 0.45)) | 1
+    normal = style.lookup("TButton", "foreground") or "black"
+    disabled = style.lookup("TButton", "foreground", ("disabled",)) or "gray"
+    images = (
+        _arrow_image(gui.root, size, normal),
+        _arrow_image(gui.root, size, disabled),
+    )
+    gui._dropdown_arrow_images = images
+    style.element_create(
+        "Dropdown.arrow", "image", images[0], ("disabled", images[1]),
+        sticky="", padding=(size // 2, 0, size, 0),
+    )
+    style.layout(DROPDOWN_BUTTON_STYLE, [
+        ("Button.button", {"sticky": "nswe", "children": [
+            ("Button.focus", {"sticky": "nswe", "children": [
+                ("Button.padding", {"sticky": "nswe", "children": [
+                    ("Dropdown.arrow", {"side": "right", "sticky": ""}),
+                    ("Button.label", {"sticky": "nswe"}),
+                ]}),
+            ]}),
+        ]}),
+    ])
+    return DROPDOWN_BUTTON_STYLE
+
+
+def _build_dropdown_button(gui, parent, source_text, items):
+    """Create a footer button that opens a menu like Write ESP32."""
+    button = ttk.Button(
+        parent, text=gui.tr(source_text), style=ensure_dropdown_button_style(gui),
+    )
+    button._s2p_dropdown_source = source_text
+    menu = tk.Menu(button, tearoff=False)
+
+    def show_menu():
+        menu.delete(0, "end")
+        for label, command in items():
+            menu.add_command(label=gui.tr(label), command=command)
+        try:
+            menu.tk_popup(
+                button.winfo_rootx(),
+                button.winfo_rooty() + button.winfo_height(),
+            )
+        finally:
+            menu.grab_release()
+
+    button.configure(command=show_menu)
+    button._s2p_dropdown_menu = menu
+    button._s2p_dropdown_items = items
+    return button

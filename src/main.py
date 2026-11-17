@@ -21,8 +21,9 @@ from xinput_controller import (
 )
 from audio_haptics import AudioHaptics
 from input_dispatcher import InputDispatcher
+from extension_bridge import ExtensionManager, load_extension_settings
 import serial
-from version import APP_TITLE
+from version import APP_TITLE, VERSION
 from config_utils import (
     CONFIG_PATH,
     DEFAULT_CONFIG_PATH,
@@ -454,6 +455,7 @@ def _run_connector():
 
     cleanup_complete = False
     input_dispatcher = None
+    extensions = None
     gc_was_enabled = gc.isenabled()
 
     def set_input_gc_suppressed(active):
@@ -472,6 +474,13 @@ def _run_connector():
         if cleanup_complete:
             return
         cleanup_complete = True
+
+        if extensions is not None:
+            # Stop accepting tool input before the transport and pad close.
+            try:
+                extensions.close()
+            except Exception as exc:
+                print(tr(f"擴充工具清理失敗：{exc}", f"Extensions cleanup failed: {exc}"))
 
         def close_transport():
             try:
@@ -1176,6 +1185,40 @@ def _run_connector():
             wait_for_error_acknowledgment()
             return
 
+    def apply_extension_settings(*, startup=False):
+        """Start, update or stop the optional Extensions pipe server."""
+        with config_file_lock():
+            settings = load_extension_settings(load_config(CONFIG_PATH, persist=False))
+        extensions.apply(settings, startup=startup)
+        return settings
+
+    def extension_controller_info():
+        """Read-only summary for tools granted the "read" capability.
+
+        Called from the IPC thread; it only reads plain variables and never
+        takes a transport or input lock.
+        """
+        return {
+            "connected": active_connection is not None,
+            "mode": connection_mode,
+            "battery_percent": latest_battery_percent,
+        }
+
+    # Nothing runs for Extensions unless the user enabled it.
+    extensions = ExtensionManager(
+        xinput, server_version=VERSION, controller_info=extension_controller_info,
+    )
+    try:
+        extension_settings = apply_extension_settings(startup=True)
+        if extension_settings.enabled and extension_settings.active_tools:
+            count = len(extension_settings.active_tools)
+            print(tr(
+                f"擴充工具已啟用（{count} 個），正在等待工具連線。",
+                f"Extensions enabled ({count}); waiting for tools to connect.",
+            ))
+    except Exception as exc:
+        print(tr(f"擴充工具啟動失敗：{exc}", f"Extensions failed to start: {exc}"))
+
     # A reload or calibration start that collides with an unsaved calibration
     # result (or a busy input worker) is retried on a later pass.
     deferred_command = None
@@ -1216,6 +1259,7 @@ def _run_connector():
                     firmware_diagnostics=firmware_diagnostics,
                     pairing_diagnostics=getattr(controller, "pairing_diagnostics", None),
                     async_logging=get_async_log_metrics(),
+                    extensions=extensions.status(),
                 )
                 if not controller_is_connected():
                     last_battery_led_mask = None
@@ -1397,6 +1441,25 @@ def _run_connector():
                                 f"Loaded {len(xinput.mapping_layers)} mapping layer(s); "
                                 f"{enabled_layer_count} enabled.",
                             ))
+
+                    elif command == "extensions_apply":
+                        clear_legacy_command()
+                        apply_extension_settings()
+                        publish_status(extensions=extensions.status())
+
+                    elif command.split(":", 1)[0] in (
+                        "extensions_connect", "extensions_disconnect",
+                    ):
+                        # "extensions_connect" acts on every tool;
+                        # "extensions_connect:<tool id>" on one list entry.
+                        clear_legacy_command()
+                        action, _, tool_id = command.partition(":")
+                        if action == "extensions_connect":
+                            apply_extension_settings()
+                            extensions.connect(tool_id or None)
+                        else:
+                            extensions.disconnect(tool_id or None)
+                        publish_status(extensions=extensions.status())
 
                     elif command:
                         # Clear malformed or obsolete commands too. Otherwise

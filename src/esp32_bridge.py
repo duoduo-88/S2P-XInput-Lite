@@ -1362,8 +1362,8 @@ class ESP32Bridge:
                 print(_tr("若需要中斷連線，請關閉此視窗。", "Close this window to disconnect."))
                 print()
                 print(_tr(
-                    "如需校正搖桿，請先關閉本程式，再按下「校正搖桿」按鈕。",
-                    "To calibrate sticks, close this program and click Stick Calibration.",
+                    "如需校正搖桿，請先關閉本程式，再按下「校正」並選擇「校正搖桿」。",
+                    "To calibrate sticks, close this program, click Calibrate, and choose Stick Calibration.",
                 ))
                 print(_tr(
                     "接著依照校正程序的畫面提示操作即可。",

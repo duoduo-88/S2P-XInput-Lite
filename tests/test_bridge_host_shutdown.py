@@ -190,6 +190,7 @@ class BridgeHostShutdownTests(unittest.TestCase):
             bridge = ESP32Bridge("test") if bridge_mode else Mock()
             bridge.close = lambda: events.append("transport") or True
             context = dict(cleanup_complete=False, controller=bridge, ESP32Bridge=ESP32Bridge,
+                           extensions=Mock(close=lambda: events.append("extensions")),
                            audio_haptics=Mock(close=lambda: events.append("audio")),
                            set_input_gc_suppressed=Mock(), close_xinput_after_dispatcher=Mock(return_value=True),
                            input_dispatcher=None, xinput=Mock(), test_telemetry=None,
@@ -197,7 +198,12 @@ class BridgeHostShutdownTests(unittest.TestCase):
             exec(compile(module, "main.cleanup", "exec"), context)
             context["cleanup"]()
             context["cleanup"]()  # idempotent
-            self.assertEqual(events, ["transport", "audio"] if bridge_mode else ["audio", "transport"])
+            # Extension input stops before any transport or audio teardown.
+            self.assertEqual(
+                events,
+                ["extensions", "transport", "audio"] if bridge_mode
+                else ["extensions", "audio", "transport"],
+            )
 
     def test_open_establishes_session_before_scanning_and_legacy_still_opens(self):
         for managed in (True, False):

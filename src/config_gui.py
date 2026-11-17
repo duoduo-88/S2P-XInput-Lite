@@ -144,6 +144,9 @@ from gui_settings import (
     config_settings_bundle,
 )
 from gui_sections.direction_deadzone import DirectionDeadzonePreview
+from gui_sections.extensions import open_extensions_window as _open_extensions_window
+from gui_sections.extensions import open_extension_tool as _open_extension_tool
+from gui_sections.extensions import tray_items as _extension_tray_items
 from gui_sections import (
     build_main_layout,
     build_stick_section,
@@ -4001,8 +4004,20 @@ class ConfigGUI:
             tray.stop()
             return False
         self._system_tray = tray
+        self.refresh_extension_tray_items()
         self._schedule_system_tray_poll()
         return True
+
+    def refresh_extension_tray_items(self):
+        """List openable extension tools in the tray menu."""
+        tray = getattr(self, "_system_tray", None)
+        if tray is None:
+            return
+        try:
+            # Tools appear as plain items between separators, without a heading.
+            tray.set_extra_items("", _extension_tray_items(self))
+        except (AttributeError, OSError, ValueError):
+            pass
 
     def _system_tray_available(self):
         tray = getattr(self, "_system_tray", None)
@@ -4034,7 +4049,9 @@ class ConfigGUI:
             action = tray.get_action()
             if action is None:
                 break
-            if action == "show":
+            if isinstance(action, tuple) and action[0] == "extra":
+                _open_extension_tool(self, action[1])
+            elif action == "show":
                 self.restore_from_system_tray()
             elif action == "exit":
                 self.restore_from_system_tray()
@@ -5366,7 +5383,7 @@ class ConfigGUI:
             try:
                 self.gyro_calibration_button.state(["!disabled"])
                 self.gyro_calibration_button.configure(
-                    text=self.tr("感測器校正")
+                    text=self.tr("校正")
                 )
                 if success:
                     messagebox.showinfo("感測器校正完成", message)
@@ -6414,12 +6431,14 @@ class ConfigGUI:
             return
         if widget is getattr(self, "profile_combo", None):
             return
+        widget_name = str(widget)
+        # Checked first: <Map> fires every time a tab is shown, and looking up
+        # the binding again for an already bound control is wasted work.
+        if widget_name in self._parameter_reset_bound_widgets:
+            return
         if self.parameter_binding_for_widget(widget) is None:
             return
 
-        widget_name = str(widget)
-        if widget_name in self._parameter_reset_bound_widgets:
-            return
         # Widget bindings run before ttk class bindings.  Returning ``break``
         # from show_parameter_reset_context_menu also prevents a right-click on
         # Scale/TScale from moving the slider before the menu appears.
@@ -7925,6 +7944,10 @@ class ConfigGUI:
         self._close_gamepad_test_process()
         self.open_gamepad_test_window()
 
+    def open_extensions_window(self):
+        """Open the global Extensions (擴充工具) settings window."""
+        return _open_extensions_window(self)
+
     def show_idle_disconnect_menu(self):
         """Show the global wireless idle timeout choices."""
         menu = tk.Menu(self.root, tearoff=False)
@@ -8007,14 +8030,22 @@ class ConfigGUI:
         )
         # This button may have been created while the UI was English. Always
         # translate from its stable Chinese key instead of the lazy text cache.
-        self.gamepad_test_button.configure(
-            text=self.tr("手把測試")
-        )
-        self.write_esp32_button.configure(
-            text=f"{self.tr('寫入 ESP32')} ▼"
-        )
+        self.write_esp32_button.configure(text=self.tr("寫入 ESP32"))
         if hasattr(self, "refresh_write_esp32_menu"):
             self.refresh_write_esp32_menu()
+        for button in (
+            getattr(self, "import_button", None),
+            getattr(self, "calibration_button", None),
+        ):
+            # A running sensor calibration owns the button text for progress.
+            if button is None or button.instate(["disabled"]):
+                continue
+            button.configure(
+                text=self.tr(button._s2p_dropdown_source)
+            )
+        if hasattr(self, "extensions_button"):
+            self.extensions_button.configure(text=self.tr("擴充工具"))
+        self.refresh_extension_tray_items()
         for combo, display_var, side, source_values in (
             self.stick_mode_selectors
         ):
@@ -9744,7 +9775,9 @@ class ConfigGUI:
             card.columnconfigure(0, weight=1)
 
             enabled_var = tk.BooleanVar(value=layer.get("enabled", True))
-            enabled = ttk.Checkbutton(top_row, variable=enabled_var)
+            # takefocus=False: a text-less checkbox otherwise draws its dotted
+            # focus box as a stray mark beside the tick after being clicked.
+            enabled = ttk.Checkbutton(top_row, variable=enabled_var, takefocus=False)
             enabled.grid(row=0, column=0, sticky="w", padx=(0, 2))
             mode_labels = (self.tr("按住"), self.tr("切換"))
             # English "Toggle" needs a wider box. Give the room from the
@@ -10873,9 +10906,30 @@ class ConfigGUI:
         if updater is not None:
             updater()
 
+    def _cached_system_default_profile(self):
+        """Parsed System Default, re-read only when one of its files changes.
+
+        Right-click reset bindings ask for default values every time a tab is
+        shown; reading and validating the INI each time made a tab switch take
+        up to half a second.  Callers here only read from the result.
+        """
+        paths = (profile_path("System Default", PROFILE_DIR), Path(DEFAULT_CONFIG_PATH))
+        try:
+            key = tuple(
+                (str(path), stat.st_mtime_ns, stat.st_size)
+                for path, stat in ((path, path.stat()) for path in paths)
+            )
+        except OSError:
+            return read_profile("System Default", PROFILE_DIR)
+        cached = getattr(self, "_system_default_cache", None)
+        if cached is None or cached[0] != key:
+            cached = (key, read_profile("System Default", PROFILE_DIR))
+            self._system_default_cache = cached
+        return cached[1]
+
     def audio_haptics_defaults_for_mode(self, mode=None):
         """Return the single canonical audio baseline from System Default."""
-        defaults = read_profile("System Default", PROFILE_DIR)
+        defaults = self._cached_system_default_profile()
         return {
             "mix_ratio": defaults.get("audio_haptics", "mix_ratio"),
             "strength": defaults.get("audio_haptics", "strength"),
@@ -10974,7 +11028,7 @@ class ConfigGUI:
 
     def gyro_system_defaults(self):
         """Read the canonical gyro reset values from System Default.ini."""
-        profile = read_profile("System Default", PROFILE_DIR)
+        profile = self._cached_system_default_profile()
         section = "gyro_mapping"
         defaults = {
             key: profile.get(section, key)

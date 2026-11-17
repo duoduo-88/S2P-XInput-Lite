@@ -152,12 +152,12 @@ The main window has four areas:
 | **Save/Apply** | Save the current profile and apply it to the connection immediately. |
 | **Save New** | Create a new profile from the values on screen. |
 | **Import Profile** | Import an external `.ini` profile. |
-| **Import Settings** | Migrate settings from another S2P-XInput-Lite installation. |
-| **Gamepad Test** | Open Gamepad Tester. See [8. Gamepad Tester](#8-gamepad-tester). |
+| **Import Settings** | Migrate settings from another S2P-XInput-Lite installation. See [2.4](#24-import-settings). |
+| **Extensions** | Open the built-in Gamepad Test or manage independent extension tools (several at once, with conflict checks). See [2.7](#27-extensions). |
 | **中／En** | Switch the interface language. |
 | **Pin** | Make the detected controller the preferred device. The controller vibrates when this succeeds. |
 | **Defaults** | Reset everything on screen to defaults. See [Restore a stable setup](#restore-a-stable-setup). |
-| **Calibrate** | Calibrate the sticks. See [3.4 Stick calibration](#34-stick-calibration). |
+| **Calibrate ▼** | Menu: **Stick Calibration** (see [3.4](#34-stick-calibration)) and **Sensor Calibration**, which calibrates the gyro, accelerometer, and magnetometer (see [6.4](#64-gyro-response)). |
 | **Flash FW** | Check and flash the ESP32-S3 firmware. See [9.2](#flash-esp32-s3). |
 | **ESP32 ▼** | Write the profile and switch to Android USB HID standalone mode, or switch back to Bridge. See [9.5](#95-write-settings-and-enable-android-usb-hid). |
 | **Restart** | Restart the desktop connection with the saved settings. Nothing is written to the ESP32. |
@@ -216,6 +216,73 @@ After it disconnects, the status bar shows
 `ESP32 · Idle; press any button to wake`. Press any controller button to wake
 and reconnect.
 
+### 2.7 Extensions
+
+S2P can work with separately installed, independent extension tools. A tool
+can only hand button, trigger, and stick states to S2P, or read controller
+state, with the permissions you allow. S2P merges them with the physical
+controller and sends the result through its one existing virtual Xbox
+controller: no second virtual controller is created, and rumble, stick curves,
+gyro, and button mapping are unaffected. Nothing extra runs while Extensions is
+disabled.
+
+> [!IMPORTANT]
+> **Responsibility and notes**
+>
+> - Extension tools are provided by their own developers. S2P-XInput-Lite is
+>   not responsible for the content, quality, or safety of third-party tools.
+>   Install tools only from sources you trust.
+> - You are responsible for how you use extension tools and for the results.
+> - Some games and online services prohibit external input or automation;
+>   check their rules before use.
+> - **Allow reading controller state** lets a tool see your button and stick
+>   output. Enable it only for tools that need it.
+> - S2P clears a tool's input immediately when the tool closes, times out, or
+>   crashes. If anything goes wrong, uncheck **Enable Extensions** to restore
+>   normal operation.
+
+1. Select **Extensions** and check **Enable Extensions**.
+2. Select **Add Tool...** and choose the tool EXE. You can add several tools;
+   up to 4 can be enabled at once.
+3. Select a tool in the list and, under **Permissions**, check **Allow input**
+   (on by default) or **Allow reading controller state** (off by default). The
+   tool reconnects by itself after a permission change.
+4. Enabled tools start with S2P: when the connection starts (or when you
+   enable a tool), S2P starts it in the background without showing a window,
+   and the tool connects by itself. To use a tool's window, select it and
+   choose **Open**, or click its name in the notification area menu. Use
+   **Enable/Disable** to turn one off.
+
+The first row is always the built-in **Gamepad Test**. It ships with S2P,
+cannot be removed, and opens even while Extensions is disabled. See
+[8. Gamepad Tester](#8-gamepad-tester).
+
+Only EXEs in the list (or tools S2P started) may connect; any other program is
+shown as unauthorized.
+
+| Status | Meaning |
+|---|---|
+| **Disabled** | Extensions or this tool is not enabled. |
+| **Waiting for connection** | Waiting for the tool. Also shown while the connector is not running. |
+| **Connected** | The tool is connected; its name is shown. "input timed out" means the tool was silent for over 1 s and its input was cleared. |
+| **Disconnected** | The tool closed. |
+| **Connection failed** | Unauthorized, missing permission, stick conflict, incompatible version, or tool not found. |
+
+**Conflict check** lists the same EXE added twice, more than 4 enabled tools,
+tools without any permission, and two tools that both want the same stick.
+
+Merge rules:
+
+- **Buttons**: output while the controller or any tool holds them; released
+  only when all release.
+- **Triggers**: the largest value from the controller and all tools wins.
+- **Sticks**: each stick can be controlled by only one tool, and the physical
+  stick has priority. A tool's stick value is used only while the physical
+  stick is at rest; moving the physical stick takes over immediately, and
+  control returns to the tool about 0.15 s after the stick is back at center.
+- When a tool closes, times out, or crashes, its input is cleared immediately
+  without releasing buttons you still hold and without affecting other tools.
+
 ---
 
 ## 3. Stick settings
@@ -261,7 +328,7 @@ enlarge the deadzone for it (see the note in [1.2](#12-install-and-first-launch)
 
 ### 3.4 Stick calibration
 
-1. Select **Calibrate** at the bottom of the main window, then press any
+1. Select **Calibrate ▼** > **Stick Calibration** at the bottom of the main window, then press any
    controller button when the calibration console asks.
 2. Release the button and both sticks and keep them still. Center capture
    starts after 3 seconds.
@@ -506,11 +573,13 @@ Only the fields that apply to the current target and control mode are shown.
 
 Buttons below the fields:
 
-- **Sensor Cal**: place the controller flat on a steady surface first. It
-  calibrates the gyro's zero point.
 - **Sens. Curve**: available only in Aim (Center) mode with the gyro enabled
   and stick output.
 - **Compensation Settings**: per-axis gyro output multipliers. Hidden for mouse output.
+
+Sensor calibration is at the bottom of the main window: **Calibrate ▼** >
+**Sensor Calibration**. Place the controller flat on a steady surface first;
+the button shows the progress while it runs.
 
 #### Sensitivity curve
 
@@ -557,7 +626,7 @@ To work out a suitable multiplier, use
 
 ### 6.6 Recommended setup order
 
-1. Place the controller flat on a steady surface and run **Sensor Cal**.
+1. Place the controller flat on a steady surface and run **Calibrate ▼** > **Sensor Calibration**.
 2. Choose the **Target**.
 3. Choose activation buttons and **Hold** or **Toggle**.
 4. Start testing with a low sensitivity.
@@ -665,7 +734,9 @@ If Audio or Mix produces a constant high-pitched sound:
 
 ![Gamepad Tester Input Monitor](assets/v0.8.2/tester-input.png)
 
-Select **Gamepad Test** at the bottom of the main window, or run
+Select **Extensions** at the bottom of the main window, select the built-in
+**Gamepad Test**, and choose **Open** (also available in the notification
+area menu), or run
 `GamepadTester.exe`, to open the standalone tester. It runs separately from
 the settings window, so its high-rate drawing does not slow down settings.
 Selecting the button again brings the existing tester forward.
@@ -1303,7 +1374,7 @@ center. See the note in [1.2](#12-install-and-first-launch).
 
 ### Gyro drift
 
-- Place the controller flat and run **Sensor Cal** again.
+- Place the controller flat and run **Calibrate ▼** > **Sensor Calibration** again.
 - Keep away from speakers, magnets, and large metal objects.
 - Increase **DZ** slightly if needed.
 
@@ -1336,7 +1407,7 @@ center. See the note in [1.2](#12-install-and-first-launch).
 | Area | Order |
 |---|---|
 | Sticks | Calibration → center deadzone → outer deadzone → curve → stabilizer |
-| Gyro | Sensor Cal → Target → activation → sensitivity → X/Y ratio → deadzone → smoothing → compensation |
+| Gyro | Sensor Calibration → Target → activation → sensitivity → X/Y ratio → deadzone → smoothing → compensation |
 | Game rumble | Test Game mode at the default Max Amp `500`; lower Max Amp or LF/HF Strength if you hear noise |
 | Audio rumble | Gate → Lvl → 6 bands → LF/HF Balance → Tail / Decay |
 | Profiles | Keep one verified stable profile and save experiments with **Save New** |

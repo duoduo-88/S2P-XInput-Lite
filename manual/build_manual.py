@@ -430,7 +430,7 @@ def build():
         (4, "功能頁籤：Buttons、Stick Map、Layers、Advanced Rumble、Gyro Map。"),
         (5, "目前頁面內容：圖中為 Switch 2 Pro 按鍵對應 Xbox 按鍵。"),
         (6, "狀態列：ViGEm、WASAPI、HidHide 與控制器／ESP32 連線狀態。"),
-        (7, "方案選單與儲存工具：Save/Apply、Save New、Import Profile、Profile Mgr.。"),
+        (7, "方案選單與儲存工具：Save/Apply、Save New、Import ▼、Extensions、Profile Mgr.。"),
         (8, "全域工具：切換語言、還原、校正、刷韌體、重啟連線與 Pin。"),
     ])
     add_heading(doc, "2.1　方案操作", 2)
@@ -438,7 +438,7 @@ def build():
         "切換方案：從 Profile 下拉選單選擇已儲存方案。",
         "儲存/套用：覆寫目前可寫入的方案，並立即套用至連線。",
         "另存新方案：保留目前方案，使用目前畫面數值建立新方案。",
-        "匯入方案：載入外部 .ini 方案；名稱衝突時依視窗提示處理。",
+        "匯入 ▼ → 匯入方案：載入外部 .ini 方案；名稱衝突時依視窗提示處理。",
         "管理方案：重新命名或刪除個人方案。System Default 不可覆寫。",
     ])
 
@@ -462,7 +462,7 @@ def build():
     add_note(doc, "建議順序", "先完成搖桿校正，再調中心死區，最後調整曲線。若先用曲線補償硬體偏移，容易造成左右方向手感不一致。", "ok")
     add_heading(doc, "3.2　校正", 2)
     add_steps(doc, [
-        "按主視窗下方「校正搖桿（Calibrate）」。",
+        "按主視窗下方「校正 ▼（Calibrate）」並選擇「校正搖桿」。",
         "依命令列提示讓搖桿回到中心，再沿完整外圈緩慢旋轉。",
         "完成後回到主介面測試；校正資料依控制器保存。",
     ])
@@ -511,11 +511,11 @@ def build():
         (2, "Target：輸出到左搖桿、右搖桿或滑鼠；可反轉 X／Y。"),
         (3, "Control Mode：Aim（Center）適合瞄準；Wheel（Tilt）適合傾斜操控。"),
         (4, "Gyro Response：感度、X/Y 比例、死區、反死區與平滑。"),
-        (5, "Stability 與校正工具：抑制突變、適應輸入並執行 Sensor Cal。"),
+        (5, "Stability 與校正工具：抑制突變與適應輸入；感測器校正位於主視窗「校正 ▼」。"),
     ])
     add_heading(doc, "6.1　建議設定流程", 2)
     add_steps(doc, [
-        "將控制器放在穩定、無震動的平面，執行 Sensor Cal。",
+        "將控制器放在穩定、無震動的平面，執行「校正 ▼」→「感測器校正」。",
         "先選 Target，再決定 Hold 或 Toggle 啟用方式。",
         "從較低感度開始測試，調整 X/Y Ratio 修正水平與垂直速度差。",
         "只有中心容易漂移時才增加 DZ；若小動作無法輸出，再少量增加 Anti DZ。",
@@ -616,7 +616,7 @@ def build():
         ("音訊震動無反應", "確認 WASAPI 為 Ready、Windows 預設輸出裝置正確，並選擇 Audio 或 Mix。"),
         ("安靜處仍有震動", "提高 Gate，降低 Lvl，並降低 High／Ultra 頻段。"),
         ("震動有撞擊聲", "降低 Max Amp、LF/HF Strength，或降低容易觸發異音的頻段增益。"),
-        ("陀螺儀漂移", "重新 Sensor Cal；降低環境震動與磁性干擾，必要時增加少量 DZ。"),
+        ("陀螺儀漂移", "重新執行「校正 ▼」→「感測器校正」；降低環境震動與磁性干擾，必要時增加少量 DZ。"),
         ("方案無法覆寫", "System Default 為唯讀；使用 Save New 建立個人方案。"),
         ("設定重啟後消失", "確認修改後已按 Save/Apply，且程式所在資料夾可寫入。"),
     ])

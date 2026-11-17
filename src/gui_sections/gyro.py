@@ -298,12 +298,6 @@ def build_gyro_section(gui, mapping_notebook):
     gyro_action_row.grid(
         row=len(gyro_rows), column=0, columnspan=4, pady=(10, 2)
     )
-    gui.gyro_calibration_button = ttk.Button(
-        gyro_action_row,
-        text="感測器校正",
-        command=gui.calibrate_gyro,
-    )
-    gui.gyro_calibration_button.pack(side="left", padx=(0, 6))
     gui.gyro_curve_button = ttk.Button(
         gyro_action_row,
         text="感度曲線",

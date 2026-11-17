@@ -1570,7 +1570,7 @@ class BluetoothController:
             print()
             print(
                 "如需校正搖桿，請先關閉本程式，"
-                "再按下「校正搖桿」按鈕。"
+                "再按下「校正」並選擇「校正搖桿」。"
             )
             print("接著依照校正程序的畫面提示操作即可。")
             print()

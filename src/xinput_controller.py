@@ -207,6 +207,7 @@ class XInputController:
             else (vg.VX360Gamepad() if activate_runtime else None)
         )
         self._test_telemetry = None
+        self._extension_input = None
         self._test_xinput_slot = None
         self._test_gyro_active = False
         self._test_input_rate_hz = None
@@ -715,6 +716,7 @@ class XInputController:
             preserved = {
                 "pad": self.pad,
                 "_test_telemetry": self._test_telemetry,
+                "_extension_input": self._extension_input,
                 "_test_xinput_slot": self._test_xinput_slot,
                 "_test_input_rate_hz": self._test_input_rate_hz,
                 "_rumble_sender": self._rumble_sender,
@@ -740,6 +742,14 @@ class XInputController:
             # the inactive snapshot's pad/condition between two assignments.
             self.__dict__.update(replacement_state)
             condition.notify_all()
+
+    def set_extension_input(self, source):
+        """Attach or detach the optional Extensions input mixer.
+
+        One attribute assignment is atomic for the input thread, which reads
+        it once per report.  ``None`` restores the plain physical path.
+        """
+        self._extension_input = source
 
     def set_test_telemetry(self, telemetry):
         """Attach the optional shared-memory diagnostics publisher."""
@@ -4708,6 +4718,12 @@ class XInputController:
         report.sThumbLY = round(final_ly * 32767)
         report.sThumbRX = round(final_rx * 32767)
         report.sThumbRY = round(final_ry * 32767)
+
+        # Optional Extensions input is merged into this one report; S2P keeps
+        # the only virtual pad.  Disabled costs a single attribute check.
+        extension_input = self._extension_input
+        if extension_input is not None:
+            extension_input.merge_into(report)
 
         self._publish_test_telemetry(
             state,

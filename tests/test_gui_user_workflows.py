@@ -1,6 +1,7 @@
 from pathlib import Path
 from contextlib import contextmanager
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -100,6 +101,158 @@ class GUIUserWorkflowTests(unittest.TestCase):
         self.close_gui()
         self.assertEqual(self.callback_errors, [])
         self.assertEqual(self.errors, [])
+
+    def test_footer_buttons(self):
+        gui = self.gui
+        calibration = gui.calibration_button
+        self.assertEqual(calibration.cget("text"), "Calibrate")
+        self.assertEqual(calibration.cget("style"), "Dropdown.TButton")
+        self.assertEqual(list(calibration._s2p_dropdown_items()), [
+            ("校正搖桿", gui.run_calibration), ("感測器校正", gui.calibrate_gyro),
+        ])
+        self.assertEqual(
+            [gui.tr(label) for label in ("校正搖桿", "感測器校正")],
+            ["Stick Calibration", "Sensor Calibration"],
+        )
+        # Sensor calibration progress is shown on the footer menu button.
+        self.assertIs(gui.gyro_calibration_button, calibration)
+        # The arrow is a right-aligned style element, not part of the caption.
+        self.assertEqual(gui.write_esp32_button.cget("text"), "ESP32")
+        self.assertEqual(gui.write_esp32_button.cget("style"), "Dropdown.TButton")
+        self.assertIn("Dropdown.arrow", str(ttk.Style(gui.root).layout("Dropdown.TButton")))
+        # Import Profile / Import Settings are separate buttons again, and the
+        # last profile-row button opens Extensions (Gamepad Test lives there).
+        row = gui.extensions_button.master
+        captions = {
+            int(widget.grid_info()["column"]): widget.cget("text")
+            for widget in row.winfo_children() if isinstance(widget, ttk.Button)
+        }
+        self.assertEqual(
+            [captions[column] for column in (4, 5, 6)],
+            ["Import Profile", "Import Settings", "Extensions"],
+        )
+        self.assertFalse(hasattr(gui, "gamepad_test_button"))
+        gyro_buttons = [
+            widget.cget("text") for widget in gui.gyro_curve_button.master.winfo_children()
+            if isinstance(widget, ttk.Button)
+        ]
+        self.assertNotIn(gui.tr("感測器校正"), gyro_buttons)
+
+    def test_extensions_window_manages_a_tool_list(self):
+        from gui_sections import extensions as extensions_window
+        import extension_bridge
+        import time as time_module
+
+        status_path = self.directory / "status.json"
+        commands = []
+        warnings = []
+        picks = []
+        opened = []
+        for patcher in (
+            patch.object(extensions_window, "CONFIG_PATH", self.config_path),
+            patch.object(extensions_window, "STATUS_PATH", status_path),
+            patch.object(extensions_window, "enqueue_controller_command", commands.append),
+            patch.object(
+                extensions_window.filedialog, "askopenfilename",
+                side_effect=lambda **_kwargs: picks.pop(0),
+            ),
+            patch.object(
+                extensions_window.messagebox, "showwarning",
+                side_effect=lambda *args, **_kwargs: warnings.append(args),
+            ),
+            patch.object(self.gui, "_bring_child_to_front"),
+            patch.object(self.gui, "open_gamepad_test_window", lambda: opened.append("tester")),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        window = self.gui.open_extensions_window()
+        self.assertIs(self.gui.open_extensions_window(), window)
+        self.assertEqual(window.title(), "Extensions")
+        tree = window._s2p_tree
+        buttons = window._s2p_buttons
+        conflicts = window._s2p_conflict_label
+        tester = extensions_window.BUILTIN_GAMEPAD_TESTER
+
+        def saved():
+            return extension_bridge.load_extension_settings(
+                config_utils.load_config(self.config_path)
+            )
+
+        # The built-in Gamepad Test is always listed and opens even when
+        # Extensions is disabled; it cannot be removed or given permissions.
+        self.assertEqual(tree.get_children(), (tester,))
+        self.assertEqual(tree.set(tester, "name"), "Gamepad Test")
+        tree.selection_set(tester)
+        self.root.update()
+        self.assertTrue(buttons["remove"].instate(["disabled"]))
+        self.assertTrue(window._s2p_options["allow_input"].instate(["disabled"]))
+        buttons["open"].invoke()
+        self.assertEqual(opened, ["tester"])
+        self.assertEqual(conflicts.cget("text"), "No conflicts")
+
+        window._s2p_enabled_checkbox.invoke()
+        macro = str(self.directory / "Macro.exe")
+        multi = str(self.directory / "Multi.exe")
+        picks.extend([macro, macro.upper(), multi])
+        buttons["add"].invoke()
+        buttons["add"].invoke()  # the same EXE again is refused
+        buttons["add"].invoke()
+        self.assertEqual(len(warnings), 1)
+        settings = saved()
+        self.assertTrue(settings.enabled)
+        self.assertEqual([tool.path for tool in settings.tools], [macro, multi])
+        macro_id, multi_id = (tool.tool_id for tool in settings.tools)
+        self.assertEqual(tree.get_children(), (tester, macro_id, multi_id))
+        self.assertEqual(
+            tree.set(macro_id, "status"), "Waiting for connection (connector not running)",
+        )
+        self.assertEqual(commands, [])  # no connector running: nothing queued
+        self.assertEqual(
+            [key for key, _label in extensions_window.tray_items(self.gui)],
+            [tester, macro_id, multi_id],
+        )
+
+        tree.selection_set(macro_id)
+        self.root.update()
+        window._s2p_options["allow_read"].invoke()
+        self.assertTrue(saved().tool(macro_id).allow_read)
+        self.assertEqual(tree.set(macro_id, "permissions"), "Input / Read")
+
+        status_path.write_text(json.dumps({
+            "state": "connected", "updated_at": time_module.time(),
+            "extensions": {"state": "waiting", "tools": {
+                macro_id: {"state": "connected", "name": "Macro Tool"},
+                multi_id: {
+                    "state": "error", "code": "conflict",
+                    "stick": "left", "with_tool": "Macro Tool",
+                },
+            }},
+        }), encoding="utf-8")
+        # Permission changes reach a running connector without a manual restart.
+        window._s2p_options["allow_read"].invoke()
+        self.assertFalse(saved().tool(macro_id).allow_read)
+        self.assertEqual(commands, ["extensions_apply"])
+        self.assertEqual(tree.set(macro_id, "name"), "Macro Tool")
+        self.assertEqual(tree.set(macro_id, "status"), "Connected")
+        self.assertIn("Connection failed", tree.set(multi_id, "status"))
+        self.assertIn(
+            '"Multi" and "Macro Tool" both want to control the Left Stick',
+            conflicts.cget("text"),
+        )
+
+        buttons["open"].invoke()  # the connector launches the selected tool
+        self.assertEqual(commands[-1], f"extensions_connect:{macro_id}")
+
+        tree.selection_set(multi_id)
+        self.root.update()
+        buttons["toggle"].invoke()
+        self.assertFalse(saved().tool(multi_id).enabled)
+        self.assertEqual(tree.set(multi_id, "status"), "Disabled")
+        self.assertTrue(buttons["open"].instate(["disabled"]))
+        buttons["remove"].invoke()
+        self.assertEqual([tool.tool_id for tool in saved().tools], [macro_id])
+        window.destroy()
+        self.assertIsNone(self.gui._extensions_window)
 
     def test_gyro_compensation_settings_save_both_axes(self):
         curve = self.gui.gyro_curve_button
@@ -439,6 +592,46 @@ class GUIUserWorkflowTests(unittest.TestCase):
         yield widget
         for child in widget.winfo_children():
             yield from GUIUserWorkflowTests.descendants(child)
+
+    def test_switching_tabs_does_not_reread_system_default(self):
+        def notebooks(widget):
+            for child in widget.winfo_children():
+                if isinstance(child, ttk.Notebook):
+                    yield child
+                yield from notebooks(child)
+
+        main = max(notebooks(self.root), key=lambda notebook: len(notebook.tabs()))
+        self.root.deiconify()
+        for tab in main.tabs():  # first visits bind the reset menus
+            main.select(tab)
+            self.root.update()
+        real_read = config_gui.read_profile
+        with patch.object(config_gui, "read_profile", wraps=real_read) as reads:
+            for _round in range(2):
+                for tab in main.tabs():
+                    main.select(tab)
+                    self.root.update()
+            self.assertEqual(reads.call_count, 0)
+            # The cached defaults follow edits to System Default.ini.
+            before = self.gui.gyro_system_defaults()
+            path = self.profiles / "System Default.ini"
+            stat = path.stat()
+            os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+            self.assertEqual(self.gui.gyro_system_defaults(), before)
+            self.assertEqual(reads.call_count, 1)
+
+    def test_mapping_layer_checkbox_draws_no_focus_box(self):
+        def checkboxes(widget):
+            for child in widget.winfo_children():
+                if isinstance(child, ttk.Checkbutton):
+                    yield child
+                yield from checkboxes(child)
+
+        boxes = list(checkboxes(self.gui.mapping_layers_list_frame))
+        self.assertTrue(boxes)  # the bundled "mouse" layer
+        for box in boxes:
+            # Without keyboard focus ttk never draws the dotted focus rectangle.
+            self.assertFalse(int(box.cget("takefocus")))
 
     def test_mapping_layer_management_cancel_and_persistence(self):
         original_layers = len(self.gui.mapping_layers)

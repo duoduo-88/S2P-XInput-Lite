@@ -39,6 +39,8 @@ TPM_NONOTIFY = 0x0080
 
 MENU_SHOW = 1001
 MENU_EXIT = 1002
+MENU_EXTRA_BASE = 2000  # extra items: MENU_EXTRA_BASE + index
+MF_GRAYED = 0x00000001
 IDI_APPLICATION = 32512
 
 
@@ -134,6 +136,8 @@ class SystemTrayIcon:
         self.icon_path = Path(icon_path) if icon_path is not None else None
         self._show_label = str(show_label)
         self._exit_label = str(exit_label)
+        self._extra_title = ""
+        self._extra_items = ()
         self._labels_lock = threading.Lock()
         self._actions = queue.Queue()
         self._ready = threading.Event()
@@ -214,8 +218,20 @@ class SystemTrayIcon:
             self._show_label = str(show_label)
             self._exit_label = str(exit_label)
 
+    def set_extra_items(self, title, items):
+        """Show ``(key, label)`` items in their own menu section.
+
+        Choosing one queues ``("extra", key)``; an empty list hides the section.
+        """
+        with self._labels_lock:
+            self._extra_title = str(title)
+            self._extra_items = tuple((str(key), str(label)) for key, label in items)
+
     def get_action(self):
-        """Return one pending ``show``/``exit`` action without blocking."""
+        """Return one pending action without blocking.
+
+        ``"show"``/``"exit"``, or ``("extra", key)`` for an extra item.
+        """
         try:
             return self._actions.get_nowait()
         except queue.Empty:
@@ -477,7 +493,15 @@ class SystemTrayIcon:
             with self._labels_lock:
                 show_label = self._show_label
                 exit_label = self._exit_label
+                extra_title = self._extra_title
+                extra_items = self._extra_items
             user32.AppendMenuW(menu, MF_STRING, MENU_SHOW, show_label)
+            if extra_items:
+                user32.AppendMenuW(menu, MF_SEPARATOR, 0, None)
+                if extra_title:
+                    user32.AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, extra_title)
+                for index, (_key, label) in enumerate(extra_items):
+                    user32.AppendMenuW(menu, MF_STRING, MENU_EXTRA_BASE + index, label)
             user32.AppendMenuW(menu, MF_SEPARATOR, 0, None)
             user32.AppendMenuW(menu, MF_STRING, MENU_EXIT, exit_label)
             point = POINT()
@@ -499,6 +523,8 @@ class SystemTrayIcon:
                 self._actions.put("show")
             elif command == MENU_EXIT:
                 self._actions.put("exit")
+            elif MENU_EXTRA_BASE <= command < MENU_EXTRA_BASE + len(extra_items):
+                self._actions.put(("extra", extra_items[command - MENU_EXTRA_BASE][0]))
         finally:
             user32.DestroyMenu(menu)
 
