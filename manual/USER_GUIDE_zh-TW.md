@@ -2,7 +2,7 @@
 
 [English](USER_GUIDE.md)
 
-S2P-XInput-Lite 把 Switch 2 Pro Controller 轉成 Windows 遊戲可直接使用的 Xbox（XInput）手把，
+S2P-XInput-Lite 把 Switch 2 Pro Controller 轉成 Windows 遊戲可直接使用的 XInput 相容（Xbox）手把，
 並提供搖桿曲線、按鍵與方向映射、映射層、陀螺儀、震動與音訊震動等設定。隨附的手把測試程式
 可檢查輸入、震動、回報率，也能做瞄準測試。
 
@@ -233,13 +233,13 @@ ESP32-S3 有兩種運作方式：**Bridge**（橋接）需要保持 Windows 程�
 
 ### 4.1 Buttons（按鍵映射）
 
-Buttons 頁籤（見 [2. 主視窗](#2-主視窗與方案) 的截圖）將手把的實體按鍵映射為 Xbox 輸出。
+Buttons 頁籤（見 [2. 主視窗](#2-主視窗與方案) 的截圖）將手把的實體按鍵映射為 XInput 輸出。
 
-- 左欄為 Switch 2 Pro 的實體按鍵，右欄下拉選單為 XInput／Xbox 輸出。
+- 左欄為 Switch 2 Pro 的實體按鍵，右欄下拉選單為 XInput 輸出。
 - `NONE`（無）表示不輸出。
 - **Reset**（還原）會還原本頁映射。
-- 一般方案可將 A/B 與 X/Y 對調，以符合 Xbox 的按鍵位置。CAPT、C、GR、GL 等額外按鍵也能指定為
-  Xbox 按鍵、搖桿按下或 `NONE`。
+- 一般方案可將 A/B 與 X/Y 對調，以符合 XInput 的按鍵位置。CAPT、C、GR、GL 等額外按鍵也能指定為
+  XInput 按鍵、搖桿按下或 `NONE`。
 - 展開下拉選單後可直接用滾輪捲動清單；捲動不會套用選項，點選後仍需按 **Save/Apply**。
 
 #### 錄製鍵盤或滑鼠輸入
@@ -250,12 +250,12 @@ Buttons 頁籤（見 [2. 主視窗](#2-主視窗與方案) 的截圖）將手把
 例如 F12、Ctrl+S、Ctrl+Shift+S。欄位會以 `KB:1`、`KB:Ctrl+S`、`M:Wheel↓` 等簡寫顯示，
 游標移上去可查看完整映射。
 
-#### 同時按下多個 Xbox 按鍵
+#### 同時按下多個 XInput 按鍵
 
 ![手把組合鍵](assets/v0.8.2/gamepad-combo.png)
 
 在按鍵或 Stick Map 的下拉選單選擇 **Gamepad Combo**（自訂手把組合），可讓一個輸入同時按下 2 到 4 個
-Xbox 按鍵，例如 X + Y。勾選按鍵後按 **OK**（確定），欄位會顯示為 `Pad:X+Y`。要修改時再選一次
+XInput 按鍵，例如 X + Y。勾選按鍵後按 **OK**（確定），欄位會顯示為 `Pad:X+Y`。要修改時再選一次
 **Gamepad Combo** 即可。
 
 - 組合內的按鍵會在同一幀一起按下、一起放開，按住多久就維持多久，不含延遲、順序、連發或自動重複。
@@ -363,7 +363,7 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
 
 ### 6.1 Activation（啟動方式）
 
-- **Button**（按鍵）：按 **…** 選擇一顆或多顆啟動按鍵。原本的 Xbox／鍵盤映射仍會保留。
+- **Button**（按鍵）：按 **…** 選擇一顆或多顆啟動按鍵。原本的 XInput／鍵盤映射仍會保留。
 - **Off**（關閉）：不產生任何陀螺儀輸出。
 - **Hold**（按住）：按住啟動按鍵時啟用。
 - **Toggle**（切換）：每按一次切換啟用或停用。

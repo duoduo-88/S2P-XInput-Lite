@@ -57,7 +57,7 @@ def build_gyro_section(gui, mapping_notebook):
         "關閉：不產生任何陀螺儀映射輸出。\n\n"
         "按住：選定按鍵符合任一／全部條件時啟用。\n\n"
         "切換：條件由未成立變成成立時切換一次。\n\n"
-        "可選多顆按鍵；原本的 Xbox／鍵盤映射仍會保留。"
+        "可選多顆按鍵；原本的 XInput／鍵盤映射仍會保留。"
     ).grid(row=0, column=6, padx=(2, 0))
 
     def update_activation_button_state(*_args):

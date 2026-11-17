@@ -108,7 +108,7 @@ class ReadableComboboxTests(unittest.TestCase):
     def test_native_open_list_fits_longest_row_and_scrollbar(self):
         text = "Linear Mouse Wheel"
         combo = ttk.Combobox(
-            self.root, values=("4WAY", text, "Linear Xbox RT"),
+            self.root, values=("4WAY", text, "Linear XInput RT"),
             width=6, height=2, state="readonly",
         )
         combo.current(0)

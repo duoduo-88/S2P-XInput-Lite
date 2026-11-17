@@ -4602,7 +4602,7 @@ class ConfigGUI:
         confirmed = messagebox.askyesno(
             "安裝 ViGEmBus",
             "未偵測到 ViGEmBus 驅動程式。\n\n"
-            "Xbox／XInput 輸出需要此驅動。\n\n"
+            "XInput 輸出需要此驅動。\n\n"
             "安裝程式會從官方來源下載 ViGEmBus，需要網路連線及"
             "系統管理員權限。\n\n"
             "是否立即執行隨附的安裝程式？"
@@ -5031,7 +5031,7 @@ class ConfigGUI:
                 self.tr("尚未安裝 HidHide"),
                 self.tr(
                     "未偵測到 HidHide。USB 有線模式仍可使用，但遊戲可能同時收到"
-                    "實體手把與虛擬 Xbox 手把。\n\n是否前往 HidHide 官方下載頁面？"
+                    "實體手把與虛擬 XInput 手把。\n\n是否前往 HidHide 官方下載頁面？"
                     "\n\n選擇「否」後不再自動提醒；需要時可點擊視窗下方的"
                     "「HidHide：缺少」。"
                 ),
@@ -5053,7 +5053,7 @@ class ConfigGUI:
             return True
 
         message = self.tr(
-            "偵測到 USB 有線手把。為避免遊戲同時收到實體 HID 與虛擬 Xbox 手把，"
+            "偵測到 USB 有線手把。為避免遊戲同時收到實體 HID 與虛擬 XInput 手把，"
             "程式可以將實體手把加入 HidHide 隱藏清單，並允許攜帶版 Python "
             "與 Raw HID 量測器繼續讀取。"
         )
@@ -7725,8 +7725,8 @@ class ConfigGUI:
     def stick_mode_label(self, mode):
         labels = {
             "MOUSE_WHEEL_LINEAR": "線性滑鼠滾輪",
-            "XINPUT_LT_LINEAR": "線性 Xbox LT",
-            "XINPUT_RT_LINEAR": "線性 Xbox RT",
+            "XINPUT_LT_LINEAR": "線性 XInput LT",
+            "XINPUT_RT_LINEAR": "線性 XInput RT",
         }
         return self.tr(labels.get(str(mode), str(mode)))
 
@@ -8434,7 +8434,7 @@ class ConfigGUI:
             self.open_gamepad_combo_dialog(variable)
 
     def open_gamepad_combo_dialog(self, variable):
-        """Pick 2-4 Xbox buttons that one input presses in the same report."""
+        """Pick 2-4 XInput buttons that one input presses in the same report."""
         self._track_custom_mapping_variable(variable)
         previous_mapping = getattr(variable, "_s2p_last_valid_mapping", "NONE")
         state = {"committed": False}
@@ -8448,7 +8448,7 @@ class ConfigGUI:
         columns = 4
         ttk.Label(
             frame,
-            text=self.tr("勾選要同時按下的 Xbox 按鍵（{low} 到 {high} 個）。").format(
+            text=self.tr("勾選要同時按下的 XInput 按鍵（{low} 到 {high} 個）。").format(
                 low=COMBO_MIN_MEMBERS, high=COMBO_MAX_MEMBERS,
             ),
         ).grid(row=0, column=0, columnspan=columns, sticky="w", pady=(0, 8))
@@ -9977,7 +9977,7 @@ class ConfigGUI:
         ttk.Label(button_inner, text="Switch 2 Pro", anchor="e").grid(
             row=0, column=0, sticky="e", padx=(0, 8), pady=(0, 5)
         )
-        ttk.Label(button_inner, text="XInput / Xbox", anchor="w").grid(
+        ttk.Label(button_inner, text="XInput", anchor="w").grid(
             row=0, column=1, sticky="w", pady=(0, 5)
         )
         button_vars = {}

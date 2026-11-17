@@ -37,7 +37,7 @@ def build_mapping_buttons_section(gui, right_frame):
     ttk.Label(mapping_frame, text="Switch 2 Pro").grid(
         row=0, column=0, sticky="e", padx=(0, 8), pady=(0, 4)
     )
-    ttk.Label(mapping_frame, text="XInput / Xbox").grid(
+    ttk.Label(mapping_frame, text="XInput").grid(
         row=0, column=1, sticky="w", pady=(0, 4)
     )
 
@@ -102,7 +102,7 @@ def build_mapping_buttons_section(gui, right_frame):
         "支援鍵盤單鍵、Ctrl／Shift／Alt／Win 複合鍵，"
         "以及滑鼠左鍵、右鍵與中鍵。\n"
         "例如：F12、Ctrl + S、Win + D。\n\n"
-        "選擇「自訂手把組合」可讓一個按鍵同時按下 2 到 4 個 Xbox 按鍵，"
+        "選擇「自訂手把組合」可讓一個按鍵同時按下 2 到 4 個 XInput 按鍵，"
         "例如 X + Y。"
     ).place(
         relx=1.0,

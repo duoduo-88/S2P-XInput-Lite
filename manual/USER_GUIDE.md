@@ -2,7 +2,7 @@
 
 [繁體中文](USER_GUIDE_zh-TW.md)
 
-S2P-XInput-Lite turns a Switch 2 Pro Controller into an Xbox (XInput)
+S2P-XInput-Lite turns a Switch 2 Pro Controller into an XInput-compatible (Xbox)
 controller that Windows games accept directly. It provides stick curves,
 button and direction mapping, mapping layers, gyro, rumble, and audio-driven
 rumble. The bundled Gamepad Tester checks input, rumble, and report rate, and
@@ -280,14 +280,14 @@ enlarge the deadzone for it (see the note in [1.2](#12-install-and-first-launch)
 ### 4.1 Buttons
 
 The **Buttons** tab (shown in the [main window screenshot](#2-main-window-and-profiles))
-maps the controller's physical buttons to Xbox outputs.
+maps the controller's physical buttons to XInput outputs.
 
 - The left column lists the Switch 2 Pro buttons, and each menu on the right
-  chooses the XInput / Xbox output.
+  chooses the XInput output.
 - `NONE` sends nothing.
 - **Reset** restores this tab's mapping.
-- A typical profile swaps A/B and X/Y to match Xbox button positions. Extra
-  buttons such as CAPT, C, GR, and GL can map to Xbox buttons, stick clicks,
+- A typical profile swaps A/B and X/Y to match XInput button positions. Extra
+  buttons such as CAPT, C, GR, and GL can map to XInput buttons, stick clicks,
   or `NONE`.
 - With a menu open, scroll the list with the mouse wheel. Scrolling does not
   pick an option. After choosing one, select **Save/Apply**.
@@ -301,12 +301,12 @@ key combination to map, such as F12, Ctrl+S, or Ctrl+Shift+S. The field shows
 short forms such as `KB:1`, `KB:Ctrl+S`, and `M:Wheel↓`. Hover over it to see
 the full mapping.
 
-#### Press several Xbox buttons at once
+#### Press several XInput buttons at once
 
 ![Choosing a gamepad combo](assets/v0.8.2/gamepad-combo.png)
 
 Choose **Gamepad Combo** in a button or Stick Map menu to have one input press
-2 to 4 Xbox buttons together, such as X + Y. Select the buttons and then **OK**.
+2 to 4 XInput buttons together, such as X + Y. Select the buttons and then **OK**.
 The field shows the combo as `Pad:X+Y`. Choose **Gamepad Combo** again to
 change it.
 
@@ -442,7 +442,7 @@ explains it in detail.
 ### 6.1 Activation
 
 - **Button**: select **…** to choose one or more activation buttons. Their
-  original Xbox or keyboard mappings still apply.
+  original XInput or keyboard mappings still apply.
 - **Off**: no gyro output.
 - **Hold**: active while an activation button is held.
 - **Toggle**: each press turns the gyro on or off.

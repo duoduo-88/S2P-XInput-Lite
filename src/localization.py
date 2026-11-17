@@ -970,8 +970,8 @@ EN_TEXT = {
     "輸入方向": "Input Direction",
     "滾輪速度": "Wheel Speed",
     "線性滑鼠滾輪": "Linear Mouse Wheel",
-    "線性 Xbox LT": "Linear Xbox LT",
-    "線性 Xbox RT": "Linear Xbox RT",
+    "線性 XInput LT": "Linear XInput LT",
+    "線性 XInput RT": "Linear XInput RT",
     "映射層": "Layers",
     "只在「混合」模式生效。\n\n0.00 = 只保留遊戲原生震動\n0.35 = 建議起始值（遊戲 65%、音訊 35%）\n1.00 = 只保留音訊震動":
         "Only applies in Mix mode.\n\n0.00 = game rumble only\n0.35 = recommended starting point (65% game, 35% audio)\n1.00 = audio rumble only",
@@ -1371,13 +1371,13 @@ EN_TEXT = {
     "確定要刪除這個方案嗎？": "Delete this profile?",
     "自定義鍵盤映射": "Custom Key Map",
     "自定義輸入映射": "Custom Input Map",
-    "選擇「自訂按鍵」後，按下要映射的輸入。\n\n支援鍵盤單鍵、Ctrl／Shift／Alt／Win 複合鍵，以及滑鼠左鍵、右鍵與中鍵。\n例如：F12、Ctrl + S、Win + D。\n\n選擇「自訂手把組合」可讓一個按鍵同時按下 2 到 4 個 Xbox 按鍵，例如 X + Y。":
-        "Choose Shortcut, then press the input to map.\n\nSupports single keys; Ctrl/Shift/Alt/Win combinations; and left, right, or middle mouse buttons.\nExamples: F12, Ctrl + S, Win + D.\n\nChoose Gamepad Combo to have one button press 2 to 4 Xbox buttons together, such as X + Y.",
+    "選擇「自訂按鍵」後，按下要映射的輸入。\n\n支援鍵盤單鍵、Ctrl／Shift／Alt／Win 複合鍵，以及滑鼠左鍵、右鍵與中鍵。\n例如：F12、Ctrl + S、Win + D。\n\n選擇「自訂手把組合」可讓一個按鍵同時按下 2 到 4 個 XInput 按鍵，例如 X + Y。":
+        "Choose Shortcut, then press the input to map.\n\nSupports single keys; Ctrl/Shift/Alt/Win combinations; and left, right, or middle mouse buttons.\nExamples: F12, Ctrl + S, Win + D.\n\nChoose Gamepad Combo to have one button press 2 to 4 XInput buttons together, such as X + Y.",
     "等待按鍵...": "Press a key...",
     "自訂手把組合": "Gamepad Combo",
     "手把組合鍵": "Gamepad Combo",
-    "勾選要同時按下的 Xbox 按鍵（{low} 到 {high} 個）。":
-        "Select the Xbox buttons to press together ({low} to {high}).",
+    "勾選要同時按下的 XInput 按鍵（{low} 到 {high} 個）。":
+        "Select the XInput buttons to press together ({low} to {high}).",
     "尚未選擇按鍵": "No buttons selected",
     "組合內的按鍵會在同一幀一起按下、一起放開，不含延遲、順序或連發。\n部分遊戲或比賽規則禁止一鍵觸發多個動作，使用前請自行確認。":
         "The buttons press and release together in the same report, with no delay, order, or repeat.\nSome games and tournament rules forbid one input triggering several actions. Check before you use it.",
@@ -1404,8 +1404,8 @@ EN_TEXT = {
     "無法啟動安裝程式": "Could Not Start Installer",
     "ViGEmBus 安裝程式已在執行，請先在安裝視窗完成操作。":
         "The ViGEmBus installer is already running. Complete it in the installer window.",
-    "未偵測到 ViGEmBus 驅動程式。\n\nXbox／XInput 輸出需要此驅動。\n\n安裝程式會從官方來源下載 ViGEmBus，需要網路連線及系統管理員權限。\n\n是否立即執行隨附的安裝程式？":
-        "ViGEmBus was not detected.\n\nThe Xbox/XInput output requires this driver.\n\nThe installer downloads ViGEmBus from the official source and requires internet access and administrator permission.\n\nRun the bundled installer now?",
+    "未偵測到 ViGEmBus 驅動程式。\n\nXInput 輸出需要此驅動。\n\n安裝程式會從官方來源下載 ViGEmBus，需要網路連線及系統管理員權限。\n\n是否立即執行隨附的安裝程式？":
+        "ViGEmBus was not detected.\n\nThe XInput output requires this driver.\n\nThe installer downloads ViGEmBus from the official source and requires internet access and administrator permission.\n\nRun the bundled installer now?",
     "找不到 Install-ViGEmBus.bat。\n\n請確認發佈包內容完整。":
         "Install-ViGEmBus.bat was not found.\n\nMake sure the release package is complete.",
     "無法啟動 ViGEmBus 安裝程式：": "Could not start the ViGEmBus installer:",
@@ -1431,8 +1431,8 @@ EN_TEXT = {
     "連接程式未啟動": "Connector not running",
     "狀態未知": "Unknown state",
     "● ViGEmBus 驅動程式：已安裝": "● ViGEmBus driver: installed",
-    "● 未偵測到 ViGEmBus 驅動程式，目前無法建立 Xbox 虛擬控制器。":
-        "● ViGEmBus driver not found; Xbox virtual controller unavailable.",
+    "● 未偵測到 ViGEmBus 驅動程式，目前無法建立 XInput 虛擬控制器。":
+        "● ViGEmBus driver not found; XInput virtual controller unavailable.",
     "● ViGEm：正常": "● ViGEm: Ready",
     "● ViGEm：缺少": "● ViGEm: Missing",
     "● HidHide：正常": "● HidHide: Ready",
@@ -1443,10 +1443,10 @@ EN_TEXT = {
     "● HidHide：錯誤": "● HidHide: Error",
     "HidHide 狀態錯誤": "HidHide Status Error",
     "尚未安裝 HidHide": "HidHide Not Installed",
-    "未偵測到 HidHide。USB 有線模式仍可使用，但遊戲可能同時收到實體手把與虛擬 Xbox 手把。\n\n是否前往 HidHide 官方下載頁面？":
-        "HidHide was not detected. Wired USB mode can still be used, but games may receive both the physical controller and virtual Xbox controller.\n\nOpen the official HidHide download page?",
-    "未偵測到 HidHide。USB 有線模式仍可使用，但遊戲可能同時收到實體手把與虛擬 Xbox 手把。\n\n是否前往 HidHide 官方下載頁面？\n\n選擇「否」後不再自動提醒；需要時可點擊視窗下方的「HidHide：缺少」。":
-        "HidHide was not detected. Wired USB mode can still be used, but games may receive both the physical controller and virtual Xbox controller.\n\nOpen the official HidHide download page?\n\nChoose No to stop automatic reminders. You can open the download page later by clicking HidHide: Missing at the bottom of the window.",
+    "未偵測到 HidHide。USB 有線模式仍可使用，但遊戲可能同時收到實體手把與虛擬 XInput 手把。\n\n是否前往 HidHide 官方下載頁面？":
+        "HidHide was not detected. Wired USB mode can still be used, but games may receive both the physical controller and virtual XInput controller.\n\nOpen the official HidHide download page?",
+    "未偵測到 HidHide。USB 有線模式仍可使用，但遊戲可能同時收到實體手把與虛擬 XInput 手把。\n\n是否前往 HidHide 官方下載頁面？\n\n選擇「否」後不再自動提醒；需要時可點擊視窗下方的「HidHide：缺少」。":
+        "HidHide was not detected. Wired USB mode can still be used, but games may receive both the physical controller and virtual XInput controller.\n\nOpen the official HidHide download page?\n\nChoose No to stop automatic reminders. You can open the download page later by clicking HidHide: Missing at the bottom of the window.",
     "無法開啟下載頁面": "Could Not Open Download Page",
     "請手動開啟以下網址：": "Open this URL manually:",
     "設定 HidHide": "Set Up HidHide",
@@ -1457,9 +1457,9 @@ EN_TEXT = {
         "Adjustable settings were reset, but HidHide could not be disabled. Close HidHide Configuration Client and try again.",
     "無法讀取 HidHide 設定。請先關閉 HidHide Configuration Client，再重新啟動連接程式。":
         "Could not read HidHide settings. Close HidHide Configuration Client, then restart the connector.",
-    "偵測到 USB 有線手把。為避免遊戲同時收到實體 HID 與虛擬 Xbox 手把，程式可以將實體手把加入 HidHide 隱藏清單，並允許攜帶版 Python 與 Raw HID 量測器繼續讀取。":
+    "偵測到 USB 有線手把。為避免遊戲同時收到實體 HID 與虛擬 XInput 手把，程式可以將實體手把加入 HidHide 隱藏清單，並允許攜帶版 Python 與 Raw HID 量測器繼續讀取。":
         "A wired USB controller was detected. To prevent games from receiving "
-        "both the physical HID and virtual Xbox controller, the app can hide "
+        "both the physical HID and virtual XInput controller, the app can hide "
         "the physical device while allowing the portable Python runtime and "
         "Raw HID probe to read it.",
     "HidHide 全域隱藏目前關閉；繼續將會開啟它。":
@@ -1560,8 +1560,8 @@ EN_TEXT = {
         "esptool flashing failed. Exit code: ",
     "偵測到尚未儲存的設定變更。\n\n是否先儲存設定，再重新啟動連接程式？\n\n是：儲存後重新啟動\n否：不儲存，直接重新啟動\n取消：返回設定畫面":
         "Unsaved changes were detected.\n\nSave before restarting the connector?\n\nYes: save and restart\nNo: restart without saving\nCancel: return to settings",
-    "未偵測到 ViGEmBus 驅動程式。\n\n目前無法啟動 Xbox 虛擬控制器。":
-        "ViGEmBus was not found.\n\nThe Xbox virtual controller cannot start.",
+    "未偵測到 ViGEmBus 驅動程式。\n\n目前無法啟動 XInput 虛擬控制器。":
+        "ViGEmBus was not found.\n\nThe XInput virtual controller cannot start.",
     "找不到 config.ini。\n請將 config_gui.py 放在主程式相同資料夾。":
         "config.ini was not found.\nPlace config_gui.py in the application folder.",
     "左搖桿中心死區必須介於 0.00 ～ 1.00": "Left center DZ must be 0.00–1.00.",
@@ -1632,11 +1632,11 @@ EN_TEXT = {
     "加速度抑制 必須介於 0 ～ 100。": "Accel suppression must be 0–100.",
     "自適應死區 必須介於 0 ～ 100。": "Adaptive DZ must be 0–100.",
     "按鍵防晃 ms 必須介於 0 ～ 120。": "Button freeze must be 0–120 ms.",
-    "按住：只有保持指定手把按鍵時啟用陀螺儀。\n\n切換：按一下啟用，再按一下關閉。\n\n啟動鍵原本的 Xbox／鍵盤映射仍會保留。":
-        "Hold: gyro is active only while the selected controller button is held.\n\nToggle: press once to enable and again to disable.\n\nThe button's original Xbox/keyboard mapping is preserved.",
-    "關閉：不產生任何陀螺儀映射輸出。\n\n按住：只有保持指定手把按鍵時啟用陀螺儀。\n\n切換：按一下啟用，再按一下關閉。\n\n啟動鍵原本的 Xbox／鍵盤映射仍會保留。":
-        "Off: no gyro-mapping output is produced.\n\nHold: gyro is active only while the selected controller button is held.\n\nToggle: press once to enable and again to disable.\n\nThe button's original Xbox/keyboard mapping is preserved.",
-    "關閉：不產生任何陀螺儀映射輸出。\n\n按住：選定按鍵符合任一／全部條件時啟用。\n\n切換：條件由未成立變成成立時切換一次。\n\n可選多顆按鍵；原本的 Xbox／鍵盤映射仍會保留。":
+    "按住：只有保持指定手把按鍵時啟用陀螺儀。\n\n切換：按一下啟用，再按一下關閉。\n\n啟動鍵原本的 XInput／鍵盤映射仍會保留。":
+        "Hold: gyro is active only while the selected controller button is held.\n\nToggle: press once to enable and again to disable.\n\nThe button's original XInput/keyboard mapping is preserved.",
+    "關閉：不產生任何陀螺儀映射輸出。\n\n按住：只有保持指定手把按鍵時啟用陀螺儀。\n\n切換：按一下啟用，再按一下關閉。\n\n啟動鍵原本的 XInput／鍵盤映射仍會保留。":
+        "Off: no gyro-mapping output is produced.\n\nHold: gyro is active only while the selected controller button is held.\n\nToggle: press once to enable and again to disable.\n\nThe button's original XInput/keyboard mapping is preserved.",
+    "關閉：不產生任何陀螺儀映射輸出。\n\n按住：選定按鍵符合任一／全部條件時啟用。\n\n切換：條件由未成立變成成立時切換一次。\n\n可選多顆按鍵；原本的 XInput／鍵盤映射仍會保留。":
         "Off: no gyro output.\n\nHold: active while the selected Any/All rule is satisfied.\n\nToggle: switches once when the rule changes from false to true.\n\nMultiple buttons are supported and their original mappings remain active.",    "回中：依陀螺儀角速度輸出，停止轉動便自動回中，適合瞄準。\n\n傾斜：以手把相對於啟用瞬間的傾斜角度控制搖桿，適合方向盤；僅支援左右搖桿輸出。\n\n自訂重設按鍵會專門用於重設中立，不再送出原本的遊戲映射。":
         "Center maps angular speed and recenters when rotation stops.\n\nTilt maps angle relative to activation and supports stick output only.\n\nThe custom recenter button is intercepted and no longer sends its game mapping.",
     "回中模式：陀螺儀角速度轉成搖桿偏移的倍率。\n僅用於回中模式。":

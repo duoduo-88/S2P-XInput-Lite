@@ -26,7 +26,7 @@ to bring over your profiles, layers, and calibration. The
 - Center gyro uses a radial deadzone and offers button spike suppression. The default button stabilization mode is Freeze Output. Gyro stick anti-deadzone now defaults to `0`. The bundled FPS-COMP preset uses `10 ms` smoothing.
 - Bundled S2P-FW `1.0.9` brings the radial deadzone, spike suppression, independent gyro compensation, and gamepad combos to Android USB HID standalone mode. Use **Flash FW** in the main app, then write your profile to the ESP32.
 - Gamepad Tester: **S2P Mobile Gamepad (Raw HID)** now shows every button and the D-pad, and works in the Aim Test.
-- **Gamepad Combo** lets one button or stick direction press 2 to 4 Xbox buttons together, such as X + Y. The buttons press and release in the same report with no delay, order, or repeat. Combos also work in mapping layers and in ESP32 standalone mode.
+- **Gamepad Combo** lets one button or stick direction press 2 to 4 XInput buttons together, such as X + Y. The buttons press and release in the same report with no delay, order, or repeat. Combos also work in mapping layers and in ESP32 standalone mode.
 - Gamepad Tester parameters, the Aim Test settings, and the compensation windows now work like the main app: drag a parameter's name to change it, and right-click for **Restore Saved** or **Restore Default**.
 - Dialogs open centered on their window instead of the screen.
 - If the ESP32 disconnects, the connector window stays open and shows why.
@@ -55,7 +55,7 @@ to bring over your profiles, layers, and calibration. The
 - 回中模式改用圓形死區，按鍵防晃可選「抑制突波」，預設為「暫停輸出」。陀螺儀搖桿反死區預設改為 `0`。內建 FPS-COMP 方案的平滑值調為 `10 ms`。
 - 隨附 S2P-FW `1.0.9`，Android USB HID 獨立模式支援圓形死區、抑制突波、獨立的陀螺儀輸出補償及手把組合鍵。在主視窗刷入新韌體後，再將設定檔寫入 ESP32。
 - 手把測試：「S2P Mobile Gamepad（Raw HID）」現在會顯示所有按鍵與十字鍵，也能用於瞄準測試。
-- 新增「自訂手把組合」：一個按鍵或搖桿方向可同時按下 2 到 4 個 Xbox 按鍵，例如 X + Y。組合內的按鍵在同一幀一起按下、一起放開，不含延遲、順序或連發。映射層與 ESP32 獨立模式也能使用。
+- 新增「自訂手把組合」：一個按鍵或搖桿方向可同時按下 2 到 4 個 XInput 按鍵，例如 X + Y。組合內的按鍵在同一幀一起按下、一起放開，不含延遲、順序或連發。映射層與 ESP32 獨立模式也能使用。
 - 手把測試、瞄準測試設定與補償視窗的參數改成和主程式一樣：在參數名稱上拖曳可調整數值，按右鍵可選「還原上次儲存」或「還原系統預設」。
 - 提示視窗改為顯示在所屬視窗中央，不再出現在螢幕中央。
 - ESP32 中斷時，連接程式視窗會保留並顯示原因。

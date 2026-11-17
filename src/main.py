@@ -404,7 +404,7 @@ def _run_connector():
             charging=False,
         )
         print()
-        print(tr("無法建立 Xbox 虛擬控制器。", "Could not create the Xbox virtual controller."))
+        print(tr("無法建立 XInput 虛擬控制器。", "Could not create the XInput virtual controller."))
         print(tr("請確認 ViGEmBus 驅動程式已正確安裝。", "Make sure the ViGEmBus driver is installed correctly."))
         print()
         print(tr(f"錯誤資訊：{exc}", f"Error details: {exc}"))

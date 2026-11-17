@@ -155,7 +155,7 @@ class LanguageAuditTests(unittest.TestCase):
             "按鍵映射", "搖桿方向映射", "左搖桿", "右搖桿",
             "模式", "死區", "觸發", "放開", "滑鼠速度", "中心死區",
             "輸入方向", "映射為右搖桿", "映射為左搖桿", "映射為滑鼠",
-            "線性滑鼠滾輪", "線性 Xbox LT", "線性 Xbox RT",
+            "線性滑鼠滾輪", "線性 XInput LT", "線性 XInput RT",
             "複製主要映射", "還原", "儲存", "取消",
         )
         for source in texts:
