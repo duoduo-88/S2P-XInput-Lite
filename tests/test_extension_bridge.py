@@ -794,6 +794,43 @@ class NamedPipeServerTests(unittest.TestCase):
         client.close()
 
 
+class ConsoleMessageTests(unittest.TestCase):
+    def test_each_change_prints_one_line(self):
+        connected = {"m": {"state": "connected", "name": "Macro", "capabilities": ["input", "read"],
+                           "sticks": ["left"]}}
+        lines = bridge.describe_tool_changes({}, connected)
+        self.assertEqual(lines, [(
+            "擴充工具已連線：Macro（權限：輸入、讀取；控制左搖桿）",
+            "Extension connected: Macro (permissions: input, read; controls the left stick)",
+        )])
+        # The same state on the next heartbeat prints nothing.
+        self.assertEqual(bridge.describe_tool_changes(connected, connected), [])
+        closed = {"m": {"state": "disconnected", "code": "tool_closed", "name": "Macro"}}
+        self.assertEqual(bridge.describe_tool_changes(connected, closed)[0][0], "擴充工具已中斷：Macro（工具已關閉）")
+        failed = {"m": {"state": "error", "code": "conflict", "name": "Macro"}}
+        self.assertIn("與其他工具搶同一支搖桿", bridge.describe_tool_changes(closed, failed)[0][0])
+        waiting = {"m": {"state": "waiting", "code": "settings_changed", "name": "Macro"}}
+        self.assertIn("等待重新連線", bridge.describe_tool_changes(connected, waiting)[0][0])
+        timeout = {"m": {"state": "connected", "code": "input_timeout", "name": "Macro"}}
+        self.assertIn("輸入逾時", bridge.describe_tool_changes(connected, timeout)[0][0])
+        # Recovering from the timeout is not announced as a new connection.
+        self.assertEqual(bridge.describe_tool_changes(timeout, connected), [])
+
+    def test_name_falls_back_to_the_listed_exe(self):
+        settings = ExtensionSettings(True, (_tool("m", MACRO),))
+        lines = bridge.describe_tool_changes({}, {"m": {"state": "waiting", "code": "settings_changed"}}, settings)
+        self.assertIn("「Macro」", lines[0][0])
+
+    def test_overall_state_is_connected_while_a_tool_is_in(self):
+        manager = ExtensionManager(SimpleNamespace(set_extension_input=lambda hub: None),
+                                   server_factory=_FakeServer)
+        manager.launch_tool = lambda tool_id, reopen=False, background=False: True
+        manager.apply(ExtensionSettings(True, (_tool("m", MACRO),)))
+        self.assertEqual(manager.status()["state"], bridge.STATE_WAITING)
+        manager.open_session(1, MACRO, {"name": "Macro"})
+        self.assertEqual(manager.status()["state"], bridge.STATE_CONNECTED)
+
+
 class GuiStatusTextTests(unittest.TestCase):
     def setUp(self):
         from gui_sections import extensions as window

@@ -1125,6 +1125,84 @@ class ExtensionPipeServer:
 
 
 # ---------------------------------------------------------------------------
+# Console messages
+# ---------------------------------------------------------------------------
+
+_CONSOLE_REASONS = {
+    "tool_closed": ("工具已關閉", "the tool closed"),
+    "user_disconnected": ("已手動中斷", "disconnected manually"),
+    "unauthorized": ("未授權的程式", "unauthorized program"),
+    "unsupported_protocol": ("通訊協定版本不相容", "incompatible protocol version"),
+    "handshake_timeout": ("未在時限內完成連線", "did not finish connecting in time"),
+    "bad_message": ("送出無效資料", "sent invalid data"),
+    "message_too_large": ("送出的資料過大", "sent an oversized message"),
+    "permission_denied": ("要求的權限未開啟", "requested permission is not allowed"),
+    "conflict": ("與其他工具搶同一支搖桿", "another tool controls the same stick"),
+    "tool_not_found": ("找不到工具 EXE", "tool EXE not found"),
+    "launch_failed": ("無法啟動工具", "could not launch the tool"),
+    "pipe_failed": ("通訊管道發生錯誤", "pipe error"),
+    "input_timeout": ("輸入逾時，已清除工具輸入", "input timed out and was cleared"),
+}
+_CONSOLE_PERMISSIONS = {"input": ("輸入", "input"), "read": ("讀取", "read")}
+
+
+def describe_tool_changes(previous, current, settings=None):
+    """Console lines for tools whose state changed, as ``(zh, en)`` pairs.
+
+    ``previous``/``current`` are ``status()["tools"]`` dictionaries.  Only
+    real changes are reported, so the connector prints one line when a tool
+    connects, disconnects or fails, not one per status heartbeat.
+    """
+    lines = []
+    for tool_id, entry in current.items():
+        state, code = entry.get("state"), str(entry.get("code") or "")
+        before = previous.get(tool_id) or {}
+        if (before.get("state"), str(before.get("code") or "")) == (state, code):
+            continue
+        name = str(entry.get("name") or "").strip()
+        if not name and settings is not None:
+            tool = settings.tool(tool_id)
+            name = Path(tool.path).stem if tool is not None else ""
+        name = name or tool_id
+        reason_zh, reason_en = _CONSOLE_REASONS.get(code, (code, code))
+        if state == STATE_CONNECTED:
+            if code == "input_timeout":
+                lines.append((f"擴充工具「{name}」{reason_zh}。", f"Extension \"{name}\": {reason_en}."))
+                continue
+            if before.get("state") == STATE_CONNECTED:
+                continue  # recovered from an input timeout: nothing to announce
+            capabilities = entry.get("capabilities") or ()
+            zh = "、".join(_CONSOLE_PERMISSIONS.get(item, (item, item))[0] for item in capabilities)
+            en = ", ".join(_CONSOLE_PERMISSIONS.get(item, (item, item))[1] for item in capabilities)
+            sticks = entry.get("sticks") or ()
+            if sticks:
+                side = {"left": ("左", "left"), "right": ("右", "right")}
+                zh += "；控制" + "、".join(side[item][0] + "搖桿" for item in sticks)
+                en += "; controls the " + " and ".join(side[item][1] for item in sticks) + " stick"
+            lines.append((
+                f"擴充工具已連線：{name}（權限：{zh or '無'}）",
+                f"Extension connected: {name} (permissions: {en or 'none'})",
+            ))
+        elif state == STATE_DISCONNECTED:
+            lines.append((
+                f"擴充工具已中斷：{name}（{reason_zh}）" if code else f"擴充工具已中斷：{name}",
+                f"Extension disconnected: {name} ({reason_en})" if code else f"Extension disconnected: {name}",
+            ))
+        elif state == STATE_ERROR:
+            lines.append((
+                f"擴充工具連線失敗：{name}（{reason_zh}）" if code else f"擴充工具連線失敗：{name}",
+                f"Extension connection failed: {name} ({reason_en})" if code
+                else f"Extension connection failed: {name}",
+            ))
+        elif state == STATE_WAITING and code == "settings_changed":
+            lines.append((
+                f"擴充工具「{name}」的設定已變更，等待重新連線。",
+                f"Extension \"{name}\" settings changed; waiting for it to reconnect.",
+            ))
+    return lines
+
+
+# ---------------------------------------------------------------------------
 # Connector-side manager
 # ---------------------------------------------------------------------------
 
@@ -1173,6 +1251,10 @@ class ExtensionManager:
             state, code = self._state, self._code
         for tool in self._settings.active_tools:
             tools.setdefault(tool.tool_id, {"state": STATE_WAITING, "code": ""})
+        if state == STATE_WAITING and any(
+            entry.get("state") == STATE_CONNECTED for entry in tools.values()
+        ):
+            state = STATE_CONNECTED  # the server listens and a tool is in
         return {
             "state": state,
             "code": code,

@@ -21,7 +21,7 @@ from xinput_controller import (
 )
 from audio_haptics import AudioHaptics
 from input_dispatcher import InputDispatcher
-from extension_bridge import ExtensionManager, load_extension_settings
+from extension_bridge import ExtensionManager, describe_tool_changes, load_extension_settings
 import serial
 from version import APP_TITLE, VERSION
 from config_utils import (
@@ -1204,6 +1204,18 @@ def _run_connector():
             "battery_percent": latest_battery_percent,
         }
 
+    extension_tools_seen = {}
+
+    def report_extension_changes():
+        """Print a line whenever an extension tool connects, drops or fails."""
+        nonlocal extension_tools_seen
+        status = extensions.status()
+        current = status.get("tools") or {}
+        for zh, en in describe_tool_changes(extension_tools_seen, current, extensions._settings):
+            print(tr(zh, en))
+        extension_tools_seen = current
+        return status
+
     # Nothing runs for Extensions unless the user enabled it.
     extensions = ExtensionManager(
         xinput, server_version=VERSION, controller_info=extension_controller_info,
@@ -1259,7 +1271,7 @@ def _run_connector():
                     firmware_diagnostics=firmware_diagnostics,
                     pairing_diagnostics=getattr(controller, "pairing_diagnostics", None),
                     async_logging=get_async_log_metrics(),
-                    extensions=extensions.status(),
+                    extensions=report_extension_changes(),
                 )
                 if not controller_is_connected():
                     last_battery_led_mask = None
@@ -1445,7 +1457,7 @@ def _run_connector():
                     elif command == "extensions_apply":
                         clear_legacy_command()
                         apply_extension_settings()
-                        publish_status(extensions=extensions.status())
+                        publish_status(extensions=report_extension_changes())
 
                     elif command.split(":", 1)[0] in (
                         "extensions_connect", "extensions_disconnect",
@@ -1459,7 +1471,7 @@ def _run_connector():
                             extensions.connect(tool_id or None)
                         else:
                             extensions.disconnect(tool_id or None)
-                        publish_status(extensions=extensions.status())
+                        publish_status(extensions=report_extension_changes())
 
                     elif command:
                         # Clear malformed or obsolete commands too. Otherwise
