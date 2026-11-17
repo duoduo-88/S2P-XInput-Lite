@@ -145,10 +145,13 @@ class GyroCompensationCalculator:
 
 
 class GyroCompensationSettings:
-    def __init__(self, owner, tr, current, apply, *, sync_saved=None, saved=None):
+    def __init__(self, owner, tr, current, apply, *, sync_saved=None, saved=None,
+                 keep_limit=None, apply_keep_limit=None):
+        """``keep_limit`` shows the speed-cap option; ``None`` hides it."""
         self.window, body = _dialog(owner, tr("陀螺儀補償設定"))
         self.window.withdraw()
         self.compensation = {axis: tk.StringVar(self.window, current[axis]) for axis, _label in AXES}
+        self.keep_limit = None if keep_limit is None else tk.BooleanVar(self.window, bool(keep_limit))
         self.sliders = {}
         body.columnconfigure(1, weight=1)
         for row, (axis, label) in enumerate(AXES):
@@ -186,15 +189,25 @@ class GyroCompensationSettings:
 
             _trace_dialog_variable(self.window, value, update_slider)
             update_slider()
+        self.keep_limit_button = None
+        if self.keep_limit is not None:
+            self.keep_limit_button = ttk.Checkbutton(
+                body, text=tr("保留原本的速度上限"), variable=self.keep_limit,
+            )
+            self.keep_limit_button.grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
+            ttk.Label(body, text=tr(
+                "勾選後，快速轉動時陀螺儀會停在調整前的視角速度，\n"
+                "手感和調整前一致。不勾選時可用到新視角速度的全部範圍。"
+            ), justify="left").grid(row=3, column=0, columnspan=3, sticky="w", padx=(20, 0))
         ttk.Label(body, text=tr(
             "調高遊戲視角速度後，如果陀螺儀微瞄變得太敏感，\n"
             "可降低對應的倍率。X 調水平，Y 調垂直。\n"
             "維持 1.00 會保留原本的陀螺儀輸出。\n"
             "例如 X 設為 0.50，水平輸出在反死區前會減半。\n"
             "倍率只作用於陀螺儀，實體搖桿維持原本的輸出。"
-        ), justify="left").grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ), justify="left").grid(row=4, column=0, columnspan=3, sticky="w", pady=(6, 0))
         ttk.Label(body, text=tr("按確定後，請在主視窗按儲存／套用。"), justify="left").grid(
-            row=3, column=0, columnspan=3, sticky="w", pady=(6, 0),
+            row=5, column=0, columnspan=3, sticky="w", pady=(6, 0),
         )
         self.status = tk.StringVar(self.window)
         feedback = ttk.Label(body, textvariable=self.status, wraplength=self.window.winfo_pixels("190p"))
@@ -215,17 +228,21 @@ class GyroCompensationSettings:
                     raise ValueError
             except ValueError:
                 self.status.set(_multiplier_range_message(tr))
-                feedback.grid(row=4, column=0, columnspan=3, sticky="w", pady=(6, 0))
+                feedback.grid(row=6, column=0, columnspan=3, sticky="w", pady=(6, 0))
                 return
             apply({axis: f"{value:.2f}" for axis, value in values.items()})
+            if self.keep_limit is not None and apply_keep_limit is not None:
+                apply_keep_limit(self.keep_limit.get())
             self.close()
 
         def restore_defaults():
             for value in self.compensation.values():
                 value.set("1.00")
+            if self.keep_limit is not None:
+                self.keep_limit.set(False)
 
         buttons = ttk.Frame(body)
-        buttons.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(8, 0))
+        buttons.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(8, 0))
         buttons.columnconfigure(1, weight=1)
         self.defaults_button = ttk.Button(buttons, text=tr("還原預設"), command=restore_defaults)
         self.defaults_button.grid(row=0, column=0, sticky="w")

@@ -92,6 +92,36 @@ class GyroCompensationTests(unittest.TestCase):
         self.assertFalse(settings.window.winfo_exists())
         self.assertEqual(applied, [])
 
+    def test_settings_keep_limit_applies_only_on_ok(self):
+        from gyro_compensation_window import GyroCompensationSettings
+
+        root = self.make_root()
+        hidden = GyroCompensationSettings(root, str, {"X": "1.00", "Y": "1.00"}, lambda _values: None)
+        self.assertIsNone(hidden.keep_limit_button)
+        hidden.close()
+        kept = []
+        settings = GyroCompensationSettings(
+            root, str, {"X": "0.19", "Y": "1.00"}, lambda _values: None,
+            keep_limit=False, apply_keep_limit=kept.append,
+        )
+        settings.keep_limit_button.invoke()
+        settings.cancel_button.invoke()
+        self.assertEqual(kept, [])
+        settings = GyroCompensationSettings(
+            root, str, {"X": "0.19", "Y": "1.00"}, lambda _values: None,
+            keep_limit=False, apply_keep_limit=kept.append,
+        )
+        settings.keep_limit_button.invoke()
+        settings.apply_button.invoke()
+        self.assertEqual(kept, [True])
+        settings = GyroCompensationSettings(
+            root, str, {"X": "0.19", "Y": "1.00"}, lambda _values: None,
+            keep_limit=True, apply_keep_limit=kept.append,
+        )
+        settings.defaults_button.invoke()
+        settings.apply_button.invoke()
+        self.assertEqual(kept, [True, False])
+
     def make_root(self):
         try:
             root = tk.Tk()

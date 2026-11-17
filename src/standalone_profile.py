@@ -722,7 +722,7 @@ def write_standalone_profile(
             and int(features.get("standalone_gyro_output_compensation") or 0) < 2
         ):
             raise StandaloneTransferError(
-                "目前 ESP32 韌體不支援「補償保留速度上限」，請先更新韌體。"
+                "目前 ESP32 韌體不支援「保留原本的速度上限」，請先更新韌體。"
             )
         if (
             gyro["activation_mode"] != "OFF"

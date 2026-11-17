@@ -68,7 +68,7 @@ class StandaloneProfileTests(unittest.TestCase):
                         write_standalone_profile("COM5", 2_000_000, compiled, target_mode="standalone_hid")
                 self.assertEqual(any(cmd.startswith("profile begin ") for cmd in port.commands), supported)
                 if not supported:
-                    self.assertIn("補償保留速度上限", str(raised.exception))
+                    self.assertIn("保留原本的速度上限", str(raised.exception))
 
     def test_low_gyro_ratios_require_firmware_support_before_staging(self):
         settings = _settings()

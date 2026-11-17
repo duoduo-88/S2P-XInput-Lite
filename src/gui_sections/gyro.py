@@ -294,27 +294,9 @@ def build_gyro_section(gui, mapping_notebook):
             target_scope, (label_widget, scale, value_label, help_widget)
         ))
 
-    keep_limit_row = ttk.Frame(gyro_settings_content)
-    keep_limit_row.grid(
-        row=len(gyro_rows), column=0, columnspan=4, pady=(6, 0)
-    )
-    ttk.Checkbutton(
-        keep_limit_row,
-        text="補償保留速度上限",
-        variable=gui.gyro_compensation_keep_limit_var,
-    ).pack(side="left", padx=(0, 4))
-    gui.create_help(
-        keep_limit_row,
-        "調高遊戲視角速度並使用補償倍率後，陀螺儀的最快轉速仍維持調整前的上限。\n"
-        "開啟：手感與調整前一致，快速轉動時會在原本的速度封頂。\n"
-        "關閉：陀螺儀可用到新視角速度的完整範圍，快速轉動時不封頂。\n"
-        "補償倍率為 1.00 時沒有差別；實體搖桿不受影響。",
-    ).pack(side="left")
-    gyro_scoped_rows.append(("CENTER_STICK", (keep_limit_row,)))
-
     gyro_action_row = ttk.Frame(gyro_settings_content)
     gyro_action_row.grid(
-        row=len(gyro_rows) + 1, column=0, columnspan=4, pady=(10, 2)
+        row=len(gyro_rows), column=0, columnspan=4, pady=(10, 2)
     )
     gui.gyro_calibration_button = ttk.Button(
         gyro_action_row,

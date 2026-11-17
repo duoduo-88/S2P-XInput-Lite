@@ -5837,11 +5837,15 @@ class ConfigGUI:
                 for axis, value in values.items():
                     self.gyro_compensation_vars[axis].set(value)
 
+            # The speed cap only changes Center stick output.
+            center_mode = self.gyro_motion_mode_var.get().strip().upper() == "CENTER"
             overlay = self._gyro_compensation_window = GyroCompensationSettings(
                 self.root, self.tr,
                 {axis: variable.get() for axis, variable in self.gyro_compensation_vars.items()},
                 apply=apply_ratios, sync_saved=self._sync_saved_gyro_compensation,
                 saved=self._saved_gyro_compensation,
+                keep_limit=self.gyro_compensation_keep_limit_var.get() if center_mode else None,
+                apply_keep_limit=self.gyro_compensation_keep_limit_var.set,
             )
         overlay.window.lift()
         overlay.window.focus_set()
