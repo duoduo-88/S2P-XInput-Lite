@@ -509,6 +509,23 @@ EN_TEXT = {
     "正在初始化手把測試程式，請稍候…":
         "Initializing the gamepad tester. Please wait…",
     "手把測試無法開啟": "Could Not Open Gamepad Test",
+    "ESP32-S3 韌體刷寫": "ESP32-S3 Firmware Flash",
+    "正在讀取 ESP32-S3 目前的韌體版本…":
+        "Reading the current ESP32-S3 firmware version…",
+    "約需數秒，請稍候。": "This takes a few seconds. Please wait.",
+    "正在等待 ESP32-S3 進入刷機模式…":
+        "Waiting for the ESP32-S3 to enter flash mode…",
+    "按住 BOOT 再按一下 RESET / EN。剩餘約 {seconds} 秒。":
+        "Hold BOOT, then press RESET / EN. About {seconds} s left.",
+    "正在確認晶片與 Flash 容量（{port}）…":
+        "Checking the chip and flash capacity ({port})…",
+    "約需 5 到 20 秒，完成後會自動開始刷寫。請勿拔除 ESP32-S3。":
+        "This takes 5 to 20 seconds, then flashing starts automatically. "
+        "Do not unplug the ESP32-S3.",
+    "正在刷寫韌體…": "Flashing firmware…",
+    "刷寫進度顯示在 esptool 視窗。完成前請勿拔除 ESP32-S3。":
+        "Progress is shown in the esptool window. "
+        "Do not unplug the ESP32-S3 until it finishes.",
     "關閉程式": "Close Application",
     "關閉設定視窗後：\n\n• 桌面橋接模式會中斷連線。\n• ESP32 獨立模式會繼續運作。":
         "After closing the settings window:\n\n"

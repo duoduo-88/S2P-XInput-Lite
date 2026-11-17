@@ -2241,16 +2241,23 @@ class ConfigGUI:
             self.main_process is not None
             and self.main_process.poll() is None
         )
-        if connector_was_running:
-            self.stop_main_process()
+        self._set_flash_progress(
+            self.tr("正在讀取 ESP32-S3 目前的韌體版本…"),
+            self.tr("約需數秒，請稍候。"),
+        )
         try:
-            firmware = find_esp32_firmware()
-            if firmware:
-                self._show_esp32_mode_migration(firmware)
-            return firmware, connector_was_running
-        except Exception as exc:
-            LOGGER.warning("Could not inspect ESP32 firmware: %s", exc)
-            return None, connector_was_running
+            if connector_was_running:
+                self.stop_main_process()
+            try:
+                firmware = find_esp32_firmware()
+            except Exception as exc:
+                LOGGER.warning("Could not inspect ESP32 firmware: %s", exc)
+                return None, connector_was_running
+        finally:
+            self._close_flash_progress()
+        if firmware:
+            self._show_esp32_mode_migration(firmware)
+        return firmware, connector_was_running
 
     def _resume_connector_after_firmware_check(self):
         main_path = Path(__file__).with_name("main.py")
@@ -2416,6 +2423,62 @@ class ConfigGUI:
         self._flash_preflight_verified_port = None
         self._flash_preflight_verified_generation = None
         self._flash_operation_active = False
+        self._close_flash_progress()
+
+    def _set_flash_progress(self, message, detail=""):
+        """Show which firmware step is running so silent waits do not look hung."""
+        window = getattr(self, "_flash_progress_window", None)
+        try:
+            if window is None or not window.winfo_exists():
+                window = tk.Toplevel(self.root)
+                window.withdraw()
+                window.title(self.tr("ESP32-S3 韌體刷寫"))
+                window.resizable(False, False)
+                window.transient(self.root)
+                # Closing would not stop esptool; the step ends on its own.
+                window.protocol("WM_DELETE_WINDOW", lambda: None)
+                content = ttk.Frame(window, padding=(18, 16))
+                content.pack(fill="both", expand=True)
+                wrap = window.winfo_pixels("240p")
+                self._flash_progress_message = ttk.Label(
+                    content, anchor="center", justify="center", wraplength=wrap,
+                )
+                self._flash_progress_message.pack(fill="x")
+                progress = ttk.Progressbar(content, mode="indeterminate", length=260)
+                progress.pack(fill="x", pady=(12, 8))
+                progress.start(12)
+                self._flash_progress_bar = progress
+                self._flash_progress_detail = ttk.Label(
+                    content, anchor="center", justify="center", wraplength=wrap,
+                )
+                self._flash_progress_detail.pack(fill="x")
+                self._flash_progress_window = window
+                self._flash_progress_message.configure(text=message)
+                self._flash_progress_detail.configure(text=detail)
+                self._center_child_window(window)
+                window.deiconify()
+            else:
+                self._flash_progress_message.configure(text=message)
+                self._flash_progress_detail.configure(text=detail)
+                # Drop the fixed size so a longer step message is not clipped.
+                window.geometry("")
+            # Paint now: the version check runs on the Tk thread right after.
+            window.update_idletasks()
+        except tk.TclError:
+            self._flash_progress_window = None
+
+    def _close_flash_progress(self):
+        window = getattr(self, "_flash_progress_window", None)
+        self._flash_progress_window = None
+        if window is None:
+            return
+        try:
+            if window.winfo_exists():
+                # Stop the bar's own Tcl timer; destroy() leaves it queued.
+                self._flash_progress_bar.stop()
+                window.destroy()
+        except tk.TclError:
+            pass
 
     def _flash_port_identity(self, port):
         """Return the current enumerated identity for a port, if it exists."""
@@ -2441,6 +2504,7 @@ class ConfigGUI:
 
         if flash_port is not None:
 
+            self._close_flash_progress()
             messagebox.showinfo(
                 self.tr("偵測到刷機連接埠"),
                 self.tr("已偵測到刷機連接埠：")
@@ -2469,6 +2533,14 @@ class ConfigGUI:
             )
             return
 
+        seconds_left = max(1, (60 - self.flash_detect_attempts + 1) // 2)
+        self._set_flash_progress(
+            self.tr("正在等待 ESP32-S3 進入刷機模式…"),
+            self.tr("按住 BOOT 再按一下 RESET / EN。剩餘約 {seconds} 秒。").format(
+                seconds=seconds_left
+            ),
+        )
+
         def poll_again():
             self._flash_detection_job = None
             self.detect_flash_port()
@@ -2495,6 +2567,10 @@ class ConfigGUI:
         result_queue = queue.Queue(maxsize=1)
         self._flash_preflight_queue = result_queue
         self._flash_preflight_port_identity = port_identity
+        self._set_flash_progress(
+            self.tr("正在確認晶片與 Flash 容量（{port}）…").format(port=port),
+            self.tr("約需 5 到 20 秒，完成後會自動開始刷寫。請勿拔除 ESP32-S3。"),
+        )
 
         def probe():
             try:
@@ -2618,6 +2694,10 @@ class ConfigGUI:
                     "CREATE_NEW_CONSOLE",
                     0
                 )
+            )
+            self._set_flash_progress(
+                self.tr("正在刷寫韌體…"),
+                self.tr("刷寫進度顯示在 esptool 視窗。完成前請勿拔除 ESP32-S3。"),
             )
 
             self.root.after(

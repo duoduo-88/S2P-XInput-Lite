@@ -385,6 +385,23 @@ class GUIUserWorkflowTests(unittest.TestCase):
                    if isinstance(widget, ttk.Button)}
         return dialog, boxes, buttons
 
+    def test_flash_progress_window_updates_and_closes_with_operation(self):
+        before_children = set(self.root.winfo_children())
+        self.gui._set_flash_progress("first", "detail")
+        window = next(child for child in self.root.winfo_children()
+                      if child not in before_children and isinstance(child, tk.Toplevel))
+        self.gui._set_flash_progress("second step", "")
+        texts = [widget.cget("text") for widget in self.descendants(window)
+                 if isinstance(widget, ttk.Label)]
+        self.assertIn("second step", texts)
+        self.assertEqual(  # Updates reuse one window instead of stacking new ones.
+            [child for child in self.root.winfo_children()
+             if child not in before_children and isinstance(child, tk.Toplevel)],
+            [window],
+        )
+        self.gui._finish_flash_operation()
+        self.assertFalse(window.winfo_exists())
+
     def test_gamepad_combo_picker_saves_and_cancel_restores(self):
         variable = self.gui.button_vars["A"]
         variable.set("B")

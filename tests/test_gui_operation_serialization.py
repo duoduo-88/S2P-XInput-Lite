@@ -65,7 +65,37 @@ class GuiOperationSerializationTests(unittest.TestCase):
         gui.calibration_process = None
         gui.flash_process = None
         gui.tr = lambda text: text
+        # The fake root cannot host a Toplevel; record the progress steps.
+        gui._set_flash_progress = Mock()
         return gui
+
+    def test_silent_flash_steps_show_progress_messages(self):
+        gui = self.make_gui()
+        gui._flash_operation_active = True
+        gui.flash_detect_attempts = 0
+        gui.ports_before_flash = set()
+        gui.detect_flash_port()
+        message, detail = gui._set_flash_progress.call_args.args
+        self.assertIn("等待 ESP32-S3 進入刷機模式", message)
+        self.assertIn("剩餘約 30 秒", detail)
+
+        gui.get_serial_port_infos = Mock(return_value=(
+            SimpleNamespace(device="COM4", vid=0x303A, pid=0x1001),
+        ))
+        with patch.object(config_gui.threading, "Thread", _DeferredThread):
+            gui.preflight_firmware_flash("COM4")
+        message, detail = gui._set_flash_progress.call_args.args
+        self.assertIn("Flash 容量（COM4）", message)
+        self.assertIn("請勿拔除", detail)
+
+    def test_version_probe_shows_progress_and_closes_it(self):
+        gui = self.make_gui()
+        gui._close_flash_progress = Mock()
+        with patch.object(config_gui, "find_esp32_firmware", return_value=None):
+            with patch.object(gui, "_cached_esp32_firmware_info", return_value=None):
+                gui.inspect_esp32_firmware()
+        self.assertIn("韌體版本", gui._set_flash_progress.call_args.args[0])
+        gui._close_flash_progress.assert_called_once_with()
 
     def test_repeated_restart_keeps_only_one_pending_start(self):
         gui = self.make_gui()
