@@ -1,47 +1,57 @@
-# 擴充工具（Extensions）IPC 協定 v1
+# Extensions IPC protocol v1
 
-S2P-XInput-Lite 透過本機 Windows Named Pipe 接收獨立擴充工具（S2P-Extensions，例如巨集、
-多設備輸入）的控制器輸入狀態，與實體手把輸入合併後，從 S2P 原本唯一的虛擬 Xbox 控制器輸出。
-工具不需要、也不可以直接操作 ViGEmBus。
+[繁體中文](extensions-ipc_zh-TW.md)
+
+S2P-XInput-Lite receives controller input state from independent extension
+tools (S2P-Extensions, such as macro or multi-device input tools) over a local
+Windows named pipe. It merges that state with the physical controller and
+sends the result through S2P's one existing virtual Xbox controller. Tools do
+not need to, and must not, talk to ViGEmBus directly.
 
 ```
-實體手把 → S2P 輸入處理（曲線、陀螺儀、映射層）→ 擴充輸入合併層 → ViGEmBus → XInput
-                                                       ↑
-                     擴充工具 A、B…（最多 4 個）── Named Pipe（協定 v1）
+Physical controller → S2P input processing (curves, gyro, mapping layers) → Extensions merge → ViGEmBus → XInput
+                                                                              ↑
+                                  Extension tools A, B… (up to 4) ── named pipe (protocol v1)
 ```
 
-## 架構與生命週期
+## Architecture and lifetime
 
-| 元件 | 位置 | 說明 |
+| Component | Location | Role |
 |---|---|---|
-| `ExtensionManager` | `src/extension_bridge.py` | 連接程式內建立；依 `config.ini` 啟停伺服器、辨識工具、處理衝突、回報狀態、啟動工具。 |
-| `ExtensionPipeServer` | 同上 | 同名 pipe 的多個 instance，每個啟用的工具一個，各自用 overlapped I/O。 |
-| `ExtensionInputHub` | 同上 | 掛在 `XInputController` 上的唯一物件，依序合併每個已連線工具。 |
-| `ExtensionInputMixer` | 同上 | 單一工具的輸入狀態；每份報告只取一次鎖。 |
-| 合併點 | `XInputController.update()` | 報告寫完、`pad.update()` 之前。未啟用時只多一次 `is None` 判斷。 |
-| 設定視窗 | `src/gui_sections/extensions.py` | 工具清單、權限、衝突檢查；只寫入全域設定並送出指令。 |
+| `ExtensionManager` | `src/extension_bridge.py` | Created in the connector. Starts and stops the server from `config.ini`, identifies tools, resolves conflicts, reports status, and starts tools. |
+| `ExtensionPipeServer` | same file | Several instances of one pipe name, one per enabled tool, each with overlapped I/O. |
+| `ExtensionInputHub` | same file | The single object attached to `XInputController`; merges every connected tool in order. |
+| `ExtensionInputMixer` | same file | One tool's input state; one lock per report. |
+| Merge point | `XInputController.update()` | After the report is built and before `pad.update()`. When disabled, the cost is a single `is None` check. |
+| Settings window | `src/gui_sections/extensions.py` | Tool list, permissions, conflict check. It only writes the global settings and sends commands. |
 
-執行緒：每個啟用的工具一條 daemon 執行緒 `S2P-Extensions-IPC`（最多 4 條），只在擴充工具啟用時存在。
-每條執行緒阻塞在 `WaitForMultipleObjects`（pipe I/O、共用停止事件、個別中斷事件），不輪詢；
-停用或連接程式結束時設定停止事件並 join（實測 < 0.5 秒）。
+Threads: one daemon thread `S2P-Extensions-IPC` per enabled tool (at most 4),
+present only while Extensions is enabled. Each blocks in
+`WaitForMultipleObjects` (pipe I/O, a shared stop event, and its own drop
+event) and never polls. Disabling Extensions or stopping the connector sets
+the stop event and joins the threads (measured under 0.5 s).
 
-連接程式指令（GUI 經 `controller_commands` 佇列送出）：
+Connector commands (sent by the GUI through the `controller_commands` queue):
 
-| 指令 | 動作 |
+| Command | Action |
 |---|---|
-| `extensions_apply` | 重新讀取設定；工具數量改變時重建 pipe，其餘只中斷設定有變動的工具（狀態 `waiting`／`settings_changed`，工具自動重連後取得新權限）。 |
-| `extensions_connect[:<tool id>]` | 「開啟」按鈕與系統匣選單使用：工具未連線時啟動它（`.py` 開發工具帶一次性權杖）。 |
-| `extensions_disconnect[:<tool id>]` | 中斷並暫停該工具（或全部），立即清除其輸入；目前 UI 不使用，停用請用「啟用／停用」。 |
+| `extensions_apply` | Re-read the settings. Rebuild the pipe when the number of tools changes; otherwise drop only tools whose settings changed (state `waiting` / `settings_changed`; the tool reconnects by itself and gets its new permissions). |
+| `extensions_connect[:<tool id>]` | Used by the **Open** button and the notification area menu: start the tool (a `.py` development tool gets a one-time token). |
+| `extensions_disconnect[:<tool id>]` | Drop and pause that tool (or all tools) and clear its input at once. Not used by the UI; use **Enable/Disable** instead. |
 
-狀態每 0.5 秒隨 `controller_status.json` 的 `extensions` 欄位發佈：
+Status is published every 0.5 s in the `extensions` field of
+`controller_status.json`:
 
 ```json
-{"state": "waiting", "code": "", "enabled": true, "protocol": 1, "max_tools": 4,
- "tools": {"<id>": {"state": "connected", "code": "", "name": "S2P-Macro",
+{"state": "connected", "code": "", "enabled": true, "protocol": 1, "max_tools": 4,
+ "tools": {"<id>": {"state": "connected", "code": "", "name": "S2P-Joystick-Macro",
                     "capabilities": ["input"], "sticks": ["left"]}}}
 ```
 
-設定（`config.ini`，全域，不隨方案切換）：
+The connector window also prints one line whenever a tool connects,
+disconnects, fails, times out, or waits to reconnect after a settings change.
+
+Settings (`config.ini`, global, not part of profiles):
 
 ```ini
 [extensions]
@@ -49,175 +59,221 @@ enabled = true
 
 [extensions.tool.1a2b3c4d]
 order = 0
-path = C:\Tools\S2P-Macro.exe
+path = C:\Tools\S2P-Joystick-Macro.exe
 enabled = true
 auto_launch = false
 allow_input = true
 allow_read = false
 ```
 
-## 連線與安全
+## Connection and security
 
-- Pipe 名稱：`\\.\pipe\S2P-XInput-Lite.Extensions`。由 S2P 啟動的工具會在環境變數
-  `S2P_EXTENSION_PIPE` 取得名稱、在 `S2P_EXTENSION_TOKEN` 取得一次性權杖。
-- 已啟用的工具會在連線開始時（或剛被啟用時）由 S2P 啟動，並帶環境變數 `S2P_EXTENSION_BACKGROUND=1`：
-  工具應直接在背景執行（例如縮到系統匣），不要跳出視窗。已在執行的工具不會重複啟動。
-- 「開啟」按鈕與系統匣選單會再次啟動工具（不帶背景旗標）；工具應只保留一份執行個體，
-  由第二次啟動通知原本那份顯示視窗。
-- 工具應定期送 `ping`（SDK 每秒一次）偵測 S2P 結束連線，並自動重新連線；權限變更就是靠這個生效。
-- 內建的「手把測試」不使用 pipe，由 S2P GUI 直接開啟。
-- `FILE_FLAG_FIRST_PIPE_INSTANCE`：其他程式無法搶先建立同名 pipe；名稱被占用時狀態為 `pipe_in_use`。
-- `PIPE_REJECT_REMOTE_CLIENTS` 與 DACL `D:P(D;;GA;;;NU)(A;;GA;;;<目前使用者 SID>)`：只允許本機、
-  同一位使用者連線。
-- 辨識：客戶端行程的映像檔路徑必須等於清單中某個啟用工具的 EXE，或 hello 帶有 S2P 啟動該工具時發出的
-  權杖（`.py` 開發用腳本走這條路徑）。其他程式會收到 `unauthorized`。
-- 權限分開授予：`input`（提交輸入）預設允許，`read`（讀取控制器狀態）預設關閉，由使用者在清單中逐一開啟。
-  工具只會得到「hello 宣告」與「使用者允許」兩者的交集。
+- Pipe name: `\\.\pipe\S2P-XInput-Lite.Extensions`. A tool started by S2P gets
+  the name in `S2P_EXTENSION_PIPE` and a one-time token in
+  `S2P_EXTENSION_TOKEN`.
+- Enabled tools are started by S2P when the connection starts (or when they are
+  enabled) with `S2P_EXTENSION_BACKGROUND=1`: the tool should run in the
+  background (for example in the notification area) without showing a window.
+  A tool that is already running is not started again.
+- **Open** and the notification area menu start the tool again (without the
+  background flag). A tool should keep a single instance, and the second
+  launch should tell the running copy to show its window.
+- Tools should send `ping` regularly (the SDK does once a second) to notice
+  when S2P ends the session and reconnect by themselves; this is how
+  permission changes take effect.
+- The built-in **Gamepad Test** does not use the pipe; the S2P GUI opens it
+  directly.
+- `FILE_FLAG_FIRST_PIPE_INSTANCE`: no other program can create the pipe name
+  first; if the name is taken, the state is `pipe_in_use`.
+- `PIPE_REJECT_REMOTE_CLIENTS` and the DACL
+  `D:P(D;;GA;;;NU)(A;;GA;;;<current user SID>)`: only local connections from
+  the same user are accepted.
+- Identification: the client process's image path must equal the EXE of an
+  enabled tool in the list, or the hello must carry the token S2P issued when
+  it started that tool (the path used by `.py` development scripts). Any
+  other program receives `unauthorized`.
+- Permissions are granted separately: `input` (submit input) is allowed by
+  default and `read` (read controller state) is off by default; the user
+  turns them on per tool. A tool gets the intersection of what its hello
+  declares and what the user allows.
 
-## 衝突規則
+## Conflict rules
 
-| 情況 | 處理 |
+| Situation | Handling |
 |---|---|
-| 同一個 EXE 重複加入清單 | 設定視窗拒絕加入；載入設定時只保留第一筆。 |
-| 啟用超過 4 個工具 | 設定視窗拒絕啟用；第 5 個以後標示「未載入」。 |
-| 工具沒有任何權限 | 設定視窗拒絕並在衝突檢查顯示。 |
-| 兩個工具要求同一支搖桿 | 後連線的工具收到 `conflict`，畫面顯示「A 與 B 同時要求控制左搖桿」。 |
-| 同一個工具重複連線 | 第二個連線收到 `already_connected`，不會搶走原本的連線。 |
-| 按鍵、扳機 | 不衝突：按鍵 OR、扳機取最大值。 |
+| The same EXE is added twice | The settings window refuses it; when loading settings only the first entry is kept. |
+| More than 4 tools are enabled | The settings window refuses to enable more; the 5th and later are marked **Not loaded**. |
+| A tool has no permission | The settings window refuses it and the conflict check lists it. |
+| Two tools claim the same stick | The tool that connects later receives `conflict`, and the window shows that both want the left (or right) stick. |
+| The same tool connects twice | The second connection receives `already_connected` and does not take over the first. |
+| Buttons and triggers | No conflict: buttons are ORed and triggers take the maximum. |
 
-## 訊息格式
+## Message format
 
-Pipe 為 message mode。每則訊息是一個 UTF-8 JSON 物件，建議以 `\n` 結尾；一則訊息內也可放多行
-JSON。單則訊息上限 4096 bytes。
+The pipe uses message mode. Each message is one UTF-8 JSON object, ideally
+ending with `\n`; one message may also carry several lines of JSON. A single
+message is limited to 4096 bytes.
 
-### 1. 握手（3 秒內必須送出）
+### 1. Handshake (must arrive within 3 s)
 
 ```json
-{"type": "hello", "protocol": 1, "name": "S2P-Macro", "version": "0.1.0",
- "capabilities": ["input"], "sticks": ["left"], "token": "<選填>"}
+{"type": "hello", "protocol": 1, "name": "S2P-Joystick-Macro", "version": "0.1.0",
+ "capabilities": ["input"], "sticks": ["left"], "token": "<optional>"}
 ```
 
-| 欄位 | 說明 |
+| Field | Meaning |
 |---|---|
-| `capabilities` | 要求的權限：`input`、`read`。省略時視為 `["input"]`。 |
-| `sticks` | 要獨占控制的搖桿：`left`、`right`。不控制搖桿可省略。 |
-| `token` | S2P 啟動工具時提供的權杖；自行啟動的 EXE 不需要。 |
+| `capabilities` | Requested permissions: `input`, `read`. Defaults to `["input"]` when omitted. |
+| `sticks` | Sticks to control exclusively: `left`, `right`. Omit when the tool does not move sticks. |
+| `token` | Token provided when S2P started the tool; not needed for an EXE started by the user. |
 
-成功：
+Success:
 
 ```json
 {"type": "welcome", "protocol": 1, "server": "S2P-XInput-Lite", "server_version": "0.8.2",
  "capabilities": ["input"], "sticks": ["left"], "input_timeout_ms": 1000}
 ```
 
-失敗時 S2P 回覆後中斷連線：
+On failure S2P replies and then closes the connection (giving the tool up to
+200 ms to read the reply):
 
 ```json
 {"type": "error", "code": "conflict", "detail": "left stick is used by another tool"}
 ```
 
-錯誤代碼：`unauthorized`、`unsupported_protocol`、`handshake_timeout`、`permission_denied`、
-`conflict`、`already_connected`、`user_disconnected`、`bad_message`、`message_too_large`。
+Error codes: `unauthorized`, `unsupported_protocol`, `handshake_timeout`,
+`permission_denied`, `conflict`, `already_connected`, `user_disconnected`,
+`bad_message`, `message_too_large`.
 
-### 2. 提交輸入（需要 `input`；完整狀態，非增量）
+### 2. Submitting input (needs `input`; full state, not incremental)
 
 ```json
 {"type": "state", "buttons": ["A", "LB"], "lt": 0, "rt": 255, "lx": 0, "ly": 32767}
 ```
 
-| 欄位 | 型別 | 範圍 | 未送出時 |
+| Field | Type | Range | When omitted |
 |---|---|---|---|
-| `buttons` | 名稱陣列或 XUSB 位元遮罩整數 | `UP DOWN LEFT RIGHT START BACK L_STK R_STK LB RB GUIDE A B X Y` | 不按任何鍵 |
-| `lt`、`rt` | 整數 | 0–255 | 不控制該扳機 |
-| `lx`+`ly`、`rx`+`ry` | 整數（必須成對，且已在 hello 宣告該搖桿） | -32768–32767 | 不控制該搖桿 |
+| `buttons` | Array of names or an XUSB bit mask integer | `UP DOWN LEFT RIGHT START BACK L_STK R_STK LB RB GUIDE A B X Y` | No button pressed |
+| `lt`, `rt` | Integer | 0–255 | That trigger is not driven |
+| `lx`+`ly`, `rx`+`ry` | Integers (in pairs, and the stick must be claimed in hello) | -32768–32767 | That stick is not driven |
 
-每則 `state` 取代該工具上一則。放開所有按鍵請送 `"buttons": []` 或 `release_all`。
+Each `state` replaces that tool's previous one. To release everything, send
+`"buttons": []` or `release_all`.
 
-**心跳**：工具有任何輸入時，至少每 `input_timeout_ms`（1000 ms）要送一則訊息（重送目前狀態或 `ping`）；
-否則 S2P 清除該工具輸入、保持連線，狀態顯示「輸入逾時」，下一則訊息即恢復。沒有輸入的工具可以保持安靜。
+**Heartbeat**: while a tool holds any input, it must send a message (its
+current state again, or `ping`) at least every `input_timeout_ms` (1000 ms).
+Otherwise S2P clears that tool's input but keeps the connection; the status
+shows **input timed out**, and the next message recovers. A tool with no
+input may stay silent.
 
-### 3. 讀取（需要 `read`）
+### 3. Reading (needs `read`)
 
-| 請求 | 回覆 |
+| Request | Reply |
 |---|---|
 | `{"type": "get_controller"}` | `{"type": "controller", "connected": true, "mode": "bluetooth", "battery_percent": 80}` |
 | `{"type": "get_input"}` | `{"type": "input", "frame": 1234, "age_ms": 1.8, "buttons": ["A"], "lt": 0, "rt": 0, "lx": 0, "ly": 0, "rx": 0, "ry": 0}` |
 
-`get_input` 回傳 S2P 在合併任何擴充工具「之前」的輸出（已套用曲線、陀螺儀與映射），所以工具不會讀回
-自己或其他工具送出的輸入；`frame` 每份實體報告加 1。只有連線中且擁有 `read` 的工具存在時才會擷取。
+`get_input` returns S2P's output from *before* any extension tool is merged
+(with curves, gyro and mapping applied), so a tool never reads back its own
+input or another tool's. `frame` increases by 1 with each physical report.
+The snapshot is captured only while a connected tool holds `read`.
 
-### 4. 其他
+### 4. Other messages
 
-| 訊息 | 動作 |
+| Message | Action |
 |---|---|
-| `{"type": "release_all"}` | 立即清除該工具的全部輸入。 |
-| `{"type": "ping", "seq": 1}` | 回覆 `{"type": "pong", "seq": 1}`；工具需讀取回覆。 |
-| `{"type": "bye"}` | 正常結束；S2P 清除該工具輸入並回到等待連線。 |
+| `{"type": "release_all"}` | Clear all of this tool's input immediately. |
+| `{"type": "ping", "seq": 1}` | Replies `{"type": "pong", "seq": 1}`; the tool must read the reply. |
+| `{"type": "bye"}` | Normal end; S2P clears this tool's input and waits for a new connection. |
 
-未知 `type`、無效數值、未宣告的搖桿、超出權限的請求都會得到 `error` 並被中斷，同時清除該工具輸入。
+An unknown `type`, an invalid value, an unclaimed stick, or a request beyond
+the granted permissions gets an `error` and a disconnect, and the tool's
+input is cleared.
 
-## 合併規則
+## Merge rules
 
-- **按鍵**：OR。實體或任一工具按住即輸出；全部放開才放開。實體報告每幀重建後才合併，
-  所以工具放開或斷線不會誤放開實體仍按住的鍵。工具在兩份實體報告之間「按下又放開」時，
-  該按鍵仍輸出一幀，不會遺失短按。
-- **扳機**：取實體與所有工具中的最大值，連續變化、不會跳動。
-- **搖桿**：每支搖桿最多一個工具（連線時檢查），並以實體優先＋遲滯合併：工具數值只在實體搖桿
-  （含曲線與陀螺儀輸出後）靜止時採用；實體幅度 ≥ 12% 立即由玩家接手，降到 6% 以下並維持
-  0.15 秒才交還工具。工具送出中立值（0, 0）不會蓋掉玩家正在推的搖桿。
-- **斷線、逾時、崩潰**：立即清除該工具狀態，下一份實體報告即恢復；其他工具不受影響。
+- **Buttons**: OR. A button is output while the physical controller or any
+  tool holds it, and released only when all release. The physical report is
+  rebuilt every frame before the merge, so a tool releasing or disconnecting
+  never releases a button still held on the controller. A tool that presses
+  and releases between two physical reports still produces one frame of the
+  press, so short taps are not lost.
+- **Triggers**: the maximum of the physical controller and all tools; changes
+  are continuous, without jumps.
+- **Sticks**: at most one tool per stick (checked on connect), merged with
+  physical priority and hysteresis. The tool's value is used only while the
+  physical stick (after curves and gyro output) is at rest; the player takes
+  over as soon as the physical magnitude reaches 12%, and control returns to
+  the tool after it stays below 6% for 0.15 s. A tool sending a neutral
+  value (0, 0) never overrides a stick the player is moving.
+- **Disconnect, timeout, crash**: the tool's state is cleared at once and the
+  next physical report is back to normal; other tools are unaffected.
 
-合併頻率跟隨實體手把的報告率；工具送出的狀態會在下一份實體報告（通常 4–8 ms 內）生效。
-S2P 不會因工具而增加第二套輸出或額外的 `pad.update()`，也不等待工具回覆。
+Merging runs at the physical controller's report rate; a state sent by a tool
+takes effect with the next physical report (usually within 4–8 ms). Tools
+never add a second output, an extra `pad.update()`, or any waiting for a
+tool's reply.
 
-## 流量保護
+## Flood protection
 
-連續訊息可立即處理；若持續超過約 2000 則／秒（每 50 ms 超過 100 則），該工具的執行緒會在時間窗剩餘時間
-內暫停讀取並釋放 GIL，避免異常工具影響實體輸入執行緒。Pipe 緩衝區為 4 KB，堆積的舊訊息有上限，
-暫停結束後會依序處理到最新狀態。
+Bursts of messages are handled immediately. If a tool keeps sending faster
+than about 2000 messages/s (more than 100 per 50 ms), its thread pauses
+reading for the rest of that window and releases the GIL, so a misbehaving
+tool cannot delay the physical input thread. The pipe buffer is 4 KB, which
+bounds the backlog; after the pause the queued messages are processed up to
+the latest state.
 
-## 撰寫獨立工具（最小範例）
+## Writing an independent tool (minimal example)
 
-只需標準函式庫；完整參考實作見 `tests/extension_ipc_test_client.py`（僅供開發，不隨發行版提供，
-未來移到 S2P-Extensions 的 `sdk/`）。
+Only the standard library is needed. A complete reference implementation is
+`tests/extension_ipc_test_client.py` (development only, not shipped). The
+shared IPC client is `sdk/s2p_ext` in
+[S2P-Extensions](https://github.com/duoduo-88/S2P-Extensions).
 
 ```python
 import json, os, threading
 
 pipe_name = os.environ.get("S2P_EXTENSION_PIPE", r"\\.\pipe\S2P-XInput-Lite.Extensions")
-pipe = open(pipe_name, "r+b", buffering=0)          # 每次 write() 為一則訊息
+pipe = open(pipe_name, "r+b", buffering=0)          # each write() is one message
 lock = threading.Lock()
 
 def send(message):
     with lock:
         pipe.write((json.dumps(message) + "\n").encode("utf-8"))
 
-hello = {"type": "hello", "protocol": 1, "name": "S2P-Macro", "version": "0.1.0",
+hello = {"type": "hello", "protocol": 1, "name": "S2P-Joystick-Macro", "version": "0.1.0",
          "capabilities": ["input"]}
 if os.environ.get("S2P_EXTENSION_TOKEN"):
     hello["token"] = os.environ["S2P_EXTENSION_TOKEN"]
 send(hello)
 assert json.loads(pipe.read(4096))["type"] == "welcome"
 
-send({"type": "state", "buttons": ["A"]})            # 按住 A（按住期間每 250 ms 重送一次）
-send({"type": "state", "buttons": []})               # 放開
+send({"type": "state", "buttons": ["A"]})            # hold A (resend every 250 ms while held)
+send({"type": "state", "buttons": []})               # release
 send({"type": "bye"})
 pipe.close()
 ```
 
-建議：
+Recommendations:
 
-- 每個按鍵狀態至少維持 16 ms，確保遊戲以 60 FPS 讀取時一定看得到。
-- 按住期間每 250 ms 重送一次目前狀態作為心跳。
-- 連線失敗（`ERROR_PIPE_BUSY` 或 S2P 未執行）時每 0.5–1 秒重試即可。
-- 只宣告真正需要的權限與搖桿，減少與其他工具衝突。
-- 正式發佈請打包成獨立 EXE，讓使用者把該 EXE 加入「擴充工具」清單（辨識依據就是這個路徑）。
+- Hold each button state for at least 16 ms so a game reading at 60 FPS
+  always sees it.
+- While holding input, resend the current state every 250 ms as the
+  heartbeat.
+- When connecting fails (`ERROR_PIPE_BUSY`, or S2P is not running), retrying
+  every 0.5–1 s is enough.
+- Declare only the permissions and sticks you need, to avoid conflicts with
+  other tools.
+- Release the tool as a standalone EXE that the user adds to the Extensions
+  list (that path is how the tool is identified).
 
-## 測試
+## Tests
 
 ```powershell
-& ".\runtime\python.exe" ".\tests\run_tests.py"   # 包含 test_extension_bridge.py
+& ".\runtime\python.exe" ".\tests\run_tests.py"   # includes test_extension_bridge.py
 ```
 
-手動驗證：在「擴充工具」清單加入 `tests\extension_ipc_test_client.py`，選取後按「連接」，S2P 會以
-開發模式啟動客戶端並執行 A、A+B、X、Y 與左搖桿示範；用現有的「手把測試」觀察合併後的 XInput 輸出。
+Manual check: add `tests\extension_ipc_test_client.py` to the Extensions list,
+select it, and choose **Open**. S2P starts the client in development mode and
+it runs an A, A+B, X, Y and left-stick demo; watch the merged XInput output
+in the existing **Gamepad Test**.

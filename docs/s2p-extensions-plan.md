@@ -24,7 +24,7 @@ S2P-Extensions/
 ├── macro/          巨集工具
 ├── multi-device/   多設備輸入工具
 ├── examples/       最小化擴充範例
-├── docs/           擴充工具開發文件（協定見本 repo docs/extensions-ipc.md）
+├── docs/           擴充工具開發文件（協定見本 repo docs/extensions-ipc_zh-TW.md）
 └── README.md
 ```
 
@@ -35,7 +35,7 @@ S2P-Extensions/
 - IPC Server、多工具清單（最多 4 個同時啟用）、讀寫權限分離、搖桿獨占與衝突檢查、心跳逾時清除。
 - 參考客戶端 `tests/extension_ipc_test_client.py`：只用標準函式庫，涵蓋 hello、state、心跳、read 請求。
   建立 S2P-Extensions 時可直接移到 `sdk/`。
-- 協定文件 `docs/extensions-ipc.md`。
+- 協定文件 `docs/extensions-ipc_zh-TW.md`（英文版 `docs/extensions-ipc.md`）。
 
 ## 後續方向
 
