@@ -1103,6 +1103,13 @@ Right-click a supported parameter to choose:
 - **Restore Saved**: discards unsaved changes.
 - **Restore Default**: uses the `System Default` value.
 
+In the compensation windows, **Restore Saved** follows what was saved last:
+
+- **Gyro Compensation Settings**: the multipliers saved in the profile,
+  including ones that **Gyro Preview** saved after a measurement.
+- **Adjusted turn speeds** in Gyro Preview: the speeds last saved with
+  **Apply to Aim Test**, or the Aim Test settings if you have not applied yet.
+
 ### 10.3 Curve control points
 
 - Drag: move the point.

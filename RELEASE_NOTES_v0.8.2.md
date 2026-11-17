@@ -7,6 +7,7 @@
 - Center gyro uses a radial deadzone and offers button spike suppression. The default button stabilization mode is Freeze Output. Gyro stick anti-deadzone now defaults to `0`. The bundled FPS-COMP preset uses `10 ms` smoothing.
 - Bundled S2P-FW `1.0.9` brings the radial deadzone, spike suppression, and independent gyro compensation to Android USB HID standalone mode. Use **Flash FW** in the main app, then write your profile to the ESP32.
 - Gamepad Tester: **S2P Mobile Gamepad (Raw HID)** now shows every button and the D-pad, and works in the Aim Test.
+- Gamepad Tester parameters, the Aim Test settings, and the compensation windows now work like the main app: drag a parameter's name to change it, and right-click for **Restore Saved** or **Restore Default**.
 - Dialogs open centered on their window instead of the screen.
 - If the ESP32 disconnects, the connector window stays open and shows why.
 - Improved stability for connection, sensor calibration, and live settings apply.
@@ -18,6 +19,7 @@
 - 回中模式改用圓形死區，按鍵防晃可選「抑制突波」，預設為「暫停輸出」。陀螺儀搖桿反死區預設改為 `0`。內建 FPS-COMP 方案的平滑值調為 `10 ms`。
 - 隨附 S2P-FW `1.0.9`，Android USB HID 獨立模式支援圓形死區、抑制突波及獨立的陀螺儀輸出補償。在主視窗刷入新韌體後，再將設定檔寫入 ESP32。
 - 手把測試：「S2P Mobile Gamepad（Raw HID）」現在會顯示所有按鍵與十字鍵，也能用於瞄準測試。
+- 手把測試、瞄準測試設定與補償視窗的參數改成和主程式一樣：在參數名稱上拖曳可調整數值，按右鍵可選「還原上次儲存」或「還原系統預設」。
 - 提示視窗改為顯示在所屬視窗中央，不再出現在螢幕中央。
 - ESP32 中斷時，連接程式視窗會保留並顯示原因。
 - 改善連線、感測器校正與即時套用設定的穩定性。

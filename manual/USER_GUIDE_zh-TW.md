@@ -884,6 +884,11 @@ Android 相容性依裝置、系統與遊戲而異，Apple 裝置不在支援範
 - **Restore Saved**（還原上次儲存）：取消尚未儲存的修改。
 - **Restore Default**（還原系統預設）：使用 `System Default` 的數值。
 
+補償視窗的「還原上次儲存」會跟著最近一次儲存的值：
+
+- **Gyro Compensation Settings**（陀螺儀補償設定）：方案中已儲存的倍率，包含 **Gyro Preview**（補償預覽）量測後存入的倍率。
+- 補償預覽的 **Adjusted turn speeds**（調整後視角速度）：最近一次按 **Apply to Aim Test**（套用至瞄準測試）存入的速度；尚未套用時為瞄準測試設定中的速度。
+
 ### 10.3 曲線控制點
 
 - 拖曳：直接修改控制點位置。
