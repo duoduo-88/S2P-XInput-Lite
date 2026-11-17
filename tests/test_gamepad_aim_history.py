@@ -46,9 +46,12 @@ class AimHistoryTests(unittest.TestCase):
         for key, value in (("tracking_arc", 180), ("tracking_speed", 200)):
             with self.subTest(key=key):
                 self.assertFalse(history.has_matching_record(dict(tracking, **{key: value})))
-        cursor = basis(mode="cursor-shooting", depth=0)
+        cursor = basis(mode="cursor-shooting", depth=0, target_top=40)
         history.add(cursor, {"hits": 8})
-        self.assertFalse(history.has_matching_record(dict(cursor, target_size_2d=14)))
+        self.assertTrue(history.has_matching_record(dict(cursor)))
+        for key, value in (("target_size_2d", 14), ("target_top", 52)):
+            with self.subTest(key=key):
+                self.assertFalse(history.has_matching_record(dict(cursor, **{key: value})))
 
     def test_reopened_history_matches_after_color_and_reticle_changes(self):
         from gamepad_aim_history import AimHistory

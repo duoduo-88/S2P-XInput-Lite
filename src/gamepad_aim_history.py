@@ -36,9 +36,10 @@ _MODE_LABELS = {
 }
 _METRIC_UNITS = {"hits": "", "accuracy": "%", "seconds": " s", "tracking": "%"}
 # Rounds compare only when the targets and screen are the same. Input speed,
-# colors, reticle, rumble, and sound do not change them.
+# colors, reticle, rumble, and sound do not change them. target_top is the 2D
+# playfield's top edge, which follows the close button height and DPI scaling.
 _COMPARISON_KEYS = (
-    "version", "mode", "viewport", "targets", "seconds", "seed", "depth",
+    "version", "mode", "viewport", "target_top", "targets", "seconds", "seed", "depth",
     "horizontal_spread", "vertical_spread", "tracking_arc", "tracking_speed",
     "target_size_2d",
 )
