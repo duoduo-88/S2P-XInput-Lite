@@ -72,13 +72,12 @@ class ConfigGuiTrayTests(unittest.TestCase):
         gui.root = Mock()
         gui._hidden_to_system_tray = False
         gui._system_tray_poll_job = None
-        gui._system_tray_minimize_job = None
         gui._root_restore_pending = False
         gui._hide_restore_splash = Mock()
         gui._begin_root_restore_cycle = Mock(return_value=1)
         return gui
 
-    def test_minimize_hides_only_after_tray_icon_is_confirmed(self):
+    def test_close_button_hides_only_after_tray_icon_is_confirmed(self):
         gui = self.gui()
         gui.main_process = object()
         gui._system_tray = Mock(available=True)
@@ -86,7 +85,7 @@ class ConfigGuiTrayTests(unittest.TestCase):
         modal = Mock()
         gui.root.grab_current.return_value = modal
 
-        self.assertTrue(gui._minimize_to_system_tray())
+        self.assertTrue(gui._hide_to_system_tray())
 
         self.assertTrue(gui._hidden_to_system_tray)
         self.assertTrue(gui._root_restore_pending)
@@ -100,7 +99,7 @@ class ConfigGuiTrayTests(unittest.TestCase):
         gui._system_tray = Mock(available=True)
         gui._system_tray.show.return_value = False
 
-        self.assertFalse(gui._minimize_to_system_tray())
+        self.assertFalse(gui._hide_to_system_tray())
 
         self.assertFalse(gui._hidden_to_system_tray)
         gui.root.withdraw.assert_not_called()
@@ -116,21 +115,43 @@ class ConfigGuiTrayTests(unittest.TestCase):
             gui.restore_from_system_tray
         )
 
-    def test_unmap_converts_only_iconic_root_to_tray(self):
+    def test_close_button_hides_to_tray_and_keeps_running(self):
+        gui = self.gui()
+        gui._hide_to_system_tray = Mock(return_value=True)
+        gui.on_close = Mock()
+
+        gui.close_to_system_tray()
+
+        gui._hide_to_system_tray.assert_called_once_with()
+        gui.on_close.assert_not_called()
+
+    def test_close_button_closes_when_the_tray_is_unavailable(self):
+        gui = self.gui()
+        gui._hide_to_system_tray = Mock(return_value=False)
+        gui.on_close = Mock()
+
+        gui.close_to_system_tray()
+
+        gui.on_close.assert_called_once_with()
+
+    def test_minimize_stays_in_the_taskbar(self):
         gui = self.gui()
         gui._system_tray = Mock(available=True)
+        gui._hide_to_system_tray = Mock()
+        gui._hide_root_until_restore_painted = Mock()
         gui.root.state.return_value = "iconic"
         scheduled = []
         gui.root.after.side_effect = (
             lambda delay, callback: scheduled.append((delay, callback)) or "job"
         )
-        gui._minimize_to_system_tray = Mock()
 
         gui._on_root_unmap()
+        for _delay, callback in scheduled:
+            callback()
 
-        self.assertEqual(scheduled[0][0], 30)
-        scheduled[0][1]()
-        gui._minimize_to_system_tray.assert_called_once_with()
+        gui._hide_to_system_tray.assert_not_called()
+        gui._system_tray.show.assert_not_called()
+        gui.root.withdraw.assert_not_called()
 
     def test_restore_removes_icon_then_maps_and_activates_root(self):
         gui = self.gui()

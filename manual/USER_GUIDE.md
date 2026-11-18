@@ -94,10 +94,12 @@ connection, input, and transport status. Keep it open while you play, because
 closing it ends the connection. If the ESP32 disconnects, the window stays
 open and shows the reason.
 
-Minimizing the settings window moves only that window to the Windows
-notification area. The connector window and the connection are unaffected.
-Click the notification icon to restore the settings window, or right-click it
-to choose **Show Settings** or **Exit**.
+Closing the settings window with **X** hides only that window in the Windows
+notification area; S2P keeps running, and the connector window and the
+connection are unaffected. Minimizing (**–**) keeps it on the taskbar as
+usual. Click the notification icon to restore the settings window, or
+right-click it to choose **Show Settings** or **Exit**. Only **Exit** really
+closes S2P.
 
 Only one settings window and one Gamepad Tester can run at a time. Starting
 either again brings the existing window forward instead of starting another

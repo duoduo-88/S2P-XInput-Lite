@@ -525,10 +525,11 @@ EN_TEXT = {
         "Progress is shown in the esptool window. "
         "Do not unplug the ESP32-S3 until it finishes.",
     "關閉程式": "Close Application",
-    "關閉設定視窗後：\n\n• 桌面橋接模式會中斷連線。\n• ESP32 獨立模式會繼續運作。":
-        "After closing the settings window:\n\n"
+    "結束程式後：\n\n• 桌面橋接模式會中斷連線。\n• ESP32 獨立模式會繼續運作。\n• 擴充工具會一併關閉。":
+        "After exiting:\n\n"
         "• Desktop bridge mode will disconnect.\n"
-        "• ESP32 standalone mode will continue running.",
+        "• ESP32 standalone mode will continue running.\n"
+        "• Extension tools will close too.",
     "以後不再提示": "Do not show this again",
     "仍要關閉": "Close Anyway",
     "無法讀取 Windows 手把介面。":

@@ -1956,15 +1956,15 @@ class ConfigGUI:
         self._hidden_to_system_tray = False
         self._system_tray = None
         self._system_tray_poll_job = None
-        self._system_tray_minimize_job = None
         self.root.bind("<Unmap>", self._on_root_unmap, add="+")
         self.root.bind("<Map>", self._on_root_map, add="+")
 
-        # 按下視窗右上角 X 時，統一關閉所有程序
+        # X 只把設定視窗收到系統匣；從系統匣選「結束程式」才會真正關閉。
+        # 最小化（-）維持一般的縮到工作列。
         self.root.protocol(
             "WM_DELETE_WINDOW",
-            self.on_close
-        )              
+            self.close_to_system_tray
+        )
         self.root.title(
             f"{APP_TITLE} Setting UI"
         )
@@ -4062,26 +4062,17 @@ class ConfigGUI:
                     pass
         self._schedule_system_tray_poll()
 
-    def _schedule_minimize_to_system_tray(self, delay=30):
-        if getattr(self, "_system_tray_minimize_job", None) is not None:
-            return
+    def close_to_system_tray(self):
+        """X hides the settings window in the notification area.
 
-        def minimize_if_iconic():
-            self._system_tray_minimize_job = None
-            try:
-                if self.root.state() == "iconic":
-                    self._minimize_to_system_tray()
-            except (AttributeError, tk.TclError):
-                pass
+        S2P keeps running and stays connected; **Exit** in the notification
+        area menu runs the normal close flow.  Without a working tray icon the
+        hidden window could not be reached again, so X closes as before.
+        """
+        if not self._hide_to_system_tray():
+            self.on_close()
 
-        try:
-            self._system_tray_minimize_job = self.root.after(
-                max(0, int(delay)), minimize_if_iconic
-            )
-        except (AttributeError, tk.TclError):
-            self._system_tray_minimize_job = None
-
-    def _minimize_to_system_tray(self):
+    def _hide_to_system_tray(self):
         """Hide only the settings root after its tray icon is confirmed."""
         if getattr(self, "_hidden_to_system_tray", False):
             return True
@@ -4144,13 +4135,6 @@ class ConfigGUI:
         if poll_job is not None:
             try:
                 self.root.after_cancel(poll_job)
-            except (AttributeError, tk.TclError):
-                pass
-        minimize_job = getattr(self, "_system_tray_minimize_job", None)
-        self._system_tray_minimize_job = None
-        if minimize_job is not None:
-            try:
-                self.root.after_cancel(minimize_job)
             except (AttributeError, tk.TclError):
                 pass
         tray = getattr(self, "_system_tray", None)
@@ -9353,13 +9337,8 @@ class ConfigGUI:
 
         if getattr(self, "_hidden_to_system_tray", False):
             return
-        if self._system_tray_available():
-            # Windows can deliver <Unmap> just before Tk reports ``iconic``.
-            # The delayed check converts only a genuine user minimize into a
-            # tray hide; unrelated withdraws retain their original meaning.
-            self._schedule_minimize_to_system_tray()
-            return
-
+        # Minimize (-) stays a normal taskbar minimize; only X hides the
+        # window in the notification area (close_to_system_tray).
         try:
             if self.root.state() == "iconic":
                 self._root_restore_pending = True
@@ -12180,9 +12159,10 @@ class ConfigGUI:
         ttk.Label(
             content,
             text=self.tr(
-                "關閉設定視窗後：\n\n"
+                "結束程式後：\n\n"
                 "• 桌面橋接模式會中斷連線。\n"
-                "• ESP32 獨立模式會繼續運作。"
+                "• ESP32 獨立模式會繼續運作。\n"
+                "• 擴充工具會一併關閉。"
             ),
             justify="left",
             wraplength=170,
