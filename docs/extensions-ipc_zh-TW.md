@@ -183,6 +183,42 @@ S2P 不會因工具而增加第二套輸出或額外的 `pad.update()`，也不�
 內暫停讀取並釋放 GIL，避免異常工具影響實體輸入執行緒。Pipe 緩衝區為 4 KB，堆積的舊訊息有上限，
 暫停結束後會依序處理到最新狀態。
 
+## 工具清單檔與更新
+
+工具必須在 EXE 旁附上以 EXE 命名的清單檔：`S2P-Joystick-Macro.exe` → `S2P-Joystick-Macro.s2p.json`
+（UTF-8 JSON，最大 64 KB）。擴充工具視窗的 **檢查更新** 會讀取它；沒有清單檔的工具會顯示「未提供更新資訊」。
+
+```json
+{"format": "s2p-extension", "name": "S2P-Joystick-Macro", "version": "0.1.0",
+ "update_url": "https://github.com/duoduo-88/S2P-Extensions/releases/latest/download/s2p-extensions-updates.json",
+ "homepage": "https://github.com/duoduo-88/S2P-Extensions"}
+```
+
+| 欄位 | 說明 |
+|---|---|
+| `format` | 固定為 `s2p-extension`。 |
+| `name` | 工具名稱；多工具更新來源以它為索引。 |
+| `version` | 已安裝的版本，格式 `MAJOR.MINOR.PATCH`，請與 `hello` 回報的版本一致。 |
+| `update_url` | 更新來源的 HTTPS 網址。可省略；省略時顯示「未提供更新資訊」。 |
+| `homepage` | 選用的 HTTPS 網頁；更新來源沒有下載頁時改開這個網址。 |
+
+更新來源是一份 JSON 文件（最大 256 KB），可描述單一工具，或以 `name` 為索引描述多個工具：
+
+```json
+{"format": "s2p-extension-updates", "version": "0.1.1", "url": "https://example.com/releases/0.1.1"}
+```
+
+```json
+{"format": "s2p-extension-updates",
+ "tools": {"S2P-Joystick-Macro": {"version": "0.1.1",
+                                  "url": "https://github.com/duoduo-88/S2P-Extensions/releases/tag/v0.1.1"}}}
+```
+
+- 只有在使用者按 **檢查更新** 時才會讀取更新來源；多個工具共用同一個 `update_url` 時只下載一次。
+- 只使用 `https` 網址。S2P 不會下載或執行工具，只在狀態欄顯示「有更新：vX.Y.Z」，並詢問是否用瀏覽器開啟 `url`。
+- 更新來源的 `version` 比清單檔新即視為有更新；更新來源無法連線、格式錯誤或沒有列出此工具時，顯示「更新檢查失敗」。
+- 把更新來源放在 GitHub release 的附檔，`update_url` 指向 `/releases/latest/download/<檔名>`，就會自動跟著最新版 release。
+
 ## 撰寫獨立工具（最小範例）
 
 只需標準函式庫；完整參考實作見 `tests/extension_ipc_test_client.py`（僅供開發，不隨發行版提供）。

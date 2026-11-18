@@ -254,6 +254,85 @@ class GUIUserWorkflowTests(unittest.TestCase):
         window.destroy()
         self.assertIsNone(self.gui._extensions_window)
 
+    def test_extensions_window_checks_tool_updates(self):
+        from gui_sections import extensions as extensions_window
+        import extension_bridge
+        import extension_updates
+        import time as time_module
+
+        macro = self.directory / "Macro.exe"
+        bare = self.directory / "Bare.exe"
+        for exe in (macro, bare):
+            exe.write_bytes(b"MZ")
+        extension_updates.manifest_path(macro).write_text(json.dumps({
+            "format": "s2p-extension", "name": "Macro", "version": "0.1.0",
+            "update_url": "https://example.test/feed.json",
+        }), encoding="utf-8")
+        config = config_utils.load_config(self.config_path)
+        extension_bridge.store_extension_settings(config, extension_bridge.ExtensionSettings(True, (
+            extension_bridge.ToolSettings("m", str(macro)),
+            extension_bridge.ToolSettings("b", str(bare)),
+        )))
+        config_utils.atomic_write_config(config, self.config_path)
+
+        class Feed:
+            requests = []
+
+            def __call__(self, request, timeout):
+                self.requests.append(request.full_url)
+                import io
+                return io.BytesIO(json.dumps({
+                    "format": "s2p-extension-updates",
+                    "tools": {"Macro": {"version": "0.2.0", "url": "https://example.test/v0.2.0"}},
+                }).encode("utf-8"))
+
+        feed = Feed()
+        real_check = extension_updates.check_tool_updates
+        questions, pages = [], []
+        for patcher in (
+            patch.object(extensions_window, "CONFIG_PATH", self.config_path),
+            patch.object(extensions_window, "STATUS_PATH", self.directory / "status.json"),
+            patch.object(
+                extensions_window, "check_tool_updates",
+                lambda tools, **kwargs: real_check(tools, opener=feed, **kwargs),
+            ),
+            patch.object(
+                extensions_window.messagebox, "askyesno",
+                side_effect=lambda title, text, **_kwargs: questions.append(text) or True,
+            ),
+            patch.object(extensions_window.webbrowser, "open",
+                         side_effect=lambda url, new=0: pages.append(url)),
+            patch.object(self.gui, "_bring_child_to_front"),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        window = self.gui.open_extensions_window()
+        tree = window._s2p_tree
+        button = window._s2p_buttons["updates"]
+        self.assertEqual(button.cget("text"), "Check for Updates")
+        self.assertNotIn("·", tree.set("m", "status"))  # nothing checked yet
+
+        button.invoke()
+        self.assertTrue(button.instate(["disabled"]))
+        deadline = time_module.monotonic() + 5
+        while not questions and time_module.monotonic() < deadline:
+            self.root.update()
+            time_module.sleep(0.02)
+        self.assertEqual(feed.requests, ["https://example.test/feed.json"])
+        self.assertIn("Macro: v0.1.0 → v0.2.0", questions[0])
+        self.assertIn("Tools without update info: 1.", questions[0])
+        self.assertEqual(pages, ["https://example.test/v0.2.0"])
+        self.assertTrue(button.instate(["!disabled"]))
+        self.assertIn("Update available: v0.2.0", tree.set("m", "status"))
+        self.assertIn("No update info", tree.set("b", "status"))
+        self.assertIn(extension_updates.UPDATE_AVAILABLE, tree.item("m", "tags"))
+
+        # Results stay for this S2P session when the window is opened again.
+        window.destroy()
+        window = self.gui.open_extensions_window()
+        self.assertIn("Update available: v0.2.0", window._s2p_tree.set("m", "status"))
+        window.destroy()
+
     def test_gyro_compensation_settings_save_both_axes(self):
         curve = self.gui.gyro_curve_button
         controls = curve.master.pack_slaves()

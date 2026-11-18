@@ -218,7 +218,7 @@ and reconnect.
 
 ### 2.7 Extensions
 
-![The Extensions window with the built-in Gamepad Test and a connected tool](assets/v0.8.2/extensions.png)
+![The Extensions window with the built-in Gamepad Test and a connected tool that has an update](assets/v0.8.2/extensions.png)
 
 S2P can work with separately installed, independent extension tools. A tool
 can only hand button, trigger, and stick states to S2P, or read controller
@@ -273,6 +273,14 @@ shown as unauthorized.
 
 **Conflict check** lists the same EXE added twice, more than 4 enabled tools,
 tools without any permission, and two tools that both want the same stick.
+
+**Check for Updates** asks each tool's update source whether a newer version
+exists and adds the result to the **State** column: **Update available**
+(with the new version), **Up to date**, **No update info** (the tool has no
+manifest), or **Update check failed**. When updates are found, S2P offers to
+open their download pages; it never downloads or installs a tool by itself.
+The tool's address is listed in a `.s2p.json` file next to its EXE, so keep
+that file with the EXE.
 
 Merge rules:
 

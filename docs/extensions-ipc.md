@@ -228,6 +228,51 @@ tool cannot delay the physical input thread. The pipe buffer is 4 KB, which
 bounds the backlog; after the pause the queued messages are processed up to
 the latest state.
 
+## Tool manifest and updates
+
+A tool must ship a manifest next to its EXE, named after the EXE:
+`S2P-Joystick-Macro.exe` → `S2P-Joystick-Macro.s2p.json` (UTF-8 JSON, at most
+64 KB). **Check for Updates** in the Extensions window reads it; a tool
+without one is listed as "No update info".
+
+```json
+{"format": "s2p-extension", "name": "S2P-Joystick-Macro", "version": "0.1.0",
+ "update_url": "https://github.com/duoduo-88/S2P-Extensions/releases/latest/download/s2p-extensions-updates.json",
+ "homepage": "https://github.com/duoduo-88/S2P-Extensions"}
+```
+
+| Field | Meaning |
+|---|---|
+| `format` | Always `s2p-extension`. |
+| `name` | The tool's name; the key in a multi-tool feed. |
+| `version` | Installed version, `MAJOR.MINOR.PATCH`. Keep it equal to the version the tool reports in `hello`. |
+| `update_url` | HTTPS address of the update feed. Optional; without it the tool is listed as "No update info". |
+| `homepage` | Optional HTTPS page, offered when the feed gives no download page. |
+
+The update feed is a JSON document (at most 256 KB) for one tool or for
+several tools keyed by `name`:
+
+```json
+{"format": "s2p-extension-updates", "version": "0.1.1", "url": "https://example.com/releases/0.1.1"}
+```
+
+```json
+{"format": "s2p-extension-updates",
+ "tools": {"S2P-Joystick-Macro": {"version": "0.1.1",
+                                  "url": "https://github.com/duoduo-88/S2P-Extensions/releases/tag/v0.1.1"}}}
+```
+
+- S2P reads the feed only when the user selects **Check for Updates**. Tools
+  that share one `update_url` are answered from a single download.
+- Only `https` addresses are used. S2P never downloads or runs a tool; it
+  shows "Update available: vX.Y.Z" in the status column and offers to open
+  `url` in the browser.
+- A newer `version` than the manifest's means an update. An unreachable or
+  invalid feed, or one that does not list the tool, is shown as "Update check
+  failed".
+- Hosting the feed as a GitHub release asset and pointing `update_url` at
+  `/releases/latest/download/<feed>` keeps the feed in step with each release.
+
 ## Writing an independent tool (minimal example)
 
 Only the standard library is needed. A complete reference implementation is

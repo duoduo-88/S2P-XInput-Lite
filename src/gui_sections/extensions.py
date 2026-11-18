@@ -7,7 +7,9 @@ controller_status.json, which this window reads twice per second while open.
 
 import json
 import subprocess
+import threading
 import time
+import webbrowser
 from dataclasses import replace
 import tkinter as tk
 from pathlib import Path
@@ -31,7 +33,15 @@ from extension_bridge import (
     settings_problems,
     store_extension_settings,
 )
+from extension_updates import (
+    CHECK_FAILED,
+    NO_INFO,
+    UP_TO_DATE,
+    UPDATE_AVAILABLE,
+    check_tool_updates,
+)
 from runtime_status import STATUS_PATH
+from version import VERSION
 
 
 STATUS_MAX_AGE_SECONDS = 3.0
@@ -62,6 +72,13 @@ STATE_COLORS = {
     STATE_ERROR: "#C62828",
 }
 OK_COLOR = "#138A36"
+UPDATE_COLOR = "#1565C0"
+UPDATE_TEXT = {
+    UPDATE_AVAILABLE: "有更新：v{latest}",
+    UP_TO_DATE: "已是最新版本",
+    NO_INFO: "未提供更新資訊",
+    CHECK_FAILED: "更新檢查失敗",
+}
 STICK_TEXT = {"left": "左搖桿", "right": "右搖桿"}
 
 
@@ -123,6 +140,45 @@ def tool_status_text(tr, settings, tool, connector_status):
     if reason:
         return f"{tr('等待連線')} · {tr(reason)}", STATE_WAITING
     return tr("等待連線"), STATE_WAITING
+
+
+def update_status_text(tr, result):
+    """Short update note for the status column ("" when not checked)."""
+    if result is None:
+        return ""
+    if result == "checking":
+        return tr("檢查更新中…")
+    return tr(UPDATE_TEXT.get(result.state, UPDATE_TEXT[CHECK_FAILED])).format(latest=result.latest)
+
+
+def update_summary(tr, settings, results):
+    """Message after a check, and the pages to offer for tools with updates."""
+    lines, pages = [], []
+    counts = {NO_INFO: 0, CHECK_FAILED: 0}
+    for tool in settings.tools:
+        result = results.get(tool.tool_id)
+        if result is None:
+            continue
+        if result.state == UPDATE_AVAILABLE:
+            lines.append(tr("{name}：v{current} → v{latest}").format(
+                name=Path(tool.path).stem, current=result.current, latest=result.latest))
+            if result.url and result.url not in pages:
+                pages.append(result.url)
+        elif result.state in counts:
+            counts[result.state] += 1
+    notes = []
+    if counts[NO_INFO]:
+        notes.append(tr("{count} 個工具未提供更新資訊。").format(count=counts[NO_INFO]))
+    if counts[CHECK_FAILED]:
+        notes.append(tr("{count} 個工具無法檢查更新。").format(count=counts[CHECK_FAILED]))
+    if lines:
+        text = tr("以下工具有新版本：") + "\n\n" + "\n".join(lines)
+    elif any(result.state == UP_TO_DATE for result in results.values()):
+        text = tr("所有可檢查的工具都已是最新版本。")
+    else:
+        text = ""
+    text = "\n\n".join(part for part in (text, "\n".join(notes)) if part)
+    return text or tr("無法檢查更新。"), pages
 
 
 def conflict_messages(tr, settings, connector_status):
@@ -243,7 +299,14 @@ def open_extensions_window(gui):
             pass
 
     tr = gui.tr
-    model = {"settings": _load_settings()}
+    if not hasattr(gui, "_extension_update_results"):
+        gui._extension_update_results = {}  # kept while S2P runs
+    model = {
+        "settings": _load_settings(),
+        "updates": gui._extension_update_results,
+        "checking": set(),   # tool ids being checked
+        "finished": [],      # results handed over by the check thread
+    }
 
     window = tk.Toplevel(gui.root)
     window.withdraw()
@@ -275,7 +338,10 @@ def open_extensions_window(gui):
         ("enabled", "啟用", ("✓",), "center"),
         ("name", "工具", ("S2P-Joystick-Macro",), "w"),
         ("permissions", "權限", (tr("輸入") + " / " + tr("讀取"), tr("內建")), "w"),
-        ("status", "狀態", (tr("等待連線（連接程式未啟動）"),), "w"),
+        ("status", "狀態", (
+            tr("等待連線（連接程式未啟動）"),
+            tr("已連接") + " · " + tr(UPDATE_TEXT[UPDATE_AVAILABLE]).format(latest="0.10.10"),
+        ), "w"),
     )
     listing = ttk.Frame(frame)
     listing.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
@@ -291,6 +357,7 @@ def open_extensions_window(gui):
         tree.column(key, width=width, anchor=anchor, stretch=key in ("name", "status"))
     for state, color in STATE_COLORS.items():
         tree.tag_configure(state, foreground=color)
+    tree.tag_configure(UPDATE_AVAILABLE, foreground=UPDATE_COLOR)
     tree.tag_configure("builtin", foreground="#333333")
     tree.grid(row=0, column=0, sticky="nsew")
     window._s2p_tree = tree
@@ -307,9 +374,13 @@ def open_extensions_window(gui):
     toggle_button.pack(side="left", padx=(6, 0))
     open_button = text_widget(ttk.Button, list_buttons, "開啟", command=lambda: open_selected())
     open_button.pack(side="right")
+    update_button = text_widget(
+        ttk.Button, list_buttons, "檢查更新", command=lambda: check_updates(),
+    )
+    update_button.pack(side="right", padx=(0, 6))
     window._s2p_buttons = {
         "add": add_button, "remove": remove_button, "toggle": toggle_button,
-        "open": open_button,
+        "open": open_button, "updates": update_button,
     }
 
     # -- permissions of the selected tool ----------------------------------------
@@ -492,6 +563,49 @@ def open_extensions_window(gui):
         if can_open(tool_id):
             open_extension_tool(gui, tool_id, model["settings"])
 
+    def check_updates():
+        if model["checking"]:
+            return
+        tools = {tool.tool_id: tool.path for tool in model["settings"].tools}
+        if not tools:
+            messagebox.showinfo(
+                tr("檢查更新"), tr("清單中沒有擴充工具。"), parent=window,
+            )
+            return
+        model["checking"] = set(tools)
+        update_button.state(["disabled"])
+
+        def run():
+            try:
+                results = check_tool_updates(tools, user_agent=f"S2P-XInput-Lite/{VERSION}")
+            except Exception:  # never leave the button disabled
+                results = {}
+            # Kept even if the window was closed meanwhile.
+            gui._extension_update_results.update(results)
+            model["finished"].append(results)
+
+        threading.Thread(target=run, name="S2P-ExtensionUpdates", daemon=True).start()
+
+    def finish_update_check():
+        if not model["finished"]:
+            return
+        results = model["finished"].pop()
+        model["checking"] = set()
+        update_button.state(["!disabled"])
+        refresh(schedule=False)
+        text, pages = update_summary(tr, model["settings"], results)
+        if pages:
+            if messagebox.askyesno(
+                tr("檢查更新"), text + "\n\n" + tr("要開啟下載頁面嗎？"), parent=window,
+            ):
+                for page in pages:
+                    try:
+                        webbrowser.open(page, new=2)
+                    except (OSError, webbrowser.Error):
+                        pass
+        else:
+            messagebox.showinfo(tr("檢查更新"), text, parent=window)
+
     def refresh_options():
         """Reflect the selected tool in the permission boxes and buttons."""
         tool = selected_tool()
@@ -518,6 +632,16 @@ def open_extensions_window(gui):
             rows.append((key, ("✓", tr(label), tr("內建"), tr("內建工具，隨 S2P 提供")), STATE_CONNECTED))
         for tool in settings.tools:
             text, state = tool_status_text(tr, settings, tool, connector)
+            result = model["updates"].get(tool.tool_id)
+            if result is not None and result.path != tool.path:
+                result = None  # the tool was moved or replaced since the check
+            if tool.tool_id in model["checking"]:
+                result = "checking"
+            note = update_status_text(tr, result)
+            if note:
+                text = f"{text} · {note}"
+            if result not in (None, "checking") and result.state == UPDATE_AVAILABLE:
+                state = UPDATE_AVAILABLE
             permissions = " / ".join(
                 tr(label) for label, allowed in (("輸入", tool.allow_input), ("讀取", tool.allow_read))
                 if allowed
@@ -543,6 +667,8 @@ def open_extensions_window(gui):
             conflict_label.configure(text="\n".join(lines), fg=STATE_COLORS[STATE_ERROR])
         else:
             conflict_label.configure(text=tr("未發現衝突"), fg=OK_COLOR)
+        if model["finished"]:
+            window.after_idle(finish_update_check)
         if schedule:
             window.after(500, refresh)
 
