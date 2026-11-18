@@ -77,7 +77,14 @@ allow_read = false
   A tool that is already running is not started again.
 - **Open** and the notification area menu start the tool again (without the
   background flag). A tool should keep a single instance, and the second
-  launch should tell the running copy to show its window.
+  launch should tell the running copy to show its window. Windows lets only
+  the foreground process, or one it just started, bring a window to the
+  front: the second copy was started by S2P and may, the running copy may
+  not. So the second copy calls `AllowSetForegroundWindow(ASFW_ANY)` before
+  signalling the running copy, then exits. The running copy restores its
+  window even when it is minimized or hidden in the notification area,
+  brings it to the front and gives it focus. Example: S2P-Extensions
+  `macro/s2p_macro/single_instance.py`.
 - Tools should send `ping` regularly (the SDK does once a second) to notice
   when S2P ends the session and reconnect by themselves; this is how
   permission changes take effect.

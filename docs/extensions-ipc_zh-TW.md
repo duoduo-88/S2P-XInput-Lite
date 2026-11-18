@@ -67,7 +67,10 @@ allow_read = false
 - 已啟用的工具會在連線開始時（或剛被啟用時）由 S2P 啟動，並帶環境變數 `S2P_EXTENSION_BACKGROUND=1`：
   工具應直接在背景執行（例如縮到系統匣），不要跳出視窗。已在執行的工具不會重複啟動。
 - 「開啟」按鈕與系統匣選單會再次啟動工具（不帶背景旗標）；工具應只保留一份執行個體，
-  由第二次啟動通知原本那份顯示視窗。
+  由第二次啟動通知原本那份顯示視窗。Windows 只允許前景程式或它剛啟動的程式把視窗移到最前面：
+  第二份由 S2P 啟動所以可以，原本在執行的那份不行。因此第二份要先呼叫 `AllowSetForegroundWindow(ASFW_ANY)`
+  再通知原本那份，然後結束；原本那份即使最小化或藏在系統匣，也要還原視窗、移到最前面並取得焦點。
+  範例：S2P-Extensions 的 `macro/s2p_macro/single_instance.py`。
 - 工具應定期送 `ping`（SDK 每秒一次）偵測 S2P 結束連線，並自動重新連線；權限變更就是靠這個生效。
 - 內建的「手把測試」不使用 pipe，由 S2P GUI 直接開啟。
 - `FILE_FLAG_FIRST_PIPE_INSTANCE`：其他程式無法搶先建立同名 pipe；名稱被占用時狀態為 `pipe_in_use`。
