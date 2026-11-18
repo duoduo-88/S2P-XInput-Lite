@@ -218,6 +218,8 @@ and reconnect.
 
 ### 2.7 Extensions
 
+![The Extensions window with the built-in Gamepad Test and a connected tool](assets/v0.8.2/extensions.png)
+
 S2P can work with separately installed, independent extension tools. A tool
 can only hand button, trigger, and stick states to S2P, or read controller
 state, with the permissions you allow. S2P merges them with the physical
