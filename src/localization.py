@@ -1760,22 +1760,14 @@ EN_TEXT = {
         "Tilt angle that reaches full output.\nLower values reach full output with less tilt.",
     "每轉動一度對應的游標像素倍率。\n數值越高，游標移動越快。":
         "Cursor-pixel multiplier per degree of rotation.\nHigher values move the cursor faster.",
-    "水平陀螺儀感度相對倍率。1.00 = 不改變。\n\n"
-    "使用搖桿輸出時，調整遊戲內的水平視角速度後，可用手把測試的「補償計算」，選擇 X（水平）。\n"
-    "用相同的右搖桿推幅與瞄準狀態，錄下舊、新設定各自從地標 A 轉到 B 的過程。\n"
-    "填入兩次耗時（秒），即可算出獨立的 X 輸出補償倍率。":
-        "Relative horizontal gyro sensitivity. 1.00 = unchanged.\n\n"
-        "With stick output, change the in-game horizontal turn speed, then open Calculator in Gamepad Tester "
-        "and select X (Horizontal).\nRecord a turn from landmark A to B with each setting, using the same "
-        "right-stick deflection and aim state.\nEnter both times in seconds to calculate the X output compensation.",
-    "垂直陀螺儀感度相對倍率。1.00 = 不改變。\n\n"
-    "使用搖桿輸出時，調整遊戲內的垂直視角速度後，可用手把測試的「補償計算」，選擇 Y（垂直）。\n"
-    "用相同的右搖桿推幅與瞄準狀態，錄下舊、新設定各自從地標 A 轉到 B 的過程。\n"
-    "填入兩次耗時（秒），即可算出獨立的 Y 輸出補償倍率。":
-        "Relative vertical gyro sensitivity. 1.00 = unchanged.\n\n"
-        "With stick output, change the in-game vertical turn speed, then open Calculator in Gamepad Tester "
-        "and select Y (Vertical).\nRecord a turn from landmark A to B with each setting, using the same "
-        "right-stick deflection and aim state.\nEnter both times in seconds to calculate the Y output compensation.",
+    "水平陀螺儀感度相對倍率。1.00 = 不改變。\n"
+    "數值越高，左右轉動時的輸出越大。":
+        "Relative horizontal gyro sensitivity. 1.00 = unchanged.\n"
+        "Higher values give more output when turning left or right.",
+    "垂直陀螺儀感度相對倍率。1.00 = 不改變。\n"
+    "數值越高，上下轉動時的輸出越大。":
+        "Relative vertical gyro sensitivity. 1.00 = unchanged.\n"
+        "Higher values give more output when tilting up or down.",
     "以水平與垂直的合成角速度判斷死區，保留斜向轉動的方向。單位：度／秒。\n自適應功能會在明確轉動時縮小死區。\n數值越高，需要更明顯的轉動才會開始輸出。":
         "Uses the combined horizontal and vertical angular speed in degrees per second to preserve the direction of diagonal motion.\nAdaptive mode reduces the deadzone during intentional motion.\nHigher values require more intentional motion before output begins.",
     "補償遊戲內建搖桿死區；只作用於回中搖桿輸出，不改變實體搖桿。\n0 = 不補償；數值越高，越容易跨過遊戲內建的搖桿死區。":

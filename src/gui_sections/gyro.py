@@ -4,20 +4,32 @@ from tkinter import ttk
 from settings_schema import GYRO_RATIO_MAX, GYRO_RATIO_MIN
 
 
+def bind_full_button_list_tooltip(gui, entry, buttons_attribute):
+    """Hovering a shortened key summary ("ZL, ZR +2") lists every key."""
+    tooltip = gui.bind_help_tooltip(
+        entry, lambda: ", ".join(getattr(gui, buttons_attribute, ()))
+    )
+    # The summary already shows everything for up to two keys.
+    tooltip.show_condition = (
+        lambda: len(getattr(gui, buttons_attribute, ())) > 2
+    )
+    return tooltip
+
+
 def build_gyro_section(gui, mapping_notebook):
     """Build the gyroscope mapping tab."""
     # =========================
     # 頁籤 4：陀螺儀映射
     # =========================
-    gyro_frame = ttk.Frame(mapping_notebook, padding=(12, 10))
+    gyro_frame = ttk.Frame(mapping_notebook, padding=(12, 8))
     gui.gyro_settings_tab = gyro_frame
     mapping_notebook.add(gyro_frame, text=" 陀螺儀映射 ")
     gyro_frame.columnconfigure(0, weight=1)
 
     activation_frame = ttk.LabelFrame(
-        gyro_frame, text="啟動方式", padding=(10, 8)
+        gyro_frame, text="啟動方式", padding=(10, 6)
     )
-    activation_frame.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+    activation_frame.grid(row=0, column=0, sticky="ew", pady=(0, 6))
     activation_content = ttk.Frame(activation_frame)
     activation_content.pack(anchor="center")
     ttk.Label(activation_content, text="按鍵").grid(
@@ -31,6 +43,9 @@ def build_gyro_section(gui, mapping_notebook):
         justify="center",
     )
     gui.gyro_activation_button_entry.grid(row=0, column=1)
+    bind_full_button_list_tooltip(
+        gui, gui.gyro_activation_button_entry, "gyro_activation_buttons"
+    )
     gui.gyro_activation_select_button = ttk.Button(
         activation_content,
         text="…",
@@ -74,9 +89,9 @@ def build_gyro_section(gui, mapping_notebook):
     update_activation_button_state()
 
     target_frame = ttk.LabelFrame(
-        gyro_frame, text="輸出目標", padding=(10, 8)
+        gyro_frame, text="輸出目標", padding=(10, 6)
     )
-    target_frame.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+    target_frame.grid(row=1, column=0, sticky="ew", pady=(0, 6))
     target_content = ttk.Frame(target_frame)
     target_content.pack(anchor="center")
     for column, (text, value) in enumerate((
@@ -115,10 +130,10 @@ def build_gyro_section(gui, mapping_notebook):
     gui.gyro_player_space_help.pack(side="left")
 
     motion_mode_frame = ttk.LabelFrame(
-        gyro_frame, text="控制模式", padding=(10, 8)
+        gyro_frame, text="控制模式", padding=(10, 6)
     )
     gui.gyro_motion_mode_frame = motion_mode_frame
-    motion_mode_frame.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+    motion_mode_frame.grid(row=2, column=0, sticky="ew", pady=(0, 6))
     motion_mode_content = ttk.Frame(motion_mode_frame)
     motion_mode_content.pack(anchor="center")
     gui.gyro_center_mode_button = ttk.Radiobutton(
@@ -181,7 +196,7 @@ def build_gyro_section(gui, mapping_notebook):
     gui.gyro_tilt_recenter_combo.pack(side="left")
 
     gyro_settings_frame = ttk.LabelFrame(
-        gyro_frame, text="陀螺儀反應", padding=(10, 8)
+        gyro_frame, text="陀螺儀反應", padding=(10, 6)
     )
     gyro_settings_frame.grid(row=3, column=0, sticky="ew")
     gyro_settings_frame.columnconfigure(0, weight=1)
@@ -199,15 +214,11 @@ def build_gyro_section(gui, mapping_notebook):
         ("最大傾角", gui.gyro_tilt_max_angle_var, 10.0, 60.0, 1.0, ".0f",
          "傾斜到此角度時輸出滿值。\n數值越小，較小的傾斜就能達到滿輸出。", "TILT"),
         ("X 比例", gui.gyro_x_ratio_var, GYRO_RATIO_MIN, GYRO_RATIO_MAX, 0.01, ".2f",
-         "水平陀螺儀感度相對倍率。1.00 = 不改變。\n\n"
-         "使用搖桿輸出時，調整遊戲內的水平視角速度後，可用手把測試的「補償計算」，選擇 X（水平）。\n"
-         "用相同的右搖桿推幅與瞄準狀態，錄下舊、新設定各自從地標 A 轉到 B 的過程。\n"
-         "填入兩次耗時（秒），即可算出獨立的 X 輸出補償倍率。", "ALL"),
+         "水平陀螺儀感度相對倍率。1.00 = 不改變。\n"
+         "數值越高，左右轉動時的輸出越大。", "ALL"),
         ("Y 比例", gui.gyro_y_ratio_var, GYRO_RATIO_MIN, GYRO_RATIO_MAX, 0.01, ".2f",
-         "垂直陀螺儀感度相對倍率。1.00 = 不改變。\n\n"
-         "使用搖桿輸出時，調整遊戲內的垂直視角速度後，可用手把測試的「補償計算」，選擇 Y（垂直）。\n"
-         "用相同的右搖桿推幅與瞄準狀態，錄下舊、新設定各自從地標 A 轉到 B 的過程。\n"
-         "填入兩次耗時（秒），即可算出獨立的 Y 輸出補償倍率。", "Y_AXIS"),
+         "垂直陀螺儀感度相對倍率。1.00 = 不改變。\n"
+         "數值越高，上下轉動時的輸出越大。", "Y_AXIS"),
         ("死區", gui.gyro_deadzone_var, 0.0, 5.0, 0.1, ".1f",
          "以水平與垂直的合成角速度判斷死區，保留斜向轉動的方向。單位：度／秒。\n"
          "自適應功能會在明確轉動時縮小死區。\n數值越高，需要更明顯的轉動才會開始輸出。", "CENTER"),
@@ -308,9 +319,9 @@ def build_gyro_section(gui, mapping_notebook):
         gyro_action_row, text="補償設定", command=gui.open_gyro_compensation_window,
     )
     stability_frame = ttk.LabelFrame(
-        gyro_frame, text="穩定控制", padding=(10, 8)
+        gyro_frame, text="穩定控制", padding=(10, 6)
     )
-    stability_frame.grid(row=4, column=0, sticky="ew", pady=(8, 0))
+    stability_frame.grid(row=4, column=0, sticky="ew", pady=(6, 0))
     stability_content = ttk.Frame(stability_frame)
     stability_content.pack(anchor="center")
     stability_rows = (
@@ -435,6 +446,9 @@ def build_gyro_section(gui, mapping_notebook):
         justify="center",
     )
     gui.gyro_stabilization_button_entry.pack(side="left")
+    bind_full_button_list_tooltip(
+        gui, gui.gyro_stabilization_button_entry, "gyro_stabilization_buttons"
+    )
     ttk.Button(
         stabilization_key_content,
         text="…",
@@ -447,12 +461,18 @@ def build_gyro_section(gui, mapping_notebook):
         "任一按鍵按下或放開都會觸發防晃，原映射仍保留。"
     )
     stabilization_key_help.pack(side="left", padx=(6, 0))
+    # Below the last frame, right edge on the frame borders. ttk buttons
+    # draw their border 1 px inside the widget box, so the box is placed
+    # 1 px past the footer's right edge to line the visible edge up.
+    gyro_footer = ttk.Frame(gyro_frame)
+    gyro_footer.grid(row=5, column=0, sticky="ew", pady=(6, 0))
     gui.gyro_reset_button = ttk.Button(
-        stabilization_key_content,
+        gyro_footer,
         text="還原陀螺儀預設",
         command=gui.reset_gyro_mapping,
     )
-    gui.gyro_reset_button.pack(side="left", padx=(6, 0))
+    gyro_footer.configure(height=gui.gyro_reset_button.winfo_reqheight())
+    gui.gyro_reset_button.place(relx=1.0, x=1, y=0, anchor="ne")
 
     def update_gyro_target_state(*args):
         target = gui.gyro_target_var.get().strip().upper()

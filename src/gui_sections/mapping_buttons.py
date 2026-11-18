@@ -106,11 +106,13 @@ def build_mapping_buttons_section(gui, right_frame):
         "例如 X + Y。"
     ).place(
         relx=1.0,
-        x=-55,
+        x=-52,
         y=3,
         anchor="ne",
     )
 
+    # ttk buttons draw their border 1 px inside the widget box, so the
+    # box overhangs by 1 px to line the visible edge up with the dropdowns.
     ttk.Button(
         mapping_frame,
         text="還原",
@@ -118,7 +120,7 @@ def build_mapping_buttons_section(gui, right_frame):
         command=gui.reset_button_mapping
     ).place(
         relx=1.0,
-        x=-2,
+        x=1,
         y=0,
         anchor="ne"
     )

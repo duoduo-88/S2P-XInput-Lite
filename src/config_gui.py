@@ -2035,6 +2035,7 @@ class ConfigGUI:
         self.stick_zoom_window = None
         self.stick_zoom_notebook = None
         self.stick_zoom_editors = {}
+        self._stick_zoom_layout_updaters = {}
         # The tester owns a high-frequency Canvas redraw loop. Keep it in a
         # separate GUI process so it cannot delay this settings window.
         self.gamepad_test_process = None
@@ -4331,8 +4332,14 @@ class ConfigGUI:
         tab = ttk.Frame(notebook, padding=(8, 4))
         notebook.add(tab, text=f" {side_text} ")
 
+        # 曲線與下方設定共用同一個容器，設定區寬度因此等於曲線圖寬度，
+        # 拉大視窗時也不會比曲線圖更寬。
+        body = ttk.Frame(tab)
+        body.pack(anchor="n")
+        body.columnconfigure(0, weight=1)
+
         editor = StickCurveEditor(
-            tab,
+            body,
             curve_vars,
             deadzone_var,
             outer_deadzone_var,
@@ -4356,21 +4363,22 @@ class ConfigGUI:
         # 放大視窗改完專用邊距後必須立刻重畫，否則第一次操作時
         # 才套用新邊距，曲線圖就會看起來突然縮小。
         editor.draw()
-        editor.pack(anchor="center")
+        editor.grid(row=0, column=0)
         self.stick_zoom_editors[side] = editor
 
-        # 下方控制區使用自然寬度置中。
-        # 「輸出與防抖」維持窄版，不再被較寬的「曲線範圍」群組
-        # 拉伸，避免兩個群組看起來無法對齊。
-        controls = ttk.Frame(tab)
-        controls.pack(pady=(5, 0), anchor="center")
+        # 下方兩個設定群組由 _arrange_stick_zoom_controls() 排列：
+        # 放得下時左右並排、等寬；低解析度放不下時改為上下排列。
+        # 兩種排列的總寬度都與曲線圖相同。
+        controls = ttk.Frame(body)
+        controls.grid(row=1, column=0, sticky="ew", pady=(5, 0))
 
         output_group = ttk.LabelFrame(
             controls,
             text="輸出與防抖",
             padding=(8, 3),
         )
-        output_group.pack(anchor="center")
+        # 拉桿吸收多出的寬度，問號維持貼齊群組右側。
+        output_group.columnconfigure(1, weight=1)
 
         ttk.Label(output_group, text="形狀").grid(
             row=0, column=0, sticky="w", padx=(2, 2), pady=2
@@ -4487,7 +4495,7 @@ class ConfigGUI:
             text="曲線範圍",
             padding=(8, 3),
         )
-        deadzone_group.pack(anchor="center", pady=(5, 0))
+        deadzone_group.columnconfigure(1, weight=1)
 
         center_label_frame = ttk.Frame(deadzone_group)
         center_label_frame.grid(row=0, column=0, sticky="e", pady=2)
@@ -4575,7 +4583,49 @@ class ConfigGUI:
             "並避免反向與超調。",
         ).grid(row=2, column=2, padx=(8, 0), pady=2)
 
+        self._stick_zoom_layout_updaters[side] = (
+            lambda: self._arrange_stick_zoom_controls(
+                controls, editor, output_group, deadzone_group
+            )
+        )
+        self._stick_zoom_layout_updaters[side]()
         return tab
+
+    def _arrange_stick_zoom_controls(
+        self, controls, editor, output_group, deadzone_group
+    ):
+        """Side by side at equal width when both fit under the curve, else stacked."""
+        gap = max(4, round(6 * self.ui_scale))
+        output_group.grid_forget()
+        deadzone_group.grid_forget()
+        controls.update_idletasks()
+        # Equal-width columns are both as wide as the wider group.
+        side_by_side = (
+            2 * max(
+                output_group.winfo_reqwidth(),
+                deadzone_group.winfo_reqwidth(),
+            )
+            + gap
+            <= editor.winfo_reqwidth()
+        )
+        if side_by_side:
+            for column in (0, 1):
+                controls.columnconfigure(
+                    column, weight=1, uniform="stick_zoom_group"
+                )
+            output_group.grid(
+                row=0, column=0, sticky="nsew", padx=(0, gap // 2)
+            )
+            deadzone_group.grid(
+                row=0, column=1, sticky="nsew", padx=(gap - gap // 2, 0)
+            )
+        else:
+            controls.columnconfigure(0, weight=1, uniform="")
+            controls.columnconfigure(1, weight=0, uniform="")
+            output_group.grid(row=0, column=0, sticky="ew")
+            deadzone_group.grid(
+                row=1, column=0, sticky="ew", pady=(5, 0)
+            )
 
     def _resize_stick_zoom_for_language(self):
         """Grow the zoom window when translated text needs additional space."""
@@ -4585,6 +4635,8 @@ class ConfigGUI:
         try:
             if not window.winfo_exists():
                 return
+            for arrange in tuple(self._stick_zoom_layout_updaters.values()):
+                arrange()
             window.update_idletasks()
             work_x, work_y, work_width, work_height = self.get_work_area()
             chrome_x = max(16, round(16 * self.ui_scale))
@@ -4617,6 +4669,7 @@ class ConfigGUI:
         self.stick_zoom_window = None
         self.stick_zoom_notebook = None
         self.stick_zoom_editors = {}
+        self._stick_zoom_layout_updaters = {}
         self.stick_settings_zoomed = False
 
         for variable, trace_id in self._stick_zoom_trace_bindings:
@@ -4689,6 +4742,7 @@ class ConfigGUI:
                 self.stick_zoom_window = None
                 self.stick_zoom_notebook = None
                 self.stick_zoom_editors = {}
+                self._stick_zoom_layout_updaters = {}
                 self.stick_settings_zoomed = False
                 for variable, trace_id in self._stick_zoom_trace_bindings:
                     try:
@@ -4702,6 +4756,8 @@ class ConfigGUI:
         # Widgets are created with Traditional Chinese source text. Running the
         # normal language pass now translates the new window when English is active.
         self.apply_language()
+        for arrange in tuple(self._stick_zoom_layout_updaters.values()):
+            arrange()
         window.update_idletasks()
         self._center_child_window(
             window,
@@ -9763,13 +9819,15 @@ class ConfigGUI:
             card.grid(row=index, column=0, sticky="ew", padx=2, pady=3)
             host.columnconfigure(0, weight=1)
 
-            top_row = ttk.Frame(card)
+            # Both rows share one grid so their columns line up:
+            #   [✓] [name ........] [activation] [mode]
+            #   [↑] [↓] [編輯]      [重新命名]    [刪除]
+            # The activation button sits over 重新命名 and the mode box over
+            # 刪除, at the same visible edges.
+            top_row = bottom_row = ttk.Frame(card)
             top_row.grid(row=0, column=0, sticky="ew")
-            top_row.columnconfigure(1, weight=1)
-            bottom_row = ttk.Frame(card)
-            bottom_row.grid(row=1, column=0, sticky="ew", pady=(1, 0))
             for column in range(2, 5):
-                bottom_row.columnconfigure(
+                top_row.columnconfigure(
                     column, weight=1, uniform="layer_action"
                 )
             card.columnconfigure(0, weight=1)
@@ -9780,27 +9838,51 @@ class ConfigGUI:
             enabled = ttk.Checkbutton(top_row, variable=enabled_var, takefocus=False)
             enabled.grid(row=0, column=0, sticky="w", padx=(0, 2))
             mode_labels = (self.tr("按住"), self.tr("切換"))
-            # English "Toggle" needs a wider box. Give the room from the
-            # name so the row keeps its width in both languages.
             mode_width = max(4, max(len(label) for label in mode_labels))
-            name_width = 14 - (mode_width - 4)
             full_name = layer.get("name", f"Layer {index + 1}")
-            display_name = (
-                full_name if len(full_name) <= name_width
-                else full_name[:name_width - 1] + "…"
+            # width=1 keeps the name from widening the shared columns; the
+            # text is shortened with "…" to whatever width it is given.
+            name_label = ttk.Label(
+                top_row, text=full_name, anchor="w", width=1
             )
-            ttk.Label(
-                top_row, text=display_name, anchor="w", width=name_width
-            ).grid(row=0, column=1, sticky="ew", padx=(0, 3))
-            activation_text = "+".join(layer.get("activation_buttons", ())) or self.tr("未設定")
+            name_label.grid(
+                row=0, column=1, columnspan=2, sticky="ew", padx=(0, 3)
+            )
+
+            def fit_layer_name(event, label=name_label, text=full_name):
+                font = tkfont.Font(
+                    root=label,
+                    font=label.cget("font")
+                    or ttk.Style(label).lookup("TLabel", "font")
+                    or "TkDefaultFont"
+                )
+                available = max(0, event.width - 2)
+                shown = text
+                if font.measure(shown) > available:
+                    while shown and font.measure(shown + "…") > available:
+                        shown = shown[:-1]
+                    shown += "…"
+                if label.cget("text") != shown:
+                    label.configure(text=shown)
+
+            name_label.bind("<Configure>", fit_layer_name, add="+")
+            full_activation_text = (
+                "+".join(layer.get("activation_buttons", ()))
+                or self.tr("未設定")
+            )
+            activation_text = full_activation_text
             if len(activation_text) > 9:
                 activation_text = activation_text[:8] + "…"
-            ttk.Button(
+            activation_button = ttk.Button(
                 top_row,
                 text=activation_text,
                 width=9,
                 command=lambda i=index: self.edit_mapping_layer_activation(i),
-            ).grid(row=0, column=2, sticky="e", padx=2)
+            )
+            activation_button.grid(row=0, column=3, sticky="ew", padx=1)
+            if activation_text != full_activation_text:
+                # Shortened with "…": hovering shows every activation key.
+                self.bind_help_tooltip(activation_button, full_activation_text)
             mode_display = {
                 "HOLD": self.tr("按住"),
                 "TOGGLE": self.tr("切換"),
@@ -9818,7 +9900,9 @@ class ConfigGUI:
                 state="readonly",
                 width=mode_width,
             )
-            mode_combo.grid(row=0, column=3, sticky="e", padx=(2, 0))
+            # Buttons draw 1 px inside their box and use padx=1; the combobox
+            # draws to its edge, so padx=2 puts it on the same visible edges.
+            mode_combo.grid(row=0, column=4, sticky="ew", padx=2)
 
             def update_enabled(*_args, item=layer, var=enabled_var):
                 item["enabled"] = bool(var.get())
@@ -9856,6 +9940,7 @@ class ConfigGUI:
                     column=column,
                     sticky="ew",
                     padx=1,
+                    pady=(1, 0),
                 )
                 if (action_index == 0 and index == 0) or (
                     action_index == 1 and index == len(self.mapping_layers) - 1

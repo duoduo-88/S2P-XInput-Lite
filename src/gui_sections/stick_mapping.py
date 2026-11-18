@@ -725,6 +725,16 @@ def build_stick_mapping_section(gui, mapping_notebook):
         update_direction_mode()
 
         # 疊放在區塊右上角，不參與 grid 尺寸計算。
+        # 與上框線、右框線的可見間距相同：以外框為基準定位，
+        # 上框線畫在標題文字高度的中線（奇數高度向下取整到下一像素）。
+        reset_gap = 10
+        label_font = (
+            ttk.Style(parent).lookup("TLabelframe.Label", "font")
+            or "TkDefaultFont"
+        )
+        top_border_y = (int(parent.tk.call(
+            "font", "metrics", label_font, "-linespace"
+        )) + 1) // 2
         ttk.Button(
             parent,
             text="還原",
@@ -735,9 +745,10 @@ def build_stick_mapping_section(gui, mapping_notebook):
             )
         ).place(
             relx=1.0,
-            x=-4,
-            y=2,
-            anchor="ne"
+            x=-reset_gap,
+            y=top_border_y + reset_gap,
+            anchor="ne",
+            bordermode="outside",
         )
 
     # 建立左搖桿方向映射
