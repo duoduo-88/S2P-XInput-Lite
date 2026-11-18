@@ -620,6 +620,17 @@ class NamedPipeServerTests(unittest.TestCase):
         again.close()
         self.assertTrue(self.wait_for(lambda: self.merged().wButtons == 0))
 
+    def test_welcome_names_the_s2p_window_process(self):
+        self.enable(_tool("m", MACRO))
+        plain = self.client()
+        self.assertNotIn("host_pid", plain.connect())  # no GUI: nothing to follow
+        plain.close()
+        self.manager.host_pid = 4321
+        followed = self.client()
+        self.assertTrue(self.wait_for(lambda: self._connect_quietly(followed)))
+        self.assertEqual(followed.welcome["host_pid"], 4321)
+        followed.close()
+
     def test_two_tools_connect_at_once_and_merge(self):
         self.enable(_tool("m", MACRO), _tool("x", MULTI))
         macro = self.client("tok-m")

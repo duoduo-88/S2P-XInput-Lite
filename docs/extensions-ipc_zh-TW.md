@@ -111,8 +111,11 @@ JSON。單則訊息上限 4096 bytes。
 
 ```json
 {"type": "welcome", "protocol": 1, "server": "S2P-XInput-Lite", "server_version": "0.8.2",
- "capabilities": ["input"], "sticks": ["left"], "input_timeout_ms": 1000}
+ "capabilities": ["input"], "sticks": ["left"], "input_timeout_ms": 1000, "host_pid": 12345}
 ```
+
+`host_pid` 是 S2P 視窗的程序 ID。要跟著 S2P 一起關閉的工具，可等待該程序結束（例如 `OpenProcess(SYNCHRONIZE)`
+加 `WaitForSingleObject`）。只重新啟動 S2P 連線時它不會改變；舊版 S2P 不會提供此欄位。
 
 失敗時 S2P 回覆後中斷連線（最多等 200 ms 讓工具讀到回覆）：
 

@@ -862,7 +862,7 @@ class _PipeInstance:
         image = process_image_path(pid) if pid else None
         # Raises ProtocolError (unauthorized, conflict, ...) when refused.
         self.session = self.server.open_session(pid, image, hello)
-        self.write({
+        welcome = {
             "type": "welcome",
             "protocol": PROTOCOL_VERSION,
             "server": "S2P-XInput-Lite",
@@ -870,7 +870,13 @@ class _PipeInstance:
             "capabilities": list(self.session.granted),
             "sticks": list(self.session.sticks),
             "input_timeout_ms": INPUT_TIMEOUT_MS,
-        })
+        }
+        host_pid = getattr(self.server.owner, "host_pid", 0)
+        if host_pid:
+            # The S2P settings process: tools close when it exits, but not when
+            # only the connector restarts.
+            welcome["host_pid"] = host_pid
+        self.write(welcome)
         return messages[1:]
 
     def _require(self, capability):
@@ -1215,9 +1221,10 @@ class ExtensionManager:
 
     def __init__(
         self, xinput, *, pipe_name=PIPE_NAME, server_version="", server_factory=None,
-        controller_info=None,
+        controller_info=None, host_pid=0,
     ):
         self._xinput = xinput
+        self.host_pid = int(host_pid or 0)
         self._pipe_name = pipe_name
         self._server_version = server_version
         self._server_factory = server_factory or ExtensionPipeServer

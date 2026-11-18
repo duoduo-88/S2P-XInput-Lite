@@ -253,7 +253,8 @@ disabled.
    enable a tool), S2P starts it in the background without showing a window,
    and the tool connects by itself. To use a tool's window, select it and
    choose **Open**, or click its name in the notification area menu. Use
-   **Enable/Disable** to turn one off.
+   **Enable/Disable** to turn one off. Closing S2P closes the tools too (a
+   tool must support this; S2P-Joystick-Macro does).
 
 The first row is always the built-in **Gamepad Test**. It ships with S2P,
 cannot be removed, and opens even while Extensions is disabled. See

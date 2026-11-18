@@ -67,6 +67,7 @@ from gamepad_test_window import (
     StickHistory,
     StickPlot,
     TEST_ICON_PATH,
+    TEST_ICON_SMALL_PATHS,
     build_device_display_mapping,
     curve_output_radii,
     diagnostic_telemetry_for_device,
@@ -84,6 +85,9 @@ from raw_hid_probe import RawHidDevice
 import test_telemetry
 from test_telemetry import SharedTestTelemetry, TELEMETRY_SIZE, _TRAIL_SEQUENCE_OFFSET
 
+
+
+TESTER_ICON_FILES = (TEST_ICON_PATH, *TEST_ICON_SMALL_PATHS)
 
 class DiagnosticDeviceSelectionTests(unittest.TestCase):
     def test_native_target_never_uses_fresh_s2p_telemetry(self):
@@ -1830,17 +1834,15 @@ class GamepadMathTests(unittest.TestCase):
         icon = Mock()
 
         with patch(
-            "gamepad_test_app.tk.PhotoImage",
+            "gamepad_test_window.tk.PhotoImage",
             return_value=icon,
         ) as image_factory:
             result = apply_root_icon(root)
 
-        image_factory.assert_called_once_with(
-            master=root,
-            file=str(TEST_ICON_PATH),
-        )
-        root.iconphoto.assert_called_once_with(True, icon)
-        self.assertIs(result, icon)
+        files = [call.kwargs["file"] for call in image_factory.call_args_list]
+        self.assertEqual(files, [str(path) for path in TESTER_ICON_FILES])
+        root.iconphoto.assert_called_once_with(True, *[icon] * len(TESTER_ICON_FILES))
+        self.assertEqual(result, [icon] * len(TESTER_ICON_FILES))
 
     def test_direct_gamepad_tester_shows_requested_startup_banner(self):
         root = Mock()
@@ -2018,12 +2020,19 @@ class GamepadMathTests(unittest.TestCase):
         ) as image_factory:
             tester._apply_window_icon(window)
 
-        image_factory.assert_called_once_with(
-            master=window,
-            file=str(TEST_ICON_PATH),
-        )
-        window.iconphoto.assert_called_once_with(False, icon)
-        self.assertIs(tester._window_icon, icon)
+        files = [call.kwargs["file"] for call in image_factory.call_args_list]
+        self.assertEqual(files, [str(path) for path in TESTER_ICON_FILES])
+        window.iconphoto.assert_called_once_with(False, *[icon] * len(TESTER_ICON_FILES))
+        self.assertEqual(tester._window_icon, [icon] * len(TESTER_ICON_FILES))
+
+    def test_tester_icon_ships_small_sizes(self):
+        import struct
+
+        for path, size in zip(TESTER_ICON_FILES, (256, 32, 16)):
+            self.assertTrue(path.is_file(), path)
+            header = path.read_bytes()[:24]
+            self.assertEqual(header[:8], b"\x89PNG\r\n\x1a\n", path)
+            self.assertEqual(struct.unpack(">II", header[16:24]), (size, size), path)
 
     def test_localized_source_label_maps_back_to_stable_source(self):
         labels = {

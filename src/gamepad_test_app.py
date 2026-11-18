@@ -12,7 +12,7 @@ from pathlib import Path
 
 from config_utils import CONFIG_PATH, atomic_write_config, config_file_lock, load_config
 from dialog_layout import install_centered_dialogs, startup_banner_geometry
-from gamepad_test_window import GamepadTestWindow, TEST_ICON_PATH
+from gamepad_test_window import GamepadTestWindow, TEST_ICON_PATH, load_tester_icons
 from localization import translate_text
 from single_instance import GYRO_SETTINGS_ACTION, SETTINGS_INSTANCE_NAME, SingleInstance, activate_tk_window
 from version import VERSION
@@ -55,9 +55,9 @@ def apply_root_icon(root):
     if not TEST_ICON_PATH.is_file():
         return None
     try:
-        icon = tk.PhotoImage(master=root, file=str(TEST_ICON_PATH))
-        root.iconphoto(True, icon)
-        return icon
+        icons = load_tester_icons(root)
+        root.iconphoto(True, *icons)
+        return icons
     except tk.TclError:
         return None
 

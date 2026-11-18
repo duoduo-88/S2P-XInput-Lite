@@ -131,8 +131,13 @@ Success:
 
 ```json
 {"type": "welcome", "protocol": 1, "server": "S2P-XInput-Lite", "server_version": "0.8.2",
- "capabilities": ["input"], "sticks": ["left"], "input_timeout_ms": 1000}
+ "capabilities": ["input"], "sticks": ["left"], "input_timeout_ms": 1000, "host_pid": 12345}
 ```
+
+`host_pid` is the process ID of the S2P window. A tool that should close
+together with S2P waits for that process to exit (for example with
+`OpenProcess(SYNCHRONIZE)` and `WaitForSingleObject`). It stays the same while
+only the S2P connection restarts. Older S2P versions omit it.
 
 On failure S2P replies and then closes the connection (giving the tool up to
 200 ms to read the reply):

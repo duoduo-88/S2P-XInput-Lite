@@ -112,6 +112,19 @@ GYRO_ANTI_DEADZONE_COLOR = "#00897B"
 TEST_ICON_PATH = (
     Path(__file__).resolve().parent.parent / "image" / "testicon.png"
 )
+# Smaller copies let Windows pick a close size for title bars and the taskbar.
+TEST_ICON_SMALL_PATHS = tuple(
+    TEST_ICON_PATH.with_name(f"testicon{size}.png") for size in (32, 16)
+)
+
+
+def load_tester_icons(master):
+    """Return the tester icon at every bundled size (largest first)."""
+    icons = []
+    for path in (TEST_ICON_PATH, *TEST_ICON_SMALL_PATHS):
+        if path.is_file():
+            icons.append(tk.PhotoImage(master=master, file=str(path)))
+    return icons
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ABOUT_ICON_PATH = PROJECT_ROOT / "image" / "icon.png"
 LICENSE_PATH = PROJECT_ROOT / "LICENSE"
@@ -2416,10 +2429,10 @@ class GamepadTestWindow:
         if not TEST_ICON_PATH.is_file():
             return
         try:
-            icon = tk.PhotoImage(master=window, file=str(TEST_ICON_PATH))
-            window.iconphoto(False, icon)
+            icons = load_tester_icons(window)
+            window.iconphoto(False, *icons)
             # Tk image objects must remain referenced for the window lifetime.
-            self._window_icon = icon
+            self._window_icon = icons
         except tk.TclError:
             self._window_icon = None
 

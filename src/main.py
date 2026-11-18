@@ -1219,6 +1219,7 @@ def _run_connector():
     # Nothing runs for Extensions unless the user enabled it.
     extensions = ExtensionManager(
         xinput, server_version=VERSION, controller_info=extension_controller_info,
+        host_pid=gui_pid,  # tools close together with the S2P window
     )
     try:
         extension_settings = apply_extension_settings(startup=True)
