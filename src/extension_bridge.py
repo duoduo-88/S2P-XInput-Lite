@@ -1433,9 +1433,14 @@ class ExtensionManager:
             tool for tool in self._settings.active_tools
             if tool_id is None or tool.tool_id == tool_id
         ]
+        with self._lock:
+            connected = set(self._sessions)
         for tool in targets:
             self._paused.discard(tool.tool_id)
-            self._set_tool(tool.tool_id, STATE_WAITING)
+            if tool.tool_id not in connected:
+                # A connected tool keeps its session (Open only shows its
+                # window), so its status must stay "connected".
+                self._set_tool(tool.tool_id, STATE_WAITING)
         if not targets or not self._start_server(len(self._settings.active_tools)):
             return False
         for tool in targets:

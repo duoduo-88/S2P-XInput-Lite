@@ -498,6 +498,9 @@ class ManagerTests(unittest.TestCase):
         del self.launches[:], self.reopened[:]  # ignore the start-up launch
         self.assertTrue(self.manager.connect("m"))
         self.assertEqual((self.launches, self.reopened), (["m"], [True]))
+        # The session is untouched, so the status must not fall back to waiting.
+        self.assertEqual(self.manager.status()["tools"]["m"]["state"], "connected")
+        self.assertEqual(self.manager.status()["state"], "connected")
 
     def test_changing_one_tool_drops_only_its_session(self):
         macro, multi = _tool("m", MACRO), _tool("x", MULTI)
