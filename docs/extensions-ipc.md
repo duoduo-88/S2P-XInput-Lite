@@ -80,8 +80,9 @@ allow_read = false
   launch should tell the running copy to show its window. Windows lets only
   the foreground process, or one it just started, bring a window to the
   front: the second copy was started by S2P and may, the running copy may
-  not. So the second copy calls `AllowSetForegroundWindow(ASFW_ANY)` before
-  signalling the running copy, then exits. The running copy restores its
+  not. So the second copy calls `AllowSetForegroundWindow` with the running
+  copy's process id (which the running copy publishes, for example in named
+  shared memory) before signalling it, then exits. The running copy restores its
   window even when it is minimized or hidden in the notification area,
   brings it to the front and gives it focus. Example: S2P-Extensions
   `macro/s2p_macro/single_instance.py`.
