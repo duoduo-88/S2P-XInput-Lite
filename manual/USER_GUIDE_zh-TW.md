@@ -77,6 +77,8 @@ ESP32-S3 有兩種運作方式：**Bridge**（橋接）需要保持 Windows 程�
 輸出 XInput 並處理震動與音訊震動；**Android USB HID 獨立模式** 不需要 Windows 程式，ESP32-S3
 本身就是一支 USB HID 手把。實體 USB XInput 有授權問題，請勿加入。
 
+<a name="connector-window"></a>
+
 ### 1.4 連接程式視窗與通知區
 
 連線時會另外開啟一個黑色的連接程式（CMD）視窗，即時顯示配對、連線、輸入與傳輸狀態。遊玩期間
@@ -182,6 +184,8 @@ ESP32-S3 有兩種運作方式：**Bridge**（橋接）需要保持 Windows 程�
 按 **Idle Disc.** 可選擇無線連線閒置多久後自動斷線：**關閉**、5、10、15、30 或 60 分鐘，
 預設 15 分鐘。這是全域設定，不隨方案切換。斷線後狀態列顯示
 `ESP32 · Idle; press any button to wake`，按手把任一鍵即可喚醒重連。
+
+<a name="extensions"></a>
 
 ### 2.7 Extensions（擴充工具）
 
@@ -327,6 +331,8 @@ Buttons 頁籤（見 [2. 主視窗](#2-主視窗與方案) 的截圖）將手把
 例如 F12、Ctrl+S、Ctrl+Shift+S。欄位會以 `KB:1`、`KB:Ctrl+S`、`M:Wheel↓` 等簡寫顯示，
 游標移上去可查看完整映射。
 
+<a name="gamepad-combo"></a>
+
 #### 同時按下多個 XInput 按鍵
 
 ![手把組合鍵](assets/v0.8.2/gamepad-combo.png)
@@ -462,6 +468,8 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
   **Recenter**（重設中立）與 **Shortcut**（自訂按鍵）用來重設中立角度。指定的重設按鍵會專門用於
   重設中立，不再送出原本的遊戲映射。
 
+<a name="gyro-response"></a>
+
 ### 6.4 Gyro Response（陀螺儀反應）
 
 依目前的輸出目標與控制模式，只會顯示適用的欄位。
@@ -494,6 +502,8 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
 （後段加速）或 **Early**（前段加速），**Lvl**（強度）調整曲線彎曲的程度。按 **OK** 後回主視窗
 按 **Save/Apply**。
 
+<a name="gyro-compensation"></a>
+
 #### 補償設定
 
 ![陀螺儀補償設定](assets/v0.8.2/gyro-compensation-settings.png)
@@ -508,6 +518,8 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
 讓陀螺儀在原本的速度封頂。這個選項只在回中模式顯示，預設關閉。
 
 要算出合適的倍率，可用手把測試的 [補償預覽與補償計算](#陀螺儀補償預覽與補償計算)。
+
+<a name="gyro-stability"></a>
 
 ### 6.5 Stability（穩定控制）
 
@@ -639,6 +651,8 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
 4. 依需要切換 **Aim Test**（瞄準測試）、**Rumble Test**（震動測試）、**Report Rate Test**（回報率量測）
    或 **Diagnostics**（診斷模式）。
 
+<a name="test-source"></a>
+
 ### 8.1 選擇測試來源
 
 - **S2P-XInput-Lite (Bridge)**：測試主程式目前輸出的虛擬手把，可顯示套用前、套用後與合成結果。
@@ -762,6 +776,8 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
 右下角的 **FPS** 依成功的 Direct2D 提交或 Tk 繪圖更新計算，**99% Low** 則把 P99 繪圖間隔換算為 FPS，
 可看出平均 FPS 高時是否仍有較長的間隔。繪圖目標跟隨螢幕目前的更新率，實際呈現也受 Windows 與顯示卡影響。
 
+<a name="gyro-preview"></a>
+
 #### 陀螺儀補償預覽與補償計算
 
 調高遊戲內的視角速度後，映射到右搖桿的陀螺儀也會跟著變快。補償倍率可降低陀螺儀輸出，
@@ -798,6 +814,8 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
    新設定 2 秒會得到 0.67。
 5. 按 **Open S2P Compensation Settings**（開啟 S2P 補償設定），或從主視窗 **Gyro Map** 開啟
    **Compensation Settings**，填入 X／Y 倍率並按 **OK**，再按 **Save/Apply**。
+
+<a name="aim-results"></a>
 
 #### 判讀與比較成績
 
@@ -996,6 +1014,8 @@ ESP32 以 A/B 儲存槽保留上一份有效設定，新資料驗證成功才切
   16 MB Flash 檢查。
 
 切回 Bridge 不會刪除最後保存的獨立設定。**Restart** 只重啟桌面連線。
+
+<a name="standalone-scope"></a>
 
 ### 9.7 獨立模式的支援範圍
 

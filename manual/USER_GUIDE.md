@@ -87,6 +87,8 @@ running, outputs XInput through ViGEmBus, and handles rumble and audio rumble.
 ESP32-S3 itself acts as a USB HID controller. Physical USB XInput has
 licensing issues and must not be added.
 
+<a name="connector-window"></a>
+
 ### 1.4 Connector window and notification area
 
 Connecting opens a separate black connector (CMD) window that shows pairing,
@@ -217,6 +219,8 @@ before it disconnects: **Off**, 5, 10, 15, 30, or 60 minutes. The default is
 After it disconnects, the status bar shows
 `ESP32 · Idle; press any button to wake`. Press any controller button to wake
 and reconnect.
+
+<a name="extensions"></a>
 
 ### 2.7 Extensions
 
@@ -411,6 +415,8 @@ key combination to map, such as F12, Ctrl+S, or Ctrl+Shift+S. The field shows
 short forms such as `KB:1`, `KB:Ctrl+S`, and `M:Wheel↓`. Hover over it to see
 the full mapping.
 
+<a name="gamepad-combo"></a>
+
 #### Press several XInput buttons at once
 
 ![Choosing a gamepad combo](assets/v0.8.2/gamepad-combo.png)
@@ -580,6 +586,8 @@ explains it in detail.
   **Shortcut** reset the neutral angle. A shortcut assigned here only resets
   the neutral angle and no longer sends its game mapping.
 
+<a name="gyro-response"></a>
+
 ### 6.4 Gyro Response
 
 Only the fields that apply to the current target and control mode are shown.
@@ -615,6 +623,8 @@ output after the curve. **Mode** chooses **Lin.**, **Late** (accelerates near
 the end), or **Early** (accelerates at the start). **Lvl** sets how strongly
 the curve bends. Select **OK**, then **Save/Apply** in the main window.
 
+<a name="gyro-compensation"></a>
+
 #### Compensation settings
 
 ![Gyro compensation settings](assets/v0.8.2/gyro-compensation-settings.png)
@@ -636,6 +646,8 @@ and is off by default.
 
 To work out a suitable multiplier, use
 [Gyro Preview and Calculator](#gyro-preview-and-calculator) in Gamepad Tester.
+
+<a name="gyro-stability"></a>
 
 ### 6.5 Stability
 
@@ -783,6 +795,8 @@ Selecting the button again brings the existing tester forward.
    Check that the dots and the event list change.
 4. Switch to **Aim Test**, **Rumble Test**, **Report Rate Test**, or
    **Diagnostics** as needed.
+
+<a name="test-source"></a>
 
 ### 8.1 Choose a test source
 
@@ -954,6 +968,8 @@ so dips show up even when the average is high. The drawing target follows the
 monitor's current refresh rate, and actual presentation also depends on
 Windows and the GPU.
 
+<a name="gyro-preview"></a>
+
 #### Gyro Preview and Calculator
 
 Raising the in-game look speed also speeds up gyro mapped to the right stick.
@@ -1002,6 +1018,8 @@ asked whether to reset them to 1.00 first.
 5. Select **Open S2P Compensation Settings**, or open **Compensation Settings**
    from **Gyro Map** in the main window. Enter the X and Y multipliers, select
    **OK**, then select **Save/Apply**.
+
+<a name="aim-results"></a>
 
 #### Read and compare results
 
@@ -1258,6 +1276,8 @@ the switch happened.
 
 Returning to Bridge keeps the last saved standalone settings. **Restart** only
 restarts the desktop connection.
+
+<a name="standalone-scope"></a>
 
 ### 9.7 Standalone mode scope
 
