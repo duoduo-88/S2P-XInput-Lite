@@ -13,16 +13,19 @@ WAIT_TIMEOUT = 258
 WAIT_FAILED = 0xFFFFFFFF
 ASFW_ANY = 0xFFFFFFFF
 SW_RESTORE = 9
+SETTINGS_INSTANCE_NAME = "S2P-XInput-Lite.Settings.v1"
+GYRO_SETTINGS_ACTION = "GyroSettings"
 
 
 class SingleInstance:
     """Own one named Windows event and wake the existing owner on duplicates."""
 
-    def __init__(self, name):
+    def __init__(self, name, action=None):
         self.name = str(name)
         self.is_primary = True
         self.error = None
         self._handle = None
+        self._action_handle = None
         self._kernel32 = None
 
         if os.name != "nt":
@@ -47,6 +50,11 @@ class SingleInstance:
             kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
             kernel32.CloseHandle.restype = ctypes.c_int
 
+            self._kernel32 = kernel32
+            if action is not None:
+                self._action_handle = kernel32.CreateEventW(None, False, False, f"Local\\{self.name}.{action}")
+                if not self._action_handle:
+                    raise ctypes.WinError(ctypes.get_last_error())
             ctypes.set_last_error(0)
             handle = kernel32.CreateEventW(
                 None,
@@ -69,9 +77,10 @@ class SingleInstance:
             self.is_primary = True
             self.close()
 
-    def notify_existing(self):
+    def notify_existing(self, *, action=False):
         """Signal the primary process and grant it foreground permission."""
-        if self._handle is None or self._kernel32 is None:
+        handle = self._action_handle if action else self._handle
+        if handle is None or self._kernel32 is None:
             return False
         try:
             user32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -80,14 +89,15 @@ class SingleInstance:
             user32.AllowSetForegroundWindow(ASFW_ANY)
         except (AttributeError, OSError):
             pass
-        return bool(self._kernel32.SetEvent(self._handle))
+        return bool(self._kernel32.SetEvent(handle))
 
-    def activation_requested(self):
+    def activation_requested(self, *, action=False):
         """Consume one pending activation request without blocking."""
-        if self._handle is None or self._kernel32 is None:
+        handle = self._action_handle if action else self._handle
+        if handle is None or self._kernel32 is None:
             return False
         result = int(
-            self._kernel32.WaitForSingleObject(self._handle, 0)
+            self._kernel32.WaitForSingleObject(handle, 0)
         )
         if result == WAIT_OBJECT_0:
             return True
@@ -100,11 +110,15 @@ class SingleInstance:
     def close(self):
         """Release this process's handle; safe to call more than once."""
         handle = self._handle
+        action_handle = self._action_handle
         kernel32 = self._kernel32
         self._handle = None
+        self._action_handle = None
         self._kernel32 = None
         if handle is not None and kernel32 is not None:
             kernel32.CloseHandle(handle)
+        if action_handle is not None and kernel32 is not None:
+            kernel32.CloseHandle(action_handle)
 
 
 def activate_tk_window(window):

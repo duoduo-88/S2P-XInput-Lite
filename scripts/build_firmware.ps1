@@ -71,8 +71,12 @@ if ($UpdateBundledImages) {
         $digest = (Get-FileHash -LiteralPath (Join-Path $bundledRoot $name) -Algorithm SHA256).Hash
         "$digest  $name"
     }
-    Set-Content -LiteralPath (Join-Path $bundledRoot "SHA256SUMS.txt") `
-        -Value $manifest -Encoding utf8
+    # Windows PowerShell's "-Encoding utf8" adds a BOM; keep the manifest plain.
+    [System.IO.File]::WriteAllText(
+        (Join-Path $bundledRoot "SHA256SUMS.txt"),
+        (($manifest -join "`r`n") + "`r`n"),
+        (New-Object System.Text.UTF8Encoding $false)
+    )
 }
 foreach ($generated in $pairs.Keys) {
     $released = $pairs[$generated]

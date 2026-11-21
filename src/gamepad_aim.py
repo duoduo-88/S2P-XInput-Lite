@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import ctypes
+from configparser import Error as ConfigError
 import logging
 import math
 import random
+import sys
 import time
 import tkinter as tk
 from collections import deque
+from dataclasses import replace
 from functools import lru_cache
+from pathlib import Path
 from tkinter import font as tkfont, messagebox, ttk
 
 from gamepad_aim_display import (
@@ -47,6 +51,8 @@ from gamepad_aim_timing import (
     IDLE_PERIOD, SIMULATION_PERIOD, TIMER_HALF_MS,
     FrameStats, next_deadline, refresh_interval, timer_delay_ms,
 )
+from gyro_compensation import DEFAULT_COMPENSATION, CompensationSnapshot, compensation_connection
+from gyro_compensation_window import GyroCompensationCalculator, GyroCompensationPreview
 from tooltip_layout import HoverTip
 
 
@@ -64,6 +70,7 @@ VIEW_BACKGROUND = ROOM_BACKGROUND
 HIDDEN_TILE = (-20, -20) * 3
 RETICLE_COLOR = "#edf4fc"
 TARGET_COLOR = "#57dab1"
+PREVIEW_LANDMARK = (0.0, 0.0, 8.0)
 DEPTH_SHADE_STEPS = 255
 HIT_DURATION = 0.15
 HIT_DIRECTIONS = ((1, 0.2), (0.4, -1), (-0.7, -0.8), (-1, 0.4), (0.3, 1))
@@ -118,6 +125,33 @@ def _scene_button_style(window):
     return "Aim.TButton"
 
 
+@lru_cache(maxsize=1)
+def _result_font_family():
+    """Load the same static CJK faces into this Windows process."""
+    fallback = "Microsoft JhengHei UI" if sys.platform == "win32" else "sans-serif"
+    if sys.platform != "win32":
+        return fallback
+
+    add_font = ctypes.windll.gdi32.AddFontMemResourceEx
+    add_font.argtypes = (
+        ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint),
+    )
+    add_font.restype = ctypes.c_void_p
+    directory = Path(__file__).with_name("fonts")
+    for style in ("Regular", "Bold"):
+        path = directory / f"S2PAimSans-{style}.ttf"
+        try:
+            data = path.read_bytes()
+        except OSError:
+            logging.getLogger(__name__).warning("Could not read aiming result font: %s", path)
+            return fallback
+        count = ctypes.c_uint()
+        if not add_font(data, len(data), None, ctypes.byref(count)):
+            logging.getLogger(__name__).warning("Could not load aiming result font: %s", path)
+            return fallback
+    return "S2P Aim Sans"
+
+
 class AimTestHud:
     tag = "aim_hud"
     margin = VIEW_MARGIN
@@ -126,7 +160,10 @@ class AimTestHud:
     def __init__(self, canvas):
         self.canvas = canvas
         self.font = tkfont.nametofont("TkDefaultFont", root=canvas)
-        self.line = self.font.metrics("linespace") + HUD_LINE_GAP
+        family = _result_font_family()
+        self.result_title_font = tkfont.Font(root=canvas, family=family, size=32, weight="bold")
+        self.result_font = tkfont.Font(root=canvas, family=family, size=12)
+        self.result_footer_font = tkfont.Font(root=canvas, family=family, size=9)
         self.labels = ()
 
     def clear(self):
@@ -141,25 +178,39 @@ class AimTestHud:
         footer_y = height - margin - pad - HUD_LINE_GAP
         self.result_center = width / 2
         self.result_width = max(1, min(720, width - 2 * (margin + pad)))
+        # Respect desktop DPI while keeping results legible in the smallest
+        # supported playfield. Negative Tk font sizes are in canvas pixels.
+        reference_scale = 2.0
+        scale = min(self.canvas.winfo_fpixels("1p"), reference_scale * min(width / 640, height / 360))
+        for font, points in (
+            (self.result_title_font, 32), (self.result_font, 12), (self.result_footer_font, 9),
+        ):
+            size = -max(1, round(points * scale))
+            if font.cget("size") != size:
+                font.configure(size=size)
         self.timer_item = self._text(margin + pad, margin + pad)
         self.labels = (
             self._text(margin + pad, footer_y, anchor="sw", width=wrap),
-            self._text(self.result_center, 0, anchor="n", justify="center", width=self.result_width),
+            self._text(
+                self.result_center, 0, anchor="n", font=self.result_font,
+                justify="center", width=self.result_width,
+            ),
             self._text(width - margin - pad, footer_y, anchor="se"),
         )
         self.change_items = []
         self.previous_changes = None
+        self.showing_result = False
 
-    def _text(self, x, y, anchor="nw", **options):
+    def _text(self, x, y, anchor="nw", font=None, **options):
         return self.canvas.create_text(
-            x, y, anchor=anchor, font=self.font, fill=RETICLE_COLOR, tags=self.tag, **options,
+            x, y, anchor=anchor, font=font or self.font, fill=RETICLE_COLOR, tags=self.tag, **options,
         )
 
     def _change_rows(self, changes, width):
         rows = []
         used = 0
         for text, color in changes:
-            span = self.font.measure(text)
+            span = min(width, self.result_font.measure(text))
             if not rows or used + span > width:
                 rows.append([])
                 used = 0
@@ -167,9 +218,14 @@ class AimTestHud:
             used += span + self.padding
         return rows
 
-    def update(self, status, score, fps, timer, changes):
+    def update(self, status, score, fps, timer, changes, *, finished):
         if not self.labels:
             return
+        if finished != self.showing_result:
+            self.showing_result = finished
+            font = self.result_footer_font if finished else self.font
+            for item in (self.labels[0], self.labels[2], self.timer_item):
+                self.canvas.itemconfigure(item, font=font)
         for item, text in zip((*self.labels, self.timer_item), (status, score, fps, timer)):
             if self.canvas.itemcget(item, "text") != text:
                 self.canvas.itemconfigure(item, text=text)
@@ -181,15 +237,26 @@ class AimTestHud:
             for row in self._change_rows(changes, self.result_width):
                 row_width = sum(span for _, _, span in row) + self.padding * (len(row) - 1)
                 x = self.result_center + row_width / 2
+                items = []
                 for text, color, span in reversed(row):
-                    item = self._text(x, y, anchor="ne", text=text)
+                    item = self._text(
+                        x, y, anchor="ne", font=self.result_font, text=text,
+                        width=self.result_width, justify="center",
+                    )
                     self.canvas.itemconfigure(item, fill=color or RETICLE_COLOR)
-                    self.change_items.append(item)
+                    items.append(item)
                     x -= span + self.padding
-                y += self.line
+                self.change_items.extend(items)
+                y = self.canvas.bbox(*items)[3] + HUD_LINE_GAP
             self.previous_changes = changes
 
     def center_result(self, height, heading, hint):
+        self.canvas.itemconfigure(
+            heading, font=self.result_title_font, width=self.result_width, justify="center",
+        )
+        self.canvas.itemconfigure(
+            hint, font=self.result_font, width=self.result_width, justify="center",
+        )
         self.canvas.coords(heading, self.result_center, 0)
         self.canvas.coords(hint, self.result_center, 0)
         groups = ((heading,), (self.labels[1],), self.change_items, (hint,))
@@ -207,11 +274,21 @@ class AimTestHud:
 class AimTestPane:
     def __init__(self, parent, translate, read_output, display_hz=lambda _window: 60.0, *,
                  settings_path=None, history=None, feedback=None, gpu_renderer=None,
-                 read_input=None, set_input_active=None, render_in_worker=False):
+                 read_input=None, set_input_active=None, render_in_worker=False,
+                 open_gyro_settings=None, compensation_available=lambda: True,
+                 read_gyro_compensation=None, reset_gyro_compensation=None, apply_gyro_compensation=None,
+                 read_gyro_reload_status=None):
         self.tr = translate
         self.read_output = read_output
         self.read_input = read_input
         self.set_input_active = set_input_active
+        self.open_gyro_settings = open_gyro_settings
+        self.compensation_available = compensation_available
+        self.read_gyro_compensation = read_gyro_compensation
+        self.reset_gyro_compensation = reset_gyro_compensation
+        self.apply_gyro_compensation = apply_gyro_compensation
+        self.read_gyro_reload_status = read_gyro_reload_status
+        self._compensation_buttons_visible = True
         self.owner = parent.winfo_toplevel()
         self.read_display_hz = display_hz
         self.display_hz = display_hz(self.owner)
@@ -220,7 +297,7 @@ class AimTestPane:
         self.window.transient(self.owner)
         self.window.title(self.tr("瞄準測試"))
         self.window.resizable(False, False)
-        self.window.protocol("WM_DELETE_WINDOW", self.close_test)
+        self.window.protocol("WM_DELETE_WINDOW", self._close_test_and_compensation)
         self._gpu_factory = gpu_renderer
         self._render_in_worker = render_in_worker
         self._render_worker = None
@@ -239,6 +316,18 @@ class AimTestPane:
         self.settings_path = settings_path
         self.settings = AimSettings.load(settings_path) if settings_path else AimSettings()
         self.settings_dialog = None
+        self.compensation_window = None
+        self.compensation_calculator = None
+        self._calculator_handoff_inputs = None
+        self._compensation_device_generation = 0
+        self._compensation_preview = False
+        self._preview_compensation_connection = None
+        self._preview_look_at = None
+        self._preview_camera_moving = False
+        self._preview_input_key = None
+        self._preview_opened_at = None
+        self._preview_cancel_pressed = True
+        self._preview_start_pressed = True
         self.history = history if history is not None else AimHistory(None)
         self.feedback = feedback
         self.feedback_at = 0.0
@@ -290,7 +379,7 @@ class AimTestPane:
         for value, label in (("2d", "2D 模式"), ("3d", "3D 模式")):
             ttk.Radiobutton(
                 self.dimension_controls, text=self.tr(label),
-                variable=self.dimension, value=value, command=self._reset,
+                variable=self.dimension, value=value, command=self._change_test_mode,
             ).pack(side="left", padx=(0, 8))
         help_mark = tk.Label(
             self.dimension_controls, text="?", width=2, relief="solid",
@@ -299,24 +388,34 @@ class AimTestPane:
         help_mark.pack(side="left")
         HoverTip(help_mark, self._help_text(), wraplength=380)
         self.drill_controls = ttk.Frame(toolbar)
-        self.drill_controls.grid(row=1, column=0, sticky="w")
+        self.drill_controls.grid(row=1, column=0, sticky="sw")
         for value, label in (("tracking", "跟槍"), ("shooting", "點靶"), ("timed-shooting", "限時點靶")):
             ttk.Radiobutton(
                 self.drill_controls, text=self.tr(label),
-                variable=self.mode, value=value, command=self._reset,
+                variable=self.mode, value=value, command=self._change_test_mode,
             ).pack(side="left", padx=(0, 8))
         actions = ttk.Frame(toolbar)
         actions.grid(row=0, column=1, rowspan=2, sticky="se")
         clear_history = ttk.Button(actions, text=self.tr("清除紀錄"), width=TOOLBAR_BUTTON_WIDTH)
-        clear_history.pack(side="left", padx=(0, 6))
+        clear_history.grid(row=1, column=0, sticky="ew", padx=(0, 6))
         self.settings_button = ttk.Button(
             actions, text=self.tr("測試設定"), width=TOOLBAR_BUTTON_WIDTH, command=self._open_settings,
         )
-        self.settings_button.pack(side="left", padx=(0, 6))
+        self.settings_button.grid(row=1, column=1, sticky="ew", padx=(0, 6))
+        self.compensation_button = ttk.Button(
+            actions, text=self.tr("補償預覽"), width=TOOLBAR_BUTTON_WIDTH,
+            command=self._open_compensation_preview,
+        )
+        self.compensation_button.grid(row=0, column=1, sticky="ew", padx=(0, 6), pady=(0, 4))
+        self.compensation_calculator_button = ttk.Button(
+            actions, text=self.tr("補償計算"), width=TOOLBAR_BUTTON_WIDTH,
+            command=self._open_compensation_calculator,
+        )
+        self.compensation_calculator_button.grid(row=0, column=2, sticky="ew", pady=(0, 4))
         self.start_button = ttk.Button(
             actions, text=self.tr("開始"), width=TOOLBAR_BUTTON_WIDTH, command=self._start,
         )
-        self.start_button.pack(side="left")
+        self.start_button.grid(row=1, column=2, sticky="ew")
         self.start_button.bind("<KeyPress-space>", lambda _event: "break")
         self.start_button.bind("<KeyRelease-space>", self._start_with_space)
 
@@ -324,13 +423,20 @@ class AimTestPane:
             parent, self.tr, on_clear=lambda: self._show_changes(()), clear_button=clear_history,
         )
         self.history_view.grid(row=1, column=0, sticky="nsew")
+
+        def align_actions(event):
+            table = self.history_view.tree
+            inset = max(0, self.history_view.winfo_width() - event.width - table.winfo_x())
+            actions.grid_configure(padx=(0, inset))
+
+        self.history_view.tree.bind("<Configure>", align_actions, add="+")
         scene_style = _scene_button_style(self.window)
         self.restart_button = ttk.Button(
             self.window, width=ACTION_BUTTON_WIDTH, command=self._start, takefocus=False, style=scene_style,
         )
         self.close_button = ttk.Button(
             self.window, text=self.tr("關閉 (Esc / B)"), width=ACTION_BUTTON_WIDTH,
-            command=self.close_test, takefocus=False, style=scene_style,
+            command=self._close_test_and_compensation, takefocus=False, style=scene_style,
         )
         self.canvas = tk.Canvas(self.window, background=VIEW_BACKGROUND, highlightthickness=0)
         self._view = self.canvas
@@ -375,7 +481,7 @@ class AimTestPane:
         # Start on release so the Windows Enter auto-repeat cannot restart a round.
         self.owner_start_binding = self.owner.bind("<KeyRelease-Return>", self._start_shortcut, add="+")
         self.window.bind("<KeyRelease-Return>", self._start_shortcut)
-        self.window.bind("<Escape>", self.close_test)
+        self.window.bind("<Escape>", self._close_test_and_compensation)
         self.window.bind("<Configure>", self._refresh_display_rate)
         parent.bind("<Map>", lambda _event: self.set_visible(True), add="+")
         parent.bind("<Unmap>", lambda _event: self.set_visible(False), add="+")
@@ -401,6 +507,8 @@ class AimTestPane:
             self._mouse_position = None
 
     def _view_lost_focus(self, event):
+        if self._compensation_preview:
+            return
         if event.widget is not self._view or self.window.focus_displayof() is self._view:
             return
         self._advance_round_before_leaving(time.perf_counter())
@@ -564,7 +672,10 @@ class AimTestPane:
         self._deactivate_input()
         self._cancel_tick()
         self._close_native_timer()
-        self.close_test(at=now)
+        self._close_test_and_compensation(at=now)
+        calculator = self.compensation_calculator
+        if calculator is not None and calculator.window.winfo_exists():
+            calculator.window.destroy()
         self.fps_text.set("")
 
     def _deactivate_input(self):
@@ -587,6 +698,11 @@ class AimTestPane:
         timer, self._native_timer = self._native_timer, None
         if timer is not None:
             timer.close()
+
+    def _change_test_mode(self):
+        if self._compensation_preview:
+            self._close_test_and_compensation()
+        self._reset()
 
     def _reset(self, *, at=None):
         self._finish_before_leaving(at)
@@ -619,12 +735,24 @@ class AimTestPane:
             self.cursor = CursorTest(
                 settings.target_count, settings.target_seconds, settings.seed, target_size=settings.target_size_2d,
             )
-        self.tracking = TrackingTest(settings.tracking_seconds, settings.seed)
-        spread = {"horizontal_spread": settings.horizontal_spread, "vertical_spread": settings.vertical_spread}
+        stick_turn_speed = settings.stick_horizontal_speed, settings.stick_vertical_speed
+        self.tracking = TrackingTest(
+            settings.tracking_seconds, settings.seed, stick_turn_speed=stick_turn_speed,
+            tracking_arc=settings.tracking_arc, tracking_speed=settings.tracking_speed,
+        )
+        shooting_options = {
+            "horizontal_spread": settings.horizontal_spread,
+            "vertical_spread": settings.vertical_spread,
+            "stick_turn_speed": stick_turn_speed,
+        }
         if self.mode_is_timed:
-            self.shooting = TimedShootingTest(settings.timed_shooting_seconds, settings.seed, settings.depth, **spread)
+            self.shooting = TimedShootingTest(
+                settings.timed_shooting_seconds, settings.seed, settings.depth, **shooting_options,
+            )
         else:
-            self.shooting = ShootingTest(settings.target_count, settings.target_seconds, settings.seed, settings.depth, **spread)
+            self.shooting = ShootingTest(
+                settings.target_count, settings.target_seconds, settings.seed, settings.depth, **shooting_options,
+            )
         self.scene = self.shooting if self.mode_is_shooting else self.tracking
         self._shade_near = self._shade_scale = 0.0
         if self.mode_is_3d and settings.depth_shading:
@@ -637,7 +765,7 @@ class AimTestPane:
         self.countdown_until = None
         self._display_countdown(None)
         self.canvas.coords(self.countdown_item, self.size[0] / 2, self.size[1] / 2)
-        self.canvas.itemconfigure(self.countdown_item, font=("Segoe UI", 56, "bold"))
+        self.canvas.itemconfigure(self.countdown_item, font=("Segoe UI", 56, "bold"), width=0)
         self.canvas.itemconfigure(self.finish_hint_item, text="")
         self._gpu_overlay = None
         self.hit_effect = None
@@ -649,7 +777,7 @@ class AimTestPane:
         self._update_labels()
 
     def _start(self, *, at=None):
-        if self.countdown_until is not None or self._awaiting_finish():
+        if self._compensation_preview or self.countdown_until is not None or self._awaiting_finish():
             return
         if self._wait_for_render_cleanup():
             self._finish_before_leaving(at)
@@ -681,13 +809,21 @@ class AimTestPane:
         self._wake_tick()
 
     def _start_shortcut(self, _event=None, *, at=None):
-        if (self._visible or self.job is not None) and self.owner.grab_current() is None:
+        if self._compensation_preview:
+            return "break"
+        if (self.test_open or self._visible or self.job is not None) and self.owner.grab_current() is None:
             focus = self.owner.focus_displayof()
             if focus is not None and focus.winfo_toplevel() in (self.owner, self.window):
-                if at is None:
-                    self.start_button.invoke()
-                elif not self.start_button.instate(("disabled",)):
-                    self._start(at=at)
+                if self.test_open and self._awaiting_finish():
+                    # Buffered input can reach the deadline before the tick
+                    # publishes the result. Finish it before checking Restart.
+                    self._check_finish()
+                button = self.restart_button if self.test_open else self.start_button
+                if not button.instate(("disabled",)):
+                    if at is None:
+                        button.invoke()
+                    else:
+                        self._start(at=at)
                 return "break"
 
     def _start_with_space(self, _event):
@@ -785,9 +921,11 @@ class AimTestPane:
         if not self._restore_display_mode():
             raise OSError("Could not restore the previous display mode")
         hwnd = self.owner.winfo_id()
-        fullscreen = self.settings.fullscreen
+        preview = self._compensation_preview
+        fullscreen = self.settings.fullscreen and not preview
+        borderless = fullscreen or preview
         resolution = self.settings.fullscreen_size if fullscreen else self.settings.window_size
-        maximize = not fullscreen and not resolution and self.window.tk.call("tk", "windowingsystem") == "win32"
+        maximize = not borderless and not resolution and self.window.tk.call("tk", "windowingsystem") == "win32"
         owner_width, owner_height = self.owner.winfo_width(), self.owner.winfo_height()
         if fullscreen and not resolution:
             resolution = highest_resolution(available_resolutions(hwnd))
@@ -800,7 +938,14 @@ class AimTestPane:
             width, height = owner_width, owner_height
         else:
             width, height = self.owner.winfo_screenwidth(), self.owner.winfo_screenheight()
-        if fullscreen:
+        if preview:
+            try:
+                x, y, right, bottom = fullscreen_monitor_bounds(hwnd)
+            except OSError:
+                x, y = 0, 0
+                right, bottom = self.owner.winfo_screenwidth(), self.owner.winfo_screenheight()
+            width, height = right - x, bottom - y
+        elif fullscreen:
             try:
                 self._fullscreen_mode = activate_fullscreen_mode(hwnd, (width, height))
             except DisplayModeRestoreError as error:
@@ -822,14 +967,19 @@ class AimTestPane:
         try:
             # Tk 8.6 fullscreen forces Windows windows to the primary screen.
             # A transient override window becomes a native child and cannot take focus.
-            self.window.transient("" if fullscreen else self.owner)
-            self.window.overrideredirect(fullscreen)
+            self.window.transient("" if borderless else self.owner)
+            self.window.overrideredirect(borderless)
             self.window.attributes("-topmost", fullscreen)
             self.window.geometry(f"{width}x{height}+{x}+{y}")
-            offset = -VIEW_MARGIN
-            for button in (self.close_button, self.restart_button):
-                button.place(relx=1, x=offset, y=VIEW_MARGIN, anchor="ne")
-                offset -= button.winfo_reqwidth() + VIEW_BUTTON_GAP
+            if preview:
+                self.close_button.place_forget()
+                self.restart_button.place_forget()
+            else:
+                self.close_button.place(relx=1, x=-VIEW_MARGIN, y=VIEW_MARGIN, anchor="ne")
+                self.restart_button.place(
+                    relx=1, x=-VIEW_MARGIN - self.close_button.winfo_reqwidth() - VIEW_BUTTON_GAP,
+                    y=VIEW_MARGIN, anchor="ne",
+                )
             self._place_view()
             self.window.deiconify()
             if maximize:
@@ -856,8 +1006,24 @@ class AimTestPane:
             raise
         return True
 
+    def _close_test_and_compensation(self, _event=None, *, at=None):
+        result = self.close_test(at=at)
+        overlay, self.compensation_window = self.compensation_window, None
+        self._preview_compensation_connection = None
+        if overlay is not None and overlay.window.winfo_exists():
+            overlay.close()
+        return result
+
     def close_test(self, _event=None, *, at=None):
         self._start_after_render_cleanup = False
+        if self._compensation_preview and self.compensation_window is not None:
+            overlay = self.compensation_window
+            if overlay.window.winfo_exists() and overlay.measurement is not None:
+                overlay.cancel()
+        if self._compensation_preview:
+            self.start_pressed = self._preview_start_pressed
+            self.cancel_pressed = self._preview_cancel_pressed
+        self._compensation_preview = False
         if self._native_timer is not None:
             self._cancel_tick()
             self._close_native_timer()
@@ -879,6 +1045,8 @@ class AimTestPane:
                         and self.start_button.winfo_exists() and self.start_button.winfo_viewable()):
                     self.start_button.focus_set()
         finally:
+            self._preview_look_at = None
+            self._preview_camera_moving = False
             if self._retired_render_view is None:
                 self._restore_display_after_close()
             self._schedule(time.perf_counter())
@@ -938,14 +1106,17 @@ class AimTestPane:
 
     def _update_hud(self):
         if self.test_open and self.hud is not None:
-            values = self.status.get(), self.score.get(), self.fps_text.get(), self.timer_text.get(), self.change_parts
+            values = (
+                self.status.get(), self.score.get(), self.fps_text.get(),
+                self.timer_text.get(), self.change_parts, self.finished,
+            )
             if values != self._hud_values:
                 self._hud_values = values
                 self._gpu_overlay = None
                 self._frame_dirty = True
                 changes = tuple((text, "#79e8a4" if better else "#ff9a9a" if better is False else None)
                                 for text, better in self.change_parts)
-                self.hud.update(*values[:4], changes)
+                self.hud.update(*values[:4], changes, finished=self.finished)
                 if self.finished:
                     self.hud.center_result(self.size[1], self.countdown_item, self.finish_hint_item)
 
@@ -958,15 +1129,231 @@ class AimTestPane:
         return self.scene if self.mode_is_3d else self.cursor
 
     def _open_settings(self):
-        self.close_test()
         if self.settings_dialog is not None and self.settings_dialog.winfo_exists():
             self.settings_dialog.lift()
             return
+        self._close_test_and_compensation()
         self.settings_dialog = show_aim_settings(self.owner, self.tr, self.settings, self._save_settings)
+
+    def _open_compensation_calculator(self):
+        self.refresh_compensation_connection()
+        if not self.compensation_available():
+            return
+        calculator = self.compensation_calculator
+        if calculator is None or not calculator.window.winfo_exists():
+            snapshot = self._confirm_gyro_compensation()
+            if snapshot is None:
+                return
+            saved_inputs = self._calculator_handoff_inputs
+            calculator = self.compensation_calculator = GyroCompensationCalculator(
+                self.owner, self.tr,
+                self._handoff_from_compensation_calculator if self.open_gyro_settings is not None else None,
+                multipliers=snapshot.multipliers,
+                saved_inputs=saved_inputs[1] if saved_inputs is not None and saved_inputs[0] == snapshot else None,
+            )
+            self._calculator_profile = snapshot
+            self._calculator_handoff_inputs = None
+            calculator.window.bind("<FocusIn>", self._validate_compensation_calculator, add="+")
+        else:
+            self._validate_compensation_calculator()
+        calculator.window.lift()
+        calculator.window.focus_set()
+
+    def _validate_compensation_calculator(self, event=None):
+        calculator = self.compensation_calculator
+        if calculator is None or (event is not None and event.widget is not calculator.window):
+            return False
+        if calculator.invalidated:
+            return False
+        if self.read_gyro_compensation is None:
+            return True
+        message = self.tr("手把或方案設定已變更，請關閉後重新開啟計算器。")
+        try:
+            if self.read_gyro_compensation() == self._calculator_profile:
+                return True
+        except (OSError, ValueError, ConfigError) as error:
+            message = self.tr("無法驗證目前的補償設定，請關閉後重新開啟計算器。") + f"\n{error}"
+        calculator.invalidate(message)
+        return False
+
+    def _handoff_from_compensation_calculator(self):
+        if self._validate_compensation_calculator():
+            self._handoff_to_gyro_settings()
+
+    def _open_compensation_preview(self):
+        self.refresh_compensation_connection()
+        if not self.compensation_available():
+            return
+        if self.settings_dialog is not None and self.settings_dialog.winfo_exists():
+            self.settings_dialog.lift()
+            return
+        overlay = self.compensation_window
+        if self._compensation_preview and overlay is not None and overlay.window.winfo_exists():
+            overlay.window.lift()
+            return
+        snapshot = self._confirm_gyro_compensation()
+        if snapshot is None or not self._prepare_compensation_preview():
+            return
+        if overlay is None or not overlay.window.winfo_exists():
+            self._preview_compensation_connection = snapshot.connection
+
+            def apply_measurement(ratios):
+                nonlocal snapshot
+                if not self.compensation_available():
+                    raise ValueError(self.tr("手把或方案設定已變更，請重新開啟補償視窗。"))
+                request_id = self.apply_gyro_compensation(snapshot, ratios)
+                snapshot = snapshot.with_multipliers(ratios)
+                return request_id
+
+            overlay = self.compensation_window = GyroCompensationPreview(
+                self.owner, self.tr, self.settings, self._prepare_compensation_preview,
+                self._turn_compensation_preview, self._close_test_and_compensation,
+                self._handoff_to_gyro_settings if self.open_gyro_settings is not None else None,
+                # _reset() replaces the scene; always target the current one.
+                multipliers=snapshot.multipliers,
+                on_speed_changed=lambda speeds: self.scene.set_stick_turn_speed(speeds),
+                apply_measurement=apply_measurement if self.apply_gyro_compensation is not None else None,
+                read_reload_status=self.read_gyro_reload_status,
+                apply_to_aim_test=self._apply_turn_speed_to_settings,
+            )
+            overlay.window.bind("<Configure>", self._position_compensation_preview, add="+")
+            overlay.window.update_idletasks()
+        if overlay.window.winfo_exists():
+            overlay.apply_selected_speeds()
+            self._position_compensation_preview()
+            overlay.window.lift()
+
+    def _apply_turn_speed_to_settings(self, speeds):
+        """Save preview speeds as the aim test's stick turn speeds.
+
+        Unlike _save_settings(), this keeps the preview open. The next round
+        rebuilds its scene from these settings in _reset().
+        """
+        horizontal, vertical = speeds
+        settings = replace(
+            self.settings, stick_horizontal_speed=int(horizontal), stick_vertical_speed=int(vertical),
+        )
+        if self.settings_path is not None:
+            settings.save(self.settings_path)
+        self.settings = settings
+
+    def _test_focus_windows(self):
+        if self._compensation_preview and self.compensation_window is not None:
+            return self.window, self.compensation_window.window
+        return (self.window,)
+
+    def _confirm_gyro_compensation(self):
+        if self.read_gyro_compensation is None:
+            return CompensationSnapshot(None, DEFAULT_COMPENSATION)
+        try:
+            generation = self._compensation_device_generation
+            snapshot = self.read_gyro_compensation()
+            multipliers = snapshot.multipliers
+            if multipliers == DEFAULT_COMPENSATION:
+                return snapshot
+            restore = messagebox.askyesno(
+                self.tr("目前方案已調整補償倍率"),
+                self.tr(
+                    "目前補償倍率為 X {x:.2f}、Y {y:.2f}。\n\n"
+                    "要將目前 S2P 設定的 X／Y 補償倍率還原為 1.00 嗎？"
+                    "選「否」會以目前的倍率繼續。"
+                ).format(x=multipliers["X"], y=multipliers["Y"]),
+                icon="warning", parent=self.owner,
+            )
+            if (generation != self._compensation_device_generation or not self.compensation_available()
+                    or self.read_gyro_compensation() != snapshot):
+                raise ValueError(self.tr("手把或方案設定已變更，請重新開啟補償視窗。"))
+            if restore:
+                if self.reset_gyro_compensation is None:
+                    raise ValueError(self.tr("無法讀取或還原補償倍率"))
+                self.reset_gyro_compensation(snapshot)
+                return snapshot.with_multipliers(DEFAULT_COMPENSATION)
+            return snapshot
+        except (OSError, ValueError, ConfigError) as exc:
+            messagebox.showerror(self.tr("無法讀取或還原補償倍率"), str(exc), parent=self.owner)
+            return None
+
+    def _position_compensation_preview(self, event=None):
+        if not self._compensation_preview or self.compensation_window is None:
+            return
+        window = self.compensation_window.window
+        if event is not None and event.widget is not window:
+            return
+        right = self.window.winfo_rootx() + self.window.winfo_width() - VIEW_MARGIN
+        current_x, current_y = window.winfo_x(), window.winfo_y()
+        border = max(0, window.winfo_rootx() - current_x)
+        x = max(self.window.winfo_rootx(), right - window.winfo_width() - border)
+        y = self.window.winfo_rooty() + VIEW_MARGIN
+        if (x, y) != (current_x, current_y):
+            window.geometry(f"+{x}+{y}")
+
+    def _handoff_to_gyro_settings(self):
+        if not self.compensation_available():
+            return
+        try:
+            self.open_gyro_settings()
+        except OSError as error:
+            parent = self.owner
+            focused = self.owner.focus_displayof()
+            if focused is not None:
+                parent = focused.winfo_toplevel()
+            messagebox.showerror(self.tr("開啟 S2P 補償設定"),
+                                 self.tr("無法開啟 S2P 主視窗。") + f"\n\n{error}", parent=parent)
+            return
+        if self._compensation_preview or self.compensation_window is not None:
+            self._close_test_and_compensation()
+        calculator = self.compensation_calculator
+        if calculator is not None and calculator.window.winfo_exists():
+            self._calculator_handoff_inputs = (self._calculator_profile, calculator.snapshot_inputs())
+            calculator.window.destroy()
+        self.owner.iconify()
+
+    def _prepare_compensation_preview(self):
+        if self.dimension.get() != "3d" or not self.compensation_available():
+            return False
+        if not self._compensation_preview:
+            self.close_test()
+            self._reset()
+            self._input_events.clear()
+            self._sim_state = None
+            self._compensation_preview = True
+            self._preview_opened_at = time.perf_counter()
+            self._preview_input_key = None
+            self._preview_cancel_pressed = self._preview_start_pressed = True
+            try:
+                if not self._open_test_window():
+                    self._compensation_preview = False
+                    return False
+            except OSError:
+                self._compensation_preview = False
+                logging.getLogger(__name__).exception("Could not open the compensation preview")
+                return False
+        self.scene.yaw = self.scene.pitch = 0.0
+        self._preview_look_at = None
+        self._frame_dirty = True
+        self._wake_tick()
+        return True
+
+    def _turn_compensation_preview(self, axis, degrees):
+        if not self.test_open or not self._compensation_preview or not self.compensation_available():
+            return None
+        radians = math.radians(degrees)
+        if axis == "X":
+            self.scene.look(radians, 0.0)
+            angle = radians
+        else:
+            previous_pitch = self.scene.pitch
+            self.scene.look(0.0, radians)
+            angle = self.scene.pitch - previous_pitch
+        self._frame_dirty = True
+        self._wake_tick()
+        return math.degrees(angle)
 
     def _save_settings(self, settings):
         if self.settings_path is not None:
             settings.save(self.settings_path)
+        if self.compensation_window is not None:
+            self._close_test_and_compensation()
         self.settings = settings
         self._reset()
 
@@ -977,14 +1364,14 @@ class AimTestPane:
             "偵測到手把時預設只用手把瞄準。若要在同一回合交替使用滑鼠，請開啟測試設定的自動銜接。",
             "跟槍時盡量讓準心留在移動的靶上。"
             "跟靶率是準心在靶上的時間比例。",
+            "3D 跟槍可在測試設定調整環繞範圍與靶速。360° 會在正後方折返。",
             "點靶時按滑鼠左鍵、RT 或空白鍵射擊。"
             "按 Enter 或手把 START 可開始或重測。",
             "2D 和 3D 都有「限時點靶」。開場就有兩顆靶。"
             "靶會留到被擊中，命中後補新靶。倒數歸零時結算命中數，並記錄命中率與平均偏差。",
-            "同設定的紀錄須使用相同的模式、畫面尺寸、出靶種子、震動與音效。"
-            "也會比對該模式的靶數、秒數、靶心大小、遠近與出靶範圍。"
-            "靶色、準心顏色與大小不影響比對。"
-            "不同滑鼠感度的成績也能互相比較。",
+            "比對只看「回合與靶」的設定：模式、解析度、出靶種子，以及該模式的靶數、秒數、靶心大小、"
+            "遠近、出靶範圍、環繞範圍與靶速。"
+            "手把視角速度、滑鼠感度、顏色、準心、震動與音效不影響比對。",
             "成績與同設定的歷史最佳回合比較。點靶依序比命中數、命中率、完成耗時與平均偏差。"
             "跟槍依序比跟靶率與平均偏差。",
             "↑ 和 ↓ 表示數值上升或下降，綠色代表進步，紅色代表退步。"
@@ -1028,12 +1415,9 @@ class AimTestPane:
             self._render_worker.discard_pending()
         parts = self._store_result()
         self.finished = True
-        self.canvas.itemconfigure(self.countdown_item, font=("Segoe UI", 32, "bold"))
         self._display_countdown(self.tr("測試完成"))
         hint = self.tr("按 Enter 或手把 START 再測一次。")
-        # Segoe UI can resolve Chinese characters to a bold fallback face.
-        family = "Segoe UI" if hint.isascii() else "Microsoft JhengHei UI"
-        self.canvas.itemconfigure(self.finish_hint_item, text=hint, font=(family, 12, "normal"))
+        self.canvas.itemconfigure(self.finish_hint_item, text=hint)
         if not skip_animation:
             # Keep the static result visible even if the GPU's last present is lost.
             self._stop_gpu()
@@ -1363,14 +1747,15 @@ class AimTestPane:
                 )
             else:
                 self._simulate_tick(now)
-                self.next_frame = now + (SIMULATION_PERIOD if self._active_round() else IDLE_PERIOD)
+                moving = self._active_round() or self._preview_camera_moving
+                self.next_frame = now + (SIMULATION_PERIOD if moving else IDLE_PERIOD)
         if now >= self.label_update_at:
             self.label_update_at = now + 0.1
             self._update_labels()
         if self._needs_frame():
             self._draw_if_due(now)
         if self.test_open and not self.finished and now - self.fps_started >= 0.5 and (
-            self._active_round() or not self.fps_text.get()
+            self._active_round() or self._preview_camera_moving or not self.fps_text.get()
         ):
             self._update_performance(now)
         self._schedule(time.perf_counter())
@@ -1383,6 +1768,9 @@ class AimTestPane:
             output = self.read_output()
             key, state = output if output is not None else (None, None)
             samples = ()
+        if self._compensation_preview:
+            self._sample_preview_input(key, state, samples, now)
+            return
         ready = state is not None
         if ready != self.output_ready and not self.settings.auto_input_switch:
             self._mouse_position = None
@@ -1417,6 +1805,31 @@ class AimTestPane:
                 self._sim_state = state
                 self._set_button_baseline(state)
 
+    def _sample_preview_input(self, key, state, samples, now):
+        self._sim_state = state
+        self._preview_start_pressed = state is None or "START" in state.buttons
+        if state is None:
+            self._preview_input_key = None
+            self._preview_cancel_pressed = True
+            self._preview_look_at = None
+            return
+        if key != self._preview_input_key:
+            self._preview_input_key = key
+            initial = samples[0][1] if samples else state
+            self._preview_cancel_pressed = "B" in initial.buttons
+            self._preview_look_at = None
+        for at, current in (*samples, (now, state)):
+            cancel = "B" in current.buttons
+            cancel_edge = cancel and not self._preview_cancel_pressed
+            self._preview_cancel_pressed = cancel
+            if cancel_edge and at >= self._preview_opened_at:
+                focus = self.window.focus_displayof()
+                if focus is not None and focus.winfo_toplevel() in self._test_focus_windows():
+                    # The rest of this drained batch will not be replayed.
+                    self._preview_cancel_pressed = "B" in state.buttons
+                    self._close_test_and_compensation(at=at)
+                    return
+
     def _set_button_baseline(self, state):
         self.start_pressed = "START" in state.buttons
         self.cancel_pressed = "B" in state.buttons
@@ -1427,8 +1840,8 @@ class AimTestPane:
         cancel = "B" in state.buttons
         if cancel and not self.cancel_pressed and self.test_open:
             focus = self.window.focus_displayof()
-            if focus is not None and focus.winfo_toplevel() is self.window:
-                self.close_test(at=at)
+            if focus is not None and focus.winfo_toplevel() in self._test_focus_windows():
+                self._close_test_and_compensation(at=at)
         elif start and not self.start_pressed:
             self._start_shortcut(at=at)
         self.start_pressed, self.cancel_pressed = start, cancel
@@ -1465,6 +1878,9 @@ class AimTestPane:
         self._simulate_to(deadline)
 
     def _simulate_tick(self, deadline):
+        if self._compensation_preview:
+            self._move_preview_camera(deadline)
+            return
         was_running = self._round().running
         self._simulate_to_input(deadline)
         if self.read_input is None and self._sim_state is not None and self._round().running:
@@ -1473,6 +1889,21 @@ class AimTestPane:
             self._frame_stats.simulations += 1
             self._check_finish()
             self._update_feedback(deadline)
+
+    def _move_preview_camera(self, now):
+        overlay = self.compensation_window
+        previous, self._preview_look_at = self._preview_look_at, now
+        self._preview_camera_moving = False
+        state = self._sim_state
+        if state is None or not any(state.right) or overlay is None or overlay.measurement is not None:
+            return
+        focus = self.window.focus_displayof()
+        if focus is not None and focus.winfo_toplevel() in self._test_focus_windows():
+            self._preview_camera_moving = True
+            seconds = 0.0 if previous is None else now - previous
+            if 0 < seconds <= MAX_SIMULATION_GAP:
+                self.scene.turn(state.right, seconds)
+                self._frame_dirty = True
 
     def _simulate_to(self, at):
         if self.countdown_until is not None:
@@ -1492,7 +1923,7 @@ class AimTestPane:
                     self.scene.turn(state.right, stick_seconds)
             else:
                 if seconds > stick_seconds:
-                    self.scene.advance((0, 0), seconds - stick_seconds)
+                    self.scene.advance(None, seconds - stick_seconds)
                 if stick_seconds:
                     self.scene.advance(state.right, stick_seconds)
         else:
@@ -1531,7 +1962,7 @@ class AimTestPane:
             delay = min(delay, timer_delay_ms(now, self.next_draw))
         self.job = self.owner.after(delay, self._run_tick)
         if self.test_open and self.display_hz >= NATIVE_TIMER_MIN_HZ and (
-            self._round().running or self.hit_effect is not None
+            self._round().running or self._preview_camera_moving or self.hit_effect is not None
         ):
             self._arm_native_wake(delay)
         else:
@@ -1622,7 +2053,50 @@ class AimTestPane:
             return False
         return True
 
+    def refresh_compensation_buttons(self):
+        visible = self.compensation_available()
+        if visible == self._compensation_buttons_visible:
+            return
+        self._compensation_buttons_visible = visible
+        for button in (self.compensation_button, self.compensation_calculator_button):
+            if visible:
+                button.grid()
+            else:
+                button.grid_remove()
+        if not visible:
+            self.close_gyro_compensation_for_device_change()
+
+    def close_gyro_compensation_for_device_change(self):
+        self._compensation_device_generation += 1
+        self._calculator_handoff_inputs = None
+        if self._compensation_preview:
+            self._close_test_and_compensation()
+        calculator = self.compensation_calculator
+        if calculator is not None and calculator.window.winfo_exists():
+            calculator.window.destroy()
+
+    def refresh_compensation_connection(self):
+        if self.read_gyro_reload_status is None:
+            return
+        calculator = self.compensation_calculator
+        calculator_open = calculator is not None and calculator.window.winfo_exists()
+        preview_open = self._compensation_preview and self.compensation_window is not None
+        if not (preview_open or calculator_open):
+            return
+        # The bridge can reconnect without changing its virtual XInput slot.
+        status = self.read_gyro_reload_status()
+        if not status:
+            return
+        connection = compensation_connection(status)
+        if (
+            (preview_open and connection != self._preview_compensation_connection)
+            or (calculator_open and connection != self._calculator_profile.connection)
+        ):
+            self.close_gyro_compensation_for_device_change()
+
     def _update_labels(self):
+        self.refresh_compensation_buttons()
+        self.compensation_button.state(["!disabled" if self.mode_is_3d else "disabled"])
         can_start = self.countdown_until is None and not self._awaiting_finish()
         for button in (self.start_button, self.restart_button):
             button.state(["!disabled" if can_start else "disabled"])
@@ -1652,6 +2126,8 @@ class AimTestPane:
             instruction = ""
         elif self.interrupted:
             instruction = start_hint_key
+        elif self._compensation_preview:
+            instruction = "用右搖桿轉動視角，以固定靶為地標。"
         elif not self._mouse_aim_enabled():
             instruction = (
                 "用右搖桿瞄準，追蹤移動球靶。" if self.mode_is_tracking
@@ -1674,7 +2150,9 @@ class AimTestPane:
         if status != self.status.get():
             self.status.set(status)
         test = self._round()
-        if self.mode_is_tracking or self.mode_is_timed:
+        if self._compensation_preview:
+            self.timer_text.set("")
+        elif self.mode_is_tracking or self.mode_is_timed:
             self.timer_text.set(self.tr("剩餘 {seconds:.1f} s").format(seconds=max(0, test.duration - test.elapsed)))
         else:
             self.timer_text.set(self.tr("耗時 {seconds:.1f}/{limit} s").format(
@@ -1683,10 +2161,18 @@ class AimTestPane:
         if self.finished:
             error = f"{test.mean_error:.2f}°" if self.mode_is_3d else f"{test.mean_error:.1f} px"
             if self.mode_is_tracking:
-                self.score.set(self.tr("跟靶率 {percent}　平均偏差 {error}").format(
+                score = self.tr("跟靶率 {percent}　平均偏差 {error}").format(
                     percent=f"{test.on_target_percent:.1f}%" if test.elapsed else "—",
                     error=error if test.elapsed else "—",
-                ))
+                )
+                if self.mode_is_3d and test.horizontal_peak is not None:
+                    score += "\n" + self.tr(
+                        "水平輸出峰值 {peak:.1f}%　最長連續滿桿 {duration:.0f} ms"
+                    ).format(
+                        peak=test.horizontal_peak * 100,
+                        duration=test.longest_horizontal_full_stick * 1000,
+                    )
+                self.score.set(score)
             else:
                 hits = test.hits if self.mode_is_timed else f"{test.hits}/{test.count}"
                 self.score.set(self.tr("命中 {hits}　命中率 {accuracy}　平均偏差 {error}").format(
@@ -1797,6 +2283,10 @@ class AimTestPane:
                 self._gpu_room = project_room(*pose)
             else:
                 self._draw_canvas_room(pose)
+        if self._compensation_preview:
+            landmark = project_ball(transform(PREVIEW_LANDMARK), width, height)
+            self._draw_balls((landmark,) if landmark is not None else ())
+            return False
         targets = list(map(transform, self.scene.target_positions()))
         if (len(targets) == 2 and (first := self.scene.crosshair_depth(targets[0])) is not None
                 and (second := self.scene.crosshair_depth(targets[1])) is not None):

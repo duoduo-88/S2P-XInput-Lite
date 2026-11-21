@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import threading
 import unittest
 
 from idle_disconnect import (
@@ -6,6 +7,7 @@ from idle_disconnect import (
     normalize_idle_disconnect_minutes,
     perform_idle_disconnect,
 )
+from input_dispatcher import InputDispatcher
 
 
 def _state(buttons=0, left=(2048, 2048), right=(2048, 2048), gyro=(0, 0, 0)):
@@ -61,9 +63,43 @@ class IdleDisconnectTests(unittest.TestCase):
 
         result = perform_idle_disconnect(
             controller,
-            xinput,
+            lambda reset: reset() is None,
+            xinput.reset_output_state,
             lambda **status: events.append(status),
         )
 
         self.assertFalse(result)
         self.assertEqual(events, ["reset"])
+
+    def test_idle_disconnect_does_not_reset_outputs_while_input_is_running(self):
+        entered = threading.Event()
+        release = threading.Event()
+        events = []
+
+        def process_input(_payload):
+            entered.set()
+            release.wait(2)
+            events.append("input finished")
+
+        dispatcher = InputDispatcher(process_input, inline_fast_path=False)
+        try:
+            dispatcher.submit(bytes(16))
+            self.assertTrue(entered.wait(1))
+            controller = SimpleNamespace(disconnect_for_idle=lambda: events.append("disconnect") or True)
+            reset = lambda: events.append("reset")
+            publish = lambda **status: events.append(status["state"])
+
+            self.assertFalse(perform_idle_disconnect(
+                controller, lambda callback: dispatcher.run_exclusive(callback, timeout=0),
+                reset, publish,
+            ))
+            self.assertEqual(events, [])
+
+            release.set()
+            self.assertTrue(perform_idle_disconnect(
+                controller, dispatcher.run_exclusive, reset, publish,
+            ))
+            self.assertEqual(events, ["input finished", "reset", "disconnect", "idle_disconnected"])
+        finally:
+            release.set()
+            dispatcher.stop()

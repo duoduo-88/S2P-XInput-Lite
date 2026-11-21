@@ -164,6 +164,10 @@ def mapping_target_label(value, translate=lambda text: text):
     value = str(value)
     if value == "CUSTOM_KEYBOARD":
         return translate("自訂按鍵")
+    if value == "CUSTOM_COMBO":
+        return translate("自訂手把組合")
+    if value.startswith("COMBO:"):
+        return "Pad:" + value[len("COMBO:"):]
     if value.startswith("KEYBOARD:"):
         return "KB:" + "+".join(
             _KEY_LABELS.get(key, key) for key in value[len("KEYBOARD:"):].split("+")

@@ -228,6 +228,14 @@ class DiagnosticSessionTests(unittest.TestCase):
             )
             self.assertEqual(read_controller_status(path), {})
 
+    def test_controller_status_ignores_invalid_documents_and_timestamps(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "controller_status.json"
+            for document in ('[]', 'null', '{"updated_at": "nan"}', '{"updated_at": "inf"}'):
+                with self.subTest(document=document):
+                    path.write_text(document, encoding="utf-8")
+                    self.assertEqual(read_controller_status(path), {})
+
     def test_old_esp32_firmware_requires_diagnostic_update_notice(self):
         self.assertTrue(diagnostic_firmware_needs_update(
             {"state": "unavailable", "error": "ESP32 did not answer capabilities"},

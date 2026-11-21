@@ -18,6 +18,7 @@ if (
 
 import configparser
 import ctypes
+from copy import deepcopy
 import hashlib
 import json
 import logging
@@ -46,7 +47,7 @@ from esp32_detection import (
     find_esp32_firmware,
     find_esp32_port,
 )
-from dialog_layout import startup_banner_geometry
+from dialog_layout import centered_message_box, install_centered_dialogs, startup_banner_geometry
 from direction_deadzones import CUSTOM_DEADZONE_KEY
 from firmware_flash_guard import FlashProbeError, probe_esp32_flash_size
 from gamepad_aim_display import DISPLAY_RESTORE_RETRY_MS
@@ -110,7 +111,13 @@ from settings_import import (
     scan_settings_import,
 )
 from mapping_targets import (
+    COMBO_MAX_MEMBERS,
+    COMBO_MEMBER_ORDER,
+    COMBO_MIN_MEMBERS,
+    COMBO_PENDING_TARGET,
     button_source_error,
+    combo_members,
+    format_combo_target,
     button_target_error,
     direction_target_error,
     stick_analog_direction_error,
@@ -118,8 +125,16 @@ from mapping_targets import (
     stick_setting_key_error,
     validate_profile_mapping_targets,
 )
-from settings_schema import SECTION_SCHEMAS, SettingValidationError, validate_config_sections
-from single_instance import SingleInstance, activate_tk_window
+from settings_schema import SECTION_SCHEMAS, SettingValidationError, normalize_config_in_place, validate_config_sections
+from gyro_compensation import COMPENSATION_FIELDS, profile_compensation
+from gyro_compensation_window import GyroCompensationSettings
+from runtime_status import settings_reload_result
+from parameter_controls import (
+    bind_drag_adjust,
+    show_restore_menu,
+    widget_is_disabled,
+)
+from single_instance import GYRO_SETTINGS_ACTION, SETTINGS_INSTANCE_NAME, SingleInstance, activate_tk_window
 from system_tray import SystemTrayIcon
 from gui_settings import (
     apply_gui_settings_to_config,
@@ -128,6 +143,9 @@ from gui_settings import (
     config_settings_bundle,
 )
 from gui_sections.direction_deadzone import DirectionDeadzonePreview
+from gui_sections.extensions import open_extensions_window as _open_extensions_window
+from gui_sections.extensions import open_extension_tool as _open_extension_tool
+from gui_sections.extensions import tray_items as _extension_tray_items
 from gui_sections import (
     build_main_layout,
     build_stick_section,
@@ -159,7 +177,6 @@ _GUI_ROOT = None
 _MESSAGEBOX_FUNCTIONS = {}
 HIDHIDE_DOWNLOAD_URL = "https://github.com/nefarius/HidHide/releases/latest"
 LOGGER = logging.getLogger(__name__)
-SETTINGS_INSTANCE_NAME = "S2P-XInput-Lite.Settings.v1"
 
 
 GYRO_DEFAULT_KEYS = (
@@ -169,7 +186,9 @@ GYRO_DEFAULT_KEYS = (
     "mouse_sensitivity", "deadzone", "stick_anti_deadzone",
     "response_curve", "curve_strength", "smoothing_ms", "invert_x",
     "invert_y", "x_ratio", "y_ratio", "accel_suppression",
-    "adaptive_deadzone", "button_freeze_ms", "stabilization_buttons",
+    "x_compensation", "y_compensation", "compensation_keep_limit",
+    "adaptive_deadzone", "button_stabilization_mode", "button_freeze_ms",
+    "stabilization_buttons",
     "player_space",
 )
 
@@ -364,17 +383,22 @@ def _install_localized_messageboxes():
                     kwargs.pop("parent", None)
                     parent = None
 
-            return _original(
-                translate_text(title, _GUI_LANGUAGE),
-                translate_text(message, _GUI_LANGUAGE),
-                *args,
-                **kwargs
-            )
+            # Windows centers MessageBox on the screen; keep it over the window.
+            # A hidden focused dialog falls back to the main window.
+            with centered_message_box(parent, _GUI_ROOT):
+                return _original(
+                    translate_text(title, _GUI_LANGUAGE),
+                    translate_text(message, _GUI_LANGUAGE),
+                    *args,
+                    **kwargs
+                )
 
         setattr(messagebox, name, localized)
 
 
 _install_localized_messageboxes()
+# Message boxes are centered by the localized wrapper above.
+install_centered_dialogs(lambda: _GUI_ROOT, messageboxes=False)
 
 # 優先使用 Per-Monitor V2，讓 4K 與多螢幕環境取得正確 DPI。
 # 舊版 Windows 不支援時再逐級退回。
@@ -514,47 +538,6 @@ def normalize_slider_input(value, minimum, maximum, step=None, allowed_values=No
         ) * step
         numeric = max(float(minimum), min(float(maximum), numeric))
     return numeric
-
-
-def scrub_numeric_value(
-    start_value,
-    step_count,
-    minimum,
-    maximum,
-    step=None,
-    allowed_values=None,
-):
-    """Move a numeric value by normal or discrete slider steps."""
-    minimum = float(minimum)
-    maximum = float(maximum)
-    start_value = float(start_value)
-    if not math.isfinite(start_value):
-        start_value = minimum
-    start_value = max(minimum, min(maximum, start_value))
-    step_count = int(step_count)
-
-    if allowed_values:
-        choices = tuple(float(item) for item in allowed_values)
-        if not choices:
-            raise ValueError("allowed_values must not be empty")
-        start_index = min(
-            range(len(choices)),
-            key=lambda index: (abs(choices[index] - start_value), index),
-        )
-        target_index = max(
-            0,
-            min(len(choices) - 1, start_index + step_count),
-        )
-        numeric = choices[target_index]
-    elif step is not None:
-        step = float(step)
-        if step <= 0:
-            raise ValueError("step must be positive")
-        numeric = start_value + step_count * step
-    else:
-        numeric = start_value
-
-    return max(minimum, min(maximum, numeric))
 
 
 def draw_output_shape_preview(canvas, shape_steps):
@@ -1814,8 +1797,6 @@ class StartupOverlay:
         self,
         root,
         language="zh",
-        center_rect=None,
-        bounds=None,
         paint_now=False,
     ):
         self.root = root
@@ -1856,9 +1837,7 @@ class StartupOverlay:
             fill="#4a4a4a",
         )
 
-        self.window.geometry(startup_banner_geometry(
-            root, width, height, center_rect=center_rect, bounds=bounds,
-        ))
+        self.window.geometry(startup_banner_geometry(root, width, height))
         self.window.update_idletasks()
         self.window.deiconify()
         self.window.lift()
@@ -1976,15 +1955,15 @@ class ConfigGUI:
         self._hidden_to_system_tray = False
         self._system_tray = None
         self._system_tray_poll_job = None
-        self._system_tray_minimize_job = None
         self.root.bind("<Unmap>", self._on_root_unmap, add="+")
         self.root.bind("<Map>", self._on_root_map, add="+")
 
-        # 按下視窗右上角 X 時，統一關閉所有程序
+        # X 只把設定視窗收到系統匣；從系統匣選「結束程式」才會真正關閉。
+        # 最小化（-）維持一般的縮到工作列。
         self.root.protocol(
             "WM_DELETE_WINDOW",
-            self.on_close
-        )              
+            self.close_to_system_tray
+        )
         self.root.title(
             f"{APP_TITLE} Setting UI"
         )
@@ -2055,6 +2034,7 @@ class ConfigGUI:
         self.stick_zoom_window = None
         self.stick_zoom_notebook = None
         self.stick_zoom_editors = {}
+        self._stick_zoom_layout_updaters = {}
         # The tester owns a high-frequency Canvas redraw loop. Keep it in a
         # separate GUI process so it cannot delay this settings window.
         self.gamepad_test_process = None
@@ -2110,9 +2090,6 @@ class ConfigGUI:
                 )
             )
         self._profile_folder_snapshot = self._capture_profile_folder_snapshot()
-        self._active_profile_content_baseline = (
-            self.profile_file_fingerprint(self.active_profile)
-        )
         self._profile_apply_job = None
         self._profile_switch_in_progress = False
         self._profile_context_target = None
@@ -2134,6 +2111,57 @@ class ConfigGUI:
         self.root.after(250, self.start_connection_on_launch)
         self.root.after(1400, self.start_automatic_update_check)
         self._start_system_tray()
+        self._focus_save_job = None
+        self._focus_save_prompt_open = False
+        self._focus_save_armed = True
+        self.root.bind("<FocusIn>", self._arm_focus_save_prompt, add="+")
+        self.root.bind("<FocusOut>", self._schedule_focus_save_prompt, add="+")
+
+    def _arm_focus_save_prompt(self, _event=None):
+        if not self._focus_save_prompt_open and not self._another_app_has_focus():
+            self._focus_save_armed = True
+
+    def _schedule_focus_save_prompt(self, _event=None):
+        if self._focus_save_armed and self._focus_save_job is None and not self._focus_save_prompt_open:
+            self._focus_save_job = self.root.after(150, self._check_focus_save_prompt)
+
+    @staticmethod
+    def _another_app_has_focus():
+        user32 = ctypes.windll.user32
+        foreground_window = user32.GetForegroundWindow
+        foreground_window.restype = wintypes.HWND
+        window_pid = user32.GetWindowThreadProcessId
+        window_pid.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.DWORD))
+        window_pid.restype = wintypes.DWORD
+        hwnd = foreground_window()
+        pid = wintypes.DWORD()
+        return bool(hwnd and window_pid(hwnd, ctypes.byref(pid)) and pid.value != os.getpid())
+
+    def _check_focus_save_prompt(self):
+        self._focus_save_job = None
+        if (self._focus_save_prompt_open or getattr(self, "_close_in_progress", False)
+                or self.root.state() not in ("normal", "zoomed")
+                or self.root.grab_current() is not None or not self._another_app_has_focus()):
+            return
+        self._sync_saved_gyro_compensation()
+        if not self.has_unsaved_changes():
+            return
+        self._focus_save_armed = False
+        self._focus_save_prompt_open = True
+        try:
+            protected = is_protected_profile(self.active_profile)
+            prompt = (
+                "目前使用唯讀的系統預設。要將尚未儲存的變更另存為新方案並套用嗎？"
+                if protected else "目前方案有尚未儲存的變更。要儲存並套用目前方案嗎？"
+            )
+            if messagebox.askyesno(self.tr("尚未儲存設定"), self.tr(prompt), default="no", parent=self.root):
+                if protected:
+                    self.save_profile_as()
+                else:
+                    self.save_current_profile(show_message=False)
+        finally:
+            self._focus_save_prompt_open = False
+            self._arm_focus_save_prompt()
 
     def get_serial_ports(self):
         """取得目前所有可用的 COM Port。"""
@@ -2216,16 +2244,23 @@ class ConfigGUI:
             self.main_process is not None
             and self.main_process.poll() is None
         )
-        if connector_was_running:
-            self.stop_main_process()
+        self._set_flash_progress(
+            self.tr("正在讀取 ESP32-S3 目前的韌體版本…"),
+            self.tr("約需數秒，請稍候。"),
+        )
         try:
-            firmware = find_esp32_firmware()
-            if firmware:
-                self._show_esp32_mode_migration(firmware)
-            return firmware, connector_was_running
-        except Exception as exc:
-            LOGGER.warning("Could not inspect ESP32 firmware: %s", exc)
-            return None, connector_was_running
+            if connector_was_running:
+                self.stop_main_process()
+            try:
+                firmware = self._run_while_flash_progress_animates(find_esp32_firmware)
+            except Exception as exc:
+                LOGGER.warning("Could not inspect ESP32 firmware: %s", exc)
+                return None, connector_was_running
+        finally:
+            self._close_flash_progress()
+        if firmware:
+            self._show_esp32_mode_migration(firmware)
+        return firmware, connector_was_running
 
     def _resume_connector_after_firmware_check(self):
         main_path = Path(__file__).with_name("main.py")
@@ -2391,6 +2426,95 @@ class ConfigGUI:
         self._flash_preflight_verified_port = None
         self._flash_preflight_verified_generation = None
         self._flash_operation_active = False
+        self._close_flash_progress()
+
+    def _set_flash_progress(self, message, detail=""):
+        """Show which firmware step is running so silent waits do not look hung."""
+        window = getattr(self, "_flash_progress_window", None)
+        try:
+            if window is None or not window.winfo_exists():
+                window = tk.Toplevel(self.root)
+                window.withdraw()
+                window.title(self.tr("ESP32-S3 韌體刷寫"))
+                window.resizable(False, False)
+                window.transient(self.root)
+                # Closing would not stop esptool; the step ends on its own.
+                window.protocol("WM_DELETE_WINDOW", lambda: None)
+                content = ttk.Frame(window, padding=(18, 16))
+                content.pack(fill="both", expand=True)
+                wrap = window.winfo_pixels("240p")
+                self._flash_progress_message = ttk.Label(
+                    content, anchor="center", justify="center", wraplength=wrap,
+                )
+                self._flash_progress_message.pack(fill="x")
+                progress = ttk.Progressbar(content, mode="indeterminate", length=260)
+                progress.pack(fill="x", pady=(12, 8))
+                progress.start(12)
+                self._flash_progress_bar = progress
+                self._flash_progress_detail = ttk.Label(
+                    content, anchor="w", justify="left", wraplength=wrap,
+                )
+                self._flash_progress_detail.pack(fill="x")
+                self._flash_progress_window = window
+                self._flash_progress_message.configure(text=message)
+                self._flash_progress_detail.configure(text=detail)
+                self._center_child_window(window)
+                window.deiconify()
+            else:
+                self._flash_progress_message.configure(text=message)
+                self._flash_progress_detail.configure(text=detail)
+                # Drop the fixed size so a longer step message is not clipped.
+                window.geometry("")
+            # Paint now: the version check runs on the Tk thread right after.
+            window.update_idletasks()
+        except tk.TclError:
+            self._flash_progress_window = None
+
+    def _run_while_flash_progress_animates(self, work):
+        """Run blocking serial work off the Tk thread and keep the progress window live.
+
+        The caller still gets the result synchronously. The progress window takes the
+        input grab meanwhile, as the window stayed frozen before this probe moved off
+        the Tk thread.
+        """
+        result = queue.Queue(maxsize=1)
+
+        def run():
+            try:
+                result.put((work(), None))
+            except Exception as exc:
+                result.put((None, exc))
+
+        threading.Thread(target=run, daemon=True, name="ESP32FirmwareVersionProbe").start()
+        window = getattr(self, "_flash_progress_window", None)
+        if window is not None:
+            try:
+                window.grab_set()
+            except tk.TclError:
+                pass
+        while result.empty():
+            try:
+                self.root.update()
+            except tk.TclError:
+                break  # The app closed; wait for the probe to release the port.
+            time.sleep(0.015)
+        value, error = result.get()
+        if error is not None:
+            raise error
+        return value
+
+    def _close_flash_progress(self):
+        window = getattr(self, "_flash_progress_window", None)
+        self._flash_progress_window = None
+        if window is None:
+            return
+        try:
+            if window.winfo_exists():
+                # Stop the bar's own Tcl timer; destroy() leaves it queued.
+                self._flash_progress_bar.stop()
+                window.destroy()
+        except tk.TclError:
+            pass
 
     def _flash_port_identity(self, port):
         """Return the current enumerated identity for a port, if it exists."""
@@ -2416,6 +2540,7 @@ class ConfigGUI:
 
         if flash_port is not None:
 
+            self._close_flash_progress()
             messagebox.showinfo(
                 self.tr("偵測到刷機連接埠"),
                 self.tr("已偵測到刷機連接埠：")
@@ -2444,6 +2569,14 @@ class ConfigGUI:
             )
             return
 
+        seconds_left = max(1, (60 - self.flash_detect_attempts + 1) // 2)
+        self._set_flash_progress(
+            self.tr("正在等待 ESP32-S3 進入刷機模式…"),
+            self.tr("按住 BOOT 再按一下 RESET / EN。剩餘約 {seconds} 秒。").format(
+                seconds=seconds_left
+            ),
+        )
+
         def poll_again():
             self._flash_detection_job = None
             self.detect_flash_port()
@@ -2470,6 +2603,10 @@ class ConfigGUI:
         result_queue = queue.Queue(maxsize=1)
         self._flash_preflight_queue = result_queue
         self._flash_preflight_port_identity = port_identity
+        self._set_flash_progress(
+            self.tr("正在確認晶片與 Flash 容量（{port}）…").format(port=port),
+            self.tr("約需 5 到 20 秒，完成後會自動開始刷寫。請勿拔除 ESP32-S3。"),
+        )
 
         def probe():
             try:
@@ -2593,6 +2730,10 @@ class ConfigGUI:
                     "CREATE_NEW_CONSOLE",
                     0
                 )
+            )
+            self._set_flash_progress(
+                self.tr("正在刷寫韌體…"),
+                self.tr("刷寫進度顯示在 esptool 視窗。完成前請勿拔除 ESP32-S3。"),
             )
 
             self.root.after(
@@ -3012,6 +3153,9 @@ class ConfigGUI:
 
             # 自定義鍵盤
             "CUSTOM_KEYBOARD",
+
+            # 自訂手把組合（同一幀按下多個 Xbox 按鍵）
+            COMBO_PENDING_TARGET,
         ]
 
         # =========================
@@ -3048,6 +3192,7 @@ class ConfigGUI:
             "L_STK", "R_STK",
             "UP", "DOWN", "LEFT", "RIGHT",
             "CUSTOM_KEYBOARD",
+            COMBO_PENDING_TARGET,
         ]
 
         # 8 個可能方向
@@ -3298,6 +3443,11 @@ class ConfigGUI:
                 "gyro_mapping", "adaptive_deadzone", fallback="85"
             )
         )
+        self.gyro_button_stabilization_mode_var = tk.StringVar(
+            value=self.config.get(
+                "gyro_mapping", "button_stabilization_mode", fallback="FREEZE"
+            ).strip().upper()
+        )
         self.gyro_button_freeze_var = tk.StringVar(
             value=self.config.get(
                 "gyro_mapping", "button_freeze_ms", fallback="5"
@@ -3328,6 +3478,15 @@ class ConfigGUI:
         )
         self.gyro_y_ratio_var = tk.StringVar(
             value=self.config.get("gyro_mapping", "y_ratio", fallback="1.00")
+        )
+        self.gyro_compensation_vars = {
+            axis: tk.StringVar(value=self.config.get("gyro_mapping", f"{axis.lower()}_compensation", fallback="1.00"))
+            for axis in ("X", "Y")
+        }
+        self.gyro_compensation_keep_limit_var = tk.BooleanVar(
+            value=self.config.getboolean(
+                "gyro_mapping", "compensation_keep_limit", fallback=False
+            )
         )
         self.gyro_invert_x_var = tk.BooleanVar(
             value=self.config.getboolean(
@@ -3845,8 +4004,20 @@ class ConfigGUI:
             tray.stop()
             return False
         self._system_tray = tray
+        self.refresh_extension_tray_items()
         self._schedule_system_tray_poll()
         return True
+
+    def refresh_extension_tray_items(self):
+        """List openable extension tools in the tray menu."""
+        tray = getattr(self, "_system_tray", None)
+        if tray is None:
+            return
+        try:
+            # Tools appear as plain items between separators, without a heading.
+            tray.set_extra_items("", _extension_tray_items(self))
+        except (AttributeError, OSError, ValueError):
+            pass
 
     def _system_tray_available(self):
         tray = getattr(self, "_system_tray", None)
@@ -3878,7 +4049,9 @@ class ConfigGUI:
             action = tray.get_action()
             if action is None:
                 break
-            if action == "show":
+            if isinstance(action, tuple) and action[0] == "extra":
+                _open_extension_tool(self, action[1])
+            elif action == "show":
                 self.restore_from_system_tray()
             elif action == "exit":
                 self.restore_from_system_tray()
@@ -3888,26 +4061,17 @@ class ConfigGUI:
                     pass
         self._schedule_system_tray_poll()
 
-    def _schedule_minimize_to_system_tray(self, delay=30):
-        if getattr(self, "_system_tray_minimize_job", None) is not None:
-            return
+    def close_to_system_tray(self):
+        """X hides the settings window in the notification area.
 
-        def minimize_if_iconic():
-            self._system_tray_minimize_job = None
-            try:
-                if self.root.state() == "iconic":
-                    self._minimize_to_system_tray()
-            except (AttributeError, tk.TclError):
-                pass
+        S2P keeps running and stays connected; **Exit** in the notification
+        area menu runs the normal close flow.  Without a working tray icon the
+        hidden window could not be reached again, so X closes as before.
+        """
+        if not self._hide_to_system_tray():
+            self.on_close()
 
-        try:
-            self._system_tray_minimize_job = self.root.after(
-                max(0, int(delay)), minimize_if_iconic
-            )
-        except (AttributeError, tk.TclError):
-            self._system_tray_minimize_job = None
-
-    def _minimize_to_system_tray(self):
+    def _hide_to_system_tray(self):
         """Hide only the settings root after its tray icon is confirmed."""
         if getattr(self, "_hidden_to_system_tray", False):
             return True
@@ -3970,13 +4134,6 @@ class ConfigGUI:
         if poll_job is not None:
             try:
                 self.root.after_cancel(poll_job)
-            except (AttributeError, tk.TclError):
-                pass
-        minimize_job = getattr(self, "_system_tray_minimize_job", None)
-        self._system_tray_minimize_job = None
-        if minimize_job is not None:
-            try:
-                self.root.after_cancel(minimize_job)
             except (AttributeError, tk.TclError):
                 pass
         tray = getattr(self, "_system_tray", None)
@@ -4158,8 +4315,14 @@ class ConfigGUI:
         tab = ttk.Frame(notebook, padding=(8, 4))
         notebook.add(tab, text=f" {side_text} ")
 
+        # 曲線與下方設定共用同一個容器，設定區寬度因此等於曲線圖寬度，
+        # 拉大視窗時也不會比曲線圖更寬。
+        body = ttk.Frame(tab)
+        body.pack(anchor="n")
+        body.columnconfigure(0, weight=1)
+
         editor = StickCurveEditor(
-            tab,
+            body,
             curve_vars,
             deadzone_var,
             outer_deadzone_var,
@@ -4183,21 +4346,22 @@ class ConfigGUI:
         # 放大視窗改完專用邊距後必須立刻重畫，否則第一次操作時
         # 才套用新邊距，曲線圖就會看起來突然縮小。
         editor.draw()
-        editor.pack(anchor="center")
+        editor.grid(row=0, column=0)
         self.stick_zoom_editors[side] = editor
 
-        # 下方控制區使用自然寬度置中。
-        # 「輸出與防抖」維持窄版，不再被較寬的「曲線範圍」群組
-        # 拉伸，避免兩個群組看起來無法對齊。
-        controls = ttk.Frame(tab)
-        controls.pack(pady=(5, 0), anchor="center")
+        # 下方兩個設定群組由 _arrange_stick_zoom_controls() 排列：
+        # 放得下時左右並排、等寬；低解析度放不下時改為上下排列。
+        # 兩種排列的總寬度都與曲線圖相同。
+        controls = ttk.Frame(body)
+        controls.grid(row=1, column=0, sticky="ew", pady=(5, 0))
 
         output_group = ttk.LabelFrame(
             controls,
             text="輸出與防抖",
             padding=(8, 3),
         )
-        output_group.pack(anchor="center")
+        # 拉桿吸收多出的寬度，問號維持貼齊群組右側。
+        output_group.columnconfigure(1, weight=1)
 
         ttk.Label(output_group, text="形狀").grid(
             row=0, column=0, sticky="w", padx=(2, 2), pady=2
@@ -4314,7 +4478,7 @@ class ConfigGUI:
             text="曲線範圍",
             padding=(8, 3),
         )
-        deadzone_group.pack(anchor="center", pady=(5, 0))
+        deadzone_group.columnconfigure(1, weight=1)
 
         center_label_frame = ttk.Frame(deadzone_group)
         center_label_frame.grid(row=0, column=0, sticky="e", pady=2)
@@ -4402,7 +4566,49 @@ class ConfigGUI:
             "並避免反向與超調。",
         ).grid(row=2, column=2, padx=(8, 0), pady=2)
 
+        self._stick_zoom_layout_updaters[side] = (
+            lambda: self._arrange_stick_zoom_controls(
+                controls, editor, output_group, deadzone_group
+            )
+        )
+        self._stick_zoom_layout_updaters[side]()
         return tab
+
+    def _arrange_stick_zoom_controls(
+        self, controls, editor, output_group, deadzone_group
+    ):
+        """Side by side at equal width when both fit under the curve, else stacked."""
+        gap = max(4, round(6 * self.ui_scale))
+        output_group.grid_forget()
+        deadzone_group.grid_forget()
+        controls.update_idletasks()
+        # Equal-width columns are both as wide as the wider group.
+        side_by_side = (
+            2 * max(
+                output_group.winfo_reqwidth(),
+                deadzone_group.winfo_reqwidth(),
+            )
+            + gap
+            <= editor.winfo_reqwidth()
+        )
+        if side_by_side:
+            for column in (0, 1):
+                controls.columnconfigure(
+                    column, weight=1, uniform="stick_zoom_group"
+                )
+            output_group.grid(
+                row=0, column=0, sticky="nsew", padx=(0, gap // 2)
+            )
+            deadzone_group.grid(
+                row=0, column=1, sticky="nsew", padx=(gap - gap // 2, 0)
+            )
+        else:
+            controls.columnconfigure(0, weight=1, uniform="")
+            controls.columnconfigure(1, weight=0, uniform="")
+            output_group.grid(row=0, column=0, sticky="ew")
+            deadzone_group.grid(
+                row=1, column=0, sticky="ew", pady=(5, 0)
+            )
 
     def _resize_stick_zoom_for_language(self):
         """Grow the zoom window when translated text needs additional space."""
@@ -4412,6 +4618,8 @@ class ConfigGUI:
         try:
             if not window.winfo_exists():
                 return
+            for arrange in tuple(self._stick_zoom_layout_updaters.values()):
+                arrange()
             window.update_idletasks()
             work_x, work_y, work_width, work_height = self.get_work_area()
             chrome_x = max(16, round(16 * self.ui_scale))
@@ -4444,6 +4652,7 @@ class ConfigGUI:
         self.stick_zoom_window = None
         self.stick_zoom_notebook = None
         self.stick_zoom_editors = {}
+        self._stick_zoom_layout_updaters = {}
         self.stick_settings_zoomed = False
 
         for variable, trace_id in self._stick_zoom_trace_bindings:
@@ -4516,6 +4725,7 @@ class ConfigGUI:
                 self.stick_zoom_window = None
                 self.stick_zoom_notebook = None
                 self.stick_zoom_editors = {}
+                self._stick_zoom_layout_updaters = {}
                 self.stick_settings_zoomed = False
                 for variable, trace_id in self._stick_zoom_trace_bindings:
                     try:
@@ -4529,6 +4739,8 @@ class ConfigGUI:
         # Widgets are created with Traditional Chinese source text. Running the
         # normal language pass now translates the new window when English is active.
         self.apply_language()
+        for arrange in tuple(self._stick_zoom_layout_updaters.values()):
+            arrange()
         window.update_idletasks()
         self._center_child_window(
             window,
@@ -4564,7 +4776,7 @@ class ConfigGUI:
         confirmed = messagebox.askyesno(
             "安裝 ViGEmBus",
             "未偵測到 ViGEmBus 驅動程式。\n\n"
-            "Xbox／XInput 輸出需要此驅動。\n\n"
+            "XInput 輸出需要此驅動。\n\n"
             "安裝程式會從官方來源下載 ViGEmBus，需要網路連線及"
             "系統管理員權限。\n\n"
             "是否立即執行隨附的安裝程式？"
@@ -4993,7 +5205,7 @@ class ConfigGUI:
                 self.tr("尚未安裝 HidHide"),
                 self.tr(
                     "未偵測到 HidHide。USB 有線模式仍可使用，但遊戲可能同時收到"
-                    "實體手把與虛擬 Xbox 手把。\n\n是否前往 HidHide 官方下載頁面？"
+                    "實體手把與虛擬 XInput 手把。\n\n是否前往 HidHide 官方下載頁面？"
                     "\n\n選擇「否」後不再自動提醒；需要時可點擊視窗下方的"
                     "「HidHide：缺少」。"
                 ),
@@ -5015,7 +5227,7 @@ class ConfigGUI:
             return True
 
         message = self.tr(
-            "偵測到 USB 有線手把。為避免遊戲同時收到實體 HID 與虛擬 Xbox 手把，"
+            "偵測到 USB 有線手把。為避免遊戲同時收到實體 HID 與虛擬 XInput 手把，"
             "程式可以將實體手把加入 HidHide 隱藏清單，並允許攜帶版 Python "
             "與 Raw HID 量測器繼續讀取。"
         )
@@ -5099,26 +5311,13 @@ class ConfigGUI:
             if age > 3.0 and state != "stopped":
                 state = "stopped"
 
-            reload_updated_at = float(
-                data.get("settings_reload_updated_at", 0.0) or 0.0
-            )
-            last_reload_notice = float(
-                getattr(self, "_last_settings_reload_notice", 0.0)
-            )
             pending_request = getattr(
                 self, "_pending_settings_reload_request", None
             )
-            status_request = str(
-                data.get("settings_reload_request_id", "") or ""
-            )
-            if (
-                pending_request
-                and status_request == pending_request
-                and reload_updated_at > last_reload_notice
-            ):
-                self._last_settings_reload_notice = reload_updated_at
-                reload_state = data.get("settings_reload_state")
-                if reload_state == "failed":
+            reload_result = settings_reload_result(data, pending_request)
+            if reload_result is not None:
+                self._pending_settings_reload_request = None
+                if reload_result["state"] == "failed":
                     messagebox.showerror(
                         self.tr("即時套用設定失敗"),
                         self.tr(
@@ -5126,11 +5325,9 @@ class ConfigGUI:
                             "新設定已儲存至檔案，重新連線後將會生效。"
                         )
                         + "\n\n"
-                        + str(data.get("settings_reload_message", "")),
+                        + str(reload_result.get("message", "")),
                         parent=self.root,
                     )
-                if reload_state in ("success", "failed"):
-                    self._pending_settings_reload_request = None
 
             raw_mode = data.get("mode")
             mode = mode_text.get(raw_mode, "")
@@ -5210,12 +5407,55 @@ class ConfigGUI:
             age = time.time() - float(status.get("updated_at", 0.0))
             if age > 3.0 or status.get("state") != "connected":
                 raise RuntimeError("controller_not_connected")
-        except (OSError, ValueError, TypeError, json.JSONDecodeError, RuntimeError):
+        # AttributeError: a valid JSON list or value is not a status object.
+        except (OSError, ValueError, TypeError, AttributeError, RuntimeError):
             messagebox.showerror(
                 "無法校正感測器",
                 "請先啟動連接程式並確認手把已連線。",
             )
             return
+
+        controller_id = status.get("controller_id")
+        connection_id = status.get("connection_id")
+
+        def finish(success, message):
+            try:
+                self.gyro_calibration_button.state(["!disabled"])
+                self.gyro_calibration_button.configure(
+                    text=self.tr("校正")
+                )
+                if success:
+                    messagebox.showinfo("感測器校正完成", message)
+                else:
+                    messagebox.showerror("感測器校正失敗", message)
+            except tk.TclError:
+                pass
+
+        def check_connection(data):
+            if not isinstance(data, dict):
+                # A valid JSON list or value cannot describe the connection.
+                finish(False, "無法確認手把連線。請確認手把後重新開始感測器校正。")
+                return False
+            if (
+                data.get("state") == "connected"
+                and data.get("connection_id") == connection_id
+                and data.get("controller_id") == controller_id
+            ):
+                return True
+            finish(False, "校正期間手把連線已變更。請確認手把後重新開始感測器校正。")
+            return False
+
+        def check_connection_after_prompt():
+            try:
+                data = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
+                if not isinstance(data, dict):
+                    return check_connection(data)
+                if time.time() - float(data.get("updated_at", 0.0)) <= 3.0:
+                    return check_connection(data)
+            except (OSError, ValueError, TypeError):
+                pass
+            finish(False, "無法確認手把連線。請確認手把後重新開始感測器校正。")
+            return False
 
         confirmed = messagebox.askokcancel(
             "感測器校正（1/3）",
@@ -5224,11 +5464,11 @@ class ConfigGUI:
             "直到顯示校正完成。穩定採樣約需 5 秒；"
             "若偵測到移動，計時會重新開始。",
         )
-        if not confirmed:
+        if not confirmed or not check_connection_after_prompt():
             return
 
         try:
-            enqueue_controller_command("calibrate_gyro")
+            enqueue_controller_command("calibrate_gyro", connection_id=connection_id)
         except OSError as exc:
             messagebox.showerror(
                 "無法校正感測器",
@@ -5241,19 +5481,6 @@ class ConfigGUI:
         gyro_seen_running = False
         self.gyro_calibration_button.state(["disabled"])
         self.gyro_calibration_button.configure(text=self.tr("靜止校正中..."))
-
-        def finish(success, message):
-            try:
-                self.gyro_calibration_button.state(["!disabled"])
-                self.gyro_calibration_button.configure(
-                    text=self.tr("感測器校正")
-                )
-                if success:
-                    messagebox.showinfo("感測器校正完成", message)
-                else:
-                    messagebox.showerror("感測器校正失敗", message)
-            except tk.TclError:
-                pass
 
         def start_magnetometer_stage(accel_completed=True):
             completed_text = (
@@ -5269,14 +5496,18 @@ class ConfigGUI:
                 "約需 12～30 秒。若取消，已完成的其他校正仍會保留，"
                 "原有磁力計資料不會被修改。",
             )
+            if not check_connection_after_prompt():
+                return
             if not confirmed_mag:
                 finish(
                     True,
-                    "陀螺儀與加速度計校正已儲存；磁力計校正已略過，原資料保持不變。",
+                    "陀螺儀與加速度計校正已儲存；磁力計校正已略過，原資料保持不變。"
+                    if accel_completed
+                    else "陀螺儀校正已完成並儲存。加速度計沿用原有資料，磁力計也沿用原有資料。",
                 )
                 return
             try:
-                enqueue_controller_command("calibrate_magnetometer")
+                enqueue_controller_command("calibrate_magnetometer", connection_id=connection_id)
             except OSError as exc:
                 finish(False, f"無法送出磁力計校正指令：\n{exc}")
                 return
@@ -5297,6 +5528,8 @@ class ConfigGUI:
                     return
                 try:
                     data = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
+                    if not check_connection(data):
+                        return
                     state = data.get("mag_calibration_state", "idle")
                     updated_at = float(data.get("updated_at", 0.0))
                     if state == "running" and updated_at >= mag_started_at:
@@ -5362,12 +5595,14 @@ class ConfigGUI:
                     elif (
                         state == "failed"
                         and updated_at >= mag_started_at
-                        and (mag_seen_running or data.get("mag_calibration_message") == "disconnected")
+                        and (mag_seen_running or data.get("mag_calibration_message") in ("disconnected", "busy"))
                     ):
                         reason = data.get("mag_calibration_message", "")
                         messages = {
                             "disconnected": "校正期間手把已斷線；原有磁力計資料未被修改。",
+                            "busy": "連接程式忙碌中，校正未開始；原有磁力計資料未被修改，請稍後再試。",
                             "save_failed": "校正完成，但無法安全寫入 config.ini。",
+                            "apply_failed": "校正已儲存。請重新連線以套用新校正。",
                             "insufficient_3d_coverage": (
                                 "磁力方向覆蓋不足（至少 18/26）。請讓手把各面都朝向不同方向，"
                                 "完整做立體 8 字翻轉後重試；原有資料未被修改。"
@@ -5399,11 +5634,13 @@ class ConfigGUI:
                 "務必包含正面、背面、左右側、USB 端及握把端，並加入一些斜向姿勢；至少讓 CMD 的加速 3D 覆蓋達到 14/26。"
                 "若取消，會保留原有資料並直接進入磁力計校正。",
             )
+            if not check_connection_after_prompt():
+                return
             if not confirmed_accel:
                 start_magnetometer_stage(False)
                 return
             try:
-                enqueue_controller_command("calibrate_accelerometer")
+                enqueue_controller_command("calibrate_accelerometer", connection_id=connection_id)
             except OSError as exc:
                 finish(False, f"無法送出加速度計校正指令：\n{exc}")
                 return
@@ -5421,6 +5658,8 @@ class ConfigGUI:
                     return
                 try:
                     data = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
+                    if not check_connection(data):
+                        return
                     state = data.get("accel_calibration_state", "idle")
                     message = data.get("accel_calibration_message", "")
                     updated_at = float(data.get("updated_at", 0.0))
@@ -5441,11 +5680,13 @@ class ConfigGUI:
                     elif (
                         state == "failed"
                         and updated_at >= accel_started_at
-                        and (accel_seen_running or message == "disconnected")
+                        and (accel_seen_running or message in ("disconnected", "busy"))
                     ):
                         messages = {
                             "disconnected": "校正期間手把已斷線。",
+                            "busy": "連接程式忙碌中，加速度計校正未開始，請稍後再試。",
                             "save_failed": "加速度計校正完成，但無法安全寫入 config.ini。",
+                            "apply_failed": "校正已儲存。請重新連線以套用新校正。",
                             "insufficient_accelerometer_coverage": "加速度計方向覆蓋不足（至少 14/26），請包含六個主要方向及更多斜向姿勢。",
                             "excessive_accelerometer_distortion": "加速度資料失真過大，請避免快速移動並重新校正。",
                             "poor_accelerometer_fit": "重力橢球殘差過大，請放慢動作並在更多方向短暫停住。",
@@ -5469,6 +5710,8 @@ class ConfigGUI:
                 return
             try:
                 data = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
+                if not check_connection(data):
+                    return
                 state = data.get("gyro_calibration_state", "idle")
                 updated_at = float(data.get("updated_at", 0.0))
                 if state == "running" and updated_at >= started_at:
@@ -5479,12 +5722,14 @@ class ConfigGUI:
                 elif (
                     state == "failed"
                     and updated_at >= started_at
-                    and (gyro_seen_running or data.get("gyro_calibration_message") == "disconnected")
+                    and (gyro_seen_running or data.get("gyro_calibration_message") in ("disconnected", "busy"))
                 ):
                     reason = data.get("gyro_calibration_message", "")
                     messages = {
                         "disconnected": "校正期間手把已斷線，請重新連線後再試。",
+                        "busy": "連接程式忙碌中，陀螺儀校正未開始，請稍後再試。",
                         "save_failed": "校正完成，但無法安全寫入 config.ini。",
+                        "apply_failed": "校正已儲存。請重新連線以套用新校正。",
                         "unstable": "三軸數值變動過大。請勿碰觸手把或桌面後重試。",
                         "timeout_or_movement": "持續偵測到移動，無法取得五秒穩定資料。",
                     }
@@ -5637,6 +5882,92 @@ class ConfigGUI:
                 self.gyro_stabilization_buttons
             )
         )
+
+    def open_gyro_compensation_window(self):
+        self._sync_saved_gyro_compensation()
+        if self.gyro_target_var.get().strip().upper() == "MOUSE":
+            return
+        overlay = getattr(self, "_gyro_compensation_window", None)
+        if overlay is None or not overlay.window.winfo_exists():
+            def apply_ratios(values):
+                for axis, value in values.items():
+                    self.gyro_compensation_vars[axis].set(value)
+
+            # The speed cap only changes Center stick output.
+            center_mode = self.gyro_motion_mode_var.get().strip().upper() == "CENTER"
+            overlay = self._gyro_compensation_window = GyroCompensationSettings(
+                self.root, self.tr,
+                {axis: variable.get() for axis, variable in self.gyro_compensation_vars.items()},
+                apply=apply_ratios, sync_saved=self._sync_saved_gyro_compensation,
+                saved=self._saved_gyro_compensation,
+                keep_limit=self.gyro_compensation_keep_limit_var.get() if center_mode else None,
+                apply_keep_limit=self.gyro_compensation_keep_limit_var.set,
+            )
+        overlay.window.lift()
+        overlay.window.focus_set()
+
+    def _saved_gyro_compensation(self):
+        """Return the last saved X/Y multipliers for the dialog's restore menu.
+
+        Read ``self.config`` rather than the saved-value registry: the tester
+        can save new multipliers (see ``_sync_saved_gyro_compensation``),
+        which updates the config but does not rebuild the registry.
+        """
+        try:
+            saved = profile_compensation(self.config)
+        except (ValueError, configparser.Error):
+            return {}  # An unreadable value leaves Restore Saved disabled.
+        return {axis: f"{value:.2f}" for axis, value in saved.items()}
+
+    def _sync_saved_gyro_compensation(self, *, latest=None):
+        """Accept tester changes without overwriting unsaved edits in this window."""
+        try:
+            if latest is None:
+                latest = load_config(CONFIG_PATH, persist=False)
+            if latest.get("gui", "active_profile", fallback="") != self.config.get(
+                "gui", "active_profile", fallback="",
+            ):
+                return
+            previous = profile_compensation(self.config)
+            saved = profile_compensation(latest)
+        except (OSError, ValueError, configparser.Error):
+            return
+        for axis, key in COMPENSATION_FIELDS.items():
+            if saved[axis] == previous[axis]:
+                continue
+            variable = self.gyro_compensation_vars[axis]
+            try:
+                unchanged = float(variable.get()) == previous[axis]
+            except ValueError:
+                unchanged = False
+            text = f"{saved[axis]:.2f}"
+            if unchanged:
+                variable.set(text)
+                overlay = getattr(self, "_gyro_compensation_window", None)
+                if overlay is not None and overlay.window.winfo_exists():
+                    draft = overlay.compensation[axis]
+                    try:
+                        if float(draft.get()) == previous[axis]:
+                            draft.set(text)
+                    except ValueError:
+                        pass  # Keep incomplete input for the dialog's validation.
+            if not self.config.has_section("gyro_mapping"):
+                self.config.add_section("gyro_mapping")
+            self.config.set("gyro_mapping", key, text)
+
+    def open_gyro_settings(self):
+        restored = self.restore_from_system_tray()
+        activate_tk_window(self.root)
+        self.gyro_settings_tab.master.select(self.gyro_settings_tab)
+        if restored:
+            self.root.after(75, self.open_gyro_compensation_window)
+        else:
+            self.open_gyro_compensation_window()
+
+    def close_gyro_compensation_window(self):
+        overlay = getattr(self, "_gyro_compensation_window", None)
+        if overlay is not None and overlay.window.winfo_exists():
+            overlay.close()
 
     def open_gyro_curve_window(self):
         """Edit the Center-stick gyro response curve in a separate window."""
@@ -5826,21 +6157,9 @@ class ConfigGUI:
             system_default = defaults.getfloat(
                 "gyro_mapping", "curve_strength"
             )
-            menu = tk.Menu(window, tearoff=False)
-            menu.add_command(
-                label=self.tr("還原上次儲存"),
-                command=lambda: reset_strength(saved_strength),
+            return show_restore_menu(
+                event, self.tr, reset_strength, saved_strength, system_default,
             )
-            menu.add_separator()
-            menu.add_command(
-                label=self.tr("還原系統預設"),
-                command=lambda: reset_strength(system_default),
-            )
-            try:
-                menu.tk_popup(event.x_root, event.y_root)
-            finally:
-                menu.grab_release()
-            return "break"
 
         strength_scale.bind("<Button-3>", show_strength_reset_menu)
         strength_value_label.bind(
@@ -6012,13 +6331,16 @@ class ConfigGUI:
         # so a calibration result cannot be overwritten by stale GUI state.
         with config_file_lock():
             latest = load_config(CONFIG_PATH)
-            apply_profile(latest, read_profile(active, PROFILE_DIR))
+            profile, fingerprint = read_profile(active, PROFILE_DIR, return_fingerprint=True)
+            apply_profile(latest, profile)
             if not latest.has_section("gui"):
                 latest.add_section("gui")
             latest.set("gui", "active_profile", active)
             atomic_write_config(latest, CONFIG_PATH)
         self.config = latest
         self.active_profile = active
+        self._active_profile_content_baseline = fingerprint
+        self._active_profile_settings_baseline = profile
         self.profile_name_var = tk.StringVar(value=active)
 
     @staticmethod
@@ -6148,12 +6470,14 @@ class ConfigGUI:
             return
         if widget is getattr(self, "profile_combo", None):
             return
+        widget_name = str(widget)
+        # Checked first: <Map> fires every time a tab is shown, and looking up
+        # the binding again for an already bound control is wasted work.
+        if widget_name in self._parameter_reset_bound_widgets:
+            return
         if self.parameter_binding_for_widget(widget) is None:
             return
 
-        widget_name = str(widget)
-        if widget_name in self._parameter_reset_bound_widgets:
-            return
         # Widget bindings run before ttk class bindings.  Returning ``break``
         # from show_parameter_reset_context_menu also prevents a right-click on
         # Scale/TScale from moving the slider before the menu appears.
@@ -6276,15 +6600,7 @@ class ConfigGUI:
     @staticmethod
     def parameter_widget_is_disabled(widget):
         """Return whether a Tk/ttk parameter control rejects user edits."""
-        try:
-            if widget.instate(["disabled"]):
-                return True
-        except (AttributeError, tk.TclError):
-            pass
-        try:
-            return str(widget.cget("state")).strip().lower() == "disabled"
-        except (AttributeError, tk.TclError):
-            return False
+        return widget_is_disabled(widget)
 
     def show_parameter_reset_context_menu(self, event):
         if self.parameter_widget_is_disabled(event.widget):
@@ -6296,23 +6612,7 @@ class ConfigGUI:
         return self.popup_parameter_reset_menu(event, variable.set, saved_value, system_default)
 
     def popup_parameter_reset_menu(self, event, setter, saved_value, system_default):
-        if self.parameter_widget_is_disabled(event.widget):
-            return "break"
-        menu = tk.Menu(event.widget.winfo_toplevel(), tearoff=False)
-        menu.add_command(
-            label=self.tr("還原上次儲存"),
-            command=lambda: setter(saved_value),
-        )
-        menu.add_separator()
-        menu.add_command(
-            label=self.tr("還原系統預設"),
-            command=lambda: setter(system_default),
-        )
-        try:
-            menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            menu.grab_release()
-        return "break"
+        return show_restore_menu(event, self.tr, setter, saved_value, system_default)
 
     def _capture_profile_folder_snapshot(self):
         """Return a lightweight snapshot used to detect external file changes."""
@@ -6543,6 +6843,7 @@ class ConfigGUI:
             self._active_profile_content_baseline = self.profile_file_fingerprint(
                 self.active_profile
             )
+            self._active_profile_settings_baseline = build_profile(self.config)
             self._external_active_profile_changed = False
             self.request_adaptive_window_update()
             reload_request = self.request_live_settings_reload()
@@ -6814,6 +7115,7 @@ class ConfigGUI:
 
     def reload_profile_variables(self):
         """Reload every GUI setting without rebuilding the window or callbacks."""
+        self.close_gyro_compensation_window()
         old_bindings = {
             name: value
             for name, value in self.__dict__.items()
@@ -6956,23 +7258,23 @@ class ConfigGUI:
                 self.profile_name_var.set(self.active_profile)
                 return
 
-            profile, loaded_fingerprint = read_profile(selected, PROFILE_DIR, return_fingerprint=True)
-            validate_profile_mapping_targets(profile, SWITCH_BUTTONS)
-
-            # Merge into the latest on-disk configuration instead of the GUI's
-            # potentially older copy.  This preserves calibration data written
-            # by the connector since the settings window was opened.
+            # Read the profile and current config under the same lock used by
+            # the tester to update them together.
             with config_file_lock():
-                updated_config = load_config(CONFIG_PATH)
+                profile, loaded_fingerprint = read_profile(selected, PROFILE_DIR, return_fingerprint=True)
+                validate_profile_mapping_targets(profile, SWITCH_BUTTONS)
+                updated_config = load_config(CONFIG_PATH, persist=False)
                 apply_profile(updated_config, profile)
                 if not updated_config.has_section("gui"):
                     updated_config.add_section("gui")
                 updated_config.set("gui", "active_profile", selected)
+                normalize_config_in_place(updated_config)
                 atomic_write_config(updated_config, CONFIG_PATH)
-            self.config = load_config(CONFIG_PATH)
+            self.config = updated_config
             self.active_profile = selected
             self.reload_profile_variables()
             self._active_profile_content_baseline = loaded_fingerprint
+            self._active_profile_settings_baseline = profile
             self._external_active_profile_changed = (
                 self.profile_file_fingerprint(selected) != loaded_fingerprint
             )
@@ -7005,7 +7307,9 @@ class ConfigGUI:
             return False
         expected_profile_fingerprint = self.profile_file_fingerprint(self.active_profile)
         if expected_profile_fingerprint != getattr(self, "_active_profile_content_baseline", None):
-            self._external_active_profile_changed = True
+            self._external_active_profile_changed = not self._merge_saved_profile_compensation(
+                expected_profile_fingerprint,
+            )
         conflict_result = self.resolve_external_active_profile_conflict()
         if conflict_result != "overwrite":
             return conflict_result == "reloaded"
@@ -7020,9 +7324,10 @@ class ConfigGUI:
                     raise ValueError(
                         self.tr("方案檔案在儲存前再次變更，請重新操作。")
                     )
+                previous_config = self.config
                 try:
                     if not self.save_config(show_confirmation=False, changes=changes):
-                        self._restore_failed_settings_save(changes)
+                        self._restore_failed_settings_save(changes, previous_config)
                         return False
                     if (
                         self.profile_file_fingerprint(self.active_profile)
@@ -7036,9 +7341,10 @@ class ConfigGUI:
                         self.config, self.active_profile, PROFILE_DIR, return_fingerprint=True,
                     )
                 except (OSError, configparser.Error, ValueError):
-                    self._restore_failed_settings_save(changes)
+                    self._restore_failed_settings_save(changes, previous_config)
                     raise
             self._active_profile_content_baseline = saved_fingerprint
+            self._active_profile_settings_baseline = build_profile(self.config)
             self._external_active_profile_changed = (
                 self.profile_file_fingerprint(self.active_profile) != saved_fingerprint
             )
@@ -7062,7 +7368,47 @@ class ConfigGUI:
             )
             return False
 
-    def _restore_failed_settings_save(self, changes):
+    def _merge_saved_profile_compensation(self, expected_fingerprint):
+        """Accept a matching disk update if only untouched compensation axes changed."""
+        baseline = getattr(self, "_active_profile_settings_baseline", None)
+        if baseline is None or expected_fingerprint is None:
+            return False
+        try:
+            with config_file_lock():
+                profile, fingerprint = read_profile(self.active_profile, PROFILE_DIR, return_fingerprint=True)
+                if fingerprint != expected_fingerprint:
+                    return False
+                latest = load_config(CONFIG_PATH, persist=False)
+                if any(
+                    config.get("gui", "active_profile", fallback="") != self.active_profile
+                    for config in (self.config, latest)
+                ):
+                    return False
+                saved = profile_compensation(profile)
+                original = profile_compensation(baseline)
+                if saved == original or saved != profile_compensation(latest):
+                    return False
+                without_edit = deepcopy(profile)
+                for key in COMPENSATION_FIELDS.values():
+                    without_edit.set("gyro_mapping", key, baseline.get("gyro_mapping", key))
+                if without_edit != baseline:
+                    return False
+                displayed = profile_compensation(self.config)
+                for axis in COMPENSATION_FIELDS:
+                    if saved[axis] != original[axis]:
+                        local = float(self.gyro_compensation_vars[axis].get())
+                        if local not in (displayed[axis], saved[axis]):
+                            return False
+                self._sync_saved_gyro_compensation(latest=latest)
+        except (OSError, ValueError, configparser.Error):
+            return False
+        self._active_profile_content_baseline = fingerprint
+        self._active_profile_settings_baseline = profile
+        return True
+
+    def _restore_failed_settings_save(self, changes, previous_config):
+        # Use the values last shown in the GUI to identify unchanged axes.
+        self.config = previous_config
         if not changes:
             return
         snapshot = getattr(self, "_layer_folder_snapshot", {})
@@ -7080,7 +7426,9 @@ class ConfigGUI:
 
     def refresh_saved_settings_baseline(self):
         """Refresh disk comparisons without discarding working GUI values."""
-        self.config = load_config(CONFIG_PATH, persist=False)
+        latest = load_config(CONFIG_PATH, persist=False)
+        self._sync_saved_gyro_compensation(latest=latest)
+        self.config = latest
         base_buttons, base_sticks = self._mapping_layer_file_defaults()
         (
             self._layer_disk_baseline,
@@ -7125,6 +7473,7 @@ class ConfigGUI:
             self.config = load_config(CONFIG_PATH)
             self.reload_profile_variables()
             self._active_profile_content_baseline = loaded_fingerprint
+            self._active_profile_settings_baseline = profile
             self._external_active_profile_changed = (
                 self.profile_file_fingerprint(self.active_profile) != loaded_fingerprint
             )
@@ -7175,9 +7524,10 @@ class ConfigGUI:
             with config_file_lock():
                 if self.profile_file_fingerprint(name) != expected_profile_fingerprint:
                     raise ValueError(self.tr("方案檔案在儲存前再次變更，請重新操作。"))
+                previous_config = self.config
                 try:
                     if not self.save_config(show_confirmation=False, changes=changes):
-                        self._restore_failed_settings_save(changes)
+                        self._restore_failed_settings_save(changes, previous_config)
                         return False
                     self.config.set("gui", "active_profile", name)
                     changes.write_config(self.config, CONFIG_PATH)
@@ -7190,10 +7540,11 @@ class ConfigGUI:
                         self.config, name, PROFILE_DIR, return_fingerprint=True,
                     )
                 except (OSError, configparser.Error, ValueError):
-                    self._restore_failed_settings_save(changes)
+                    self._restore_failed_settings_save(changes, previous_config)
                     raise
             self.active_profile = name
             self._active_profile_content_baseline = saved_fingerprint
+            self._active_profile_settings_baseline = build_profile(self.config)
             self._external_active_profile_changed = (
                 self.profile_file_fingerprint(name) != saved_fingerprint
             )
@@ -7554,8 +7905,8 @@ class ConfigGUI:
     def stick_mode_label(self, mode):
         labels = {
             "MOUSE_WHEEL_LINEAR": "線性滑鼠滾輪",
-            "XINPUT_LT_LINEAR": "線性 Xbox LT",
-            "XINPUT_RT_LINEAR": "線性 Xbox RT",
+            "XINPUT_LT_LINEAR": "線性 XInput LT",
+            "XINPUT_RT_LINEAR": "線性 XInput RT",
         }
         return self.tr(labels.get(str(mode), str(mode)))
 
@@ -7632,13 +7983,17 @@ class ConfigGUI:
         self._close_gamepad_test_process()
         self.open_gamepad_test_window()
 
+    def open_extensions_window(self):
+        """Open the global Extensions (擴充工具) settings window."""
+        return _open_extensions_window(self)
+
     def show_idle_disconnect_menu(self):
         """Show the global wireless idle timeout choices."""
         menu = tk.Menu(self.root, tearoff=False)
         selected = tk.IntVar(value=self.idle_disconnect_minutes)
         for minutes in IDLE_DISCONNECT_OPTIONS:
             label = (
-                self.tr("關閉")
+                self.tr("關閉|off")
                 if minutes == 0
                 else self.tr("{minutes} 分鐘").format(minutes=minutes)
             )
@@ -7671,7 +8026,8 @@ class ConfigGUI:
                     latest.add_section("gui")
                 latest.set("gui", "idle_disconnect_minutes", str(minutes))
                 atomic_write_config(latest, CONFIG_PATH)
-            self.config = load_config(CONFIG_PATH)
+            # Keep the loaded gameplay values for merging external edits at save time.
+            self.config.set("gui", "idle_disconnect_minutes", str(minutes))
             self.idle_disconnect_minutes = minutes
             enqueue_controller_command("reload_settings")
         except OSError as exc:
@@ -7713,14 +8069,22 @@ class ConfigGUI:
         )
         # This button may have been created while the UI was English. Always
         # translate from its stable Chinese key instead of the lazy text cache.
-        self.gamepad_test_button.configure(
-            text=self.tr("手把測試")
-        )
-        self.write_esp32_button.configure(
-            text=f"{self.tr('寫入 ESP32')} ▼"
-        )
+        self.write_esp32_button.configure(text=self.tr("寫入 ESP32"))
         if hasattr(self, "refresh_write_esp32_menu"):
             self.refresh_write_esp32_menu()
+        for button in (
+            getattr(self, "import_button", None),
+            getattr(self, "calibration_button", None),
+        ):
+            # A running sensor calibration owns the button text for progress.
+            if button is None or button.instate(["disabled"]):
+                continue
+            button.configure(
+                text=self.tr(button._s2p_dropdown_source)
+            )
+        if hasattr(self, "extensions_button"):
+            self.extensions_button.configure(text=self.tr("擴充工具"))
+        self.refresh_extension_tray_items()
         for combo, display_var, side, source_values in (
             self.stick_mode_selectors
         ):
@@ -7752,11 +8116,8 @@ class ConfigGUI:
 
     @staticmethod
     def _is_pending_custom_mapping(value):
-        return (
-            str(value)
-            .strip()
-            .upper()
-            == "CUSTOM_KEYBOARD"
+        return str(value).strip().upper() in (
+            "CUSTOM_KEYBOARD", COMBO_PENDING_TARGET,
         )
 
     def _track_custom_mapping_variable(self, variable):
@@ -8256,6 +8617,116 @@ class ConfigGUI:
         self._center_child_window(capture_window)
         self._bring_child_to_front(capture_window)
 
+    def open_custom_mapping(self, variable, mouse_mode=None):
+        """Open the recorder or combo picker for a just-selected custom option."""
+        value = str(variable.get()).strip().upper()
+        if value == "CUSTOM_KEYBOARD":
+            self.open_keyboard_capture(variable, mouse_mode=mouse_mode)
+        elif value == COMBO_PENDING_TARGET:
+            self.open_gamepad_combo_dialog(variable)
+
+    def open_gamepad_combo_dialog(self, variable):
+        """Pick 2-4 XInput buttons that one input presses in the same report."""
+        self._track_custom_mapping_variable(variable)
+        previous_mapping = getattr(variable, "_s2p_last_valid_mapping", "NONE")
+        state = {"committed": False}
+        dialog = tk.Toplevel(self.root)
+        dialog.withdraw()
+        dialog.transient(self.root)
+        dialog.title(self.tr("手把組合鍵"))
+        dialog.resizable(False, False)
+        frame = ttk.Frame(dialog, padding=12)
+        frame.pack(fill="both", expand=True)
+        columns = 4
+        ttk.Label(
+            frame,
+            text=self.tr("勾選要同時按下的 XInput 按鍵（{low} 到 {high} 個）。").format(
+                low=COMBO_MIN_MEMBERS, high=COMBO_MAX_MEMBERS,
+            ),
+        ).grid(row=0, column=0, columnspan=columns, sticky="w", pady=(0, 8))
+
+        selected = set(combo_members(previous_mapping))
+        variables = {}
+        checkbuttons = {}
+        # One row per button group: face, shoulders/triggers, system, sticks, D-pad.
+        groups = (COMBO_MEMBER_ORDER[0:4], COMBO_MEMBER_ORDER[4:8],
+                  COMBO_MEMBER_ORDER[8:11], COMBO_MEMBER_ORDER[11:13],
+                  COMBO_MEMBER_ORDER[13:17])
+        for group_index, group in enumerate(groups):
+            for column, name in enumerate(group):
+                variables[name] = tk.BooleanVar(dialog, name in selected)
+                checkbuttons[name] = ttk.Checkbutton(
+                    frame, text=name, variable=variables[name],
+                    command=lambda: refresh(),
+                )
+                checkbuttons[name].grid(
+                    row=1 + group_index, column=column, sticky="w", padx=6, pady=3,
+                )
+        next_row = 1 + len(groups)
+
+        preview_var = tk.StringVar(dialog)
+        ttk.Label(frame, textvariable=preview_var, font=("", 11, "bold")).grid(
+            row=next_row, column=0, columnspan=columns, sticky="w", pady=(10, 4),
+        )
+        ttk.Label(
+            frame,
+            text=self.tr(
+                "組合內的按鍵會在同一幀一起按下、一起放開，不含延遲、順序或連發。\n"
+                "部分遊戲或比賽規則禁止一鍵觸發多個動作，使用前請自行確認。"
+            ),
+            justify="left",
+            wraplength=dialog.winfo_pixels("300p"),
+        ).grid(row=next_row + 1, column=0, columnspan=columns, sticky="w", pady=(0, 4))
+
+        controls = ttk.Frame(frame)
+        controls.grid(row=next_row + 2, column=0, columnspan=columns, sticky="e", pady=(8, 0))
+        ttk.Button(controls, text=self.tr("取消"), command=dialog.destroy).pack(
+            side="right", padx=(6, 0)
+        )
+        accept_button = ttk.Button(controls, text=self.tr("確定"))
+        accept_button.pack(side="right")
+
+        def chosen():
+            return [name for name in COMBO_MEMBER_ORDER if variables[name].get()]
+
+        def refresh():
+            members = chosen()
+            preview_var.set(
+                " + ".join(members) if members else self.tr("尚未選擇按鍵")
+            )
+            full = len(members) >= COMBO_MAX_MEMBERS
+            for name, checkbutton in checkbuttons.items():
+                checkbutton.state(
+                    ["disabled"] if full and not variables[name].get() else ["!disabled"]
+                )
+            accept_button.state(
+                ["!disabled"]
+                if COMBO_MIN_MEMBERS <= len(members) <= COMBO_MAX_MEMBERS
+                else ["disabled"]
+            )
+
+        def accept(_event=None):
+            members = chosen()
+            if not COMBO_MIN_MEMBERS <= len(members) <= COMBO_MAX_MEMBERS:
+                return
+            state["committed"] = True
+            variable.set(format_combo_target(members))
+            dialog.destroy()
+
+        def restore_on_cancel(event):
+            if event.widget is not dialog:
+                return
+            if not state["committed"] and self._is_pending_custom_mapping(variable.get()):
+                variable.set(previous_mapping)
+
+        accept_button.configure(command=accept)
+        dialog.bind("<Return>", accept)
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        dialog.bind("<Destroy>", restore_on_cancel, add="+")
+        refresh()
+        self._center_child_window(dialog)
+        self._bring_child_to_front(dialog)
+
     def create_help(self, parent, text, illustration=None):
         label = tk.Label(
             parent,
@@ -8350,75 +8821,24 @@ class ConfigGUI:
         text_entry=False,
     ):
         """Bind drag adjustment, preserving native clicks and horizontal motion on entries."""
-        pixels_per_step = 8
-        state = {
-            "start_x": 0,
-            "start_y": 0,
-            "start_value": float(minimum),
-            "last_steps": 0,
-            "dragged": False,
-        }
-        widget.configure(cursor="sb_h_double_arrow")
-
-        def begin(event):
-            interaction_enabled = not self.parameter_widget_is_disabled(
-                widget
-            )
-            state["interaction_enabled"] = interaction_enabled
-            if not interaction_enabled:
-                if on_disabled_click is not None:
-                    on_disabled_click()
-                return "break"
-            try:
-                start_value = float(variable.get())
-            except (TypeError, ValueError, tk.TclError):
-                start_value = float(minimum)
-            state.update({
-                "start_x": event.x_root,
-                "start_y": event.y_root,
-                "start_value": start_value,
-                "last_steps": 0,
-                "dragged": False,
-            })
-            return None if text_entry else "break"
-
-        def drag(event):
-            if not state.get("interaction_enabled", False):
-                return "break"
-            delta_x = event.x_root - state["start_x"]
-            delta_y = event.y_root - state["start_y"]
-            distance = delta_x if text_entry or abs(delta_x) >= abs(delta_y) else -delta_y
-            step_count = int(distance / pixels_per_step)
-            if step_count == 0 and not text_entry:
-                return "break"
-            if step_count == state["last_steps"]:
-                return "break"
-            state["dragged"] = True
-            state["last_steps"] = step_count
-            numeric = scrub_numeric_value(
-                state["start_value"],
-                step_count,
-                minimum,
-                maximum,
-                step=step,
-                allowed_values=allowed_values,
-            )
+        def apply(numeric):
             if setter is None:
                 variable.set(format(numeric, number_format))
             else:
                 setter(numeric)
-            return "break"
 
-        def finish(_event):
-            if not state.get("interaction_enabled", False):
-                return "break"
-            if not state["dragged"] and click_command is not None:
-                click_command()
-            return None if text_entry else "break"
-
-        widget.bind("<ButtonPress-1>", begin)
-        widget.bind("<B1-Motion>", drag)
-        widget.bind("<ButtonRelease-1>", finish)
+        bind_drag_adjust(
+            widget,
+            variable,
+            minimum,
+            maximum,
+            apply,
+            step=step,
+            allowed_values=allowed_values,
+            on_disabled_click=on_disabled_click,
+            click_command=click_command,
+            text_entry=text_entry,
+        )
 
     def open_slider_value_editor(
         self,
@@ -8916,13 +9336,8 @@ class ConfigGUI:
 
         if getattr(self, "_hidden_to_system_tray", False):
             return
-        if self._system_tray_available():
-            # Windows can deliver <Unmap> just before Tk reports ``iconic``.
-            # The delayed check converts only a genuine user minimize into a
-            # tray hide; unrelated withdraws retain their original meaning.
-            self._schedule_minimize_to_system_tray()
-            return
-
+        # Minimize (-) stays a normal taskbar minimize; only X hides the
+        # window in the notification area (close_to_system_tray).
         try:
             if self.root.state() == "iconic":
                 self._root_restore_pending = True
@@ -9023,18 +9438,9 @@ class ConfigGUI:
         """Cover a taskbar restore until the complete root has repainted."""
         self._hide_restore_splash()
         try:
-            work_area = self.get_work_area()
-            center_rect = (
-                int(self.root.winfo_rootx()),
-                int(self.root.winfo_rooty()),
-                max(1, int(self.root.winfo_width())),
-                max(1, int(self.root.winfo_height())),
-            )
             self._restore_splash = StartupOverlay(
                 self.root,
                 language=self.language,
-                center_rect=center_rect,
-                bounds=work_area,
             )
             self._restore_splash_generation = generation
         except (tk.TclError, OSError, ValueError):
@@ -9391,36 +9797,70 @@ class ConfigGUI:
             card.grid(row=index, column=0, sticky="ew", padx=2, pady=3)
             host.columnconfigure(0, weight=1)
 
-            top_row = ttk.Frame(card)
+            # Both rows share one grid so their columns line up:
+            #   [✓] [name ........] [activation] [mode]
+            #   [↑] [↓] [編輯]      [重新命名]    [刪除]
+            # The activation button sits over 重新命名 and the mode box over
+            # 刪除, at the same visible edges.
+            top_row = bottom_row = ttk.Frame(card)
             top_row.grid(row=0, column=0, sticky="ew")
-            top_row.columnconfigure(1, weight=1)
-            bottom_row = ttk.Frame(card)
-            bottom_row.grid(row=1, column=0, sticky="ew", pady=(1, 0))
             for column in range(2, 5):
-                bottom_row.columnconfigure(
+                top_row.columnconfigure(
                     column, weight=1, uniform="layer_action"
                 )
             card.columnconfigure(0, weight=1)
 
             enabled_var = tk.BooleanVar(value=layer.get("enabled", True))
-            enabled = ttk.Checkbutton(top_row, variable=enabled_var)
+            # takefocus=False: a text-less checkbox otherwise draws its dotted
+            # focus box as a stray mark beside the tick after being clicked.
+            enabled = ttk.Checkbutton(top_row, variable=enabled_var, takefocus=False)
             enabled.grid(row=0, column=0, sticky="w", padx=(0, 2))
+            mode_labels = (self.tr("按住"), self.tr("切換"))
+            mode_width = max(4, max(len(label) for label in mode_labels))
             full_name = layer.get("name", f"Layer {index + 1}")
-            display_name = (
-                full_name if len(full_name) <= 14 else full_name[:13] + "…"
+            # width=1 keeps the name from widening the shared columns; the
+            # text is shortened with "…" to whatever width it is given.
+            name_label = ttk.Label(
+                top_row, text=full_name, anchor="w", width=1
             )
-            ttk.Label(
-                top_row, text=display_name, anchor="w", width=14
-            ).grid(row=0, column=1, sticky="ew", padx=(0, 3))
-            activation_text = "+".join(layer.get("activation_buttons", ())) or self.tr("未設定")
+            name_label.grid(
+                row=0, column=1, columnspan=2, sticky="ew", padx=(0, 3)
+            )
+
+            def fit_layer_name(event, label=name_label, text=full_name):
+                font = tkfont.Font(
+                    root=label,
+                    font=label.cget("font")
+                    or ttk.Style(label).lookup("TLabel", "font")
+                    or "TkDefaultFont"
+                )
+                available = max(0, event.width - 2)
+                shown = text
+                if font.measure(shown) > available:
+                    while shown and font.measure(shown + "…") > available:
+                        shown = shown[:-1]
+                    shown += "…"
+                if label.cget("text") != shown:
+                    label.configure(text=shown)
+
+            name_label.bind("<Configure>", fit_layer_name, add="+")
+            full_activation_text = (
+                "+".join(layer.get("activation_buttons", ()))
+                or self.tr("未設定")
+            )
+            activation_text = full_activation_text
             if len(activation_text) > 9:
                 activation_text = activation_text[:8] + "…"
-            ttk.Button(
+            activation_button = ttk.Button(
                 top_row,
                 text=activation_text,
                 width=9,
                 command=lambda i=index: self.edit_mapping_layer_activation(i),
-            ).grid(row=0, column=2, sticky="e", padx=2)
+            )
+            activation_button.grid(row=0, column=3, sticky="ew", padx=1)
+            if activation_text != full_activation_text:
+                # Shortened with "…": hovering shows every activation key.
+                self.bind_help_tooltip(activation_button, full_activation_text)
             mode_display = {
                 "HOLD": self.tr("按住"),
                 "TOGGLE": self.tr("切換"),
@@ -9434,11 +9874,13 @@ class ConfigGUI:
             mode_combo = ttk.Combobox(
                 top_row,
                 textvariable=mode_var,
-                values=(self.tr("按住"), self.tr("切換")),
+                values=mode_labels,
                 state="readonly",
-                width=4,
+                width=mode_width,
             )
-            mode_combo.grid(row=0, column=3, sticky="e", padx=(2, 0))
+            # Buttons draw 1 px inside their box and use padx=1; the combobox
+            # draws to its edge, so padx=2 puts it on the same visible edges.
+            mode_combo.grid(row=0, column=4, sticky="ew", padx=2)
 
             def update_enabled(*_args, item=layer, var=enabled_var):
                 item["enabled"] = bool(var.get())
@@ -9476,6 +9918,7 @@ class ConfigGUI:
                     column=column,
                     sticky="ew",
                     padx=1,
+                    pady=(1, 0),
                 )
                 if (action_index == 0 and index == 0) or (
                     action_index == 1 and index == len(self.mapping_layers) - 1
@@ -9752,7 +10195,7 @@ class ConfigGUI:
         ttk.Label(button_inner, text="Switch 2 Pro", anchor="e").grid(
             row=0, column=0, sticky="e", padx=(0, 8), pady=(0, 5)
         )
-        ttk.Label(button_inner, text="XInput / Xbox", anchor="w").grid(
+        ttk.Label(button_inner, text="XInput", anchor="w").grid(
             row=0, column=1, sticky="w", pady=(0, 5)
         )
         button_vars = {}
@@ -9785,9 +10228,9 @@ class ConfigGUI:
             )
             combo.bind(
                 "<<ComboboxSelected>>",
-                lambda _event, var=variable: self.open_keyboard_capture(
+                lambda _event, var=variable: self.open_custom_mapping(
                     var, mouse_mode="buttons"
-                ) if var.get() == "CUSTOM_KEYBOARD" else None,
+                ),
             )
         button_inner.columnconfigure(1, weight=1)
 
@@ -9887,9 +10330,9 @@ class ConfigGUI:
                     diagonal_cells.append(cell)
                 combo.bind(
                     "<<ComboboxSelected>>",
-                    lambda _event, var=variable: self.open_keyboard_capture(
+                    lambda _event, var=variable: self.open_custom_mapping(
                         var, mouse_mode="wheel"
-                    ) if var.get() == "CUSTOM_KEYBOARD" else None,
+                    ),
                 )
 
             center = ttk.Frame(page)
@@ -10526,9 +10969,30 @@ class ConfigGUI:
         if updater is not None:
             updater()
 
+    def _cached_system_default_profile(self):
+        """Parsed System Default, re-read only when one of its files changes.
+
+        Right-click reset bindings ask for default values every time a tab is
+        shown; reading and validating the INI each time made a tab switch take
+        up to half a second.  Callers here only read from the result.
+        """
+        paths = (profile_path("System Default", PROFILE_DIR), Path(DEFAULT_CONFIG_PATH))
+        try:
+            key = tuple(
+                (str(path), stat.st_mtime_ns, stat.st_size)
+                for path, stat in ((path, path.stat()) for path in paths)
+            )
+        except OSError:
+            return read_profile("System Default", PROFILE_DIR)
+        cached = getattr(self, "_system_default_cache", None)
+        if cached is None or cached[0] != key:
+            cached = (key, read_profile("System Default", PROFILE_DIR))
+            self._system_default_cache = cached
+        return cached[1]
+
     def audio_haptics_defaults_for_mode(self, mode=None):
         """Return the single canonical audio baseline from System Default."""
-        defaults = read_profile("System Default", PROFILE_DIR)
+        defaults = self._cached_system_default_profile()
         return {
             "mix_ratio": defaults.get("audio_haptics", "mix_ratio"),
             "strength": defaults.get("audio_haptics", "strength"),
@@ -10627,7 +11091,7 @@ class ConfigGUI:
 
     def gyro_system_defaults(self):
         """Read the canonical gyro reset values from System Default.ini."""
-        profile = read_profile("System Default", PROFILE_DIR)
+        profile = self._cached_system_default_profile()
         section = "gyro_mapping"
         defaults = {
             key: profile.get(section, key)
@@ -10647,12 +11111,15 @@ class ConfigGUI:
                 self.gyro_stabilization_button_options,
             )
         )
-        for key in ("invert_x", "invert_y", "player_space"):
+        for key in (
+            "invert_x", "invert_y", "player_space", "compensation_keep_limit",
+        ):
             defaults[key] = profile.getboolean(section, key)
         return defaults
 
     def apply_gyro_defaults(self, defaults):
         """Apply one complete gyro preset without touching calibration data."""
+        self.close_gyro_compensation_window()
         self.gyro_activation_mode_var.set(defaults["activation_mode"])
         self.gyro_activation_buttons = list(defaults["activation_buttons"])
         self.gyro_activation_match_var.set(defaults["activation_match"])
@@ -10667,6 +11134,11 @@ class ConfigGUI:
         self.gyro_mouse_sensitivity_var.set(defaults["mouse_sensitivity"])
         self.gyro_x_ratio_var.set(defaults["x_ratio"])
         self.gyro_y_ratio_var.set(defaults["y_ratio"])
+        for axis, variable in self.gyro_compensation_vars.items():
+            variable.set(defaults[f"{axis.lower()}_compensation"])
+        self.gyro_compensation_keep_limit_var.set(
+            defaults["compensation_keep_limit"]
+        )
         self.gyro_deadzone_var.set(defaults["deadzone"])
         self.gyro_stick_anti_deadzone_var.set(defaults["stick_anti_deadzone"])
         self.gyro_response_curve_var.set(defaults["response_curve"])
@@ -10674,6 +11146,7 @@ class ConfigGUI:
         self.gyro_smoothing_var.set(defaults["smoothing_ms"])
         self.gyro_accel_suppression_var.set(defaults["accel_suppression"])
         self.gyro_adaptive_deadzone_var.set(defaults["adaptive_deadzone"])
+        self.gyro_button_stabilization_mode_var.set(defaults["button_stabilization_mode"])
         self.gyro_button_freeze_var.set(defaults["button_freeze_ms"])
         self.gyro_stabilization_buttons = list(defaults["stabilization_buttons"])
         self.gyro_invert_x_var.set(defaults["invert_x"])
@@ -10754,6 +11227,10 @@ class ConfigGUI:
             ),
             str(self.gyro_player_space_var): (
                 self.gyro_player_space_var, "player_space"
+            ),
+            str(self.gyro_compensation_keep_limit_var): (
+                self.gyro_compensation_keep_limit_var,
+                "compensation_keep_limit",
             ),
         }
         pair = pairs.get(variable_name)
@@ -11681,9 +12158,10 @@ class ConfigGUI:
         ttk.Label(
             content,
             text=self.tr(
-                "關閉設定視窗後：\n\n"
+                "結束程式後：\n\n"
                 "• 桌面橋接模式會中斷連線。\n"
-                "• ESP32 獨立模式會繼續運作。"
+                "• ESP32 獨立模式會繼續運作。\n"
+                "• 擴充工具會一併關閉。"
             ),
             justify="left",
             wraplength=170,
@@ -11930,19 +12408,20 @@ class ConfigGUI:
             # [gyro] / [gyro.<controller>] 校正資料。
             if changes is not None:
                 changes.watch(CONFIG_PATH)
-            self.config = load_config(CONFIG_PATH, persist=False)
+            latest = load_config(CONFIG_PATH, persist=False)
+            self._sync_saved_gyro_compensation(latest=latest)
 
             # Save and dirty-state detection now consume the exact same bundle.
             # This prevents new controls from being added to one path but
             # accidentally omitted from the other.
             settings_bundle = collect_gui_settings(self, strict=True)
-            apply_gui_settings_to_config(self.config, settings_bundle)
+            apply_gui_settings_to_config(latest, settings_bundle)
 
             # Layer JSON files contain the shared mappings.  Only the ordered
             # IDs and enabled IDs belong to the active profile.
-            store_layer_state(self.config, self.mapping_layers)
+            store_layer_state(latest, self.mapping_layers)
             save_layers(
-                self.config,
+                latest,
                 self.mapping_layers,
                 LAYER_DIR,
                 deletable_paths=getattr(self, "_layer_managed_paths", ()),
@@ -11951,7 +12430,7 @@ class ConfigGUI:
             )
 
             write = changes.write_config if changes is not None else atomic_write_config
-            write(self.config, CONFIG_PATH)
+            write(latest, CONFIG_PATH)
 
             # 重新載入剛剛實際寫入的設定與映射層。映射層編輯器的
             # DoubleVar 會產生 float，而 JSON 載入後會標準化為字串；
@@ -12061,11 +12540,12 @@ def show_startup_window(root):
     )
 
 
-def main(instance=None):
-    instance = instance or SingleInstance(SETTINGS_INSTANCE_NAME)
+def main(instance=None, *, open_gyro=False):
+    instance = instance or SingleInstance(SETTINGS_INSTANCE_NAME, action=GYRO_SETTINGS_ACTION)
     if not instance.is_primary:
         try:
-            instance.notify_existing()
+            if not open_gyro or not instance.notify_existing(action=True):
+                instance.notify_existing()
         finally:
             instance.close()
         return False
@@ -12099,10 +12579,14 @@ def main(instance=None):
         root.update_idletasks()
         gui._flush_dwm_composition()
         startup_window.destroy()
+        if open_gyro:
+            gui.open_gyro_settings()
 
         def poll_activation_request():
             try:
-                if instance.activation_requested():
+                if instance.activation_requested(action=True):
+                    gui.open_gyro_settings()
+                elif instance.activation_requested():
                     gui.activate_existing_settings()
                 root.after(100, poll_activation_request)
             except (OSError, tk.TclError):
@@ -12119,4 +12603,4 @@ def main(instance=None):
         instance.close()
 
 if __name__ == "__main__":
-    main()
+    main(open_gyro="--gyro-settings" in sys.argv[1:])

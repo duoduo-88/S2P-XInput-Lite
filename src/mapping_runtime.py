@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from mapping_layers import LayerSelector
+from mapping_targets import COMBO_PREFIX, combo_members
 
 
 MAP_NONE = 0
@@ -22,6 +23,29 @@ MAP_RY = 6
 MAP_LT = 7
 MAP_RT = 8
 MAP_BUTTON = 9
+MAP_COMBO = 10
+
+
+@dataclass(frozen=True)
+class ComboOutput:
+    """XInput state a gamepad combo adds to the same report."""
+
+    buttons: int
+    left_trigger: bool
+    right_trigger: bool
+    members: tuple
+
+
+def compile_combo_output(target, xbox_buttons):
+    """Compile ``COMBO:X+Y`` into one report contribution, or ``None``."""
+    members = combo_members(target)
+    if not members:
+        return None
+    buttons = 0
+    for name in members:
+        if name in xbox_buttons:
+            buttons |= int(xbox_buttons[name])
+    return ComboOutput(buttons, "LT" in members, "RT" in members, members)
 
 
 @dataclass(frozen=True)
@@ -64,6 +88,9 @@ def compile_button_mapping(
         elif target.startswith("KEYBOARD:"):
             kind = MAP_KEYBOARD
             value = target[len("KEYBOARD:"):].strip()
+        elif target.startswith(COMBO_PREFIX):
+            value = compile_combo_output(target, xbox_buttons)
+            kind = MAP_COMBO if value is not None else MAP_NONE
         elif target in axis_targets:
             kind, value = axis_targets[target]
         elif target == "LT":

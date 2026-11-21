@@ -9,6 +9,7 @@ import unittest
 import zlib
 from collections import deque
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
 
@@ -26,6 +27,9 @@ from gamepad_devices import (
     JOYCAPS_HASV,
     JOYCAPS_HASZ,
     JOYCAPSW,
+    NINTENDO_PRO2_PROFILE,
+    NINTENDO_PRO2_PID,
+    NINTENDO_PRO2_VID,
     NativeGamepadSampler,
     S2P_MOBILE_HID_PROFILE,
     WindowsGamepadBackend,
@@ -63,6 +67,7 @@ from gamepad_test_window import (
     StickHistory,
     StickPlot,
     TEST_ICON_PATH,
+    TEST_ICON_SMALL_PATHS,
     build_device_display_mapping,
     curve_output_radii,
     diagnostic_telemetry_for_device,
@@ -80,6 +85,9 @@ from raw_hid_probe import RawHidDevice
 import test_telemetry
 from test_telemetry import SharedTestTelemetry, TELEMETRY_SIZE, _TRAIL_SEQUENCE_OFFSET
 
+
+
+TESTER_ICON_FILES = (TEST_ICON_PATH, *TEST_ICON_SMALL_PATHS)
 
 class DiagnosticDeviceSelectionTests(unittest.TestCase):
     def test_native_target_never_uses_fresh_s2p_telemetry(self):
@@ -404,6 +412,228 @@ class SharedTelemetryTests(unittest.TestCase):
 
 
 class GamepadMathTests(unittest.TestCase):
+    def test_winmm_identity_reads_current_slot_capabilities(self):
+        backend = object.__new__(WindowsGamepadBackend)
+        backend.winmm = Mock()
+        current_pid = NINTENDO_PRO2_PID
+
+        def read_caps(_index, pointer, _size):
+            pointer._obj.wMid = NINTENDO_PRO2_VID
+            pointer._obj.wPid = current_pid
+            return 0
+
+        backend.winmm.joyGetDevCapsW.side_effect = read_caps
+        self.assertTrue(backend.is_nintendo_pro2_winmm(0))
+        current_pid = 0x2009
+        self.assertFalse(backend.is_nintendo_pro2_winmm(0))
+
+    def test_gyro_compensation_requires_a_selected_switch_2_controller(self):
+        tester = object.__new__(GamepadTestWindow)
+        tester._selected_device = Mock(return_value=None)
+        tester.latest_telemetry = {"timestamp_ns": time.monotonic_ns()}
+        tester.latest_diagnostic_input = {}
+        tester.backend = Mock()
+        raw = RawHidDevice("switch", "switch-path", "Gamepad", 0x057E, 0x2069, 1, 5, 0)
+        other = RawHidDevice("other", "other-path", "Switch 2 Pro Controller", 0x057E, 0x2009, 1, 5, 0)
+        tester.raw_hid_devices = {device.key: device for device in (raw, other)}
+        native = GamepadDevice("winmm:0", "winmm", 0, "Gamepad", False, input_profile=NINTENDO_PRO2_PROFILE)
+        bridge = GamepadDevice("s2p", "s2p", 0, "Bridge", True)
+        xinput = GamepadDevice("xinput:1", "xinput", 1, "Switch 2 Pro Controller", True)
+
+        for device, expected in (
+            (None, False), (bridge, True), (xinput, False), (native, False),
+            (raw_hid_test_device(other, 1), False),
+        ):
+            with self.subTest(device=device):
+                tester._selected_device.return_value = device
+                self.assertEqual(tester._selected_device_supports_gyro_compensation(), expected)
+
+        tester._selected_device.return_value = native
+        tester.latest_diagnostic_input = {"device_key": native.key}
+        tester.backend.is_nintendo_pro2_winmm.return_value = True
+        self.assertTrue(tester._selected_device_supports_gyro_compensation())
+        tester.backend.is_nintendo_pro2_winmm.return_value = False
+        self.assertFalse(tester._selected_device_supports_gyro_compensation())
+        tester.backend.is_nintendo_pro2_winmm.assert_called_with(native.index)
+
+        tester._selected_device.return_value = bridge
+        tester.latest_telemetry["gyro"] = {"available": False, "target": None}
+        self.assertFalse(tester._selected_device_supports_gyro_compensation())
+        tester.latest_telemetry["gyro"] = {"available": True, "target": "right"}
+        self.assertTrue(tester._selected_device_supports_gyro_compensation())
+        tester.latest_telemetry = {"timestamp_ns": time.monotonic_ns() - 2_000_000_000}
+        self.assertFalse(tester._selected_device_supports_gyro_compensation())
+
+    def test_gyro_compensation_checks_raw_hid_presence_even_without_a_stream(self):
+        tester = object.__new__(GamepadTestWindow)
+        raw = RawHidDevice("switch", "switch-path", "Gamepad", 0x057E, 0x2069, 1, 5, 0)
+        tester._selected_device = Mock(return_value=raw_hid_test_device(raw, 0))
+        tester.raw_hid_devices = {raw.key: raw}
+        with patch("gamepad_test_window.is_raw_hid_device_present") as present:
+            present.return_value = True
+            self.assertTrue(tester._selected_device_supports_gyro_compensation())
+            present.return_value = False
+            self.assertFalse(tester._selected_device_supports_gyro_compensation())
+            present.assert_called_with(raw.path)
+
+    def test_gyro_compensation_restore_rechecks_the_profile_and_preserves_other_settings(self):
+        from config_utils import atomic_write_config, load_config, read_profile, save_profile
+        from gyro_compensation import CompensationSnapshot, DEFAULT_COMPENSATION
+
+        tester = object.__new__(GamepadTestWindow)
+        tester.gui = SimpleNamespace(tr=str)
+        with TemporaryDirectory() as folder:
+            path = Path(folder) / "config.ini"
+            profiles = Path(folder) / "profiles"
+            config = load_config(path, persist=False)
+            config.set("gui", "active_profile", "Alpha")
+            config.set("gyro_mapping", "x_compensation", "0.80")
+            config.set("gyro_mapping", "y_ratio", "1.20")
+            atomic_write_config(config, path)
+            config.set("gyro_mapping", "y_ratio", "1.40")
+            save_profile(config, "Alpha", profiles)
+            with (
+                patch("gamepad_test_window.CONFIG_PATH", path),
+                patch("gamepad_test_window.PROFILE_DIR", profiles),
+                patch("gamepad_test_window.read_controller_status", return_value={
+                    "state": "connected", "controller_id": "AABBCC112233", "connection_id": "link-1",
+                }),
+                patch("gamepad_test_window.enqueue_controller_command") as enqueue,
+            ):
+                snapshot = tester._read_gyro_compensation()
+                self.assertEqual(snapshot.connection, ("AABBCC112233", "link-1"))
+                external = read_profile("Alpha", profiles)
+                external.set("gyro_mapping", "x_compensation", "0.90")
+                save_profile(external, "Alpha", profiles)
+                with self.assertRaises(ValueError):
+                    tester._write_gyro_compensation(snapshot, {"X": 0.25, "Y": 0.50})
+                self.assertEqual(read_profile("Alpha", profiles).getfloat("gyro_mapping", "x_compensation"), 0.9)
+                external.set("gyro_mapping", "x_compensation", "0.80")
+                save_profile(external, "Alpha", profiles)
+                with self.assertRaises(ValueError):
+                    tester._reset_gyro_compensation(CompensationSnapshot("Other", snapshot.multipliers))
+                enqueue.assert_not_called()
+                enqueue.side_effect = OSError("queue unavailable")
+                with self.assertRaises(OSError):
+                    tester._reset_gyro_compensation(snapshot)
+                self.assertEqual(tester._read_gyro_compensation(), snapshot)
+                self.assertEqual(read_profile("Alpha", profiles).getfloat("gyro_mapping", "x_compensation"), 0.8)
+                enqueue.reset_mock(side_effect=True)
+                tester._reset_gyro_compensation(snapshot)
+                enqueue.assert_called_once_with(
+                    "reload_settings", connection_id="link-1",
+                    compensation_signature='["Alpha","RIGHT_STICK",1.0,1.0]',
+                )
+                baseline = snapshot.with_multipliers(DEFAULT_COMPENSATION)
+                self.assertEqual(tester._read_gyro_compensation(), baseline)
+                ratios = {"X": 0.25, "Y": 0.50}
+                enqueue.return_value = "reload-request"
+                self.assertEqual(tester._write_gyro_compensation(baseline, ratios), "reload-request")
+                self.assertEqual(
+                    enqueue.call_args.kwargs["compensation_signature"], '["Alpha","RIGHT_STICK",0.25,0.5]',
+                )
+                self.assertEqual(tester._read_gyro_compensation(), baseline.with_multipliers(ratios))
+            saved = read_profile("Alpha", profiles)
+            self.assertEqual(saved.getfloat("gyro_mapping", "x_compensation"), 0.25)
+            self.assertEqual(saved.getfloat("gyro_mapping", "y_compensation"), 0.50)
+            self.assertEqual(saved.getfloat("gyro_mapping", "y_ratio"), 1.4)
+            self.assertEqual(load_config(path, persist=False).getfloat("gyro_mapping", "y_ratio"), 1.2)
+
+    def test_gyro_compensation_does_not_save_after_the_connector_reconnects(self):
+        from config_utils import atomic_write_config, load_config, save_profile
+
+        tester = object.__new__(GamepadTestWindow)
+        tester.gui = SimpleNamespace(tr=str)
+        initial_status = {"state": "connected", "controller_id": "AABBCC112233", "connection_id": "link-1"}
+        status = initial_status.copy()
+        with TemporaryDirectory() as folder:
+            path = Path(folder) / "config.ini"
+            profiles = Path(folder) / "profiles"
+            config = load_config(path, persist=False)
+            config.set("gui", "active_profile", "Alpha")
+            atomic_write_config(config, path)
+            save_profile(config, "Alpha", profiles)
+            profile = profiles / "Alpha.ini"
+            original = path.read_bytes(), profile.read_bytes()
+
+            with (
+                patch("gamepad_test_window.CONFIG_PATH", path),
+                patch("gamepad_test_window.PROFILE_DIR", profiles),
+                patch("gamepad_test_window.read_controller_status", side_effect=lambda _path: status.copy()),
+                patch("gamepad_test_window.enqueue_controller_command") as enqueue,
+            ):
+                snapshot = tester._read_gyro_compensation()
+                for new_status in (
+                    {},
+                    dict(initial_status, state="disconnected"),
+                    dict(initial_status, connection_id="link-2"),
+                    dict(initial_status, connection_id="link-3", controller_id="AABBCC445566"),
+                ):
+                    with self.subTest(status=new_status):
+                        status.clear()
+                        status.update(new_status)
+                        with self.assertRaisesRegex(ValueError, "手把或方案設定已變更"):
+                            tester._write_gyro_compensation(snapshot, {"X": 0.5, "Y": 0.8})
+                        self.assertEqual((path.read_bytes(), profile.read_bytes()), original)
+                enqueue.assert_not_called()
+
+                with patch(
+                    "gamepad_test_window.read_controller_status",
+                    side_effect=(initial_status, dict(initial_status, connection_id="link-2")),
+                ):
+                    with self.assertRaisesRegex(ValueError, "手把或方案設定已變更"):
+                        tester._write_gyro_compensation(snapshot, {"X": 0.5, "Y": 0.8})
+                self.assertEqual((path.read_bytes(), profile.read_bytes()), original)
+                enqueue.assert_not_called()
+
+    def test_gyro_compensation_rejects_a_changed_output_target(self):
+        from config_utils import atomic_write_config, load_config, read_profile, save_profile
+
+        tester = object.__new__(GamepadTestWindow)
+        tester.gui = SimpleNamespace(tr=str)
+        for change_profile, target in ((False, "MOUSE"), (True, "MOUSE"), (False, "LEFT_STICK")):
+            with self.subTest(change_profile=change_profile, target=target), TemporaryDirectory() as folder:
+                path = Path(folder) / "config.ini"
+                profiles = Path(folder) / "profiles"
+                config = load_config(path, persist=False)
+                config.set("gui", "active_profile", "Alpha")
+                atomic_write_config(config, path)
+                save_profile(config, "Alpha", profiles)
+                profile_path = profiles / "Alpha.ini"
+                with (
+                    patch("gamepad_test_window.CONFIG_PATH", path),
+                    patch("gamepad_test_window.PROFILE_DIR", profiles),
+                    patch("gamepad_test_window.read_controller_status", return_value={
+                        "state": "connected", "connection_id": "link-1",
+                    }),
+                    patch("gamepad_test_window.enqueue_controller_command") as enqueue,
+                ):
+                    snapshot = tester._read_gyro_compensation()
+                    if change_profile:
+                        profile = read_profile("Alpha", profiles)
+                        profile.set("gyro_mapping", "target", target)
+                        save_profile(profile, "Alpha", profiles)
+                    else:
+                        config.set("gyro_mapping", "target", target)
+                        atomic_write_config(config, path)
+                    before = path.read_bytes(), profile_path.read_bytes()
+
+                    with self.assertRaises(ValueError):
+                        tester._write_gyro_compensation(snapshot, {"X": 0.5, "Y": 0.8})
+                    self.assertEqual((path.read_bytes(), profile_path.read_bytes()), before)
+                    enqueue.assert_not_called()
+                    if target == "MOUSE":
+                        with self.assertRaisesRegex(ValueError, "滑鼠"):
+                            tester._read_gyro_compensation()
+                    else:
+                        fresh = tester._read_gyro_compensation()
+                        self.assertEqual(fresh.output_target, "LEFT_STICK")
+                        tester._write_gyro_compensation(fresh, {"X": 0.5, "Y": 0.8})
+                        enqueue.assert_called_once_with(
+                            "reload_settings", connection_id="link-1",
+                            compensation_signature='["Alpha","LEFT_STICK",0.5,0.8]',
+                        )
+
     def test_raw_hid_collection_is_a_first_class_virtual_test_device(self):
         raw = RawHidDevice(
             "hid:vigem", "hid-path", "Xbox Controller",
@@ -831,6 +1061,30 @@ class GamepadMathTests(unittest.TestCase):
 
         self.assertEqual(diagnostic_inputs[0]["left"], [0.9, 0.0])
         self.assertEqual(diagnostic_inputs[1], {})
+
+    def test_stick_readout_returns_to_zero_without_a_live_sample(self):
+        tester = self.make_raw_monitor("xinput")
+        tester._raw_hid_stream_path = None
+        tester._monitor_presentation_allowed.return_value = True
+        tester._update_triggers = Mock()
+        tester._event_inputs = Mock(return_value={})
+        tester._update_events = Mock()
+        tester.trail_length_var = Mock(get=Mock(return_value=2.5))
+        tester.shape_enabled_var = Mock(get=Mock(return_value=False))
+        history = StickHistory()
+        history.add(0.9, 0.2, 9.9, False)
+        tester.histories = {"left": history}
+        plot = Mock()
+        tester.plots = {"left": plot}
+
+        with patch("gamepad_test_window.time.perf_counter", return_value=10.0):
+            tester._poll()
+            self.assertEqual(plot.draw.call_args.args[1:3], (0.9, 0.2))
+            tester.native_sampler.read_snapshot.return_value = (None, (), None)
+            tester._poll()
+
+        self.assertEqual(plot.draw.call_args.args[1:3], (0.0, 0.0))
+        self.assertTrue(history.trail)
 
     def test_completed_measurement_resumes_actual_sampling_once(self):
         tester = object.__new__(GamepadTestWindow)
@@ -1466,11 +1720,13 @@ class GamepadMathTests(unittest.TestCase):
         tester.window.winfo_exists.return_value = True
         tester.window.after.return_value = "next-refresh"
         tester._refresh_devices = Mock()
+        tester.aim_pane = Mock()
         tester._device_refresh_job = "old-refresh"
 
         tester._refresh_devices_after_telemetry()
 
         tester._refresh_devices.assert_called_once_with(force=False)
+        tester.aim_pane.refresh_compensation_connection.assert_called_once_with()
         tester.window.after.assert_called_once_with(
             1000, tester._refresh_devices_after_telemetry
         )
@@ -1497,6 +1753,25 @@ class GamepadMathTests(unittest.TestCase):
 
         enumerate_raw.assert_not_called()
         tester.native_sampler.enumerate_devices.assert_not_called()
+
+    def test_periodic_device_refresh_closes_compensation_when_bridge_slot_changes(self):
+        tester = object.__new__(GamepadTestWindow)
+        tester._raw_hid_pending_start = None
+        tester.raw_hid_probe = SimpleNamespace(has_reader=False)
+        tester._device_enumeration_initialized = True
+        tester._native_test_devices = ()
+        tester.raw_hid_devices = {}
+        tester.selected_device_var = Mock(get=Mock(return_value="Bridge"))
+        tester.devices = {"Bridge": GamepadDevice("s2p", "s2p", 0, "Bridge", True)}
+        tester.latest_telemetry = {"timestamp_ns": time.monotonic_ns(), "xinput_slot": 1}
+        tester.gui = SimpleNamespace(tr=str)
+        for name in ("device_combo", "aim_pane", "stop_rumble", "clear_measurements", "_configure_source_controls",
+                     "_configure_native_sampler", "_set_raw_hid_controls_active", "_sync_raw_hid_stream"):
+            setattr(tester, name, Mock())
+
+        tester._refresh_devices()
+
+        tester.aim_pane.close_gyro_compensation_for_device_change.assert_called_once_with()
 
     def test_manual_refresh_quiesces_readers_and_contains_errors(self):
         tester = object.__new__(GamepadTestWindow)
@@ -1559,17 +1834,15 @@ class GamepadMathTests(unittest.TestCase):
         icon = Mock()
 
         with patch(
-            "gamepad_test_app.tk.PhotoImage",
+            "gamepad_test_window.tk.PhotoImage",
             return_value=icon,
         ) as image_factory:
             result = apply_root_icon(root)
 
-        image_factory.assert_called_once_with(
-            master=root,
-            file=str(TEST_ICON_PATH),
-        )
-        root.iconphoto.assert_called_once_with(True, icon)
-        self.assertIs(result, icon)
+        files = [call.kwargs["file"] for call in image_factory.call_args_list]
+        self.assertEqual(files, [str(path) for path in TESTER_ICON_FILES])
+        root.iconphoto.assert_called_once_with(True, *[icon] * len(TESTER_ICON_FILES))
+        self.assertEqual(result, [icon] * len(TESTER_ICON_FILES))
 
     def test_direct_gamepad_tester_shows_requested_startup_banner(self):
         root = Mock()
@@ -1747,12 +2020,19 @@ class GamepadMathTests(unittest.TestCase):
         ) as image_factory:
             tester._apply_window_icon(window)
 
-        image_factory.assert_called_once_with(
-            master=window,
-            file=str(TEST_ICON_PATH),
-        )
-        window.iconphoto.assert_called_once_with(False, icon)
-        self.assertIs(tester._window_icon, icon)
+        files = [call.kwargs["file"] for call in image_factory.call_args_list]
+        self.assertEqual(files, [str(path) for path in TESTER_ICON_FILES])
+        window.iconphoto.assert_called_once_with(False, *[icon] * len(TESTER_ICON_FILES))
+        self.assertEqual(tester._window_icon, [icon] * len(TESTER_ICON_FILES))
+
+    def test_tester_icon_ships_small_sizes(self):
+        import struct
+
+        for path, size in zip(TESTER_ICON_FILES, (256, 32, 16)):
+            self.assertTrue(path.is_file(), path)
+            header = path.read_bytes()[:24]
+            self.assertEqual(header[:8], b"\x89PNG\r\n\x1a\n", path)
+            self.assertEqual(struct.unpack(">II", header[16:24]), (size, size), path)
 
     def test_localized_source_label_maps_back_to_stable_source(self):
         labels = {

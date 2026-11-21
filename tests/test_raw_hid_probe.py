@@ -27,6 +27,7 @@ from raw_hid_probe import (
     _enumerate_raw_hid_gamepads_isolated,
     _fixed_stream_probe_supported,
     enumerate_raw_hid_gamepads,
+    is_raw_hid_device_present,
     _is_virtual_hid_path,
     normalize_probe_snapshot,
 )
@@ -68,6 +69,20 @@ class FakeHid:
 
 
 class RawHidProbeTests(unittest.TestCase):
+    def test_presence_queries_the_current_hid_device_instance(self):
+        path = rb"\\?\HID#VID_057E&PID_2069&Col01#5&123&0&0000#{guid}"
+        locate = Mock(side_effect=(0, 13))
+        with (
+            patch("raw_hid_probe.sys.platform", "win32"),
+            patch("raw_hid_probe.ctypes.windll", create=True) as windll,
+        ):
+            windll.cfgmgr32.CM_Locate_DevNodeW = locate
+            self.assertTrue(is_raw_hid_device_present(path))
+            self.assertFalse(is_raw_hid_device_present(path))
+            self.assertFalse(is_raw_hid_device_present("invalid"))
+        self.assertEqual(locate.call_count, 2)
+        self.assertEqual(locate.call_args.args[1:], (r"HID\VID_057E&PID_2069&Col01\5&123&0&0000", 0))
+
     def test_isolated_enumeration_contains_child_process_crash(self):
         crashed = subprocess.CompletedProcess(
             args=("python",), returncode=0xC0000374, stdout=b"", stderr=b""

@@ -9,7 +9,8 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from config_gui import ConfigGUI, normalize_slider_input, scrub_numeric_value
+from config_gui import ConfigGUI, normalize_slider_input
+from parameter_controls import scrub_numeric_value
 from gui_sections.audio_haptics import (
     AUDIO_ATTACK_VALUES,
     AUDIO_RELEASE_VALUES,

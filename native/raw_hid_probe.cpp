@@ -85,6 +85,10 @@ struct StreamParser {
     AxisDescriptor right_y;
     AxisDescriptor left_trigger;
     AxisDescriptor right_trigger;
+    // Game Pad collections: standard Button-page usages and the hat switch.
+    bool gamepad_buttons = false;
+    AxisDescriptor hat;
+    ULONG max_button_usages = 0;
     USHORT input_data_indices = 0;
     uint32_t axes_mask = 0;
 };
@@ -737,6 +741,30 @@ bool initialize_stream_parser(
     if (parser.right_y.valid) parser.axes_mask |= StreamRightY;
     parser.left_trigger = find_axis(value_caps, 0xC5, -1, 0x02);
     parser.right_trigger = find_axis(value_caps, 0xC4, -1, 0x02);
+    // Generic Desktop / Game Pad. Buttons follow the standard HID gamepad
+    // usage order that Android and Linux apply to every such device.
+    if (device_caps.UsagePage == 0x01 && device_caps.Usage == 0x05) {
+        USHORT button_count = device_caps.NumberInputButtonCaps;
+        std::vector<HIDP_BUTTON_CAPS> button_caps(button_count);
+        if (
+            button_count != 0
+            && HidP_GetButtonCaps(
+                HidP_Input, button_caps.data(), &button_count, parser.preparsed
+            ) == HIDP_STATUS_SUCCESS
+        ) {
+            button_caps.resize(button_count);
+            parser.gamepad_buttons = std::any_of(
+                button_caps.begin(), button_caps.end(),
+                [](const HIDP_BUTTON_CAPS &cap) { return cap.UsagePage == 0x09; }
+            );
+        }
+        if (parser.gamepad_buttons) {
+            parser.max_button_usages = HidP_MaxUsageListLength(
+                HidP_Input, 0x09, parser.preparsed
+            );
+        }
+        parser.hat = find_axis(value_caps, 0x39);
+    }
     // Timing measurement only needs raw reports, and the monitor can still
     // present a useful partial-axis view. A valid input report descriptor is
     // therefore enough to start even when no standard stick usage is found.
@@ -872,6 +900,93 @@ float normalize_xinput_hid_axis(ULONG raw, bool invert) {
     return invert ? -normalized : normalized;
 }
 
+// XInput wButtons bits, matching XINPUT_BUTTON_NAMES in gamepad_devices.py.
+constexpr uint32_t kXInputDpadUp = 0x0001;
+constexpr uint32_t kXInputDpadDown = 0x0002;
+constexpr uint32_t kXInputDpadLeft = 0x0004;
+constexpr uint32_t kXInputDpadRight = 0x0008;
+
+uint32_t standard_gamepad_button_mask(USAGE usage) {
+    // Standard HID gamepad order (Linux BTN_GAMEPAD, Android key layout):
+    // 1 A, 2 B, 3 C, 4 X, 5 Y, 6 Z, 7 L1, 8 R1, 9 L2, 10 R2,
+    // 11 Select, 12 Start, 13 Mode, 14 left stick, 15 right stick.
+    // C, Z and the digital L2/R2 have no XInput button; triggers stay analog.
+    switch (usage) {
+    case 1: return 0x1000;   // A
+    case 2: return 0x2000;   // B
+    case 4: return 0x4000;   // X
+    case 5: return 0x8000;   // Y
+    case 7: return 0x0100;   // LB
+    case 8: return 0x0200;   // RB
+    case 11: return 0x0020;  // BACK
+    case 12: return 0x0010;  // START
+    case 13: return 0x0400;  // GUIDE
+    case 14: return 0x0040;  // L3
+    case 15: return 0x0080;  // R3
+    default: return 0;
+    }
+}
+
+uint32_t hat_to_dpad_mask(const AxisDescriptor &hat, ULONG raw) {
+    // An eight-way hat reports 0..7 clockwise from up. Any value outside the
+    // logical range is the null state, which means no direction is pressed.
+    const LONG value = static_cast<LONG>(raw);
+    if (
+        hat.logical_maximum - hat.logical_minimum != 7
+        || value < hat.logical_minimum
+        || value > hat.logical_maximum
+    ) {
+        return 0;
+    }
+    constexpr uint32_t directions[] = {
+        kXInputDpadUp,
+        kXInputDpadUp | kXInputDpadRight,
+        kXInputDpadRight,
+        kXInputDpadDown | kXInputDpadRight,
+        kXInputDpadDown,
+        kXInputDpadDown | kXInputDpadLeft,
+        kXInputDpadLeft,
+        kXInputDpadUp | kXInputDpadLeft,
+    };
+    return directions[value - hat.logical_minimum];
+}
+
+uint32_t read_standard_gamepad_buttons(
+    const StreamParser &parser,
+    const std::vector<uint8_t> &report,
+    size_t report_length,
+    std::vector<USAGE> &usages
+) {
+    report_length = std::min(report_length, report.size());
+    if (!parser.gamepad_buttons || report_length == 0) return 0;
+    PCHAR data = reinterpret_cast<PCHAR>(const_cast<uint8_t *>(report.data()));
+    const ULONG length = static_cast<ULONG>(report_length);
+    uint32_t mask = 0;
+    ULONG count = static_cast<ULONG>(usages.size());
+    if (
+        count != 0
+        && HidP_GetUsages(
+            HidP_Input, 0x09, 0, usages.data(), &count, parser.preparsed, data, length
+        ) == HIDP_STATUS_SUCCESS
+    ) {
+        for (ULONG index = 0; index < count; ++index) {
+            mask |= standard_gamepad_button_mask(usages[index]);
+        }
+    }
+    if (parser.hat.valid) {
+        ULONG raw = 0;
+        if (
+            HidP_GetUsageValue(
+                HidP_Input, parser.hat.usage_page, parser.hat.link_collection,
+                parser.hat.usage, &raw, parser.preparsed, data, length
+            ) == HIDP_STATUS_SUCCESS
+        ) {
+            mask |= hat_to_dpad_mask(parser.hat, raw);
+        }
+    }
+    return mask;
+}
+
 uint32_t pro2_buttons_to_u32(uint8_t b0, uint8_t b1, uint8_t b2) {
     struct ButtonMapping {
         uint8_t mask;
@@ -977,6 +1092,7 @@ int run_stream(
     // HidP_GetUsageValue call would make the 8 kHz reader itself a source of
     // scheduler and allocator jitter.
     std::vector<HIDP_DATA> hid_data(parser.input_data_indices);
+    std::vector<USAGE> button_usages(parser.max_button_usages);
     HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     if (event == nullptr) {
         const DWORD error = GetLastError();
@@ -1159,6 +1275,11 @@ int run_stream(
                 );
                 sample_axes |= StreamRightTrigger;
             }
+            // Without this, buttons and the D-pad of every standard HID
+            // gamepad (including S2P Mobile Gamepad) stayed at zero.
+            buttons = read_standard_gamepad_buttons(
+                parser, report, bytes_read, button_usages
+            );
         }
         if (nintendo_pro2_layout) {
             if (buttons & 0x00800000) {

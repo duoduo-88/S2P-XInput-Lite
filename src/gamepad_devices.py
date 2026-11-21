@@ -372,10 +372,7 @@ class WindowsGamepadBackend:
                     name = f"Generic Gamepad {index + 1}"
                     name_translation_key = "一般手把 {index}"
                 is_s2p_mobile = is_s2p_mobile_hid_device(caps, name)
-                is_nintendo_pro2 = (
-                    int(caps.wMid) == NINTENDO_PRO2_VID
-                    and int(caps.wPid) == NINTENDO_PRO2_PID
-                )
+                is_nintendo_pro2 = self._is_nintendo_pro2_caps(caps)
                 if is_s2p_mobile:
                     found_s2p_mobile = True
                     # WinMM sometimes replaces the USB product string with a
@@ -421,6 +418,20 @@ class WindowsGamepadBackend:
             else:
                 self._close_s2p_mobile_hid()
         return devices
+
+    @staticmethod
+    def _is_nintendo_pro2_caps(caps):
+        return (int(caps.wMid), int(caps.wPid)) == (NINTENDO_PRO2_VID, NINTENDO_PRO2_PID)
+
+    def is_nintendo_pro2_winmm(self, index):
+        """Verify the current device in a WinMM slot that may have been reused."""
+        if self.winmm is None:
+            return False
+        caps = JOYCAPSW()
+        return (
+            self.winmm.joyGetDevCapsW(index, ctypes.byref(caps), ctypes.sizeof(caps)) == JOYERR_NOERROR
+            and self._is_nintendo_pro2_caps(caps)
+        )
 
     def _close_s2p_mobile_hid(self):
         device = getattr(self, "_s2p_mobile_hid", None)
@@ -781,6 +792,7 @@ class NativeGamepadSampler:
         self._last_token = None
         self._samples = deque(maxlen=4096)
         self._aim_capture = False
+        self._aim_capture_generation = 0
         self._aim_samples = deque(maxlen=512)
         self._observed_update_count = 0
         self._rate_points = deque(maxlen=4096)
@@ -859,6 +871,7 @@ class NativeGamepadSampler:
         """Start or stop a separate, bounded queue for the visible aim pane."""
         with self._lock:
             self._aim_capture = enabled
+            self._aim_capture_generation += 1
             self._aim_samples.clear()
 
     def read_aim_snapshot(self, device):
@@ -892,6 +905,7 @@ class NativeGamepadSampler:
         with self._lock:
             device = self._device
             generation = self._device_generation
+            aim_generation = self._aim_capture_generation
         if device is None:
             return
         with self._backend_lock:
@@ -923,7 +937,7 @@ class NativeGamepadSampler:
             self._observed_update_count += update_count
             sample = (now, state)
             self._samples.append(sample)
-            if self._aim_capture:
+            if self._aim_capture and aim_generation == self._aim_capture_generation:
                 self._aim_samples.append(sample)
             self._rate_points.append(
                 (now, self._observed_update_count)

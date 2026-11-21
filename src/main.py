@@ -5,6 +5,7 @@ import os
 import sys
 import time
 import signal
+from uuid import uuid4
 from pathlib import Path
 from esp32_bridge import ESP32Bridge
 from esp32_detection import find_esp32_port
@@ -13,14 +14,21 @@ from bluetooth_controller import (
 )
 from wired_controller import WiredController, find_wired_controller
 from switch2_input import battery_led_mask, SensorModeTracker, parse_input_report
-from xinput_controller import XInputController
+from xinput_controller import (
+    CalibrationInProgressError,
+    CalibrationResultPendingError,
+    XInputController,
+)
 from audio_haptics import AudioHaptics
 from input_dispatcher import InputDispatcher
+from extension_bridge import ExtensionManager, describe_tool_changes, load_extension_settings
 import serial
-from version import APP_TITLE
+from version import APP_TITLE, VERSION
 from config_utils import (
     CONFIG_PATH,
+    DEFAULT_CONFIG_PATH,
     atomic_write_config,
+    calibration_section,
     config_file_lock,
     load_accelerometer_calibration,
     load_config,
@@ -34,7 +42,9 @@ from config_utils import (
     store_magnetometer_calibration,
 )
 from runtime_commands import ControllerCommandInbox
+from gyro_compensation import compensation_reload_signature
 from runtime_status import ControllerStatusPublisher
+from single_instance import SingleInstance
 from test_telemetry import SharedTestTelemetry
 from console_i18n import current_language, set_language_from_config
 from console_i18n import localized_print as print
@@ -54,7 +64,25 @@ from runtime_logging import (
     get_async_log_metrics,
     install_async_stdio,
     shutdown_async_stdio,
+    write_interactive_prompt,
 )
+
+# Loop passes a reload or calibration start may wait for a finished
+# calibration result to be saved, or for input processing to pause.
+COMMAND_RETRY_LIMIT = 3
+
+# Command -> (xinput sensor name, status prefix, fields published on start).
+CALIBRATION_COMMANDS = {
+    "calibrate_gyro": ("gyro", "gyro", {"message": "keep_still"}),
+    "calibrate_magnetometer": (
+        "magnetometer", "mag",
+        {"message": "move_figure_eight", "progress": 0, "spans": [0.0, 0.0, 0.0]},
+    ),
+    "calibrate_accelerometer": (
+        "accelerometer", "accel",
+        {"message": "move_and_pause", "progress": 0, "quality": None},
+    ),
+}
 
 HIDHIDE_APPLICATION_PATHS = (
     Path(sys.executable),
@@ -64,6 +92,41 @@ HIDHIDE_APPLICATION_PATHS = (
 
 def tr(zh, en):
     return en if current_language() == "en" else zh
+
+
+def load_runtime_stick_calibration(config, controller_id=None):
+    section = calibration_section(controller_id)
+    has_device_profiles = section != "sticks" and any(
+        name.startswith("sticks.") for name in config.sections()
+    )
+    if not has_device_profiles or config.has_section(section):
+        try:
+            return load_stick_calibration(
+                config, controller_id, fallback_to_legacy=not has_device_profiles
+            )
+        except (ValueError, configparser.Error) as exc:
+            print(tr(
+                f"搖桿校正資料無效，改用預設校正：{exc}",
+                f"Invalid stick calibration. Using defaults: {exc}",
+            ))
+    # Once device profiles exist, [sticks] may contain another pad's last save.
+    defaults = configparser.ConfigParser()
+    try:
+        defaults.read(DEFAULT_CONFIG_PATH, encoding="utf-8")
+        return load_stick_calibration(defaults)
+    except (OSError, ValueError, configparser.Error) as exc:
+        # A damaged default profile must not make every connection fail.
+        print(tr(
+            f"預設搖桿校正無法讀取，改用中立校正：{exc}",
+            f"Default stick calibration is unreadable. Using a neutral calibration: {exc}",
+        ))
+        return neutral_stick_calibration()
+
+
+def neutral_stick_calibration():
+    """Match the bundled System Default [sticks] section."""
+    side = {"center": (2048, 2048), "max": (2047, 2047), "min": (2048, 2048)}
+    return {"left": dict(side), "right": dict(side)}
 
 
 def _enable_console_colors():
@@ -154,8 +217,64 @@ def _finish_orientation_coverage():
     _COVERAGE_BLOCK_LINES = 0
 
 def main():
-    install_async_stdio()
+    instance = SingleInstance("S2P-XInput-Lite.Connector.v1")
+    try:
+        if not instance.is_primary:
+            print(tr("連接程式已在執行。", "The connector is already running."))
+            return 1
+        if instance.error is not None:
+            print(tr(f"無法確認連接程式的執行權：{instance.error}",
+                     f"Could not acquire the connector's single-instance guard: {instance.error}"))
+            return 1
+        try:
+            install_async_stdio()
+            return _run_connector()
+        finally:
+            shutdown_async_stdio()
+    finally:
+        instance.close()
+
+
+def _run_connector():
     process_started_at = time.time()
+    stop_requested = False
+    # Set only by the GUI or console shutdown request. A lost transport also
+    # stops the connector, but its error must remain visible to the user.
+    shutdown_requested = False
+    transport_lost = False
+    controller = None
+    connection_mode = None
+    gui_pid = os.environ.get("S2P_GUI_PID", "")
+    gui_pid = int(gui_pid) if gui_pid.isdecimal() else 0
+
+    def handle_shutdown_signal(_signum=None, _frame=None):
+        nonlocal stop_requested, shutdown_requested
+        shutdown_requested = True
+        stop_requested = True
+        if connection_mode == "esp32" and controller is not None:
+            controller.request_shutdown()
+
+    def wait_for_error_acknowledgment():
+        if shutdown_requested:
+            return
+        prompt = tr("\n按 Enter 鍵關閉...", "\nPress Enter to close...")
+        if not gui_pid:
+            input(prompt)
+        elif sys.stdin is not None and sys.stdin.isatty():
+            import msvcrt
+
+            write_interactive_prompt(prompt)
+            while not shutdown_requested:
+                if msvcrt.kbhit() and msvcrt.getwch() in ("\r", "\n"):
+                    break
+                time.sleep(0.05)
+
+    signal.signal(signal.SIGBREAK, handle_shutdown_signal)
+    if gui_pid:
+        watch_parent_process_exit(gui_pid, handle_shutdown_signal)
+    if stop_requested:
+        return
+
     command_inbox = ControllerCommandInbox()
     command_inbox.reset(process_started_at)
     status_publisher = ControllerStatusPublisher()
@@ -172,10 +291,7 @@ def main():
     print()
 
 
-    # Start with the legacy profile.  Once the controller is identified, the
-    # matching per-device profile is loaded by on_connected().
     try:
-        load_stick_calibration(config)
         baudrate = config.getint(
             "serial",
             "baudrate",
@@ -185,8 +301,8 @@ def main():
             raise ValueError("serial baudrate must be positive")
     except (ValueError, TypeError, configparser.Error) as exc:
         publish_status(state="stopped")
-        print(tr(f"config.ini 的校正或序列設定無效：{exc}", f"Invalid calibration or serial settings in config.ini: {exc}"))
-        input(tr("\n按 Enter 鍵關閉...", "\nPress Enter to close..."))
+        print(tr(f"config.ini 的序列設定無效：{exc}", f"Invalid serial settings in config.ini: {exc}"))
+        wait_for_error_acknowledgment()
         return
 
     hidhide_status = reconcile_active_hidhide(HIDHIDE_APPLICATION_PATHS)
@@ -204,7 +320,6 @@ def main():
     print(tr("正在偵測 USB 有線手把...", "Detecting a wired USB controller..."))
     wired_entry = find_wired_controller()
     port = None
-    connection_mode = None
 
     if wired_entry is not None:
         print(tr(
@@ -242,6 +357,9 @@ def main():
         print()
 
         connection_mode = "bluetooth"
+    if stop_requested:
+        publish_status(state="stopped")
+        return
     publish_status(state="searching", mode=connection_mode)
     audio_haptics = None
     test_telemetry = None
@@ -257,7 +375,7 @@ def main():
                 ))
             xinput = XInputController(
                 config,
-                load_stick_calibration(config),
+                load_runtime_stick_calibration(config),
                 layer_state_config_path=CONFIG_PATH,
             )
         set_language_from_config(config)
@@ -277,7 +395,7 @@ def main():
         )
         print()
         print(tr(f"config.ini 的控制器設定無效：{exc}", f"Invalid controller settings in config.ini: {exc}"))
-        input(tr("\n按 Enter 鍵關閉...", "\nPress Enter to close..."))
+        wait_for_error_acknowledgment()
         return
 
     except Exception as exc:
@@ -287,12 +405,12 @@ def main():
             charging=False,
         )
         print()
-        print(tr("無法建立 Xbox 虛擬控制器。", "Could not create the Xbox virtual controller."))
+        print(tr("無法建立 XInput 虛擬控制器。", "Could not create the XInput virtual controller."))
         print(tr("請確認 ViGEmBus 驅動程式已正確安裝。", "Make sure the ViGEmBus driver is installed correctly."))
         print()
         print(tr(f"錯誤資訊：{exc}", f"Error details: {exc}"))
 
-        input(tr("\n按 Enter 鍵關閉...", "\nPress Enter to close..."))
+        wait_for_error_acknowledgment()
         return
 
     try:
@@ -319,7 +437,7 @@ def main():
         xinput.close()
         publish_status(state="stopped")
         print(tr(f"控制器連線模組啟動失敗：{exc}", f"Controller connection module failed to start: {exc}"))
-        input(tr("\n按 Enter 鍵關閉...", "\nPress Enter to close..."))
+        wait_for_error_acknowledgment()
         return
 
     try:
@@ -332,11 +450,12 @@ def main():
             controller.close()
             publish_status(state="stopped")
         print(tr(f"音訊震動模組啟動失敗：{exc}", f"Audio haptics module failed to start: {exc}"))
-        input(tr("\n按 Enter 鍵關閉...", "\nPress Enter to close..."))
+        wait_for_error_acknowledgment()
         return
 
     cleanup_complete = False
     input_dispatcher = None
+    extensions = None
     gc_was_enabled = gc.isenabled()
 
     def set_input_gc_suppressed(active):
@@ -355,6 +474,13 @@ def main():
         if cleanup_complete:
             return
         cleanup_complete = True
+
+        if extensions is not None:
+            # Stop accepting tool input before the transport and pad close.
+            try:
+                extensions.close()
+            except Exception as exc:
+                print(tr(f"擴充工具清理失敗：{exc}", f"Extensions cleanup failed: {exc}"))
 
         def close_transport():
             try:
@@ -426,26 +552,9 @@ def main():
             gyro_bias_samples=0,
         )
 
-    stop_requested = False
-
-    def handle_shutdown_signal(signum, frame):
-        nonlocal stop_requested
-        stop_requested = True
-        if connection_mode == "esp32":
-            controller.request_shutdown()
-
-    # Register before any transport open/scan can block.  The settings GUI
-    # uses CTRL_BREAK_EVENT to request the cleanup path below.
-    signal.signal(
-        signal.SIGBREAK,
-        handle_shutdown_signal
-    )
-    if connection_mode == "esp32":
-        gui_pid = os.environ.get("S2P_GUI_PID", "")
-        if gui_pid.isdecimal():
-            watch_parent_process_exit(
-                int(gui_pid), lambda: handle_shutdown_signal(None, None),
-            )
+    if stop_requested:
+        cleanup()
+        return
 
     last_status_stage = 0.0
     last_input_error = 0.0
@@ -459,10 +568,15 @@ def main():
         load_idle_disconnect_minutes(config)
     )
     idle_disconnect_requested = False
+    active_connection = None
+    calibration_connections = {}
 
     def on_input(payload):
         nonlocal last_status_stage, last_input_error
         nonlocal latest_battery_percent
+        # A transport producer can finish handing off a report during teardown.
+        if stop_requested:
+            return
         state = parse_input_report(
             payload
         )
@@ -558,32 +672,83 @@ def main():
     # submit_batch() method when several CDC reports were buffered together.
     controller.input_callback = input_dispatcher
 
-    def apply_runtime_calibration(target, source_config):
-        controller_id = getattr(controller, "controller_id", None)
-        target.set_calibration(
-            load_stick_calibration(source_config, controller_id)
-        )
-        target.set_gyro_bias(load_gyro_bias(source_config, controller_id))
-        accel_bias, accel_matrix = load_accelerometer_calibration(
-            source_config, controller_id
-        )
-        target.set_accelerometer_calibration(accel_bias, accel_matrix)
-        target.set_magnetometer_calibration(
-            load_magnetometer_bias(source_config, controller_id),
-            load_magnetometer_scale(source_config, controller_id),
-            load_magnetometer_matrix(source_config, controller_id),
-        )
+    def apply_motion_calibration(target, source_config, controller_id, *, announce=False):
+        try:
+            gyro_bias = load_gyro_bias(source_config, controller_id)
+            target.set_gyro_bias(gyro_bias)
+        except (ValueError, configparser.Error) as exc:
+            target.set_gyro_bias(None)
+            print(tr(
+                f"陀螺儀校正資料無效，改用自動估算：{exc}",
+                f"Invalid gyro calibration. Using automatic estimation: {exc}",
+            ))
+        else:
+            if announce and gyro_bias is not None:
+                print(tr(
+                    f"已套用陀螺儀校正資料：{controller_id or 'legacy'}",
+                    f"Gyro calibration applied: {controller_id or 'legacy'}",
+                ))
 
-    def reload_runtime_settings():
+        try:
+            accel_bias, accel_matrix = load_accelerometer_calibration(
+                source_config, controller_id
+            )
+            target.set_accelerometer_calibration(accel_bias, accel_matrix)
+        except (ValueError, configparser.Error) as exc:
+            target.set_accelerometer_calibration(None)
+            print(tr(
+                f"加速度計校正資料無效，改用預設值：{exc}",
+                f"Invalid accelerometer calibration. Using defaults: {exc}",
+            ))
+
+        try:
+            mag_bias = load_magnetometer_bias(source_config, controller_id)
+            target.set_magnetometer_calibration(
+                mag_bias,
+                load_magnetometer_scale(source_config, controller_id),
+                load_magnetometer_matrix(source_config, controller_id),
+            )
+        except (ValueError, configparser.Error) as exc:
+            target.set_magnetometer_calibration(None)
+            print(tr(
+                f"磁力計校正資料無效，改用預設值：{exc}",
+                f"Invalid magnetometer calibration. Using defaults: {exc}",
+            ))
+        else:
+            if announce and mag_bias is not None:
+                print(tr(
+                    f"已套用磁力計校正資料：{controller_id}",
+                    f"Magnetometer calibration applied: {controller_id}",
+                ))
+
+    def reload_runtime_settings(expected_connection_id=None, expected_compensation_signature=None):
         """Hot-swap gameplay settings without replacing either connection."""
+        connection = active_connection
+        if expected_connection_id is not None:
+            connection_error = tr(
+                "手把連線已變更，請重新開啟補償視窗。",
+                "The controller connection changed. Reopen the compensation window.",
+            )
+            # Transport readiness may take a lock used by on_connected().
+            # Check it before taking the config or input-dispatcher lock.
+            if (
+                connection is None or connection[1] != expected_connection_id
+                or not controller_is_connected()
+            ):
+                raise ValueError(connection_error)
+
         def replace_settings():
             nonlocal config, xinput, audio_haptics, previous_audio
+            controller_id = getattr(controller, "controller_id", None)
+            if expected_connection_id is not None:
+                if stop_requested or active_connection is not connection:
+                    raise ValueError(connection_error)
+                controller_id = connection[0]
             try:
-                calibration = load_stick_calibration(
-                    new_config, getattr(controller, "controller_id", None)
-                )
+                calibration = load_runtime_stick_calibration(new_config, controller_id)
                 previous_xinput.reconfigure(new_config, calibration)
-                apply_runtime_calibration(previous_xinput, new_config)
+                previous_xinput.set_calibration(calibration)
+                apply_motion_calibration(previous_xinput, new_config, controller_id)
                 if previous_audio is None:
                     previous_audio = AudioHaptics(
                         new_config, previous_xinput.set_audio_rumble
@@ -591,11 +756,14 @@ def main():
                     previous_audio.start()
                 else:
                     previous_audio.reconfigure(new_config)
+            except CalibrationInProgressError:
+                # reconfigure() rejected before changing any runtime state.
+                raise
             except Exception:
                 previous_xinput.reconfigure(
                     previous_config, previous_calibration, mapping_layers=previous_layers,
                 )
-                apply_runtime_calibration(previous_xinput, previous_config)
+                apply_motion_calibration(previous_xinput, previous_config, controller_id)
                 xinput = previous_xinput
                 try:
                     if previous_audio is not None:
@@ -630,21 +798,19 @@ def main():
             previous_calibration = previous_xinput.cal
             previous_layers = previous_xinput.mapping_layers
 
-            new_config = load_config(CONFIG_PATH)
+            new_config = load_config(CONFIG_PATH, persist=expected_compensation_signature is None)
+            if (
+                expected_compensation_signature is not None
+                and compensation_reload_signature(new_config) != expected_compensation_signature
+            ):
+                raise ValueError(tr(
+                    "方案、補償倍率或陀螺儀輸出已變更，請重新開啟補償視窗。",
+                    "The profile, compensation, or gyro output changed. Reopen the compensation window.",
+                ))
             new_baudrate = new_config.getint("serial", "baudrate", fallback=2_000_000)
             if new_baudrate != baudrate:
                 raise ValueError(
                     "serial baudrate changed; restart the connection to apply it"
-                )
-
-            calibration_states = (
-                previous_xinput.get_gyro_calibration_status(),
-                previous_xinput.get_accelerometer_calibration_status(),
-                previous_xinput.get_magnetometer_calibration_status(),
-            )
-            if any(item.get("state") == "running" for item in calibration_states):
-                raise ValueError(
-                    "calibration is running; finish or cancel it before applying settings"
                 )
 
             if not input_dispatcher.run_exclusive(replace_settings, timeout=1.0):
@@ -660,6 +826,8 @@ def main():
         nonlocal gyro_initialization_complete_announced
         nonlocal idle_disconnect_requested
         nonlocal latest_battery_percent
+        nonlocal active_connection
+        active_connection = None
         if not input_dispatcher.reset(timeout=1.0):
             raise TimeoutError(
                 "Input processing did not quiesce during connection startup."
@@ -690,40 +858,18 @@ def main():
                 f"Failed to load latest settings on first connection: {exc}",
             ))
         controller_id = getattr(controller, "controller_id", None)
-        publish_status(controller_id=controller_id)
-        try:
-            xinput.set_calibration(
-                load_stick_calibration(config, controller_id)
-            )
-            if controller_id:
-                print(tr(f"已套用控制器校正資料：{controller_id}", f"Controller calibration applied: {controller_id}"))
-        except (ValueError, configparser.Error) as exc:
-            print(tr(f"控制器校正資料無效，沿用預設校正：{exc}", f"Invalid controller calibration; using defaults: {exc}"))
+        xinput.set_calibration(load_runtime_stick_calibration(config, controller_id))
         try:
             gyro_config = configparser.ConfigParser()
             if not gyro_config.read(CONFIG_PATH, encoding="utf-8"):
                 raise FileNotFoundError("config.ini not found")
-            gyro_bias = load_gyro_bias(gyro_config, controller_id)
-            xinput.set_gyro_bias(gyro_bias)
-            accel_bias, accel_matrix = load_accelerometer_calibration(
-                gyro_config, controller_id
-            )
-            xinput.set_accelerometer_calibration(accel_bias, accel_matrix)
-            mag_bias = load_magnetometer_bias(gyro_config, controller_id)
-            mag_scale = load_magnetometer_scale(gyro_config, controller_id)
-            mag_matrix = load_magnetometer_matrix(gyro_config, controller_id)
-            xinput.set_magnetometer_calibration(
-                mag_bias, mag_scale, mag_matrix
-            )
-            if gyro_bias is not None:
-                print(tr(f"已套用陀螺儀校正資料：{controller_id or 'legacy'}", f"Gyro calibration applied: {controller_id or 'legacy'}"))
-            if mag_bias is not None:
-                print(tr(f"已套用磁力計校正資料：{controller_id}", f"Magnetometer calibration applied: {controller_id}"))
         except (OSError, ValueError, configparser.Error) as exc:
             xinput.set_gyro_bias(None)
             xinput.set_accelerometer_calibration(None)
             xinput.set_magnetometer_calibration(None)
-            print(tr(f"陀螺儀校正資料無效，改用自動估算：{exc}", f"Invalid motion calibration; using automatic estimation: {exc}"))
+            print(tr(f"無法讀取感測器校正資料：{exc}", f"Could not read sensor calibration data: {exc}"))
+        else:
+            apply_motion_calibration(xinput, gyro_config, controller_id, announce=True)
         gyro_initialization = xinput.get_gyro_initialization_status()
         gyro_initialization_announced.clear()
         gyro_initialization_complete_announced = bool(
@@ -750,8 +896,11 @@ def main():
                 "Gyro initialization complete: saved calibration data was loaded and the gyro is ready immediately.",
             ))
 
+        connection_id = uuid4().hex
         publish_status(
             state="connected",
+            controller_id=controller_id,
+            connection_id=connection_id,
             battery_percent=None,
             battery_voltage=None,
             charging=False,
@@ -779,6 +928,7 @@ def main():
             mag_raw=None,
             gyro_bias_samples=getattr(xinput, "_gyro_bias_samples", 0),
         )
+        active_connection = (controller_id, connection_id)
 
     controller.connected_callback = on_connected
 
@@ -788,6 +938,8 @@ def main():
         nonlocal gyro_initialization_announced
         nonlocal idle_disconnect_requested
         nonlocal latest_battery_percent
+        nonlocal active_connection
+        active_connection = None
         dispatcher_reset = input_dispatcher.reset(timeout=1.0)
         sensor_mode_tracker.reset()
         last_status_stage = 0.0
@@ -835,8 +987,12 @@ def main():
     def on_transport_unavailable():
         """Stop the connector when its BLE radio or USB bridge is gone."""
         nonlocal stop_requested
+        nonlocal transport_lost
         nonlocal gyro_initialization_tracking
         nonlocal gyro_initialization_announced
+        nonlocal active_connection
+        active_connection = None
+        transport_lost = True
         stop_requested = True
         gyro_initialization_tracking = False
         gyro_initialization_announced.clear()
@@ -875,6 +1031,60 @@ def main():
     def controller_is_connected():
         return controller_application_ready(controller)
 
+    def start_sensor_calibration(sensor, start, expected_connection_id):
+        """Return "started", "disconnected", "pending" or "busy".
+
+        "pending" means a previous result is still waiting to be saved and
+        "busy" means input processing did not pause in time; both can retry.
+        """
+        connection = active_connection
+        # The transport may acquire its state lock here. Keep this outside
+        # the dispatcher lock since the connection callbacks reset the dispatcher.
+        if connection is None or not controller_is_connected():
+            return "disconnected"
+        if expected_connection_id is not None and expected_connection_id != connection[1]:
+            return "disconnected"
+
+        outcome = "disconnected"
+
+        def begin():
+            nonlocal outcome
+            if stop_requested or active_connection is not connection:
+                return
+            if start():
+                calibration_connections[sensor] = connection
+                outcome = "started"
+            else:
+                # The existing result will be saved by this iteration.
+                outcome = "pending"
+
+        if not input_dispatcher.run_exclusive(begin, timeout=1.0):
+            return "busy"
+        return outcome
+
+    def apply_saved_sensor_calibration(connection, apply):
+        def apply_if_current():
+            if not stop_requested and active_connection is connection:
+                apply()
+                xinput.reset_tilt_neutral()
+
+        if stop_requested or active_connection is not connection:
+            return "success", "saved"
+        try:
+            if input_dispatcher.run_exclusive(apply_if_current, timeout=1.0):
+                return "success", "saved"
+            raise TimeoutError("Input processing did not quiesce for calibration.")
+        except (OSError, ValueError) as exc:
+            print(tr(
+                f"校正已儲存，無法立即套用：{exc}",
+                f"Calibration was saved but could not be applied immediately: {exc}",
+            ))
+            return "failed", "apply_failed"
+
+    if stop_requested:
+        cleanup()
+        return
+
     if connection_mode == "wired":
         print(tr(
             "正在啟動 USB 有線連線...",
@@ -888,7 +1098,7 @@ def main():
                 f"Wired USB connection failed to start: {exc}",
             ))
             cleanup()
-            input(tr("\n按 Enter 鍵關閉...", "\nPress Enter to close..."))
+            wait_for_error_acknowledgment()
             return
 
     elif connection_mode == "esp32":
@@ -900,27 +1110,40 @@ def main():
         try:
             controller.open()
 
-        except (serial.SerialException, OSError):
+        except (serial.SerialException, OSError, RuntimeError):
             cleanup()
-            if stop_requested:
+            if shutdown_requested:
                 return
             print()
-            print(
-                tr(f"無法開啟 {port}。", f"Could not open {port}.")
-            )
-            print(
-                tr("此連接埠可能正在被其他程式使用。", "The serial port may be in use by another program.")
-            )
-            print(
-                tr(
-                    "請關閉原本的連接程式或校正程式後再試。",
-                    "Close the existing connection or calibration program and try again.",
+            if stop_requested:
+                # The bridge stopped answering during the ownership handshake.
+                print(tr(
+                    f"ESP32（{port}）在啟動期間中斷連線。",
+                    f"The ESP32 ({port}) disconnected during startup.",
+                ))
+                print(tr(
+                    "請確認 USB 連接線與 ESP32 後再試。",
+                    "Check the USB cable and the ESP32, then try again.",
+                ))
+            else:
+                print(
+                    tr(f"無法開啟 {port}。", f"Could not open {port}.")
                 )
-            )
+                print(
+                    tr("此連接埠可能正在被其他程式使用。", "The serial port may be in use by another program.")
+                )
+                print(
+                    tr(
+                        "請關閉原本的連接程式或校正程式後再試。",
+                        "Close the existing connection or calibration program and try again.",
+                    )
+                )
 
-            input(
-                tr("\n按 Enter 鍵關閉...", "\nPress Enter to close...")
-            )
+            wait_for_error_acknowledgment()
+            return
+
+        if stop_requested:
+            cleanup()
             return
 
         print(
@@ -959,9 +1182,60 @@ def main():
             print()
             print(tr(f"Windows 原生藍牙啟動失敗：{exc}", f"Windows native Bluetooth failed to start: {exc}"))
             cleanup()
-            input(tr("\n按 Enter 鍵關閉...", "\nPress Enter to close..."))
+            wait_for_error_acknowledgment()
             return
 
+    def apply_extension_settings(*, startup=False):
+        """Start, update or stop the optional Extensions pipe server."""
+        with config_file_lock():
+            settings = load_extension_settings(load_config(CONFIG_PATH, persist=False))
+        extensions.apply(settings, startup=startup)
+        return settings
+
+    def extension_controller_info():
+        """Read-only summary for tools granted the "read" capability.
+
+        Called from the IPC thread; it only reads plain variables and never
+        takes a transport or input lock.
+        """
+        return {
+            "connected": active_connection is not None,
+            "mode": connection_mode,
+            "battery_percent": latest_battery_percent,
+        }
+
+    extension_tools_seen = {}
+
+    def report_extension_changes():
+        """Print a line whenever an extension tool connects, drops or fails."""
+        nonlocal extension_tools_seen
+        status = extensions.status()
+        current = status.get("tools") or {}
+        for zh, en in describe_tool_changes(extension_tools_seen, current, extensions._settings):
+            print(tr(zh, en))
+        extension_tools_seen = current
+        return status
+
+    # Nothing runs for Extensions unless the user enabled it.
+    extensions = ExtensionManager(
+        xinput, server_version=VERSION, controller_info=extension_controller_info,
+        host_pid=gui_pid,  # tools close together with the S2P window
+    )
+    try:
+        extension_settings = apply_extension_settings(startup=True)
+        if extension_settings.enabled and extension_settings.active_tools:
+            count = len(extension_settings.active_tools)
+            print(tr(
+                f"擴充工具已啟用（{count} 個），正在等待工具連線。",
+                f"Extensions enabled ({count}); waiting for tools to connect.",
+            ))
+    except Exception as exc:
+        print(tr(f"擴充工具啟動失敗：{exc}", f"Extensions failed to start: {exc}"))
+
+    # A reload or calibration start that collides with an unsaved calibration
+    # result (or a busy input worker) is retried on a later pass.
+    deferred_command = None
+    deferred_command_attempts = 0
     try:
         last_heartbeat = 0.0
         last_battery_led_mask = None
@@ -996,7 +1270,9 @@ def main():
                 publish_status(
                     rumble=rumble_status,
                     firmware_diagnostics=firmware_diagnostics,
+                    pairing_diagnostics=getattr(controller, "pairing_diagnostics", None),
                     async_logging=get_async_log_metrics(),
+                    extensions=report_extension_changes(),
                 )
                 if not controller_is_connected():
                     last_battery_led_mask = None
@@ -1024,7 +1300,8 @@ def main():
                 try:
                     if not perform_idle_disconnect(
                         controller,
-                        xinput,
+                        input_dispatcher.run_exclusive,
+                        xinput.reset_output_state,
                         publish_status,
                     ):
                         raise RuntimeError(tr(
@@ -1043,7 +1320,11 @@ def main():
                         f"閒置自動斷線失敗：{exc}",
                         f"Idle disconnect failed: {exc}",
                     ))
-            pending_command = command_inbox.next()
+            if deferred_command is not None:
+                pending_command, deferred_command = deferred_command, None
+            else:
+                pending_command = command_inbox.next()
+                deferred_command_attempts = 0
             if pending_command is not None:
                 try:
                     command = pending_command.command
@@ -1077,54 +1358,36 @@ def main():
                                 )
                             )
 
-                    elif command == "calibrate_gyro":
+                    elif command in CALIBRATION_COMMANDS:
                         clear_legacy_command()
-                        connected = controller_is_connected()
-                        if connected:
-                            xinput.start_gyro_calibration()
+                        sensor, prefix, running_fields = CALIBRATION_COMMANDS[command]
+                        outcome = start_sensor_calibration(
+                            sensor, getattr(xinput, f"start_{sensor}_calibration"),
+                            pending_command.connection_id,
+                        )
+                        if outcome == "started":
                             publish_status(
-                                gyro_calibration_state="running",
-                                gyro_calibration_message="keep_still",
+                                **{f"{prefix}_calibration_state": "running"},
+                                **{
+                                    f"{prefix}_calibration_{key}": value
+                                    for key, value in running_fields.items()
+                                },
                             )
+                        elif (
+                            outcome != "disconnected"
+                            and deferred_command_attempts < COMMAND_RETRY_LIMIT
+                        ):
+                            # Retry after this pass saves a pending result or
+                            # input processing becomes idle again.
+                            deferred_command_attempts += 1
+                            deferred_command = pending_command
                         else:
-                            publish_status(
-                                gyro_calibration_state="failed",
-                                gyro_calibration_message="disconnected",
-                            )
-
-                    elif command == "calibrate_magnetometer":
-                        clear_legacy_command()
-                        connected = controller_is_connected()
-                        if connected:
-                            xinput.start_magnetometer_calibration()
-                            publish_status(
-                                mag_calibration_state="running",
-                                mag_calibration_message="move_figure_eight",
-                                mag_calibration_progress=0,
-                                mag_calibration_spans=[0.0, 0.0, 0.0],
-                            )
-                        else:
-                            publish_status(
-                                mag_calibration_state="failed",
-                                mag_calibration_message="disconnected",
-                            )
-
-                    elif command == "calibrate_accelerometer":
-                        clear_legacy_command()
-                        connected = controller_is_connected()
-                        if connected:
-                            xinput.start_accelerometer_calibration()
-                            publish_status(
-                                accel_calibration_state="running",
-                                accel_calibration_message="move_and_pause",
-                                accel_calibration_progress=0,
-                                accel_calibration_quality=None,
-                            )
-                        else:
-                            publish_status(
-                                accel_calibration_state="failed",
-                                accel_calibration_message="disconnected",
-                            )
+                            publish_status(**{
+                                f"{prefix}_calibration_state": "failed",
+                                f"{prefix}_calibration_message": (
+                                    "disconnected" if outcome == "disconnected" else "busy"
+                                ),
+                            })
 
                     elif command == "reset_tilt_neutral":
                         clear_legacy_command()
@@ -1145,20 +1408,31 @@ def main():
                             settings_reload_request_id=request_id,
                         )
                         try:
-                            reload_runtime_settings()
-                        except Exception as exc:
-                            publish_status(
-                                settings_reload_state="failed",
-                                settings_reload_message=str(exc),
-                                settings_reload_updated_at=time.time(),
-                                settings_reload_request_id=request_id,
+                            reload_runtime_settings(
+                                pending_command.connection_id, pending_command.compensation_signature,
                             )
-                            print(tr(
-                                f"執行中的連線未能套用新設定，目前暫時沿用先前設定；"
-                                f"磁碟設定已保留：{exc}",
-                                f"The live connection could not apply the new settings and is "
-                                f"temporarily using the previous settings; disk settings were kept: {exc}",
-                            ))
+                        except Exception as exc:
+                            if (
+                                isinstance(exc, CalibrationResultPendingError)
+                                and deferred_command_attempts < COMMAND_RETRY_LIMIT
+                            ):
+                                # The result is saved later in this iteration;
+                                # retry the same request on the next pass.
+                                deferred_command_attempts += 1
+                                deferred_command = pending_command
+                            else:
+                                publish_status(
+                                    settings_reload_state="failed",
+                                    settings_reload_message=str(exc),
+                                    settings_reload_updated_at=time.time(),
+                                    settings_reload_request_id=request_id,
+                                )
+                                print(tr(
+                                    f"執行中的連線未能套用新設定，目前暫時沿用先前設定；"
+                                    f"磁碟設定已保留：{exc}",
+                                    f"The live connection could not apply the new settings and is "
+                                    f"temporarily using the previous settings; disk settings were kept: {exc}",
+                                ))
                         else:
                             enabled_layer_count = sum(
                                 1 for layer in xinput.mapping_layers
@@ -1181,6 +1455,25 @@ def main():
                                 f"{enabled_layer_count} enabled.",
                             ))
 
+                    elif command == "extensions_apply":
+                        clear_legacy_command()
+                        apply_extension_settings()
+                        publish_status(extensions=report_extension_changes())
+
+                    elif command.split(":", 1)[0] in (
+                        "extensions_connect", "extensions_disconnect",
+                    ):
+                        # "extensions_connect" acts on every tool;
+                        # "extensions_connect:<tool id>" on one list entry.
+                        clear_legacy_command()
+                        action, _, tool_id = command.partition(":")
+                        if action == "extensions_connect":
+                            apply_extension_settings()
+                            extensions.connect(tool_id or None)
+                        else:
+                            extensions.disconnect(tool_id or None)
+                        publish_status(extensions=report_extension_changes())
+
                     elif command:
                         # Clear malformed or obsolete commands too. Otherwise
                         # this loop would keep re-reading the same text.
@@ -1192,7 +1485,9 @@ def main():
                         f"處理控制器指令失敗：{exc}"
                     )
                 finally:
-                    pending_command.finish()
+                    # A deferred reload keeps its claimed request until it is retried.
+                    if deferred_command is not pending_command:
+                        pending_command.finish()
 
             if gyro_initialization_tracking and controller_is_connected():
                 initialization = xinput.get_gyro_initialization_status()
@@ -1278,6 +1573,7 @@ def main():
 
             gyro_bias = xinput.consume_gyro_calibration_result()
             if gyro_bias is not None:
+                connection = calibration_connections.pop("gyro")
                 try:
                     with config_file_lock():
                         calibration_config = configparser.ConfigParser()
@@ -1286,14 +1582,17 @@ def main():
                         store_gyro_bias(
                             calibration_config,
                             gyro_bias,
-                            getattr(controller, "controller_id", None),
+                            connection[0],
                         )
                         atomic_write_config(calibration_config, CONFIG_PATH)
                     print(tr("陀螺儀零點校正已儲存。", "Gyro zero calibration saved."))
+                    state, message = apply_saved_sensor_calibration(
+                        connection, lambda: xinput.set_gyro_bias(gyro_bias)
+                    )
                     publish_status(
-                        gyro_calibration_state="success",
-                        gyro_calibration_message="saved",
-                        gyro_calibration_quality=calibration_status.get("quality"),
+                        gyro_calibration_state=state,
+                        gyro_calibration_message=message,
+                        gyro_calibration_quality=xinput.get_gyro_calibration_status().get("quality"),
                     )
                 except (OSError, ValueError, configparser.Error) as exc:
                     print(tr(f"陀螺儀校正儲存失敗：{exc}", f"Could not save gyro calibration: {exc}"))
@@ -1344,6 +1643,7 @@ def main():
 
             mag_result = xinput.consume_magnetometer_calibration_result()
             if mag_result is not None:
+                connection = calibration_connections.pop("magnetometer")
                 try:
                     mag_bias, mag_matrix, mag_quality = mag_result
                     with config_file_lock():
@@ -1354,15 +1654,20 @@ def main():
                             calibration_config,
                             mag_bias,
                             (1.0, 1.0, 1.0),
-                            getattr(controller, "controller_id", None),
+                            connection[0],
                             matrix=mag_matrix,
                             quality=mag_quality,
                         )
                         atomic_write_config(calibration_config, CONFIG_PATH)
                     print(tr("磁力計三軸校正已儲存。", "3-axis magnetometer calibration saved."))
+                    state, message = apply_saved_sensor_calibration(
+                        connection, lambda: xinput.set_magnetometer_calibration(
+                            mag_bias, matrix=mag_matrix, field_reference=1.0
+                        )
+                    )
                     publish_status(
-                        mag_calibration_state="success",
-                        mag_calibration_message="saved",
+                        mag_calibration_state=state,
+                        mag_calibration_message=message,
                         mag_calibration_progress=100,
                         mag_calibration_spans=list(mag_status["spans"]),
                         mag_calibration_quality=mag_quality,
@@ -1383,13 +1688,14 @@ def main():
             )
             if accel_key != last_accel_calibration_state:
                 last_accel_calibration_state = accel_key
-                publish_status(
-                    accel_calibration_state=accel_status["state"],
-                    accel_calibration_message=accel_status["message"],
-                    accel_calibration_progress=accel_status["progress"],
-                    accel_orientation_bins=[list(item) for item in accel_status.get("orientation_bins", ())],
-                    accel_orientation_coverage=accel_status.get("orientation_coverage", 0.0),
-                )
+                if accel_key[0] != "success":
+                    publish_status(
+                        accel_calibration_state=accel_status["state"],
+                        accel_calibration_message=accel_status["message"],
+                        accel_calibration_progress=accel_status["progress"],
+                        accel_orientation_bins=[list(item) for item in accel_status.get("orientation_bins", ())],
+                        accel_orientation_coverage=accel_status.get("orientation_coverage", 0.0),
+                    )
             accel_bins = accel_status.get("orientation_bins", ())
             accel_bin_signature = tuple(sorted(tuple(item) for item in accel_bins))
             if accel_status["state"] == "running":
@@ -1414,6 +1720,7 @@ def main():
 
             accel_result = xinput.consume_accelerometer_calibration_result()
             if accel_result is not None:
+                connection = calibration_connections.pop("accelerometer")
                 try:
                     accel_bias, accel_matrix, accel_quality = accel_result
                     with config_file_lock():
@@ -1424,16 +1731,23 @@ def main():
                             calibration_config,
                             accel_bias,
                             accel_matrix,
-                            getattr(controller, "controller_id", None),
+                            connection[0],
                             quality=accel_quality,
                         )
                         atomic_write_config(calibration_config, CONFIG_PATH)
                     print(tr("加速度計多姿態橢球校正已儲存。", "Multi-pose accelerometer calibration saved."))
+                    state, message = apply_saved_sensor_calibration(
+                        connection, lambda: xinput.set_accelerometer_calibration(
+                            accel_bias, accel_matrix
+                        )
+                    )
                     publish_status(
-                        accel_calibration_state="success",
-                        accel_calibration_message="saved",
+                        accel_calibration_state=state,
+                        accel_calibration_message=message,
                         accel_calibration_progress=100,
                         accel_calibration_quality=accel_quality,
+                        accel_orientation_bins=[list(item) for item in accel_status.get("orientation_bins", ())],
+                        accel_orientation_coverage=accel_status.get("orientation_coverage", 0.0),
                     )
                 except (OSError, ValueError, configparser.Error) as exc:
                     print(tr(f"加速度計校正儲存失敗：{exc}", f"Could not save accelerometer calibration: {exc}"))
@@ -1448,11 +1762,31 @@ def main():
         print(tr("\n正在關閉程式...", "\nClosing program..."))
 
     finally:
-        try:
-            cleanup()
-        finally:
-            shutdown_async_stdio()
+        if deferred_command is not None:
+            deferred_command.finish()
+        cleanup()
+
+    if transport_lost and not shutdown_requested:
+        # Without this the console closes as soon as the process exits,
+        # hiding why the connection stopped.
+        print()
+        if connection_mode == "esp32":
+            print(tr(
+                f"ESP32（{port}）已中斷，連接程式已停止。",
+                f"The ESP32 ({port}) disconnected and the connector stopped.",
+            ))
+            print(tr(
+                "請確認 USB 連接線後，在主視窗按「重啟連線」。",
+                "Check the USB cable, then click Restart in the main window.",
+            ))
+        else:
+            print(tr(
+                "藍牙已無法使用，連接程式已停止。請確認藍牙已開啟後，在主視窗按「重啟連線」。",
+                "Bluetooth is unavailable and the connector stopped. "
+                "Turn Bluetooth on, then click Restart in the main window.",
+            ))
+        wait_for_error_acknowledgment()
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

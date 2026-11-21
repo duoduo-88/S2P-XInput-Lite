@@ -79,21 +79,31 @@ def _decode_hid_path(value):
     return str(value or "")
 
 
-def _hid_parent_device_ids(device_path):
-    """Return the Config Manager parent chain for one HID interface path."""
+def _hid_device_instance_id(device_path):
     path = _decode_hid_path(device_path)
     parts = path[4:].split("#") if path.startswith("\\\\?\\") else ()
-    if len(parts) < 3 or sys.platform != "win32":
+    return "\\".join(parts[:3]) if len(parts) >= 3 else None
+
+
+def _locate_hid_device(cfgmgr32, instance_id):
+    locate = cfgmgr32.CM_Locate_DevNodeW
+    locate.argtypes = (ctypes.POINTER(wintypes.DWORD), wintypes.LPWSTR, wintypes.ULONG)
+    locate.restype = wintypes.ULONG
+    device = wintypes.DWORD()
+    # CM_LOCATE_DEVNODE_NORMAL excludes devices no longer present.
+    return device if locate(ctypes.byref(device), instance_id, 0) == 0 else None
+
+
+def _hid_parent_device_ids(device_path):
+    """Return the Config Manager parent chain for one HID interface path."""
+    instance_id = _hid_device_instance_id(device_path)
+    if instance_id is None or sys.platform != "win32":
         return ()
-    instance_id = "\\".join(parts[:3])
     try:
-        cfgmgr32 = ctypes.WinDLL("cfgmgr32")
-        cfgmgr32.CM_Locate_DevNodeW.argtypes = (
-            ctypes.POINTER(wintypes.DWORD),
-            wintypes.LPWSTR,
-            wintypes.ULONG,
-        )
-        cfgmgr32.CM_Locate_DevNodeW.restype = wintypes.ULONG
+        cfgmgr32 = ctypes.windll.cfgmgr32
+        current = _locate_hid_device(cfgmgr32, instance_id)
+        if current is None:
+            return ()
         cfgmgr32.CM_Get_Parent.argtypes = (
             ctypes.POINTER(wintypes.DWORD),
             wintypes.DWORD,
@@ -107,11 +117,6 @@ def _hid_parent_device_ids(device_path):
             wintypes.ULONG,
         )
         cfgmgr32.CM_Get_Device_IDW.restype = wintypes.ULONG
-        current = wintypes.DWORD()
-        if cfgmgr32.CM_Locate_DevNodeW(
-            ctypes.byref(current), instance_id, 0
-        ):
-            return ()
         parents = []
         for _depth in range(16):
             parent = wintypes.DWORD()
@@ -132,6 +137,17 @@ def _hid_parent_device_ids(device_path):
         return tuple(parents)
     except (AttributeError, OSError, TypeError, ValueError):
         return ()
+
+
+def is_raw_hid_device_present(device_path):
+    """Check a selected HID device without opening it or relying on sampling."""
+    instance_id = _hid_device_instance_id(device_path)
+    if instance_id is None or sys.platform != "win32":
+        return False
+    try:
+        return _locate_hid_device(ctypes.windll.cfgmgr32, instance_id) is not None
+    except (AttributeError, OSError, TypeError, ValueError):
+        return False
 
 
 def _is_virtual_hid_path(device_path):

@@ -2,7 +2,7 @@
 
 `esp32s3_usb_bridge_bluedroid/` contains the complete bundled firmware source.
 
-- Product/version: `S2P-FW 1.0.8`
+- Product/version: `S2P-FW 1.0.9`
 - Protocol: `s2p_bridge 1.0.0`; firmware profile: `s2p_usb_bridge`
 - Build: `standalone_diagnostics`; target: ESP32-S3 with 16 MB flash
 - Locked toolchain: ESP-IDF `5.5.4`, esp_tinyusb `1.7.6~2`, tinyusb `0.19.0~3`

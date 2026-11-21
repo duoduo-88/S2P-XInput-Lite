@@ -1,15 +1,32 @@
+import gc
 import math
 import sys
 import threading
 import time
 import tkinter as tk
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from tkinter import ttk
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 
 class AimModelTests(unittest.TestCase):
+    def test_3d_stick_turn_speed_is_independent_per_axis_in_every_drill(self):
+        from gamepad_aim_model import ShootingTest, TimedShootingTest, TrackingTest
+
+        for drill in (ShootingTest, TimedShootingTest, TrackingTest):
+            with self.subTest(drill=drill.__name__):
+                test = drill(stick_turn_speed=(360, 60))
+                test.start()
+                test.turn((1.0, 0.5), 0.1)
+                self.assertAlmostEqual(math.degrees(test.yaw), 36)
+                self.assertAlmostEqual(math.degrees(test.pitch), 3)
+                test.look(0.1, 0.2)
+                self.assertAlmostEqual(test.yaw, math.radians(36) + 0.1)
+                self.assertAlmostEqual(test.pitch, math.radians(3) + 0.2)
+
     def test_small_stick_output_moves_cursor_linearly(self):
         from gamepad_aim import CursorTest
 
@@ -180,6 +197,51 @@ class AimOutputTests(unittest.TestCase):
         window._configure_native_sampler()
         self.assertIsNone(window._read_aim_output())
 
+    def _raw_stream_aim_window(self, samples, *, stream_path="raw-path"):
+        from gamepad_devices import GamepadDevice
+        from gamepad_test_window import GamepadTestWindow
+
+        window = object.__new__(GamepadTestWindow)
+        window._aim_selected_device = GamepadDevice("raw_hid:s2p", "raw_hid", 0, "S2P Mobile Gamepad", False)
+        window._aim_native_device = None  # No provable WinMM/XInput twin.
+        window._aim_input_active = True
+        window._aim_raw_rate_sample = None
+        window.native_sampler = None
+        window._selected_raw_hid_device = lambda: SimpleNamespace(path="raw-path")
+        window._raw_hid_stream_path = stream_path
+        window.raw_hid_stream = Mock(active=True, status=Mock(return_value={}))
+        window.raw_hid_stream.read_samples.side_effect = lambda cursor, **_kwargs: (
+            samples.pop(0) if samples else ((), cursor, 0)
+        )
+        return window
+
+    def test_s2p_raw_hid_aim_reads_its_own_stream(self):
+        full_report = (1.0, (0.1, 0.2), (0.5, -0.5), 7, 0x3F, (0.0, 1.0), 0x1000 | 0x0001)
+        triggers_only = (1.1, (0.0, 0.0), (0.0, 0.0), 8, 0x30, (0.0, 0.5), 0)
+        window = self._raw_stream_aim_window([((full_report, triggers_only), 8, 0)])
+
+        key, state, samples, _rate = window._read_aim_input()
+
+        self.assertEqual(key[:3], ("raw_hid:s2p", 0, "raw-stream"))
+        self.assertEqual(state.right, (0.5, -0.5))
+        self.assertEqual(state.buttons, ("↑", "A"))
+        self.assertEqual(state.right_trigger, 1.0)
+        # The trigger-only report is not a stick sample.
+        self.assertEqual([stamp for stamp, _ in samples], [1.0])
+        self.assertEqual(window._aim_raw_stream_cursor, 8)
+
+        key_again, held, samples_again, _rate = window._read_aim_input()
+        self.assertEqual(key_again, key)
+        self.assertIs(held, state)  # Keep the last state between reports.
+        self.assertEqual(samples_again, ())
+
+    def test_raw_hid_aim_ignores_a_stream_for_another_collection(self):
+        report = (1.0, (0.0, 0.0), (0.5, 0.5), 1, 0x3F, (0.0, 0.0), 0)
+        window = self._raw_stream_aim_window([((report,), 1, 0)], stream_path="other-path")
+
+        self.assertIsNone(window._read_aim_input())
+        window.raw_hid_stream.read_samples.assert_not_called()
+
     def test_s2p_aim_reads_the_published_xinput_slot(self):
         from gamepad_devices import GamepadDevice, GamepadState
         from gamepad_test_window import GamepadTestWindow
@@ -236,9 +298,952 @@ class AimPaneTests(unittest.TestCase):
             self.root = tk.Tk()
         except tk.TclError as error:
             self.skipTest(str(error))
+        self.addCleanup(gc.collect)
         self.addCleanup(self.root.destroy)
         self.addCleanup(self.root.update_idletasks)
         self.root.withdraw()
+
+    def test_escape_closes_both_compensation_windows_from_either_focus(self):
+        from gamepad_aim import AimTestPane
+
+        pane = AimTestPane(self.root, str, lambda: None)
+        self.root.deiconify()
+        self.root.update()
+        for focus_in_overlay in (False, True):
+            with self.subTest(focus_in_overlay=focus_in_overlay):
+                pane._open_compensation_preview()
+                overlay = pane.compensation_window
+                self.assertTrue(pane.test_open)
+                overlay.start()
+                self.assertIsNotNone(overlay.job)
+                widget = overlay.adjusted[0] if focus_in_overlay else pane.canvas
+                widget.focus_force()
+                self.root.update()
+                widget.event_generate("<Escape>")
+                self.root.update()
+                self.assertFalse(overlay.window.winfo_exists())
+                self.assertFalse(pane.test_open)
+                self.assertIsNone(overlay.job)
+                self.assertIsNone(overlay.measurement)
+
+    def test_compensation_overlay_measures_two_3d_camera_speeds(self):
+        from gamepad_aim import AimTestPane, VIEW_MARGIN
+        from gamepad_aim_settings import AimSettings
+
+        read_output = Mock(return_value=None)
+        pane = AimTestPane(self.root, str, read_output)
+        self.root.deiconify()
+        self.root.update()
+        pane._save_settings(AimSettings(fullscreen=True, window_size="800x450"))
+        with patch("gamepad_aim.fullscreen_monitor_bounds", return_value=(50, 40, 1050, 640)):
+            pane._open_compensation_preview()
+        overlay = pane.compensation_window
+        read_output.reset_mock()
+        self.root.update()
+        self.assertTrue(overlay.window.winfo_viewable())
+        self.assertTrue(overlay.window.attributes("-topmost"))
+        self.assertTrue(pane.window.winfo_viewable())
+        self.assertTrue(pane.window.overrideredirect())
+        self.assertIsNone(pane._fullscreen_mode)
+        self.assertEqual(
+            (pane.window.winfo_rootx(), pane.window.winfo_rooty(),
+             pane.window.winfo_width(), pane.window.winfo_height()),
+            (50, 40, 1000, 600),
+        )
+        self.assertGreaterEqual(overlay.window.winfo_rootx(), pane.window.winfo_rootx())
+        self.assertLess(overlay.window.winfo_rootx(), pane.window.winfo_rootx() + pane.window.winfo_width())
+        self.assertGreaterEqual(overlay.window.winfo_rooty(), pane.window.winfo_rooty())
+        self.assertLess(overlay.window.winfo_rooty(), pane.window.winfo_rooty() + pane.window.winfo_height())
+        self.assertEqual(
+            overlay.window.winfo_rootx() + overlay.window.winfo_width(),
+            pane.window.winfo_rootx() + pane.window.winfo_width() - VIEW_MARGIN,
+        )
+        self.assertEqual(overlay.window.winfo_y(), pane.window.winfo_rooty() + VIEW_MARGIN)
+
+        overlay.adjusted[0].set("240")
+        overlay.adjusted[1].set("1080")
+        overlay.measure_button.invoke()
+        for index, angle in enumerate((9.8, 8.05, 16.8, 75.6)):
+            overlay.window.after_cancel(overlay.job)
+            with patch("gyro_compensation_window.time.perf_counter", return_value=overlay.end_at):
+                overlay._tick()
+            self.assertAlmostEqual(overlay.angles[index], angle)
+            if index < 3:
+                overlay.window.after_cancel(overlay.job)
+                overlay._start_turn()
+        self.assertIn("建議 X 補償倍率 0.58", overlay.result.get())
+        self.assertIn("建議 Y 補償倍率 0.11", overlay.result.get())
+        self.assertEqual(pane.settings.stick_horizontal_speed, 140)
+        self.assertEqual(pane.settings.stick_vertical_speed, 115)
+        pane._sample_input(104)
+        read_output.assert_called_once_with()
+        self.assertFalse(pane.history.records)
+        overlay.start()
+        self.assertIsNotNone(overlay.job)
+        pane.close_test()
+        self.assertIsNone(overlay.job)
+        self.assertIsNone(overlay.measurement)
+
+    def test_preview_close_button_and_window_close_cancel_pending_measurement(self):
+        from gamepad_aim import AimTestPane
+
+        pane = AimTestPane(self.root, str, lambda: None)
+        self.root.deiconify()
+        self.root.update()
+        for close_preview in (False, True):
+            with self.subTest(close_preview=close_preview):
+                pane._open_compensation_preview()
+                overlay = pane.compensation_window
+                overlay.start()
+                self.assertIsNotNone(overlay.job)
+                if close_preview:
+                    overlay.close_button.invoke()
+                else:
+                    overlay.window.tk.call(overlay.window.protocol("WM_DELETE_WINDOW"))
+                self.assertIsNone(overlay.job)
+                self.assertIsNone(overlay.measurement)
+                self.assertFalse(pane.test_open)
+                self.assertFalse(overlay.window.winfo_exists())
+
+    def test_controller_b_closes_both_preview_windows_from_either_focus(self):
+        from gamepad_aim import AimTestPane
+
+        neutral = SimpleNamespace(buttons=(), right=(1, 0), right_trigger=1)
+        held_b = SimpleNamespace(buttons=("B",), right=(1, 0), right_trigger=1)
+        read_input = Mock(return_value=None)
+        pane = AimTestPane(self.root, str, lambda: None, read_input=read_input)
+        self.root.deiconify()
+        self.root.update()
+        for overlay_focused in (False, True):
+            with self.subTest(overlay_focused=overlay_focused):
+                pane._input_events.append((99, SimpleNamespace(buttons=("START",))))
+                pane._open_compensation_preview()
+                overlay = pane.compensation_window
+                self.assertFalse(pane._input_events)
+                overlay.start()
+                widget = overlay.adjusted[0] if overlay_focused else pane.canvas
+                widget.focus_force()
+                self.root.update_idletasks()
+
+                now = time.perf_counter()
+                read_input.return_value = ("device", held_b, (), 125)
+                pane._sample_input(now)
+                self.assertTrue(pane.test_open)
+                read_input.return_value = (
+                    "device", neutral, ((now + 0.01, neutral), (now + 0.02, held_b), (now + 0.03, neutral)), 125,
+                )
+                pane._sample_input(now + 0.03)
+                self.assertFalse(pane.test_open)
+                self.assertFalse(overlay.window.winfo_exists())
+                self.assertIsNone(overlay.job)
+                self.assertFalse(pane.cancel_pressed)
+                self.assertEqual(pane.scene.yaw, 0.0)
+
+    def test_preview_recognizes_new_b_press_in_first_batch_after_reconnect(self):
+        from gamepad_aim import AimTestPane
+
+        released = SimpleNamespace(buttons=(), right=(0.0, 0.0), right_trigger=0.0)
+        held = SimpleNamespace(buttons=("B",), right=(0.0, 0.0), right_trigger=0.0)
+        read_input = Mock(return_value=None)
+        pane = AimTestPane(self.root, str, lambda: None, read_input=read_input)
+        self.root.deiconify()
+        self.root.update()
+        opened = time.perf_counter()
+        with patch("gamepad_aim.time.perf_counter", return_value=opened):
+            pane._open_compensation_preview()
+        overlay = pane.compensation_window
+        with patch.object(pane.window, "focus_displayof", return_value=pane.canvas):
+            # A B press from before the preview opened is only a held state.
+            read_input.return_value = (
+                "old", held, ((opened - 0.03, released), (opened - 0.01, held)), None,
+            )
+            pane._sample_input(opened + 0.01)
+            self.assertTrue(pane.test_open)
+
+            read_input.return_value = None
+            pane._sample_input(opened + 0.02)
+
+            # The first report can also arrive with B already held.
+            read_input.return_value = ("replacement", held, ((opened + 0.025, held),), None)
+            pane._sample_input(opened + 0.026)
+            self.assertTrue(pane.test_open)
+
+            # On the new connection, the initial report is neutral and the
+            # user presses B before Tk gets to drain the first batch.
+            read_input.return_value = (
+                "reconnected", held, ((opened + 0.03, released), (opened + 0.04, held)), None,
+            )
+            pane._sample_input(opened + 0.05)
+
+        self.assertFalse(pane.test_open)
+        self.assertFalse(overlay.window.winfo_exists())
+
+    def test_preview_speed_selection_follows_a_replaced_scene(self):
+        from gamepad_aim import AimTestPane
+
+        pane = AimTestPane(self.root, str, lambda: None)
+        self.root.deiconify()
+        self.root.update()
+        pane._open_compensation_preview()
+        overlay = pane.compensation_window
+        replacement = Mock()
+        pane.scene = replacement  # _reset() builds a new scene object
+
+        overlay.speed_source.set("adjusted")
+
+        replacement.set_stick_turn_speed.assert_called()
+
+    def test_switching_aim_dimension_closes_the_compensation_preview(self):
+        from gamepad_aim import AimTestPane
+
+        pane = AimTestPane(self.root, str, lambda: None)
+        self.root.deiconify()
+        self.root.update()
+        pane._open_compensation_preview()
+        overlay = pane.compensation_window
+        overlay.start()
+        dimension = next(widget for widget in pane.dimension_controls.winfo_children()
+                         if isinstance(widget, ttk.Radiobutton) and widget.cget("value") == "2d")
+        dimension.invoke()
+        self.assertFalse(pane.mode_is_3d)
+        self.assertFalse(pane.test_open)
+        self.assertFalse(overlay.window.winfo_exists())
+        self.assertIsNone(overlay.job)
+
+    def test_held_start_during_preview_does_not_start_a_round_when_it_closes(self):
+        from gamepad_aim import AimTestPane
+
+        neutral = SimpleNamespace(buttons=(), right=(0, 0), right_trigger=0)
+        held_start = SimpleNamespace(buttons=("START",), right=(0, 0), right_trigger=0)
+        read_output = Mock(return_value=("device", neutral))
+        pane = AimTestPane(self.root, str, read_output)
+        self.root.deiconify()
+        self.root.update()
+        pane._sample_input(100)
+        pane._open_compensation_preview()
+        read_output.return_value = ("device", held_start)
+        pane._sample_input(101)
+        pane.compensation_window.close_button.invoke()
+
+        with patch.object(pane, "_start_shortcut") as start:
+            pane._sample_input(102)
+            start.assert_not_called()
+            read_output.return_value = ("device", neutral)
+            pane._sample_input(103)
+            read_output.return_value = ("device", held_start)
+            pane._sample_input(104)
+            start.assert_called_once_with(at=104)
+
+    def test_compensation_preview_applies_adjusted_speed_to_the_aim_test(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_settings import AimSettings
+
+        folder = TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        path = Path(folder.name) / "aim.json"
+        AimSettings(fullscreen=False, stick_horizontal_speed=180, stick_vertical_speed=95).save(path)
+        with patch("gamepad_aim.AimSettings", AimSettings):
+            pane = AimTestPane(self.root, str, lambda: None, settings_path=path)
+        self.root.deiconify()
+        self.root.update()
+        pane._open_compensation_preview()
+        overlay = pane.compensation_window
+        self.assertEqual(overlay.window.title(), "補償預覽")
+
+        overlay.adjusted[0].set("1081")
+        overlay.aim_test_button.invoke()
+        self.assertIn("1080", overlay.status.get())
+        self.assertEqual(AimSettings.load(path).stick_horizontal_speed, 180)
+
+        overlay.adjusted[0].set("560")
+        overlay.adjusted[1].set("300")
+        overlay.aim_test_button.invoke()
+
+        self.assertEqual((pane.settings.stick_horizontal_speed, pane.settings.stick_vertical_speed), (560, 300))
+        saved = AimSettings.load(path)
+        self.assertEqual((saved.stick_horizontal_speed, saved.stick_vertical_speed), (560, 300))
+        self.assertTrue(pane._compensation_preview)  # The preview stays open.
+        self.assertTrue(overlay.window.winfo_exists())
+        self.assertIn("560", overlay.status.get())
+
+        overlay.measure_button.invoke()
+        self.assertTrue(overlay.aim_test_button.instate(("disabled",)))
+        overlay.close_button.invoke()
+
+    def test_compensation_preview_uses_current_settings_without_saving_adjustments(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_settings import AimSettings
+
+        folder = TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        path = Path(folder.name) / "aim.json"
+        original = AimSettings(fullscreen=False, stick_horizontal_speed=180, stick_vertical_speed=95)
+        original.save(path)
+        with patch("gamepad_aim.AimSettings", AimSettings):
+            pane = AimTestPane(self.root, str, lambda: None, settings_path=path)
+        self.root.deiconify()
+        self.root.update()
+        pane._open_compensation_preview()
+        overlay = pane.compensation_window
+        self.assertEqual(overlay.speed_source.get(), "original")
+        self.assertEqual(overlay.original, (140, 115))
+        self.assertEqual(tuple(entry.get() for entry in overlay.adjusted), ("180", "95"))
+        overlay.adjusted[1].set("1081")
+        overlay.measure_button.invoke()
+        self.assertIsNone(overlay.measurement)
+        self.assertIn("1080", overlay.status.get())
+        overlay.adjusted[1].set("120")
+        overlay.measure_button.invoke()
+        self.assertIsNotNone(overlay.measurement)
+        pane._open_settings()
+        self.assertFalse(overlay.window.winfo_exists())
+        self.assertIsNone(overlay.job)
+        self.assertEqual(AimSettings.load(path), original)
+
+    def test_preview_hides_start_and_ignores_shortcuts_in_either_window(self):
+        from gamepad_aim import AimTestPane
+
+        neutral = SimpleNamespace(buttons=(), right=(0, 0), right_trigger=0)
+        start = SimpleNamespace(buttons=("START",), right=(0, 0), right_trigger=0)
+        read_input = Mock(return_value=None)
+        pane = AimTestPane(self.root, str, lambda: None, read_input=read_input)
+        self.root.deiconify()
+        self.root.update()
+        for shortcut in ("Enter", "START"):
+            for overlay_focused in (False, True):
+                with self.subTest(shortcut=shortcut, overlay_focused=overlay_focused):
+                    read_input.return_value = None
+                    pane._open_compensation_preview()
+                    overlay = pane.compensation_window
+                    self.assertFalse(pane.restart_button.winfo_ismapped())
+                    self.assertFalse(pane.close_button.winfo_ismapped())
+                    widget = overlay.adjusted[0] if overlay_focused else pane.canvas
+                    widget.focus_force()
+                    self.root.update_idletasks()
+                    if shortcut == "Enter":
+                        widget.event_generate("<KeyRelease-Return>")
+                    else:
+                        read_input.return_value = ("device", start, (), 125)
+                        pane._sample_input(100)
+                        self.assertIsNone(pane.countdown_until)
+                        read_input.return_value = ("device", neutral, ((101, neutral), (102, start), (103, neutral)), 125)
+                        pane._sample_input(103)
+                    self.assertIsNone(pane.countdown_until)
+                    self.assertFalse(pane.scene.running)
+                    self.assertTrue(overlay.window.winfo_exists())
+                    overlay.close_button.invoke()
+
+    def test_preview_speed_changes_take_effect_during_free_look(self):
+        import math
+
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_settings import AimSettings
+
+        sample = SimpleNamespace(buttons=(), right=(0.5, 0.5), right_trigger=0)
+        pane = AimTestPane(self.root, str, lambda: ("device", sample))
+        pane._save_settings(AimSettings(stick_horizontal_speed=560, stick_vertical_speed=230))
+        self.root.deiconify()
+        self.root.update()
+        pane._open_compensation_preview()
+        overlay = pane.compensation_window
+        pane.canvas.focus_force()
+        self.root.update_idletasks()
+        pane._sample_input(100)
+        pane._simulate_tick(100)
+        yaw, pitch = pane.scene.yaw, pane.scene.pitch
+        pane._simulate_tick(100.1)
+        self.assertAlmostEqual(pane.scene.yaw - yaw, math.radians(7))
+        self.assertAlmostEqual(pane.scene.pitch - pitch, math.radians(5.75))
+        overlay.speed_options[1].invoke()
+        yaw, pitch = pane.scene.yaw, pane.scene.pitch
+        pane._simulate_tick(100.2)
+        self.assertAlmostEqual(pane.scene.yaw - yaw, math.radians(28))
+        self.assertAlmostEqual(pane.scene.pitch - pitch, math.radians(11.5))
+        overlay.adjusted[0].set("400")
+        yaw = pane.scene.yaw
+        pane._simulate_tick(100.3)
+        self.assertAlmostEqual(pane.scene.yaw - yaw, math.radians(20))
+        overlay.speed_options[0].invoke()
+        yaw = pane.scene.yaw
+        pane._simulate_tick(100.4)
+        self.assertAlmostEqual(pane.scene.yaw - yaw, math.radians(7))
+        self.assertEqual(pane.settings.stick_horizontal_speed, 560)
+
+    def test_preview_camera_keeps_up_with_display_during_stick_motion(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_timing import IDLE_PERIOD
+
+        sample = SimpleNamespace(buttons=(), right=(0.5, 0.0), right_trigger=0)
+        pane = AimTestPane(self.root, str, lambda: ("device", sample), display_hz=lambda _window: 120)
+        self.root.deiconify()
+        self.root.update()
+        pane._open_compensation_preview()
+        pane.canvas.focus_force()
+        self.root.update_idletasks()
+        pane._cancel_tick()
+        start = 100.0
+        pane.last_frame = pane.next_frame = pane.next_draw = start
+        pane._rate_check_at = pane.label_update_at = start + 2
+        frame_yaws = []
+        with (
+            patch.object(pane, "_schedule"),
+            patch.object(pane, "_draw", side_effect=lambda: frame_yaws.append(pane.scene.yaw)),
+        ):
+            for step in range(1000):
+                with patch("gamepad_aim.time.perf_counter", return_value=start + step / 1000):
+                    pane._tick()
+            moved_frames = sum(a != b for a, b in zip(frame_yaws, frame_yaws[1:]))
+            self.assertGreaterEqual(moved_frames, 110)
+
+            sample.right = (0.0, 0.0)
+            with patch("gamepad_aim.time.perf_counter", return_value=start + 1.02):
+                pane._tick()
+            self.assertAlmostEqual(pane.next_frame, start + 1.02 + IDLE_PERIOD)
+
+    def test_preview_shows_one_world_fixed_landmark_then_regular_test_spawns_targets(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_settings import AimSettings
+
+        pane = AimTestPane(self.root, str, lambda: None)
+        pane.mode.set("timed-shooting")
+        pane._save_settings(AimSettings(fullscreen=False, window_size="800x450"))
+        self.root.deiconify()
+        self.root.update()
+        pane._open_compensation_preview()
+        pane._draw()
+        initial, second = pane._ball_bounds
+        self.assertIsNotNone(initial)
+        self.assertIsNone(second)
+        self.assertAlmostEqual(initial[0], pane.size[0] / 2)
+        pane._turn_compensation_preview("X", 15)
+        pane._draw()
+        self.assertLess(pane._ball_bounds[0][0], initial[0])
+        self.assertIsNone(pane._ball_bounds[1])
+        pane._turn_compensation_preview("X", -15)
+        pane._draw()
+        self.assertEqual(pane._ball_bounds, [initial, None])
+        self.assertIsNone(pane.round_basis)
+
+        pane.compensation_window.close_button.invoke()
+        pane.start_button.invoke()
+        self.assertTrue(pane.restart_button.winfo_ismapped())
+        pane._advance_countdown(pane.countdown_until)
+        self.assertEqual(len(pane.scene.target_positions()), 2)
+
+    def test_preview_measurement_applies_both_axes_without_compounding_repeated_runs(self):
+        from gamepad_aim import AimTestPane
+        from gyro_compensation import CompensationSnapshot
+
+        snapshot = CompensationSnapshot("Alpha", {"X": 1.0, "Y": 1.0}, {"X": 1.0, "Y": 1.0})
+        apply = Mock(return_value=None)
+        pane = AimTestPane(self.root, str, lambda: None, read_gyro_compensation=lambda: snapshot,
+                           apply_gyro_compensation=apply)
+        self.root.deiconify()
+        self.root.update()
+        pane._open_compensation_preview()
+        overlay = pane.compensation_window
+
+        def measure(horizontal, vertical):
+            overlay.adjusted[0].set(horizontal)
+            overlay.adjusted[1].set(vertical)
+            overlay.measure_button.invoke()
+            for index in range(4):
+                overlay.window.after_cancel(overlay.job)
+                with patch("gyro_compensation_window.time.perf_counter", return_value=overlay.end_at):
+                    overlay._tick()
+                if index < 3:
+                    overlay.window.after_cancel(overlay.job)
+                    overlay._start_turn()
+
+        measure("560", "230")
+        ratios = {"X": 0.25, "Y": 0.50}
+        apply.assert_called_once_with(snapshot, ratios)
+        self.assertEqual(overlay.current_multiplier_text["X"].get(), "X（水平）  0.25")
+        self.assertIn("已寫入", overlay.status.get())
+        measure("280", "230")
+        apply.assert_called_with(snapshot.with_multipliers(ratios), {"X": 0.50, "Y": 0.50})
+        self.assertEqual(apply.call_count, 2)
+        measure("10", "230")
+        self.assertEqual(apply.call_count, 2)
+        self.assertIn("超出", overlay.status.get())
+
+    def test_preview_reports_the_matching_live_reload_result_after_saving(self):
+        from gamepad_aim import AimTestPane
+        from gyro_compensation import CompensationSnapshot
+
+        for state in ("success", "failed", "timeout", "close"):
+            with self.subTest(state=state):
+                read_status = Mock(return_value={
+                    "settings_reload_request_id": "unrelated",
+                    "settings_reload_state": "success",
+                })
+                pane = AimTestPane(
+                    self.root, str, lambda: None,
+                    read_gyro_compensation=lambda: CompensationSnapshot(None, {"X": 1.0, "Y": 1.0}),
+                    apply_gyro_compensation=Mock(return_value="request"),
+                    read_gyro_reload_status=read_status,
+                )
+                self.root.deiconify()
+                self.root.update()
+                pane._open_compensation_preview()
+                overlay = pane.compensation_window
+                overlay.adjusted[0].set("280")
+                overlay.start()
+                for index in range(4):
+                    overlay.window.after_cancel(overlay.job)
+                    with patch("gyro_compensation_window.time.perf_counter", return_value=overlay.end_at):
+                        overlay._tick()
+                    if index < 3:
+                        overlay.window.after_cancel(overlay.job)
+                        overlay._start_turn()
+                self.assertIn("等待", overlay.status.get())
+                overlay.window.after_cancel(overlay.reload_job)
+                overlay._poll_reload("request")
+                self.assertIn("等待", overlay.status.get())
+                self.assertIsNotNone(overlay.reload_job)
+                if state == "close":
+                    overlay.close_button.invoke()
+                    self.assertIsNone(overlay.reload_job)
+                    continue
+                overlay.window.after_cancel(overlay.reload_job)
+                if state == "timeout":
+                    with patch("gyro_compensation_window.time.perf_counter", return_value=overlay.reload_deadline):
+                        overlay._poll_reload("request")
+                    self.assertIn("未確認", overlay.status.get())
+                else:
+                    read_status.return_value = {
+                        "settings_reload_request_id": "later-request",
+                        "settings_reload_state": "success",
+                        "settings_reload_results": {
+                            "request": {"state": state, "message": "calibration is running"},
+                        },
+                    }
+                    overlay._poll_reload("request")
+                    self.assertIn("並套用" if state == "success" else "即時套用失敗", overlay.status.get())
+                self.assertIsNone(overlay.reload_job)
+                saved_feedback = overlay.status.get()
+                self.assertEqual(overlay.current_multiplier_text["X"].get(), "X（水平）  0.50")
+                frame = overlay.window.winfo_children()[0].winfo_children()[0]
+                self.assertEqual(frame.cget("text"), "已儲存的補償倍率")
+                overlay.adjusted[0].set("560")
+                self.assertFalse(overlay.result.get())
+                self.assertEqual(overlay.status.get(), saved_feedback)
+                overlay.adjusted[0].set("invalid")
+                overlay.start()
+                self.assertIn("整數", overlay.status.get())
+                overlay.adjusted[0].set("280")
+                self.assertEqual(overlay.status.get(), saved_feedback)
+                overlay.close_button.invoke()
+
+    def test_preview_hands_off_to_s2p_and_minimizes_the_tester(self):
+        from gamepad_aim import AimTestPane
+
+        handoff = Mock()
+        pane = AimTestPane(self.root, str, lambda: None, open_gyro_settings=handoff)
+        self.root.deiconify()
+        self.root.update()
+        pane._open_compensation_preview()
+        overlay = pane.compensation_window
+        overlay.measure_button.invoke()
+        with patch.object(self.root, "iconify") as iconify:
+            overlay.settings_button.invoke()
+        handoff.assert_called_once_with()
+        iconify.assert_called_once_with()
+        self.assertFalse(overlay.window.winfo_exists())
+        self.assertIsNone(overlay.job)
+
+    def test_calculator_keeps_both_axes_after_opening_s2p_settings(self):
+        from gamepad_aim import AimTestPane
+        from gyro_compensation import CompensationSnapshot
+
+        handoff = Mock()
+        pane = AimTestPane(self.root, str, lambda: None, open_gyro_settings=handoff,
+                           read_gyro_compensation=lambda: CompensationSnapshot("test", {"X": 0.8, "Y": 1.25}))
+        self.root.deiconify()
+        self.root.update()
+        with patch("gamepad_aim.messagebox.askyesno", return_value=False):
+            pane._open_compensation_calculator()
+        calculator = pane.compensation_calculator
+        for value, text in zip(calculator.inputs["X"][1:], ("3", "2")):
+            value.set(text)
+        calculator.axis.set("Y")
+        for value, text in zip(calculator.inputs["Y"][1:], ("2", "1")):
+            value.set(text)
+        expected = calculator.result.get()
+
+        with patch.object(self.root, "iconify"):
+            calculator.settings_button.invoke()
+        handoff.assert_called_once_with()
+        self.assertFalse(calculator.window.winfo_exists())
+
+        with patch("gamepad_aim.messagebox.askyesno", return_value=False):
+            pane._open_compensation_calculator()
+        calculator = pane.compensation_calculator
+        self.assertEqual(calculator.axis.get(), "Y")
+        self.assertEqual(calculator.result.get(), expected)
+        calculator.axis.set("X")
+        self.assertEqual(tuple(value.get() for value in calculator.inputs["X"]), ("0.80", "3", "2"))
+        self.assertIn("0.53", calculator.result.get())
+
+    def test_switching_between_supported_controllers_during_prompt_aborts_the_reset(self):
+        from gamepad_aim import AimTestPane
+        from gyro_compensation import CompensationSnapshot
+
+        reset = Mock()
+        pane = AimTestPane(self.root, str, lambda: None, compensation_available=lambda: True,
+                           read_gyro_compensation=lambda: CompensationSnapshot("Alpha", {"X": 0.8, "Y": 1.0}),
+                           reset_gyro_compensation=reset)
+
+        def switch_controller(*_args, **_kwargs):
+            pane.close_gyro_compensation_for_device_change()
+            return True
+
+        with (
+            patch("gamepad_aim.messagebox.askyesno", side_effect=switch_controller),
+            patch("gamepad_aim.messagebox.showerror") as error,
+        ):
+            pane._open_compensation_calculator()
+
+        reset.assert_not_called()
+        error.assert_called_once()
+        self.assertIsNone(pane.compensation_calculator)
+
+    def test_calculator_blocks_settings_handoff_after_external_compensation_changes(self):
+        from gamepad_aim import AimTestPane
+        from gyro_compensation import CompensationSnapshot
+
+        original = CompensationSnapshot("Alpha", {"X": 1.0, "Y": 1.0})
+        for changed in (
+            CompensationSnapshot("Beta", original.multipliers),
+            original.with_multipliers({"X": 0.5, "Y": 1.0}),
+            CompensationSnapshot("Alpha", original.multipliers, output_target="LEFT_STICK"),
+        ):
+            with self.subTest(changed=changed):
+                read = Mock(return_value=original)
+                handoff = Mock()
+                pane = AimTestPane(
+                    self.root, str, lambda: None, open_gyro_settings=handoff,
+                    read_gyro_compensation=read,
+                )
+                pane._open_compensation_calculator()
+                calculator = pane.compensation_calculator
+                for field, value in zip(calculator.inputs["X"][1:], ("4", "2")):
+                    field.set(value)
+                self.assertIn("0.50", calculator.result.get())
+
+                read.return_value = changed
+                with patch.object(self.root, "iconify") as iconify:
+                    calculator.settings_button.invoke()
+
+                handoff.assert_not_called()
+                iconify.assert_not_called()
+                self.assertTrue(calculator.window.winfo_exists())
+                self.assertIn("重新開啟", calculator.result.get())
+                self.assertTrue(calculator.settings_button.instate(("disabled",)))
+                calculator.inputs["X"][2].set("3")
+                self.assertIn("重新開啟", calculator.result.get())
+                calculator.window.destroy()
+
+    def test_returning_to_calculator_hides_the_stale_recommendation(self):
+        from gamepad_aim import AimTestPane
+        from gyro_compensation import CompensationSnapshot
+
+        read = Mock(return_value=CompensationSnapshot("Alpha", {"X": 1.0, "Y": 1.0}))
+        pane = AimTestPane(self.root, str, lambda: None, read_gyro_compensation=read)
+        self.root.deiconify()
+        pane._open_compensation_calculator()
+        calculator = pane.compensation_calculator
+        calculator.inputs["X"][1].set("4")
+        calculator.inputs["X"][2].set("2")
+        self.assertIn("0.50", calculator.result.get())
+
+        read.return_value = CompensationSnapshot("Beta", {"X": 1.0, "Y": 1.0})
+        calculator.window.event_generate("<FocusIn>")
+        self.assertIn("重新開啟", calculator.result.get())
+        calculator.window.destroy()
+        pane._open_compensation_calculator()
+        self.assertFalse(pane.compensation_calculator.result.get())
+
+    def test_preview_and_calculator_offer_to_restore_changed_compensation(self):
+        from gamepad_aim import AimTestPane
+        from gyro_compensation import CompensationSnapshot
+
+        snapshot = CompensationSnapshot("test", {"X": 0.8, "Y": 1.25})
+        reset = Mock()
+        pane = AimTestPane(self.root, str, lambda: None,
+                           read_gyro_compensation=lambda: snapshot, reset_gyro_compensation=reset)
+        self.root.deiconify()
+        self.root.update()
+        with patch("gamepad_aim.messagebox.askyesno", side_effect=(False, True)) as warning:
+            pane._open_compensation_preview()
+            overlay = pane.compensation_window
+            self.assertEqual(overlay.original_multipliers, snapshot.multipliers)
+            overlay.start()
+            for index in range(4):
+                overlay.window.after_cancel(overlay.job)
+                with patch("gyro_compensation_window.time.perf_counter", return_value=overlay.end_at):
+                    overlay._tick()
+                if index < 3:
+                    overlay.window.after_cancel(overlay.job)
+                    overlay._start_turn()
+            self.assertIn("建議 X 補償倍率 0.80", overlay.result.get())
+            self.assertIn("建議 Y 補償倍率 1.25", overlay.result.get())
+            pane._close_test_and_compensation()
+            pane._open_compensation_calculator()
+        self.assertEqual(warning.call_count, 2)
+        reset.assert_called_once_with(snapshot)
+        calculator = pane.compensation_calculator
+        self.assertTrue(calculator.entries[0].instate(("readonly",)))
+        self.assertEqual(calculator.entries[0].get(), "1.00")
+
+    def test_compensation_preview_can_retry_after_an_open_error(self):
+        from gamepad_aim import AimTestPane
+
+        pane = AimTestPane(self.root, str, lambda: None)
+        self.root.deiconify()
+        self.root.update()
+        with (
+            patch.object(pane, "_open_test_window", side_effect=OSError("display restore failed")),
+            self.assertLogs("gamepad_aim", level="ERROR"),
+        ):
+            pane._open_compensation_preview()
+        self.assertFalse(pane.test_open)
+        self.assertFalse(pane._compensation_preview)
+        self.assertIsNone(pane.compensation_window)
+
+        pane._open_compensation_preview()
+        self.assertTrue(pane.test_open)
+        self.assertTrue(pane.compensation_window.window.winfo_exists())
+
+    def test_reopening_preview_keeps_result_and_alignment(self):
+        from gamepad_aim import AimTestPane, VIEW_MARGIN
+        from gamepad_aim_settings import AimSettings
+        from localization import translate_text
+
+        pane = AimTestPane(self.root, lambda key: translate_text(key, "en"), lambda: None)
+        self.root.deiconify()
+        self.root.update()
+        pane._save_settings(AimSettings(stick_horizontal_speed=1080, stick_vertical_speed=1080))
+        with patch("gamepad_aim.fullscreen_monitor_bounds", return_value=(0, 0, 800, 600)):
+            pane._open_compensation_preview()
+        overlay = pane.compensation_window
+        original_width = overlay.window.winfo_width()
+        for entry in overlay.adjusted:
+            entry.set("10")
+        overlay.start()
+        for index in range(4):
+            overlay.window.after_cancel(overlay.job)
+            with patch("gyro_compensation_window.time.perf_counter", return_value=overlay.end_at):
+                overlay._tick()
+            if index < 3:
+                overlay.window.after_cancel(overlay.job)
+                overlay._start_turn()
+        self.root.update()
+        self.assertGreaterEqual(overlay.window.winfo_width(), original_width)
+        with self.subTest("dialog alignment"):
+            self.assertEqual(
+                overlay.window.winfo_rootx() + overlay.window.winfo_width(),
+                pane.window.winfo_rootx() + pane.window.winfo_width() - VIEW_MARGIN,
+            )
+        with self.subTest("camera position and result"):
+            pitch = pane.scene.pitch
+            result = overlay.result.get()
+            pane._open_compensation_preview()
+            self.assertEqual(pane.scene.pitch, pitch)
+            self.assertEqual(overlay.result.get(), result)
+
+    def test_editing_preview_speed_invalidates_the_previous_measurement(self):
+        from gamepad_aim import AimTestPane
+
+        pane = AimTestPane(self.root, str, lambda: None)
+        self.root.deiconify()
+        self.root.update()
+        pane._open_compensation_preview()
+        overlay = pane.compensation_window
+        overlay.start()
+        for index in range(4):
+            overlay.window.after_cancel(overlay.job)
+            with patch("gyro_compensation_window.time.perf_counter", return_value=overlay.end_at):
+                overlay._tick()
+            if index < 3:
+                overlay.window.after_cancel(overlay.job)
+                overlay._start_turn()
+        self.assertTrue(overlay.result.get())
+        self.assertTrue(overlay.status.get())
+
+        overlay.adjusted[0].set("280")
+        self.assertEqual(overlay.result.get(), "")
+        self.assertEqual(overlay.status.get(), "")
+
+    def test_compensation_buttons_follow_the_selected_controller(self):
+        from gamepad_aim import AimTestPane
+
+        available = Mock(return_value=False)
+        pane = AimTestPane(self.root, str, lambda: None, compensation_available=available)
+        buttons = (pane.compensation_button, pane.compensation_calculator_button)
+        self.assertEqual([button.winfo_manager() for button in buttons], ["", ""])
+        pane._open_compensation_calculator()
+        pane._open_compensation_preview()
+        self.assertIsNone(pane.compensation_calculator)
+        self.assertIsNone(pane.compensation_window)
+
+        available.return_value = True
+        pane._update_labels()
+        self.assertEqual([button.winfo_manager() for button in buttons], ["grid", "grid"])
+        self.assertEqual([button.grid_info()["column"] for button in buttons], [1, 2])
+        pane.compensation_calculator_button.invoke()
+        calculator = pane.compensation_calculator
+        self.assertTrue(calculator.window.winfo_exists())
+
+        available.return_value = False
+        pane._update_labels()
+        self.assertEqual([button.winfo_manager() for button in buttons], ["", ""])
+        self.assertFalse(calculator.window.winfo_exists())
+        self.assertEqual(pane.settings_button.winfo_manager(), "grid")
+        self.assertEqual(pane.start_button.winfo_manager(), "grid")
+
+        self.root.deiconify()
+        self.root.update()
+        available.return_value = True
+        pane.refresh_compensation_buttons()
+        pane.compensation_button.invoke()
+        overlay = pane.compensation_window
+        overlay.start()
+        self.assertIsNotNone(overlay.job)
+
+        available.return_value = False
+        pane.refresh_compensation_buttons()
+        self.assertFalse(pane.test_open)
+        self.assertFalse(overlay.window.winfo_exists())
+        self.assertIsNone(overlay.job)
+
+    def test_disconnected_controller_cannot_start_or_continue_preview_measurement(self):
+        from gamepad_aim import AimTestPane
+
+        available = Mock(return_value=True)
+        pane = AimTestPane(self.root, str, lambda: None, compensation_available=available)
+        self.root.deiconify()
+        self.root.update()
+        pane._open_compensation_preview()
+        overlay = pane.compensation_window
+
+        available.return_value = False
+        overlay.start()
+        self.assertIsNone(overlay.job)
+        self.assertIsNone(overlay.measurement)
+
+        available.return_value = True
+        overlay.start()
+        overlay.window.after_cancel(overlay.job)
+        available.return_value = False
+        with patch("gyro_compensation_window.time.perf_counter", return_value=overlay.end_at):
+            overlay._tick()
+        self.assertIsNone(overlay.job)
+        self.assertIsNone(overlay.measurement)
+        self.assertEqual(pane.scene.yaw, 0.0)
+
+    def test_compensation_windows_close_when_the_same_bridge_slot_reconnects(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_test_window import GamepadTestWindow
+        from gyro_compensation import CompensationSnapshot
+
+        status = {"state": "connected", "controller_id": "controller", "connection_id": "first"}
+        pane = AimTestPane(
+            self.root, str, lambda: None,
+            read_gyro_compensation=lambda: CompensationSnapshot(
+                "Alpha", {"X": 1.0, "Y": 1.0}, connection=("controller", status["connection_id"]),
+            ),
+            read_gyro_reload_status=lambda: status,
+            apply_gyro_compensation=Mock(),
+        )
+        tester = object.__new__(GamepadTestWindow)
+        tester.window = Mock()
+        tester.aim_pane = pane
+        tester._refresh_devices = Mock()
+        self.root.deiconify()
+        self.root.update()
+        pane._open_compensation_calculator()
+        pane._open_compensation_preview()
+        calculator = pane.compensation_calculator
+        overlay = pane.compensation_window
+        overlay.start()
+
+        tester._refresh_devices_after_telemetry()
+        self.assertIsNotNone(overlay.job)
+        self.assertTrue(calculator.window.winfo_exists())
+
+        status, connected = {}, status
+        tester._refresh_devices_after_telemetry()
+        self.assertIsNotNone(overlay.job)
+        self.assertTrue(calculator.window.winfo_exists())
+
+        status = connected
+        status["connection_id"] = "second"
+        tester._refresh_devices_after_telemetry()
+
+        self.assertIsNone(overlay.job)
+        self.assertFalse(overlay.window.winfo_exists())
+        self.assertFalse(calculator.window.winfo_exists())
+        pane.apply_gyro_compensation.assert_not_called()
+        pane._open_compensation_calculator()
+        pane._open_compensation_preview()
+        tester._refresh_devices_after_telemetry()
+        self.assertTrue(pane.compensation_calculator.window.winfo_exists())
+        self.assertTrue(pane.compensation_window.window.winfo_exists())
+
+    def test_saved_3d_stick_speed_reaches_the_live_camera(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_settings import AimSettings
+
+        pane = AimTestPane(self.root, str, lambda: None)
+        for mode in ("shooting", "tracking", "timed-shooting"):
+            with self.subTest(mode=mode):
+                pane.mode.set(mode)
+                pane._save_settings(AimSettings(
+                    fullscreen=False, stick_horizontal_speed=360, stick_vertical_speed=60,
+                ))
+                pane.scene.start()
+                pane._sim_state = SimpleNamespace(right=(1.0, 0.5))
+                pane._simulated_at = 100.0
+                pane._simulate_to(100.1)
+                self.assertAlmostEqual(math.degrees(pane.scene.yaw), 36)
+                self.assertAlmostEqual(math.degrees(pane.scene.pitch), 3)
+
+    def test_saved_tracking_arc_and_speed_reach_the_live_target(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_settings import AimSettings
+
+        pane = AimTestPane(self.root, str, lambda: None)
+        pane.mode.set("tracking")
+        pane._save_settings(AimSettings(fullscreen=False, tracking_arc=360, tracking_speed=200))
+        pane.scene.start()
+        pane._simulated_at = 100.0
+        pane._simulate_to(101.0)
+        x, _y, z = pane.scene.target_position()
+        self.assertAlmostEqual(x, 0.0)
+        self.assertLess(z, 0.0)
+
+    def test_3d_tracking_result_reports_horizontal_full_stick_time(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_settings import AimSettings
+
+        pane = AimTestPane(self.root, str, lambda: None)
+        pane.mode.set("tracking")
+        pane._save_settings(AimSettings(fullscreen=False, tracking_seconds=1))
+        pane.countdown_until = 100
+        pane._advance_countdown(100)
+
+        def state(x):
+            return SimpleNamespace(right=(x, 0.0), buttons=(), right_trigger=0.0)
+
+        pane._input_events.extend((
+            (100.1, state(1.0)), (100.125, state(0.5)),
+            (100.2, state(-1.0)), (100.24, state(0.0)),
+        ))
+        pane._simulate_to_input(101.0)
+        pane._check_finish(skip_animation=True)
+        self.assertIn("水平輸出峰值 100.0%", pane.score.get())
+        self.assertIn("最長連續滿桿 40 ms", pane.score.get())
 
     def test_gpu_3d_draws_current_grid_and_target_in_the_same_frame(self):
         from gamepad_aim import AimTestPane
@@ -1433,7 +2438,7 @@ class AimPaneTests(unittest.TestCase):
         text = tip.winfo_children()[0].cget("text").replace("\n", "")
         self.assertIn("跟靶率", text)
         self.assertIn("同設定", text)
-        self.assertIn("靶色、準心顏色與大小不影響比對", text)
+        self.assertIn("手把視角速度、滑鼠感度、顏色、準心、震動與音效不影響比對", text)
         self.assertIn("綠色代表進步，紅色代表退步", text)
         self.assertIn("−14.4 pp", text)
         self.assertIn("平均偏差是準心與靶心的平均距離", text)
@@ -1445,7 +2450,7 @@ class AimPaneTests(unittest.TestCase):
 
         pane = AimTestPane(self.root, str, lambda: None)
         pane._open_test_window()
-        pane._resize(SimpleNamespace(width=1280, height=720))
+        pane._resize(SimpleNamespace(widget=pane._view, width=1280, height=720))
         pane.finished = True
         pane._show_changes((("命中 ↑ +1", True),))
         pane._update_labels()
@@ -1453,7 +2458,7 @@ class AimPaneTests(unittest.TestCase):
         comparison = pane.hud.change_items[0]
         gap = pane.canvas.bbox(comparison)[1] - pane.canvas.bbox(score)[3]
         self.assertGreaterEqual(gap, 0)
-        self.assertLess(gap, pane.hud.line // 2)
+        self.assertLessEqual(gap, pane.hud.padding + 1)
 
     def test_fullscreen_start_uses_selected_display_mode_and_escape_restores_it(self):
         from gamepad_aim import AimTestPane
@@ -2178,6 +3183,148 @@ class AimPaneTests(unittest.TestCase):
         self.assertEqual(pane.change_parts, (("同基準尚無紀錄", None),))
         self.assertEqual(len(history.records), 3)
 
+    @unittest.skipUnless(sys.platform == "win32", "Windows private fonts")
+    def test_result_uses_bundled_font_for_chinese_english_and_symbols(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_settings import AimSettings
+        from localization import translate_text
+
+        for language in ("zh-TW", "en"):
+            with self.subTest(language=language):
+                pane = AimTestPane(
+                    self.root, lambda text: translate_text(text, language), lambda: None,
+                )
+                pane.dimension.set("2d")
+                pane._save_settings(AimSettings(fullscreen=False, target_count=1))
+                pane._start()
+                pane._advance_countdown(pane.countdown_until)
+                x, y, _ = pane.cursor.target(*pane.size, pane._cursor_top())
+                pane._mouse_click(SimpleNamespace(x=x, y=y))
+                pane._draw_hit_effect(pane.hit_effect[0] + 1)
+                pane._show_changes((("命中率 ↑ +50.0 pp", True),))
+                pane.fps_text.set("FPS 120   99% Low 118")
+                pane._update_hud()
+
+                self.assertTrue(pane.finished)
+                title = pane.countdown_item
+                for item in (
+                    title, *pane.hud.labels[1:], pane.hud.timer_item,
+                    pane.finish_hint_item, *pane.hud.change_items,
+                ):
+                    spec = pane.canvas.itemcget(item, "font")
+                    text = pane.canvas.itemcget(item, "text")
+                    self.assertTrue(text)
+                    weight = pane.canvas.tk.call("font", "actual", spec, "-weight")
+                    self.assertEqual(weight, "bold" if item == title else "normal")
+                    for char in set(text) - {"\n"}:
+                        actual = pane.canvas.tk.call(
+                            "font", "actual", spec, "-displayof", pane.canvas, "-family", "--", char,
+                        )
+                        self.assertEqual(actual, "S2P Aim Sans", (language, text, char))
+                pane.restart_button.invoke()
+                self.assertEqual(
+                    pane.canvas.itemcget(pane.hud.timer_item, "font"), "TkDefaultFont",
+                )
+                pane.close_test()
+
+    def test_finishing_round_when_history_clear_button_is_destroyed(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_history import AimHistory
+        from gamepad_aim_settings import AimSettings
+
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "history.json"
+            pane = AimTestPane(self.root, str, lambda: None, history=AimHistory(path))
+            pane.dimension.set("2d")
+            pane._save_settings(AimSettings(fullscreen=False, window_size="800x450", target_count=1))
+            pane._start()
+            started = pane.countdown_until
+            pane._advance_countdown(started)
+            pane.cursor.x, pane.cursor.y, _ = pane.cursor.target(*pane.size, pane._cursor_top())
+            pane._shoot(started + 0.05)
+            pane.history_view.clear_button.destroy()
+            pane._draw_hit_effect(started + 1)
+
+            self.assertTrue(pane.finished)
+            self.assertIn("命中 1/1", pane.score.get())
+            self.assertTrue(pane.history_view.tree.get_children())
+            record, = AimHistory(path).records
+            self.assertEqual(record["metrics"]["hits"], 1)
+            pane.close_test()
+            self.assertEqual(len(AimHistory(path).records), 1)
+
+    def test_write_failure_still_shows_score_and_allows_restart(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_history import AimHistory
+        from gamepad_aim_settings import AimSettings
+
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "history.json"
+            pane = AimTestPane(self.root, str, lambda: None, history=AimHistory(path))
+            pane.dimension.set("2d")
+            pane._save_settings(AimSettings(fullscreen=False, window_size="800x450", target_count=1))
+
+            def finish():
+                pane._start()
+                started = pane.countdown_until
+                pane._advance_countdown(started)
+                pane.cursor.x, pane.cursor.y, _ = pane.cursor.target(*pane.size, pane._cursor_top())
+                pane._shoot(started + 0.05)
+                pane._draw_hit_effect(started + 1)
+
+            with patch("gamepad_aim_history.atomic_write_bytes", side_effect=PermissionError("history is locked")):
+                finish()
+            self.assertTrue(pane.finished)
+            self.assertIn("命中 1/1", pane.score.get())
+            self.assertIn("無法儲存這筆紀錄", pane.status.get())
+            self.assertFalse(path.exists())
+            self.assertFalse(pane.change_parts)
+            self.assertFalse(pane.restart_button.instate(("disabled",)))
+
+            finish()
+            self.assertTrue(pane.finished)
+            self.assertFalse(pane.history_error)
+            self.assertEqual(len(AimHistory(path).records), 1)
+            pane.close_test()
+
+    def test_result_text_fits_a_small_window_at_high_dpi_after_resize(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_settings import AimSettings
+        from localization import translate_text
+
+        self.root.tk.call("tk", "scaling", 4.0)
+        for language in ("en", "zh-TW"):
+            pane = AimTestPane(self.root, lambda text: translate_text(text, language), lambda: None)
+            pane.dimension.set("2d")
+            pane._save_settings(AimSettings(fullscreen=False, window_size="800x450", target_count=1))
+            pane._start()
+            pane._advance_countdown(pane.countdown_until)
+            x, y, _ = pane.cursor.target(*pane.size, pane._cursor_top())
+            pane._mouse_click(SimpleNamespace(x=x, y=y))
+            pane._draw_hit_effect(pane.hit_effect[0] + 1)
+            self.assertTrue(pane.finished)
+
+            for width, height in ((640, 360), (800, 450)):
+                with self.subTest(language=language, size=(width, height)):
+                    pane._resize(SimpleNamespace(widget=pane.canvas, width=width, height=height))
+                    groups = [
+                        pane.canvas.bbox(pane.countdown_item),
+                        pane.canvas.bbox(pane.hud.labels[1]),
+                        pane.canvas.bbox(*pane.hud.change_items),
+                        pane.canvas.bbox(pane.finish_hint_item),
+                    ]
+                    for left, top, right, bottom in groups:
+                        self.assertGreaterEqual(left, 0)
+                        self.assertGreaterEqual(top, 0)
+                        self.assertLessEqual(right, width)
+                        self.assertLessEqual(bottom, height)
+                        self.assertAlmostEqual((left + right) / 2, width / 2, delta=1)
+                    for earlier, later in zip(groups, groups[1:]):
+                        self.assertLess(earlier[3], later[1])
+            pane.restart_button.invoke()
+            self.assertEqual(float(pane.canvas.itemcget(pane.countdown_item, "width")), 0)
+            pane.close_test()
+
     def test_all_modes_clear_targets_at_completion(self):
         from gamepad_aim import AimTestPane
         from gamepad_aim_settings import AimSettings
@@ -2255,7 +3402,7 @@ class AimPaneTests(unittest.TestCase):
         from gamepad_aim_settings import AimSettings
 
         for dimension, mode in (("2d", "shooting"), ("2d", "tracking"), ("3d", "tracking")):
-            for action in ("close", "restart", "focus", "resize", "hide", "destroy"):
+            for action in ("close", "restart", "focus", "resize", "switch-mode", "hide", "destroy"):
                 with self.subTest(dimension=dimension, mode=mode, action=action):
                     frame = tk.Frame(self.root)
                     self.addCleanup(frame.destroy)
@@ -2270,6 +3417,7 @@ class AimPaneTests(unittest.TestCase):
                     pane._advance_countdown(start)
                     pane._simulate_to(start + 0.99)
                     self.assertTrue(pane._round().running)
+                    expected_mode = pane.round_basis["mode"]
 
                     with patch("gamepad_aim.time.perf_counter", return_value=start + 1.001):
                         if action == "close":
@@ -2281,6 +3429,9 @@ class AimPaneTests(unittest.TestCase):
                                 pane._view_lost_focus(SimpleNamespace(widget=pane._view))
                         elif action == "resize":
                             pane._resize(SimpleNamespace(widget=pane._view, width=900, height=500))
+                        elif action == "switch-mode":
+                            pane.mode.set("tracking" if mode == "shooting" else "shooting")
+                            pane._change_test_mode()
                         elif action == "hide":
                             pane.set_visible(False)
                         else:
@@ -2288,6 +3439,7 @@ class AimPaneTests(unittest.TestCase):
 
                     self.assertEqual(len(pane.history.records), 1)
                     record, = pane.history.records
+                    self.assertEqual(record["basis"]["mode"], expected_mode)
                     self.assertEqual(record["metrics"]["seconds"], 1)
                     self.assertIn("tracking" if mode == "tracking" else "hits", record["metrics"])
                     pane.close_test()
@@ -2322,6 +3474,85 @@ class AimPaneTests(unittest.TestCase):
                 self.assertEqual(pane.test_open, button == "START")
                 self.assertEqual(pane.countdown_until is not None, button == "START")
                 self.assertFalse(pane.history.records)
+
+    def test_buffered_start_after_timeout_saves_completed_round_and_restarts(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_settings import AimSettings
+
+        for mode in ("shooting", "tracking", "timed-shooting"):
+            with self.subTest(mode=mode):
+                frame = tk.Frame(self.root)
+                self.addCleanup(frame.destroy)
+                pane = AimTestPane(frame, str, lambda: None, read_input=lambda: None)
+                pane.dimension.set("2d")
+                pane.mode.set(mode)
+                pane._save_settings(AimSettings(
+                    fullscreen=False, window_size="800x450", target_seconds=1,
+                    tracking_seconds=1, timed_shooting_seconds=1,
+                ))
+                pane._start()
+                started = pane.countdown_until
+                pane._advance_countdown(started)
+                basis = pane.round_basis
+                pane._simulate_to(started + 0.98)
+                pane.start_pressed = False
+                pressed = SimpleNamespace(buttons=("START",), right=(0.0, 0.0), right_trigger=0.0)
+                pane._input_events.extend((
+                    (started + 1.01, pressed),
+                    (started + 1.02, pressed),
+                ))
+                with (
+                    patch.object(pane.owner, "focus_displayof", return_value=pane.canvas),
+                    patch.object(pane, "_schedule"),
+                    patch("gamepad_aim.time.perf_counter", return_value=started + 1.03),
+                ):
+                    pane._simulate_tick(started + 1.03)
+
+                record, = pane.history.records
+                self.assertEqual(record["basis"], basis)
+                self.assertEqual(record["metrics"]["seconds"], 1)
+                self.assertIsNotNone(pane.countdown_until)
+                self.assertFalse(pane.finished)
+                pane.close_test()
+                self.assertEqual(len(pane.history.records), 1)
+
+    def test_held_start_during_final_hit_does_not_skip_results(self):
+        from gamepad_aim import AimTestPane
+        from gamepad_aim_settings import AimSettings
+
+        pane = AimTestPane(self.root, str, lambda: None, read_input=lambda: None)
+        pane.dimension.set("2d")
+        pane._save_settings(AimSettings(fullscreen=False, window_size="800x450", target_count=1))
+        pane._start()
+        started = pane.countdown_until
+        pane._advance_countdown(started)
+        pane.cursor.x, pane.cursor.y, _ = pane.cursor.target(*pane.size, pane._cursor_top())
+        pane._shoot(started + 0.05)
+        self.assertTrue(pane._awaiting_finish())
+        pane.start_pressed = False
+        pressed = SimpleNamespace(buttons=("START",), right=(0.0, 0.0), right_trigger=0.0)
+        pane._input_events.append((started + 0.06, pressed))
+        with patch.object(pane.owner, "focus_displayof", return_value=pane.canvas):
+            pane._simulate_tick(started + 0.06)
+            self.assertFalse(pane.finished)
+            self.assertIsNone(pane.countdown_until)
+            pane._draw_hit_effect(started + 1)
+            pane._input_events.append((started + 1.01, pressed))
+            pane._simulate_tick(started + 1.01)
+
+        self.assertTrue(pane.finished)
+        self.assertIsNone(pane.countdown_until)
+        self.assertEqual(len(pane.history.records), 1)
+        released = SimpleNamespace(buttons=(), right=(0.0, 0.0), right_trigger=0.0)
+        pane._input_events.extend(((started + 1.02, released), (started + 1.03, pressed)))
+        with (
+            patch.object(pane.owner, "focus_displayof", return_value=pane.canvas),
+            patch("gamepad_aim.time.perf_counter", return_value=started + 1.03),
+        ):
+            pane._simulate_tick(started + 1.03)
+        self.assertIsNotNone(pane.countdown_until)
+        self.assertEqual(len(pane.history.records), 1)
+        pane.close_test()
 
     def test_destroying_the_test_window_saves_the_last_hit_once(self):
         from gamepad_aim import AimTestPane

@@ -59,6 +59,7 @@ from desktop_output import (
 )
 from mapping_runtime import (
     MAP_BUTTON,
+    MAP_COMBO,
     MAP_KEYBOARD,
     MAP_LT,
     MAP_LX,
@@ -71,6 +72,7 @@ from mapping_runtime import (
     MappingRuntime,
     MappingRuntimeManager,
     compile_button_mapping,
+    compile_combo_output,
 )
 
 
@@ -121,6 +123,9 @@ XB_BUTTONS = {
 XB_BUTTON_NAMES = {
     int(mask): name for name, mask in XB_BUTTONS.items()
 }
+# Stick directions keep their target strings; compile each combo once.
+_DIRECTION_COMBO_CACHE = {}
+_MISSING = object()
 
 def _soft_mix(first, second, maximum):
     """Combine amplitudes without the harsh clipping of plain addition."""
@@ -145,6 +150,14 @@ def _update_rumble_tail(
     if target_changed:
         current = target + (current - target) * strength
     return max(target, current * max(0.0, min(1.0, decay_factor)))
+
+
+class CalibrationInProgressError(ValueError):
+    """A settings reload would replace a live or unsaved calibration."""
+
+
+class CalibrationResultPendingError(CalibrationInProgressError):
+    """A finished calibration result has not been saved by the connector yet."""
 
 
 class XInputController:
@@ -194,6 +207,7 @@ class XInputController:
             else (vg.VX360Gamepad() if activate_runtime else None)
         )
         self._test_telemetry = None
+        self._extension_input = None
         self._test_xinput_slot = None
         self._test_gyro_active = False
         self._test_input_rate_hz = None
@@ -497,6 +511,7 @@ class XInputController:
         self.gyro_player_space = gyro_settings["player_space"]
         self.gyro_accel_suppression = gyro_settings["accel_suppression"] / 100.0
         self.gyro_adaptive_deadzone = gyro_settings["adaptive_deadzone"] / 100.0
+        self.gyro_button_stabilization_mode = gyro_settings["button_stabilization_mode"]
         self.gyro_button_freeze_ms = gyro_settings["button_freeze_ms"]
         legacy_stabilization_button = config.get(
             "gyro_mapping", "stabilization_button", fallback="NONE"
@@ -515,6 +530,9 @@ class XInputController:
         )
         self.gyro_x_ratio = gyro_settings["x_ratio"]
         self.gyro_y_ratio = gyro_settings["y_ratio"]
+        self.gyro_x_compensation = gyro_settings["x_compensation"]
+        self.gyro_y_compensation = gyro_settings["y_compensation"]
+        self.gyro_compensation_keep_limit = gyro_settings["compensation_keep_limit"]
         self.gyro_invert_x = gyro_settings["invert_x"]
         self.gyro_invert_y = gyro_settings["invert_y"]
         self._gyro_toggle_enabled = False
@@ -543,6 +561,8 @@ class XInputController:
         self._aim_pose_ready_since = None
         self._aim_player_space_blend = 0.0
         self._gyro_freeze_until = 0.0
+        self._gyro_button_guard_remaining = 0.0
+        self._gyro_button_reference = (0.0, 0.0)
         self._gyro_stabilization_button_state = 0
         self._tilt_recenter_was_pressed = False
         self._tilt_orientation = None
@@ -670,6 +690,14 @@ class XInputController:
         Build an inactive snapshot instead, then transplant its Python state
         while preserving the one pad, callback, condition and worker thread.
         """
+        with self._gyro_calibration_lock:
+            if "running" in (self._gyro_calibration_state, self._mag_calibration_state, self._accel_calibration_state):
+                raise CalibrationInProgressError("calibration is running; finish it before applying settings")
+            if any(result is not None for result in (
+                self._gyro_calibration_result, self._mag_calibration_result, self._accel_calibration_result,
+            )):
+                raise CalibrationResultPendingError("calibration result is waiting to be saved; apply settings again shortly")
+
         snapshot = type(self)(
             config,
             calibration,
@@ -688,6 +716,7 @@ class XInputController:
             preserved = {
                 "pad": self.pad,
                 "_test_telemetry": self._test_telemetry,
+                "_extension_input": self._extension_input,
                 "_test_xinput_slot": self._test_xinput_slot,
                 "_test_input_rate_hz": self._test_input_rate_hz,
                 "_rumble_sender": self._rumble_sender,
@@ -713,6 +742,14 @@ class XInputController:
             # the inactive snapshot's pad/condition between two assignments.
             self.__dict__.update(replacement_state)
             condition.notify_all()
+
+    def set_extension_input(self, source):
+        """Attach or detach the optional Extensions input mixer.
+
+        One attribute assignment is atomic for the input thread, which reads
+        it once per report.  ``None`` restores the plain physical path.
+        """
+        self._extension_input = source
 
     def set_test_telemetry(self, telemetry):
         """Attach the optional shared-memory diagnostics publisher."""
@@ -790,6 +827,8 @@ class XInputController:
             return f"鍵盤 {value}"
         if kind == MAP_BUTTON:
             return f"XInput {XB_BUTTON_NAMES.get(int(value), value)}"
+        if kind == MAP_COMBO:
+            return f"XInput {'+'.join(value.members)}"
         if kind == MAP_LT:
             return "XInput LT"
         if kind == MAP_RT:
@@ -801,6 +840,25 @@ class XInputController:
             MAP_RY: "XInput 右搖桿 Y",
         }
         return axis_names.get(kind, "無")
+
+    @staticmethod
+    def _apply_combo_output(report, combo):
+        """Add a combo's buttons and triggers to this report only."""
+        if combo is None:
+            return
+        report.wButtons |= combo.buttons
+        if combo.left_trigger:
+            report.bLeftTrigger = 255
+        if combo.right_trigger:
+            report.bRightTrigger = 255
+
+    @staticmethod
+    def _direction_combo_output(target):
+        combo = _DIRECTION_COMBO_CACHE.get(target, _MISSING)
+        if combo is _MISSING:
+            combo = compile_combo_output(target, XB_BUTTONS)
+            _DIRECTION_COMBO_CACHE[target] = combo
+        return combo
 
     @staticmethod
     def _test_direction_target(target):
@@ -821,6 +879,8 @@ class XInputController:
             return names.get(mouse_value, f"滑鼠 {mouse_value}")
         if target in ("LT", "RT"):
             return f"XInput {target}"
+        if target.startswith("COMBO:"):
+            return f"XInput {target[len('COMBO:'):]}"
         if target in XB_BUTTONS:
             return f"XInput {target}"
         return target
@@ -995,6 +1055,9 @@ class XInputController:
                 "tilt_max_angle": self.gyro_tilt_max_angle,
                 "x_ratio": self.gyro_x_ratio,
                 "y_ratio": self.gyro_y_ratio,
+                "x_compensation": self.gyro_x_compensation,
+                "y_compensation": self.gyro_y_compensation,
+                "compensation_keep_limit": self.gyro_compensation_keep_limit,
                 "response_curve": self.gyro_response_curve,
                 "curve_strength": self.gyro_curve_strength,
                 "smoothing_ms": self.gyro_smoothing_ms,
@@ -1052,6 +1115,8 @@ class XInputController:
         self._aim_pose_ready_since = None
         self._aim_player_space_blend = 0.0
         self._gyro_freeze_until = 0.0
+        self._gyro_button_guard_remaining = 0.0
+        self._gyro_button_reference = (0.0, 0.0)
         self._gyro_stabilization_button_state = 0
         self._tilt_recenter_was_pressed = False
         self._tilt_orientation = None
@@ -2246,7 +2311,9 @@ class XInputController:
             or not np.all(np.isfinite(bias_values))
             or not np.all(np.isfinite(matrix_values))
             or float(np.max(np.abs(matrix_values - matrix_values.T))) > 1e-9
-            or float(np.linalg.det(matrix_values)) <= 1e-12
+            # The ellipsoid correction must be positive definite. An absolute
+            # determinant cutoff rejects valid small gains (e.g. 16384 LSB/g).
+            or float(np.min(np.linalg.eigvalsh(matrix_values))) <= 0.0
         ):
             raise ValueError("invalid accelerometer calibration")
         self._accel_bias = bias_values
@@ -2311,7 +2378,9 @@ class XInputController:
             return None
         return corrected
 
-    def set_magnetometer_calibration(self, bias, scale=None, matrix=None):
+    def set_magnetometer_calibration(
+        self, bias, scale=None, matrix=None, *, field_reference=None,
+    ):
         """Apply validated per-controller hard/soft-iron calibration."""
         if bias is None:
             self._mag_bias = [0.0, 0.0, 0.0]
@@ -2339,11 +2408,8 @@ class XInputController:
             for value in scale_values
         ):
             raise ValueError("invalid magnetometer scale")
-        self._mag_bias = list(bias_values)
-        self._mag_scale = list(scale_values)
-        if matrix is None:
-            self._mag_matrix = None
-        else:
+        matrix_values = None
+        if matrix is not None:
             matrix_values = np.asarray(matrix, dtype=np.float64)
             if matrix_values.shape != (3, 3) or not np.all(
                 np.isfinite(matrix_values)
@@ -2352,9 +2418,11 @@ class XInputController:
             determinant = float(np.linalg.det(matrix_values))
             if determinant <= 1e-12:
                 raise ValueError("invalid magnetometer matrix")
-            self._mag_matrix = matrix_values
-        self._mag_field_reference = None
-        self._mag_field_valid = False
+        self._mag_bias = list(bias_values)
+        self._mag_scale = list(scale_values)
+        self._mag_matrix = matrix_values
+        self._mag_field_reference = field_reference
+        self._mag_field_valid = field_reference is not None
         self._ahrs.reset()
         self._reset_magnetic_fusion_state()
         self._nine_axis_orientation = None
@@ -2368,6 +2436,8 @@ class XInputController:
     def start_gyro_calibration(self):
         """Begin a one-second stationary zero-bias calibration."""
         with self._gyro_calibration_lock:
+            if self._gyro_calibration_result is not None:
+                return False
             self._gyro_calibration_state = "running"
             self._gyro_calibration_message = "keep_still"
             self._gyro_calibration_started = time.perf_counter()
@@ -2376,7 +2446,6 @@ class XInputController:
             self._gyro_calibration_valid_time = 0.0
             self._gyro_calibration_last_raw = None
             self._gyro_calibration_samples = []
-            self._gyro_calibration_result = None
             self._gyro_calibration_quality = None
         self._gyro_toggle_enabled = False
         self._gyro_smoothed = (0.0, 0.0)
@@ -2390,6 +2459,7 @@ class XInputController:
         self._nine_axis_orientation = None
         self._nine_axis_quaternion = None
         self._nine_axis_has_magnetometer = False
+        return True
 
     def get_gyro_calibration_status(self):
         with self._gyro_calibration_lock:
@@ -2409,6 +2479,8 @@ class XInputController:
     def start_accelerometer_calibration(self):
         """Collect many low-motion gravity directions for ellipsoid fitting."""
         with self._gyro_calibration_lock:
+            if self._accel_calibration_result is not None:
+                return False
             self._accel_calibration_state = "running"
             self._accel_calibration_message = "move_and_pause"
             self._accel_calibration_started = time.perf_counter()
@@ -2417,13 +2489,13 @@ class XInputController:
             self._accel_orientation_bins = set()
             self._accel_calibration_last_fit = 0.0
             self._accel_calibration_last_error = ""
-            self._accel_calibration_result = None
             self._accel_calibration_quality = None
         self._gyro_toggle_enabled = False
         self._gyro_smoothed = (0.0, 0.0)
         self._gyro_was_active = False
         self._tilt_neutral = None
         self._tilt_neutral_quaternion = None
+        return True
 
     def get_accelerometer_calibration_status(self):
         with self._gyro_calibration_lock:
@@ -2532,24 +2604,17 @@ class XInputController:
                 self._accel_calibration_last_error = str(exc)
                 self._accel_calibration_message = "more_orientations"
                 return True
-            self._accel_bias = np.asarray(bias, dtype=np.float64)
-            self._accel_matrix = np.asarray(matrix, dtype=np.float64)
             self._accel_calibration_quality = quality
             self._accel_calibration_result = (bias, matrix, quality)
             self._accel_calibration_state = "success"
             self._accel_calibration_message = "ready_to_save"
-            self._ahrs.reset()
-            self._reset_magnetic_fusion_state()
-            self._nine_axis_orientation = None
-            self._nine_axis_quaternion = None
-            self._nine_axis_has_magnetometer = False
-            self._tilt_neutral = None
-            self._tilt_neutral_quaternion = None
             return True
 
     def start_magnetometer_calibration(self):
         """Begin a guided full-orientation magnetometer calibration."""
         with self._gyro_calibration_lock:
+            if self._mag_calibration_result is not None:
+                return False
             self._mag_calibration_state = "running"
             self._mag_calibration_message = "move_figure_eight"
             self._mag_calibration_started = time.perf_counter()
@@ -2557,7 +2622,6 @@ class XInputController:
             self._mag_orientation_bins = set()
             self._mag_calibration_min = [math.inf, math.inf, math.inf]
             self._mag_calibration_max = [-math.inf, -math.inf, -math.inf]
-            self._mag_calibration_result = None
             self._mag_calibration_last_fit = 0.0
             self._mag_calibration_last_error = ""
         self._gyro_toggle_enabled = False
@@ -2565,6 +2629,7 @@ class XInputController:
         self._gyro_was_active = False
         self._tilt_neutral = None
         self._tilt_neutral_quaternion = None
+        return True
 
     def get_magnetometer_calibration_status(self):
         with self._gyro_calibration_lock:
@@ -2666,21 +2731,9 @@ class XInputController:
                 self._mag_calibration_message = "more_orientations"
                 return True
 
-            self._mag_bias = list(bias)
-            self._mag_scale = [1.0, 1.0, 1.0]
-            self._mag_matrix = np.asarray(matrix, dtype=np.float64)
-            self._mag_field_reference = 1.0
-            self._mag_field_valid = True
             self._mag_calibration_result = (bias, matrix, quality)
             self._mag_calibration_state = "success"
             self._mag_calibration_message = "ready_to_save"
-            self._ahrs.reset()
-            self._reset_magnetic_fusion_state()
-            self._nine_axis_orientation = None
-            self._nine_axis_quaternion = None
-            self._nine_axis_has_magnetometer = False
-            self._tilt_neutral = None
-            self._tilt_neutral_quaternion = None
             return True
 
     def _process_gyro_calibration(self, gyroscope, accelerometer):
@@ -2748,16 +2801,10 @@ class XInputController:
                 self._gyro_calibration_message = "unstable"
                 return True
 
-            self._gyro_bias = list(bias)
-            self._gyro_bias_anchor = list(bias)
-            self._gyro_bias_samples = self.GYRO_FINAL_SAMPLES
-            self._gyro_bias_source = "manual"
-            self._gyro_stationary_samples = 0
-            self._gyro_last_raw = None
             self._gyro_calibration_result = bias
             self._gyro_calibration_quality = quality
             self._gyro_calibration_state = "success"
-            self._gyro_calibration_message = "saved"
+            self._gyro_calibration_message = "ready_to_save"
             return True
 
     @staticmethod
@@ -3678,11 +3725,18 @@ class XInputController:
             self, "_gyro_stabilization_button_state", 0
         )
         self._gyro_stabilization_button_state = stabilization_button_state
-        if should_freeze_gyro_output(
+        button_guard_triggered = should_freeze_gyro_output(
             self.gyro_activation_mode,
             getattr(self, "gyro_button_freeze_ms", 0.0),
             stabilization_changed,
-        ):
+        )
+        use_spike_guard = (
+            self.gyro_motion_mode == "CENTER"
+            and self.gyro_button_stabilization_mode == "SPIKE"
+            and self.gyro_button_freeze_ms > 0.0
+            and bool(self.gyro_stabilization_buttons)
+        )
+        if button_guard_triggered and not use_spike_guard:
             self._gyro_freeze_until = max(
                 getattr(self, "_gyro_freeze_until", 0.0),
                 time.perf_counter()
@@ -3802,8 +3856,13 @@ class XInputController:
                 )
         else:
             horizontal, vertical = self._gravity_aware_aim_axes(gyroscope, dt)
+            if use_spike_guard:
+                horizontal, vertical = self._guard_gyro_button_spike(
+                    horizontal, vertical, dt, button_guard_triggered
+                )
         if self.gyro_motion_mode == "TILT":
-            active_deadzone = self.gyro_tilt_deadzone
+            horizontal = _soft_deadzone(horizontal, self.gyro_tilt_deadzone)
+            vertical = _soft_deadzone(vertical, self.gyro_tilt_deadzone)
             self._gyro_motion_envelope = 0.0
         else:
             motion_speed = math.hypot(horizontal, vertical)
@@ -3823,8 +3882,12 @@ class XInputController:
                 self._gyro_motion_envelope,
                 getattr(self, "gyro_adaptive_deadzone", 0.0),
             )
-        horizontal = _soft_deadzone(horizontal, active_deadzone)
-        vertical = _soft_deadzone(vertical, active_deadzone)
+            if motion_speed <= active_deadzone:
+                horizontal = vertical = 0.0
+            else:
+                scale = (motion_speed - active_deadzone) / motion_speed
+                horizontal *= scale
+                vertical *= scale
         horizontal *= self.gyro_x_ratio
         vertical *= self.gyro_y_ratio
         if self.gyro_invert_x:
@@ -3894,7 +3957,49 @@ class XInputController:
                 self.gyro_response_curve,
                 self.gyro_curve_strength,
             )
-        return stick_x, stick_y, 0.0, 0.0
+            if getattr(self, "gyro_compensation_keep_limit", False):
+                # Cap at full stick before compensation, so the compensated
+                # gyro keeps the turn-speed ceiling of the original game setting.
+                target_side = (
+                    "left" if self.gyro_target == "LEFT_STICK" else "right"
+                )
+                stick_x, stick_y = _clamp_vector_to_shape(
+                    stick_x, stick_y, self.stick_output_shape[target_side]
+                )
+        return (
+            stick_x * self.gyro_x_compensation,
+            stick_y * self.gyro_y_compensation,
+            0.0,
+            0.0,
+        )
+
+    def _guard_gyro_button_spike(self, x, y, dt, triggered):
+        """Bound sudden deviations from the pre-button angular velocity."""
+        if not self._gyro_was_active:
+            self._gyro_button_reference = (x, y)
+            self._gyro_button_guard_remaining = 0.0
+            return x, y
+
+        reference_x, reference_y = self._gyro_button_reference
+        duration = self.gyro_button_freeze_ms / 1000.0
+        remaining = (
+            duration if triggered else max(0.0, self._gyro_button_guard_remaining - dt)
+        )
+        self._gyro_button_guard_remaining = remaining
+        delta_x, delta_y = x - reference_x, y - reference_y
+        if remaining > 0.0:
+            # Widen the allowance after the edge to let deliberate turns through.
+            allowance = 2.0 + 400.0 * (duration - remaining)
+            deviation = math.hypot(delta_x, delta_y)
+            if deviation > allowance:
+                scale = allowance / deviation
+                return reference_x + delta_x * scale, reference_y + delta_y * scale
+        else:
+            alpha = 1.0 - math.exp(-dt / 0.020)
+            self._gyro_button_reference = (
+                reference_x + delta_x * alpha, reference_y + delta_y * alpha
+            )
+        return x, y
 
     def _emit_mouse_move(self, delta_x, delta_y):
         self._desktop_output.emit_mouse_move(delta_x, delta_y)
@@ -4158,6 +4263,8 @@ class XInputController:
                 report.bRightTrigger = 255
             elif kind == MAP_BUTTON:
                 report.wButtons |= value
+            elif kind == MAP_COMBO:
+                self._apply_combo_output(report, value)
 
         # =========================
         # 搖桿
@@ -4351,8 +4458,14 @@ class XInputController:
             ):
                 continue
 
+            # 手把組合：同一幀同時按下多個 Xbox 按鍵
+            if target.startswith("COMBO:"):
+                self._apply_combo_output(
+                    report, self._direction_combo_output(target)
+                )
+
             # LT
-            if target == "LT":
+            elif target == "LT":
                 report.bLeftTrigger = 255
 
             # RT
@@ -4605,6 +4718,12 @@ class XInputController:
         report.sThumbLY = round(final_ly * 32767)
         report.sThumbRX = round(final_rx * 32767)
         report.sThumbRY = round(final_ry * 32767)
+
+        # Optional Extensions input is merged into this one report; S2P keeps
+        # the only virtual pad.  Disabled costs a single attribute check.
+        extension_input = self._extension_input
+        if extension_input is not None:
+            extension_input.merge_into(report)
 
         self._publish_test_telemetry(
             state,

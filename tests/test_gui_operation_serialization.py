@@ -40,6 +40,9 @@ class _ScheduledRoot:
     def after_cancel(self, job):
         self._jobs.pop(job, None)
 
+    def update(self):
+        pass
+
     def run_all(self):
         while self._jobs:
             _job, callback = self._jobs.popitem()
@@ -65,7 +68,68 @@ class GuiOperationSerializationTests(unittest.TestCase):
         gui.calibration_process = None
         gui.flash_process = None
         gui.tr = lambda text: text
+        # The fake root cannot host a Toplevel; record the progress steps.
+        gui._set_flash_progress = Mock()
         return gui
+
+    def test_silent_flash_steps_show_progress_messages(self):
+        gui = self.make_gui()
+        gui._flash_operation_active = True
+        gui.flash_detect_attempts = 0
+        gui.ports_before_flash = set()
+        gui.detect_flash_port()
+        message, detail = gui._set_flash_progress.call_args.args
+        self.assertIn("等待 ESP32-S3 進入刷機模式", message)
+        self.assertIn("剩餘約 30 秒", detail)
+
+        gui.get_serial_port_infos = Mock(return_value=(
+            SimpleNamespace(device="COM4", vid=0x303A, pid=0x1001),
+        ))
+        with patch.object(config_gui.threading, "Thread", _DeferredThread):
+            gui.preflight_firmware_flash("COM4")
+        message, detail = gui._set_flash_progress.call_args.args
+        self.assertIn("Flash 容量（COM4）", message)
+        self.assertIn("請勿拔除", detail)
+
+    def test_version_probe_shows_progress_and_closes_it(self):
+        gui = self.make_gui()
+        gui._close_flash_progress = Mock()
+        with patch.object(config_gui, "find_esp32_firmware", return_value=None):
+            with patch.object(gui, "_cached_esp32_firmware_info", return_value=None):
+                gui.inspect_esp32_firmware()
+        self.assertIn("韌體版本", gui._set_flash_progress.call_args.args[0])
+        gui._close_flash_progress.assert_called_once_with()
+
+    def test_version_probe_runs_off_the_tk_thread_while_tk_keeps_updating(self):
+        import threading
+
+        gui = self.make_gui()
+        gui._close_flash_progress = Mock()
+        gui._show_esp32_mode_migration = Mock()
+        tk_updated = threading.Event()
+        gui.root.update = tk_updated.set
+        probe_threads = []
+
+        def probe():
+            probe_threads.append(threading.current_thread())
+            # Finishing requires the Tk loop to run while the probe is busy.
+            self.assertTrue(tk_updated.wait(5))
+            return {"version": "1.0.0"}
+
+        with patch.object(config_gui, "find_esp32_firmware", side_effect=probe):
+            with patch.object(gui, "_cached_esp32_firmware_info", return_value=None):
+                firmware, _resume = gui.inspect_esp32_firmware()
+        self.assertEqual(firmware, {"version": "1.0.0"})
+        self.assertIsNot(probe_threads[0], threading.main_thread())
+        gui._close_flash_progress.assert_called_once_with()
+
+    def test_version_probe_error_still_returns_none(self):
+        gui = self.make_gui()
+        gui._close_flash_progress = Mock()
+        with patch.object(config_gui, "find_esp32_firmware", side_effect=OSError("busy")):
+            with patch.object(gui, "_cached_esp32_firmware_info", return_value=None):
+                self.assertEqual(gui.inspect_esp32_firmware(), (None, False))
+        gui._close_flash_progress.assert_called_once_with()
 
     def test_repeated_restart_keeps_only_one_pending_start(self):
         gui = self.make_gui()
@@ -125,7 +189,7 @@ class GuiOperationSerializationTests(unittest.TestCase):
     def test_matching_firmware_version_can_cancel_without_flash_prompt(self):
         gui = self.make_gui()
         gui.inspect_esp32_firmware = Mock(return_value=(
-            {"product": "S2P-FW", "version": "1.0.8"},
+            {"product": "S2P-FW", "version": "1.0.9"},
             False,
         ))
         gui.stop_main_process = Mock()
@@ -137,7 +201,7 @@ class GuiOperationSerializationTests(unittest.TestCase):
             gui.flash_firmware()
 
         message = confirm.call_args.args[1]
-        self.assertIn("S2P-FW v1.0.8", message)
+        self.assertIn("S2P-FW v1.0.9", message)
         self.assertIn("目前已是相同版本", message)
         gui.stop_main_process.assert_not_called()
         gui.detect_flash_port.assert_not_called()

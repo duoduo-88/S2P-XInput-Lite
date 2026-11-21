@@ -11,8 +11,9 @@ from tkinter import colorchooser, ttk
 from config_utils import atomic_write_bytes, config_file_lock
 from dialog_layout import center_child_dialog
 from gamepad_aim_display import available_resolutions, highest_resolution, window_work_area
-from gamepad_aim_model import TIMED_MODES, TRACKING_MODES
+from gamepad_aim_model import DEFAULT_STICK_TURN_SPEED, TIMED_MODES, TRACKING_MODES
 from readable_combobox import ReadableCombobox
+from parameter_controls import bind_drag_adjust, bind_restore_menu
 from tooltip_layout import HoverTip
 
 
@@ -20,6 +21,8 @@ LIMITS = {
     "target_count": (1, 100),
     "target_seconds": (0, 300),
     "tracking_seconds": (1, 300),
+    "tracking_arc": (0, 360),
+    "tracking_speed": (10, 600),
     "timed_shooting_seconds": (1, 300),
     "seed": (0, 2**32 - 1),
     "depth": (0, 100),
@@ -27,9 +30,15 @@ LIMITS = {
     "horizontal_spread": (25, 180),
     "vertical_spread": (25, 180),
     "mouse_sensitivity": (10, 300),
+    "stick_horizontal_speed": (10, 1080),
+    "stick_vertical_speed": (10, 1080),
     "reticle_size": (6, 48),
     "target_size_2d": (2, 20),
 }
+TURN_SPEED_FIELDS = (
+    ("stick_horizontal_speed", "3D 水平視角速度（°/秒）"),
+    ("stick_vertical_speed", "3D 垂直視角速度（°/秒）"),
+)
 COLORS = {
     "reticle_color": "準心顏色",
     "reticle_on_target_color": "準心對靶色",
@@ -70,6 +79,10 @@ class AimSettings:
     depth_shading: bool = True
     mouse_sensitivity: int = 100
     auto_input_switch: bool = False
+    stick_horizontal_speed: int = DEFAULT_STICK_TURN_SPEED[0]
+    stick_vertical_speed: int = DEFAULT_STICK_TURN_SPEED[1]
+    tracking_arc: int = 0
+    tracking_speed: int = 100
 
     @classmethod
     def load(cls, path):
@@ -116,6 +129,10 @@ class AimSettings:
         version = 4 if timed else 1
         if mode == "timed-shooting":
             version = 5  # Overlapping balls score by ray intersection depth.
+        elif mode == "tracking" and self.tracking_arc == 360:
+            version = 3  # The full arc reverses behind the player.
+        elif mode == "tracking" and self.tracking_arc and self.seed:
+            version = 2  # Seeded arcs can now start in either direction.
         basis = {
             "version": version,
             "mode": mode,
@@ -134,8 +151,20 @@ class AimSettings:
                 value = getattr(self, key)
                 if value != 100:
                     basis[key] = value
-        if (shooting or mode == "tracking") and self.mouse_sensitivity != 100:
-            basis["mouse_sensitivity"] = self.mouse_sensitivity
+        if shooting or mode == "tracking":
+            for key, default in (
+                ("mouse_sensitivity", 100),
+                ("stick_horizontal_speed", DEFAULT_STICK_TURN_SPEED[0]),
+                ("stick_vertical_speed", DEFAULT_STICK_TURN_SPEED[1]),
+            ):
+                value = getattr(self, key)
+                if value != default:
+                    basis[key] = value
+        if mode == "tracking":
+            if self.tracking_arc:
+                basis["tracking_arc"] = self.tracking_arc
+            if self.tracking_speed != 100:
+                basis["tracking_speed"] = self.tracking_speed
         if not mode.endswith("cursor-mouse") and self.reticle_size != 14:
             basis["reticle_size"] = self.reticle_size
         if mode.startswith(("cursor-", "timed-cursor")) and self.target_size_2d != 7:
@@ -159,52 +188,120 @@ def show_aim_settings(parent, tr, current, apply):
     body_window = canvas.create_window(0, 0, window=body, anchor="nw")
     scrollbar = ttk.Scrollbar(content, orient="vertical", command=canvas.yview)
     canvas.configure(yscrollcommand=scrollbar.set)
-    body.columnconfigure(1, weight=1)
+    body.columnconfigure((0, 1), weight=1)
+    body.rowconfigure(1, weight=1)
+    # Only the round-and-target panel feeds the history comparison basis.
+    drills = ttk.LabelFrame(body, text=tr("回合與靶（列入成績比對）"), padding=(10, 5))
+    drills.grid(row=0, column=0, rowspan=2, sticky="nsew")
+    controls = ttk.LabelFrame(body, text=tr("視角與顯示"), padding=(10, 5))
+    controls.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+    feedback = ttk.LabelFrame(body, text=tr("震動與音效"), padding=(10, 5))
+    feedback.grid(row=1, column=1, sticky="nsew", padx=(10, 0), pady=(8, 0))
+    for panel in (drills, feedback, controls):
+        panel.columnconfigure(1, weight=1)
     values = {}
-    inputs = (
+    drill_inputs = (
         ("target_count", "點靶數量"),
         ("target_seconds", "點靶秒數（0 為不限時）"),
         ("tracking_seconds", "跟槍秒數"),
         ("seed", "出靶種子（0 為固定配置）"),
         ("timed_shooting_seconds", "限時點靶秒數"),
+        ("tracking_arc", "3D 跟槍環繞範圍（°）"),
+        ("tracking_speed", "3D 跟槍靶速（%）"),
+    )
+    control_inputs = (
+        *TURN_SPEED_FIELDS,
         ("mouse_sensitivity", "3D 滑鼠感度（%）"),
     )
+    input_help = {
+        "seed": "按 ↻ 隨機產生種子。相同種子可重播路線。3D 環繞在種子非 0 時可往左或往右起跑。",
+        "mouse_sensitivity": "100% 為預設感度，每像素轉動 0.18°。50% 為一半感度。",
+        "stick_horizontal_speed": "右搖桿水平推到底時的轉向速度，包含映射至右搖桿的陀螺儀輸出。",
+        "stick_vertical_speed": "右搖桿垂直推到底時的轉向速度，包含映射至右搖桿的陀螺儀輸出。",
+        "tracking_arc": "0° 使用原本的路線。180° 在左右各 90° 處折返。360° 在正後方折返，經過正面後往另一側移動。",
+        "tracking_speed": "環繞路線在 100% 時為 90°/秒，最高 600% 為 540°/秒。",
+        "depth": "提高後，3D 點靶會在更多不同的距離出現。",
+        "horizontal_spread": "控制 3D 點靶左右的出現範圍。數值越高，越常需要大幅轉身。",
+        "vertical_spread": "控制 3D 點靶上下的出現範圍。數值越高，越常需要抬高或壓低視角。",
+        "target_size_2d": "以畫面短邊的百分比設定 2D 靶心大小。",
+    }
+
+    def add_help(parent, row, text, *, pady=0):
+        marker = tk.Label(parent, text="?", width=2, relief="solid", borderwidth=1, cursor="question_arrow")
+        marker.grid(row=row, column=3, sticky="w", padx=(6, 0), pady=pady)
+        HoverTip(marker, tr(text))
+
+    defaults = AimSettings()
+
+    def bind_parameter(key, name_label, apply, *controls, value_label=None):
+        """Drag the item name (or reading) to adjust; right-click to restore."""
+        low, high = LIMITS[key]
+        for widget in (name_label, value_label):
+            if widget is not None:
+                bind_drag_adjust(widget, values[key], low, high, apply, step=1)
+        bind_restore_menu(
+            (name_label, value_label, *controls), tr, apply,
+            getattr(current, key), getattr(defaults, key),
+        )
+
     first = None
-    for row, (key, label) in enumerate(inputs):
-        ttk.Label(body, text=tr(label)).grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
-        values[key] = tk.StringVar(dialog, str(getattr(current, key)))
-        entry = ttk.Spinbox(body, from_=LIMITS[key][0], to=LIMITS[key][1],
-                            textvariable=values[key], width=10)
-        entry.grid(row=row, column=1, sticky="ew", pady=4)
-        if key == "mouse_sensitivity":
-            HoverTip(entry, tr("100% 為預設感度，每像素轉動 0.18°。50% 為一半感度。"))
-        if first is None:
-            first = entry
+    for panel, inputs in ((drills, drill_inputs), (controls, control_inputs)):
+        for row, (key, label) in enumerate(inputs):
+            name_label = ttk.Label(panel, text=tr(label))
+            name_label.grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
+            values[key] = tk.StringVar(dialog, str(getattr(current, key)))
+            entry = ttk.Spinbox(panel, from_=LIMITS[key][0], to=LIMITS[key][1],
+                                textvariable=values[key], width=10)
+            entry.grid(row=row, column=1, sticky="ew", pady=4)
+            bind_parameter(
+                key, name_label, lambda number, field=key: values[field].set(str(round(number))), entry,
+            )
+            if key in input_help:
+                add_help(panel, row, input_help[key])
+            if first is None:
+                first = entry
     ttk.Button(
-        body, text="↻", width=3,
+        drills, text="↻", width=3,
         command=lambda: values["seed"].set(str(secrets.randbelow(LIMITS["seed"][1]) + 1)),
     ).grid(row=3, column=2, padx=(6, 0))
 
-    sliders = (
+    drill_sliders = (
         ("depth", "3D 點靶遠近差異"),
         ("horizontal_spread", "3D 點靶水平範圍"),
         ("vertical_spread", "3D 點靶垂直範圍"),
-        ("reticle_size", "準心大小"),
         ("target_size_2d", "2D 靶心大小（畫面短邊）"),
-        ("rumble", "震動強度"),
     )
+    feedback_sliders = (("rumble", "震動強度"),)
+    control_sliders = (("reticle_size", "準心大小"),)
     slider_texts = {}
-    for row, (key, label) in enumerate(sliders, start=len(inputs)):
-        ttk.Label(body, text=tr(label)).grid(row=row, column=0, sticky="w", pady=4)
-        values[key] = tk.DoubleVar(dialog, getattr(current, key))
-        suffix = " px" if key == "reticle_size" else "%"
-        reading = tk.StringVar(dialog, f"{int(values[key].get())}{suffix}")
-        slider_texts[key] = reading, suffix
-        ttk.Scale(
-            body, from_=LIMITS[key][0], to=LIMITS[key][1], variable=values[key],
-            command=lambda value, text=reading, unit=suffix: text.set(f"{round(float(value))}{unit}"),
-        ).grid(row=row, column=1, sticky="ew", pady=4)
-        ttk.Label(body, textvariable=reading, width=6).grid(row=row, column=2, sticky="w", padx=(6, 0))
+    for panel, sliders, start in (
+        (drills, drill_sliders, len(drill_inputs)),
+        (feedback, feedback_sliders, 0),
+        (controls, control_sliders, len(control_inputs)),
+    ):
+        for row, (key, label) in enumerate(sliders, start=start):
+            name_label = ttk.Label(panel, text=tr(label))
+            name_label.grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
+            values[key] = tk.DoubleVar(dialog, getattr(current, key))
+            suffix = " px" if key == "reticle_size" else "%"
+            reading = tk.StringVar(dialog, f"{int(values[key].get())}{suffix}")
+            slider_texts[key] = reading, suffix
+            scale = ttk.Scale(
+                panel, from_=LIMITS[key][0], to=LIMITS[key][1], variable=values[key],
+                command=lambda value, text=reading, unit=suffix: text.set(f"{round(float(value))}{unit}"),
+            )
+            scale.grid(row=row, column=1, sticky="ew", pady=4)
+            value_label = ttk.Label(panel, textvariable=reading, width=6)
+            value_label.grid(row=row, column=2, sticky="w", padx=(6, 0))
+
+            def set_slider(number, field=key, text=reading, unit=suffix):
+                values[field].set(round(number))
+                text.set(f"{round(number)}{unit}")
+
+            bind_parameter(key, name_label, set_slider, scale, value_label=value_label)
+            if key in input_help:
+                add_help(panel, row, input_help[key])
+    labels = dict(drill_inputs + control_inputs + drill_sliders + feedback_sliders + control_sliders)
 
     def set_color(key, button, color):
         values[key].set(color.lower())
@@ -216,26 +313,27 @@ def show_aim_settings(parent, tr, current, apply):
             set_color(key, button, color)
 
     swatches = {}
-    colors_row = len(inputs) + len(sliders)
+    colors_row = len(control_inputs) + len(control_sliders)
     for row, (key, label) in enumerate(COLORS.items(), start=colors_row):
-        ttk.Label(body, text=tr(label)).grid(row=row, column=0, sticky="w", pady=4)
+        ttk.Label(controls, text=tr(label)).grid(row=row, column=0, sticky="w", pady=4)
         color = getattr(current, key)
         values[key] = tk.StringVar(dialog, color)
-        swatch = tk.Button(body, textvariable=values[key], background=color,
+        swatch = tk.Button(controls, textvariable=values[key], background=color,
                            activebackground=color, width=10)
         swatches[key] = swatch
         swatch.configure(command=lambda field=key, widget=swatch: choose_color(field, widget))
         swatch.grid(row=row, column=1, sticky="ew", pady=4)
 
-    display = ttk.Frame(body)
-    display_row = colors_row + len(COLORS)
-    display.grid(row=display_row, column=0, columnspan=3, sticky="w", pady=4)
-    ttk.Label(display, text=tr("解析度")).pack(side="left", padx=(0, 8))
+    # The window size sets the round's viewport, so it belongs with the compared settings.
+    display_row = len(drill_inputs) + len(drill_sliders)
+    ttk.Label(drills, text=tr("解析度")).grid(row=display_row, column=0, sticky="w", padx=(0, 8), pady=4)
+    display = ttk.Frame(drills)
+    display.grid(row=display_row, column=1, columnspan=2, sticky="w", pady=4)
     auto_size = tr("自動（最高）")
     window_size = tk.StringVar(dialog, current.window_size or auto_size)
     fullscreen_size = tk.StringVar(dialog, current.fullscreen_size or auto_size)
     fullscreen = tk.BooleanVar(dialog, current.fullscreen)
-    size_picker = ReadableCombobox(display, textvariable=window_size, width=11, state="readonly")
+    size_picker = ReadableCombobox(display, textvariable=window_size, width=14, state="readonly")
     size_picker.pack(side="left")
     try:
         fullscreen_sizes = tuple(size for size in available_resolutions(parent.winfo_id()) if _valid_resolution(size))
@@ -261,27 +359,30 @@ def show_aim_settings(parent, tr, current, apply):
         else:
             size_picker.configure(textvariable=window_size, values=(auto_size, *windowed_sizes))
 
+    # A row of its own keeps the drill panel narrow enough for small work areas.
     fullscreen_option = ttk.Checkbutton(
-        display, text=tr("全螢幕"), variable=fullscreen, command=sync_size_picker,
+        drills, text=tr("全螢幕"), variable=fullscreen, command=sync_size_picker,
     )
-    fullscreen_option.pack(side="left", padx=(8, 0))
-    HoverTip(fullscreen_option, tr("全螢幕會暫時切換螢幕解析度。關閉測試後會還原。"))
+    fullscreen_option.grid(row=display_row + 1, column=1, columnspan=2, sticky="w", pady=(0, 4))
+    add_help(drills, display_row + 1, "全螢幕會暫時切換螢幕解析度。關閉測試後會還原。", pady=(0, 4))
     sync_size_picker()
 
     sound = tk.BooleanVar(dialog, current.sound)
-    ttk.Checkbutton(body, text=tr("命中與跟靶音效"), variable=sound).grid(
-        row=display_row + 1, column=0, sticky="w", pady=6,
+    ttk.Checkbutton(feedback, text=tr("命中與跟靶音效"), variable=sound).grid(
+        row=len(feedback_sliders), column=0, columnspan=3, sticky="w", pady=6,
     )
+    options_row = colors_row + len(COLORS)
     depth_shading = tk.BooleanVar(dialog, current.depth_shading)
-    ttk.Checkbutton(body, text=tr("加深遠近效果"), variable=depth_shading).grid(
-        row=display_row + 1, column=1, columnspan=2, sticky="w", pady=6,
+    ttk.Checkbutton(controls, text=tr("加深遠近效果"), variable=depth_shading).grid(
+        row=options_row, column=0, columnspan=3, sticky="w", pady=6,
     )
+    add_help(controls, options_row, "3D 靶離視角越遠，顏色越暗。")
     auto_input_switch = tk.BooleanVar(dialog, current.auto_input_switch)
     auto_switch_option = ttk.Checkbutton(
-        body, text=tr("啟用手把與滑鼠自動銜接"), variable=auto_input_switch,
+        controls, text=tr("啟用手把與滑鼠自動銜接"), variable=auto_input_switch,
     )
-    auto_switch_option.grid(row=display_row + 2, column=0, columnspan=3, sticky="w", pady=(0, 6))
-    HoverTip(auto_switch_option, tr("關閉時，偵測到手把就停用滑鼠瞄準與左鍵射擊。未偵測到手把時可用滑鼠。"))
+    auto_switch_option.grid(row=options_row + 1, column=0, columnspan=3, sticky="w", pady=(0, 6))
+    add_help(controls, options_row + 1, "關閉時，偵測到手把就停用滑鼠瞄準與左鍵射擊。未偵測到手把時可用滑鼠。", pady=(0, 6))
     error = tk.StringVar(dialog)
     footer = ttk.Frame(dialog, padding=(10, 0, 10, 12))
     footer.pack(fill="x")
@@ -325,9 +426,8 @@ def show_aim_settings(parent, tr, current, apply):
             except (ValueError, OverflowError, tk.TclError):
                 value = low - 1
             if not low <= value <= high:
-                label = dict(inputs + sliders)[key]
                 error.set(tr("{label}請輸入 {low} 到 {high} 的整數。").format(
-                    label=tr(label), low=low, high=high,
+                    label=tr(labels[key]), low=low, high=high,
                 ))
                 return
             options[key] = value
@@ -351,8 +451,18 @@ def show_aim_settings(parent, tr, current, apply):
         bounds = window_work_area(owner.winfo_id())
     except OSError:
         bounds = 0, 0, owner.winfo_screenwidth(), owner.winfo_screenheight()
-    # Allow space for the title bar and borders outside the Tk client area.
-    height_limit = bounds[3] - bounds[1] - dialog.winfo_pixels("36p")
+    # Allow space for the title bar, window borders and a possible scrollbar.
+    window_margin = dialog.winfo_pixels("36p")
+    height_limit = bounds[3] - bounds[1] - window_margin
+    dialog.update_idletasks()
+    # Line the rumble slider up with the reticle slider above it.
+    for column in (0, 2, 3):
+        feedback.columnconfigure(column, minsize=controls.grid_bbox(column, 0)[2])
+    dialog.update_idletasks()
+    if body.winfo_reqwidth() > bounds[2] - bounds[0] - window_margin:
+        drills.grid_configure(rowspan=1, columnspan=2)
+        controls.grid_configure(row=1, column=0, columnspan=2, padx=0, pady=(8, 0))
+        feedback.grid_configure(row=2, column=0, columnspan=2, padx=0, pady=(8, 0))
 
     def fit_content(_event=None):
         width, height = body.winfo_reqwidth(), body.winfo_reqheight()
@@ -386,7 +496,8 @@ def show_aim_settings(parent, tr, current, apply):
     canvas.bind("<Configure>", lambda event: canvas.itemconfigure(body_window, width=event.width))
     footer.bind("<Configure>", fit_content)
     # Spinboxes and comboboxes handle the wheel before the dialog's binding.
-    for widget in (*body.winfo_children(), *display.winfo_children()):
+    for widget in (*drills.winfo_children(), *feedback.winfo_children(),
+                   *controls.winfo_children(), *display.winfo_children()):
         widget.bind("<MouseWheel>", scroll_settings, add="+")
     dialog.bind("<MouseWheel>", scroll_settings)
     dialog.bind("<FocusIn>", reveal_focused_setting)

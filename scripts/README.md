@@ -69,7 +69,7 @@ an official release.
 
 ## Bundled firmware and verification
 
-Desktop v0.8.1 bundles S2P-FW 1.0.8 with protocol `s2p_bridge 1.0.0`.
+Desktop v0.8.2 bundles S2P-FW 1.0.9 with protocol `s2p_bridge 1.0.0`.
 ESP-IDF 5.5.4 builds
 use reproducible-build configuration with esp_tinyusb 1.7.6~2 and tinyusb 0.19.0~3.
 Synchronize bootloader, partition table and application from the same build before

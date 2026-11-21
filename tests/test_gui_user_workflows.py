@@ -1,5 +1,7 @@
 from pathlib import Path
+from contextlib import contextmanager
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -99,6 +101,417 @@ class GUIUserWorkflowTests(unittest.TestCase):
         self.close_gui()
         self.assertEqual(self.callback_errors, [])
         self.assertEqual(self.errors, [])
+
+    def test_footer_buttons(self):
+        gui = self.gui
+        calibration = gui.calibration_button
+        self.assertEqual(calibration.cget("text"), "Calibrate")
+        self.assertEqual(calibration.cget("style"), "Dropdown.TButton")
+        self.assertEqual(list(calibration._s2p_dropdown_items()), [
+            ("校正搖桿", gui.run_calibration), ("感測器校正", gui.calibrate_gyro),
+        ])
+        self.assertEqual(
+            [gui.tr(label) for label in ("校正搖桿", "感測器校正")],
+            ["Stick Calibration", "Sensor Calibration"],
+        )
+        # Sensor calibration progress is shown on the footer menu button.
+        self.assertIs(gui.gyro_calibration_button, calibration)
+        # The arrow is a right-aligned style element, not part of the caption.
+        self.assertEqual(gui.write_esp32_button.cget("text"), "ESP32")
+        self.assertEqual(gui.write_esp32_button.cget("style"), "Dropdown.TButton")
+        self.assertIn("Dropdown.arrow", str(ttk.Style(gui.root).layout("Dropdown.TButton")))
+        # Import Profile / Import Settings are separate buttons again, and the
+        # last profile-row button opens Extensions (Gamepad Test lives there).
+        row = gui.extensions_button.master
+        captions = {
+            int(widget.grid_info()["column"]): widget.cget("text")
+            for widget in row.winfo_children() if isinstance(widget, ttk.Button)
+        }
+        self.assertEqual(
+            [captions[column] for column in (4, 5, 6)],
+            ["Import Profile", "Import Settings", "Extensions"],
+        )
+        self.assertFalse(hasattr(gui, "gamepad_test_button"))
+        gyro_buttons = [
+            widget.cget("text") for widget in gui.gyro_curve_button.master.winfo_children()
+            if isinstance(widget, ttk.Button)
+        ]
+        self.assertNotIn(gui.tr("感測器校正"), gyro_buttons)
+
+    def test_extensions_window_manages_a_tool_list(self):
+        from gui_sections import extensions as extensions_window
+        import extension_bridge
+        import time as time_module
+
+        status_path = self.directory / "status.json"
+        commands = []
+        warnings = []
+        picks = []
+        opened = []
+        for patcher in (
+            patch.object(extensions_window, "CONFIG_PATH", self.config_path),
+            patch.object(extensions_window, "STATUS_PATH", status_path),
+            patch.object(extensions_window, "enqueue_controller_command", commands.append),
+            patch.object(
+                extensions_window.filedialog, "askopenfilename",
+                side_effect=lambda **_kwargs: picks.pop(0),
+            ),
+            patch.object(
+                extensions_window.messagebox, "showwarning",
+                side_effect=lambda *args, **_kwargs: warnings.append(args),
+            ),
+            patch.object(self.gui, "_bring_child_to_front"),
+            patch.object(self.gui, "open_gamepad_test_window", lambda: opened.append("tester")),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        window = self.gui.open_extensions_window()
+        self.assertIs(self.gui.open_extensions_window(), window)
+        self.assertEqual(window.title(), "Extensions")
+        tree = window._s2p_tree
+        buttons = window._s2p_buttons
+        conflicts = window._s2p_conflict_label
+        tester = extensions_window.BUILTIN_GAMEPAD_TESTER
+
+        def saved():
+            return extension_bridge.load_extension_settings(
+                config_utils.load_config(self.config_path)
+            )
+
+        # The built-in Gamepad Test is always listed and opens even when no
+        # tool is enabled; it cannot be removed or given permissions.
+        self.assertEqual(tree.get_children(), (tester,))
+        self.assertEqual(tree.set(tester, "name"), "Gamepad Test")
+        tree.selection_set(tester)
+        self.root.update()
+        self.assertTrue(buttons["remove"].instate(["disabled"]))
+        self.assertTrue(window._s2p_options["allow_input"].instate(["disabled"]))
+        buttons["open"].invoke()
+        self.assertEqual(opened, ["tester"])
+        self.assertEqual(conflicts.cget("text"), "No conflicts")
+
+        # No master switch: adding a tool enables it in the list.
+        self.assertFalse(hasattr(window, "_s2p_enabled_checkbox"))
+        macro =str(self.directory / "Macro.exe")
+        multi = str(self.directory / "Multi.exe")
+        picks.extend([macro, macro.upper(), multi])
+        buttons["add"].invoke()
+        buttons["add"].invoke()  # the same EXE again is refused
+        buttons["add"].invoke()
+        self.assertEqual(len(warnings), 1)
+        settings = saved()
+        self.assertTrue(settings.enabled)
+        self.assertEqual([tool.path for tool in settings.tools], [macro, multi])
+        macro_id, multi_id = (tool.tool_id for tool in settings.tools)
+        self.assertEqual(tree.get_children(), (tester, macro_id, multi_id))
+        self.assertEqual(
+            tree.set(macro_id, "status"), "Waiting for connection (connector not running)",
+        )
+        self.assertEqual(commands, [])  # no connector running: nothing queued
+        self.assertEqual(
+            conflicts.cget("text"),
+            "No conflicts in the settings (the connection is not running, so running "
+            "tools are not checked yet)",
+        )
+        self.assertEqual(
+            [key for key, _label in extensions_window.tray_items(self.gui)],
+            [tester, macro_id, multi_id],
+        )
+
+        tree.selection_set(macro_id)
+        self.root.update()
+        window._s2p_options["allow_read"].invoke()
+        self.assertTrue(saved().tool(macro_id).allow_read)
+        self.assertEqual(tree.set(macro_id, "permissions"), "Input / Read")
+
+        status_path.write_text(json.dumps({
+            "state": "connected", "updated_at": time_module.time(),
+            "extensions": {"state": "waiting", "tools": {
+                macro_id: {"state": "connected", "name": "Macro Tool"},
+                multi_id: {
+                    "state": "error", "code": "conflict",
+                    "stick": "left", "with_tool": "Macro Tool",
+                },
+            }, "conflicts": [{
+                "kind": "stick", "tool": multi_id, "name": "Multi", "stick": "left",
+                "with_id": macro_id, "with_tool": "Macro Tool",
+            }]},
+        }), encoding="utf-8")
+        # Permission changes reach a running connector without a manual restart.
+        window._s2p_options["allow_read"].invoke()
+        self.assertFalse(saved().tool(macro_id).allow_read)
+        self.assertEqual(commands, ["extensions_apply"])
+        self.assertEqual(tree.set(macro_id, "name"), "Macro Tool")
+        self.assertEqual(tree.set(macro_id, "status"), "Connected")
+        self.assertIn("Connection failed", tree.set(multi_id, "status"))
+        self.assertIn(
+            '"Multi" was refused the Left Stick: "Macro Tool" controls it',
+            conflicts.cget("text"),
+        )
+
+        buttons["open"].invoke()  # the connector launches the selected tool
+        self.assertEqual(commands[-1], f"extensions_connect:{macro_id}")
+
+        tree.selection_set(multi_id)
+        self.root.update()
+        buttons["toggle"].invoke()
+        self.assertFalse(saved().tool(multi_id).enabled)
+        self.assertEqual(tree.set(multi_id, "status"), "Disabled")
+        self.assertTrue(buttons["open"].instate(["disabled"]))
+        buttons["remove"].invoke()
+        self.assertEqual([tool.tool_id for tool in saved().tools], [macro_id])
+        window.destroy()
+        self.assertIsNone(self.gui._extensions_window)
+
+    def test_extensions_window_checks_tool_updates(self):
+        from gui_sections import extensions as extensions_window
+        import extension_bridge
+        import extension_updates
+        import time as time_module
+
+        macro = self.directory / "Macro.exe"
+        bare = self.directory / "Bare.exe"
+        for exe in (macro, bare):
+            exe.write_bytes(b"MZ")
+        extension_updates.manifest_path(macro).write_text(json.dumps({
+            "format": "s2p-extension", "name": "Macro", "version": "0.1.0",
+            "update_url": "https://example.test/feed.json",
+        }), encoding="utf-8")
+        config = config_utils.load_config(self.config_path)
+        extension_bridge.store_extension_settings(config, extension_bridge.ExtensionSettings((
+            extension_bridge.ToolSettings("m", str(macro)),
+            extension_bridge.ToolSettings("b", str(bare)),
+        )))
+        config_utils.atomic_write_config(config, self.config_path)
+
+        class Feed:
+            requests = []
+
+            def __call__(self, request, timeout):
+                self.requests.append(request.full_url)
+                import io
+                return io.BytesIO(json.dumps({
+                    "format": "s2p-extension-updates",
+                    "tools": {"Macro": {"version": "0.2.0", "url": "https://example.test/v0.2.0"}},
+                }).encode("utf-8"))
+
+        feed = Feed()
+        real_check = extension_updates.check_tool_updates
+        questions, pages = [], []
+        for patcher in (
+            patch.object(extensions_window, "CONFIG_PATH", self.config_path),
+            patch.object(extensions_window, "STATUS_PATH", self.directory / "status.json"),
+            patch.object(
+                extensions_window, "check_tool_updates",
+                lambda tools, **kwargs: real_check(tools, opener=feed, **kwargs),
+            ),
+            patch.object(
+                extensions_window.messagebox, "askyesno",
+                side_effect=lambda title, text, **_kwargs: questions.append(text) or True,
+            ),
+            patch.object(extensions_window.webbrowser, "open",
+                         side_effect=lambda url, new=0: pages.append(url)),
+            patch.object(self.gui, "_bring_child_to_front"),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        window = self.gui.open_extensions_window()
+        tree = window._s2p_tree
+        button = window._s2p_buttons["updates"]
+        self.assertEqual(button.cget("text"), "Check for Updates")
+        self.assertNotIn("·", tree.set("m", "status"))  # nothing checked yet
+
+        button.invoke()
+        self.assertTrue(button.instate(["disabled"]))
+        deadline = time_module.monotonic() + 5
+        while not questions and time_module.monotonic() < deadline:
+            self.root.update()
+            time_module.sleep(0.02)
+        self.assertEqual(feed.requests, ["https://example.test/feed.json"])
+        self.assertIn("Macro: v0.1.0 → v0.2.0", questions[0])
+        self.assertIn("Tools without update info: 1.", questions[0])
+        self.assertEqual(pages, ["https://example.test/v0.2.0"])
+        self.assertTrue(button.instate(["!disabled"]))
+        self.assertIn("Update available: v0.2.0", tree.set("m", "status"))
+        self.assertIn("No update info", tree.set("b", "status"))
+        self.assertIn(extension_updates.UPDATE_AVAILABLE, tree.item("m", "tags"))
+
+        # Results stay for this S2P session when the window is opened again.
+        window.destroy()
+        window = self.gui.open_extensions_window()
+        self.assertIn("Update available: v0.2.0", window._s2p_tree.set("m", "status"))
+        window.destroy()
+
+    def test_gyro_compensation_settings_save_both_axes(self):
+        curve = self.gui.gyro_curve_button
+        controls = curve.master.pack_slaves()
+        compensation = controls[controls.index(curve) + 1]
+        self.assertEqual(compensation.cget("text"), self.gui.tr("補償設定"))
+        stabilization = self.gui.gyro_stabilization_button_entry.master.master
+        help_buttons = [
+            widget for row in stabilization.winfo_children() if isinstance(row, ttk.Frame)
+            for widget in row.winfo_children()
+            if "抑制突波：保留原本的轉動" in getattr(widget, "parameter_help_text", "")
+        ]
+        self.assertEqual(len(help_buttons), 1)
+        self.assertEqual(help_buttons[0].cget("text"), "?")
+        compensation.invoke()
+        overlay = self.gui._gyro_compensation_window
+        overlay.compensation["X"].set("0.75")
+        overlay.compensation["Y"].set("0.16")
+        overlay.apply_button.invoke()
+        self.assertEqual(float(self.gui.gyro_x_ratio_var.get()), 1.0)
+        self.assertEqual(float(self.gui.gyro_y_ratio_var.get()), 1.0)
+        self.assertTrue(self.gui.save_current_profile(show_message=False))
+        self.close_gui()
+        self.open_gui()
+        self.assertEqual(float(self.gui.gyro_y_ratio_var.get()), 1.0)
+        self.gui.open_gyro_settings()
+        self.assertEqual(self.gui.gyro_settings_tab.master.select(), str(self.gui.gyro_settings_tab))
+        overlay = self.gui._gyro_compensation_window
+        self.assertEqual(overlay.compensation["X"].get(), "0.75")
+        self.assertEqual(overlay.compensation["Y"].get(), "0.16")
+        self.gui.apply_selected_profile("Action")
+        self.assertEqual(self.gui.active_profile, "Action")
+        self.assertFalse(overlay.window.winfo_exists())
+        self.gui.open_gyro_compensation_window()
+        overlay = self.gui._gyro_compensation_window
+        self.assertEqual(overlay.compensation["X"].get(), "1.00")
+        self.assertEqual(overlay.compensation["Y"].get(), "1.00")
+
+    def test_gyro_compensation_is_hidden_for_mouse_output(self):
+        curve = self.gui.gyro_curve_button
+        controls = curve.master
+        compensation = next(button for button in controls.pack_slaves()
+                            if button.cget("text") == self.gui.tr("補償設定"))
+        compensation.invoke()
+        overlay = self.gui._gyro_compensation_window
+
+        self.gui.gyro_target_var.set("MOUSE")
+        self.assertNotIn(compensation, controls.pack_slaves())
+        self.assertFalse(overlay.window.winfo_exists())
+        self.gui.open_gyro_compensation_window()
+        self.assertFalse(self.gui._gyro_compensation_window.window.winfo_exists())
+
+        for target in ("LEFT_STICK", "RIGHT_STICK"):
+            self.gui.gyro_target_var.set(target)
+            buttons = controls.pack_slaves()
+            self.assertEqual(buttons[buttons.index(curve) + 1], compensation)
+
+    def test_confirming_compensation_preserves_saved_changes_to_an_unchanged_axis(self):
+        self.gui.open_gyro_compensation_window()
+        overlay = self.gui._gyro_compensation_window
+        overlay.compensation["X"].set("0.70")
+        overlay.compensation["Y"].set("1.0")
+
+        latest = config_utils.load_config(self.config_path, persist=False)
+        latest.set("gyro_mapping", "x_compensation", "0.40")
+        latest.set("gyro_mapping", "y_compensation", "0.55")
+        config_utils.atomic_write_config(latest, self.config_path)
+        config_utils.save_profile(latest, "General", self.profiles)
+        overlay.apply_button.invoke()
+
+        self.assertFalse(overlay.window.winfo_exists())
+        self.assertEqual(self.gui.gyro_compensation_vars["X"].get(), "0.70")
+        self.assertEqual(self.gui.gyro_compensation_vars["Y"].get(), "0.55")
+        self.assertTrue(self.gui.has_unsaved_changes())
+        self.assertEqual(config_utils.load_config(self.config_path, persist=False).getfloat(
+            "gyro_mapping", "x_compensation",
+        ), 0.40)
+
+    def test_changing_idle_timeout_does_not_hide_new_compensation_from_the_next_save(self):
+        self.gui.open_gyro_compensation_window()
+        overlay = self.gui._gyro_compensation_window
+        overlay.compensation["X"].set("0.70")
+        overlay.apply_button.invoke()
+
+        latest = config_utils.load_config(self.config_path, persist=False)
+        latest.set("gyro_mapping", "y_compensation", "0.55")
+        config_utils.atomic_write_config(latest, self.config_path)
+        config_utils.save_profile(latest, "General", self.profiles)
+        with patch.object(config_gui, "enqueue_controller_command") as enqueue:
+            self.gui.set_idle_disconnect_minutes(15)
+        enqueue.assert_called_once_with("reload_settings")
+
+        with patch.object(config_gui.messagebox, "askyesnocancel", return_value=False):
+            self.assertTrue(self.gui.save_current_profile(show_message=False))
+
+        config = config_utils.load_config(self.config_path, persist=False)
+        profile = config_utils.read_profile("General", self.profiles)
+        self.assertEqual(config.getint("gui", "idle_disconnect_minutes"), 15)
+        for saved in (config, profile):
+            self.assertEqual(saved.getfloat("gyro_mapping", "x_compensation"), 0.70)
+            self.assertEqual(saved.getfloat("gyro_mapping", "y_compensation"), 0.55)
+
+    def test_profile_save_merges_preview_compensation_without_a_conflict_prompt(self):
+        self.gui.gyro_compensation_vars["X"].set("0.70")
+        latest = config_utils.load_config(self.config_path, persist=False)
+        latest.set("gyro_mapping", "y_compensation", "0.55")
+        config_utils.atomic_write_config(latest, self.config_path)
+        profile = config_utils.read_profile("General", self.profiles)
+        profile.set("gyro_mapping", "y_compensation", "0.55")
+        config_utils.atomic_write_config(profile, self.profiles / "General.ini")
+        self.gui.sync_profile_directory()
+
+        with patch.object(config_gui.messagebox, "askyesnocancel", return_value=None) as conflict:
+            self.assertTrue(self.gui.save_current_profile(show_message=False))
+        conflict.assert_not_called()
+        saved = config_utils.read_profile("General", self.profiles)
+        self.assertEqual(saved.getfloat("gyro_mapping", "x_compensation"), 0.70)
+        self.assertEqual(saved.getfloat("gyro_mapping", "y_compensation"), 0.55)
+
+    def test_profile_save_still_confirms_an_external_edit_alongside_compensation(self):
+        self.gui.gyro_compensation_vars["X"].set("0.70")
+        latest = config_utils.load_config(self.config_path, persist=False)
+        latest.set("gyro_mapping", "y_compensation", "0.55")
+        config_utils.atomic_write_config(latest, self.config_path)
+        profile = config_utils.read_profile("General", self.profiles)
+        profile.set("gyro_mapping", "y_compensation", "0.55")
+        profile.set("rumble", "lf_strength", "0.91")
+        path = self.profiles / "General.ini"
+        config_utils.atomic_write_config(profile, path)
+        before = path.read_bytes()
+
+        with patch.object(config_gui.messagebox, "askyesnocancel", return_value=None) as conflict:
+            self.assertFalse(self.gui.save_current_profile(show_message=False))
+        conflict.assert_called_once()
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_profile_save_keeps_conflict_prompt_when_both_windows_edit_the_same_axis(self):
+        self.gui.gyro_compensation_vars["Y"].set("0.75")
+        latest = config_utils.load_config(self.config_path, persist=False)
+        latest.set("gyro_mapping", "y_compensation", "0.55")
+        config_utils.atomic_write_config(latest, self.config_path)
+        profile = config_utils.read_profile("General", self.profiles)
+        profile.set("gyro_mapping", "y_compensation", "0.55")
+        path = self.profiles / "General.ini"
+        config_utils.atomic_write_config(profile, path)
+        before = path.read_bytes()
+
+        with patch.object(config_gui.messagebox, "askyesnocancel", return_value=None) as conflict:
+            self.assertFalse(self.gui.save_current_profile(show_message=False))
+        conflict.assert_called_once()
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(self.gui.gyro_compensation_vars["Y"].get(), "0.75")
+
+    def test_switch_reads_the_destination_profile_under_the_config_lock(self):
+        # Another S2P window completes a profile update while this one waits for the lock.
+        @contextmanager
+        def wait_for_other_writer():
+            profile = config_utils.read_profile("Action", self.profiles)
+            profile.set("gyro_mapping", "y_compensation", "0.55")
+            config_utils.atomic_write_config(profile, self.profiles / "Action.ini")
+            with config_utils.config_file_lock():
+                yield
+
+        with patch.object(config_gui, "config_file_lock", wait_for_other_writer):
+            self.gui.apply_selected_profile("Action")
+
+        self.assertEqual(self.gui.active_profile, "Action")
+        self.assertEqual(float(self.gui.gyro_compensation_vars["Y"].get()), 0.55)
+        config = config_utils.load_config(self.config_path, persist=False)
+        self.assertEqual(config.getfloat("gyro_mapping", "y_compensation"), 0.55)
+        self.assertFalse(self.gui._external_active_profile_changed)
 
     def test_edit_save_switch_save_as_and_reopen(self):
         self.assertEqual(self.gui.active_profile, "General")
@@ -200,11 +613,113 @@ class GUIUserWorkflowTests(unittest.TestCase):
         self.assertEqual(self.gui.button_vars["A"].get(), "KEYBOARD:CTRL+A")
         self.assertFalse(self.gui.has_unsaved_changes())
 
+    def _open_combo_picker(self, variable):
+        before_children = set(self.root.winfo_children())
+        variable.set("CUSTOM_COMBO")
+        with patch.object(self.gui, "_bring_child_to_front"):
+            self.gui.open_custom_mapping(variable, mouse_mode="buttons")
+        dialog = next(child for child in self.root.winfo_children()
+                      if child not in before_children and isinstance(child, tk.Toplevel))
+        boxes = {widget.cget("text"): widget for widget in self.descendants(dialog)
+                 if isinstance(widget, ttk.Checkbutton)}
+        buttons = {widget.cget("text"): widget for widget in self.descendants(dialog)
+                   if isinstance(widget, ttk.Button)}
+        return dialog, boxes, buttons
+
+    def test_flash_progress_window_updates_and_closes_with_operation(self):
+        before_children = set(self.root.winfo_children())
+        self.gui._set_flash_progress("first", "detail")
+        window = next(child for child in self.root.winfo_children()
+                      if child not in before_children and isinstance(child, tk.Toplevel))
+        self.gui._set_flash_progress("second step", "")
+        texts = [widget.cget("text") for widget in self.descendants(window)
+                 if isinstance(widget, ttk.Label)]
+        self.assertIn("second step", texts)
+        self.assertEqual(  # Updates reuse one window instead of stacking new ones.
+            [child for child in self.root.winfo_children()
+             if child not in before_children and isinstance(child, tk.Toplevel)],
+            [window],
+        )
+        self.gui._finish_flash_operation()
+        self.assertFalse(window.winfo_exists())
+
+    def test_gamepad_combo_picker_saves_and_cancel_restores(self):
+        variable = self.gui.button_vars["A"]
+        variable.set("B")
+        dialog, _boxes, buttons = self._open_combo_picker(variable)
+        dialog.destroy()  # Closing the window cancels like the Cancel button.
+        self.assertEqual(variable.get(), "B")
+
+        dialog, boxes, buttons = self._open_combo_picker(variable)
+        accept = buttons[self.gui.tr("確定")]
+        self.assertTrue(accept.instate(["disabled"]))
+        boxes["X"].invoke()
+        self.assertTrue(accept.instate(["disabled"]))  # One button is not a combo.
+        for name in ("Y", "LB", "RB"):
+            boxes[name].invoke()
+        self.assertTrue(boxes["A"].instate(["disabled"]))  # Four is the limit.
+        accept.invoke()
+        self.assertFalse(dialog.winfo_exists())
+        self.assertEqual(variable.get(), "COMBO:X+Y+LB+RB")
+
+        dialog, boxes, buttons = self._open_combo_picker(variable)
+        self.assertTrue(boxes["X"].instate(["selected"]))  # Reopening keeps the combo.
+        boxes["X"].invoke()
+        buttons[self.gui.tr("取消")].invoke()
+        self.assertFalse(dialog.winfo_exists())
+        self.assertEqual(variable.get(), "COMBO:X+Y+LB+RB")
+
+        self.assertTrue(self.gui.save_current_profile(show_message=False))
+        self.close_gui()
+        self.open_gui()
+        self.assertEqual(self.gui.button_vars["A"].get(), "COMBO:X+Y+LB+RB")
+        self.pump()
+
     @staticmethod
     def descendants(widget):
         yield widget
         for child in widget.winfo_children():
             yield from GUIUserWorkflowTests.descendants(child)
+
+    def test_switching_tabs_does_not_reread_system_default(self):
+        def notebooks(widget):
+            for child in widget.winfo_children():
+                if isinstance(child, ttk.Notebook):
+                    yield child
+                yield from notebooks(child)
+
+        main = max(notebooks(self.root), key=lambda notebook: len(notebook.tabs()))
+        self.root.deiconify()
+        for tab in main.tabs():  # first visits bind the reset menus
+            main.select(tab)
+            self.root.update()
+        real_read = config_gui.read_profile
+        with patch.object(config_gui, "read_profile", wraps=real_read) as reads:
+            for _round in range(2):
+                for tab in main.tabs():
+                    main.select(tab)
+                    self.root.update()
+            self.assertEqual(reads.call_count, 0)
+            # The cached defaults follow edits to System Default.ini.
+            before = self.gui.gyro_system_defaults()
+            path = self.profiles / "System Default.ini"
+            stat = path.stat()
+            os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+            self.assertEqual(self.gui.gyro_system_defaults(), before)
+            self.assertEqual(reads.call_count, 1)
+
+    def test_mapping_layer_checkbox_draws_no_focus_box(self):
+        def checkboxes(widget):
+            for child in widget.winfo_children():
+                if isinstance(child, ttk.Checkbutton):
+                    yield child
+                yield from checkboxes(child)
+
+        boxes = list(checkboxes(self.gui.mapping_layers_list_frame))
+        self.assertTrue(boxes)  # the bundled "mouse" layer
+        for box in boxes:
+            # Without keyboard focus ttk never draws the dotted focus rectangle.
+            self.assertFalse(int(box.cget("takefocus")))
 
     def test_mapping_layer_management_cancel_and_persistence(self):
         original_layers = len(self.gui.mapping_layers)
@@ -307,6 +822,52 @@ class GUIUserWorkflowTests(unittest.TestCase):
 
         self.assertEqual(self.config_path.read_bytes(), external)
         self.assertEqual(float(self.gui.lf_strength_var.get()), 0.42)
+
+    def test_failed_save_merges_a_newly_saved_compensation_axis_before_retry(self):
+        self.gui.open_gyro_compensation_window()
+        overlay = self.gui._gyro_compensation_window
+        overlay.compensation["X"].set("0.70")
+        overlay.apply_button.invoke()
+        latest = config_utils.load_config(self.config_path, persist=False)
+        latest.set("gyro_mapping", "y_compensation", "0.55")
+
+        def fail_after_external_write(*_args, **_kwargs):
+            config_utils.atomic_write_config(latest, self.config_path)
+            config_utils.save_profile(latest, "General", self.profiles)
+            raise OSError("forced profile write failure")
+
+        with (
+            patch.object(config_gui.messagebox, "showerror"),
+            patch.object(config_gui, "save_profile", side_effect=fail_after_external_write),
+        ):
+            self.assertFalse(self.gui.save_current_profile(show_message=False))
+        self.assertEqual(self.gui.gyro_compensation_vars["X"].get(), "0.70")
+
+        with patch.object(config_gui.messagebox, "askyesnocancel", return_value=False):
+            self.assertTrue(self.gui.save_current_profile(show_message=False))
+
+        config = config_utils.load_config(self.config_path, persist=False)
+        profile = config_utils.read_profile("General", self.profiles)
+        for saved in (config, profile):
+            self.assertEqual(saved.getfloat("gyro_mapping", "x_compensation"), 0.70)
+            self.assertEqual(saved.getfloat("gyro_mapping", "y_compensation"), 0.55)
+
+    def test_save_failure_before_first_write_keeps_compensation_marked_unsaved(self):
+        self.gui.open_gyro_compensation_window()
+        overlay = self.gui._gyro_compensation_window
+        overlay.compensation["X"].set("0.70")
+        overlay.apply_button.invoke()
+        original = self.config_path.read_bytes()
+
+        with (
+            patch.object(config_gui.messagebox, "showerror"),
+            patch.object(config_gui, "save_layers", side_effect=OSError("forced layer write failure")),
+        ):
+            self.assertFalse(self.gui.save_current_profile(show_message=False))
+
+        self.assertEqual(self.config_path.read_bytes(), original)
+        self.assertEqual(self.gui.gyro_compensation_vars["X"].get(), "0.70")
+        self.assertTrue(self.gui.has_unsaved_changes())
 
     def test_save_rejects_external_config_edits_during_layer_writes(self):
         self.gui.lf_strength_var.set("0.42")

@@ -71,11 +71,13 @@ def read_controller_status(path):
     """Return a fresh connector status document, or an empty mapping."""
     try:
         status = json.loads(Path(path).read_text(encoding="utf-8"))
-        updated_at = float(status.get("updated_at", 0.0) or 0.0)
-        if time.time() - updated_at > 3.0:
+        if not isinstance(status, dict):
             return {}
-        return status if isinstance(status, dict) else {}
-    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        updated_at = float(status.get("updated_at", 0.0) or 0.0)
+        if not math.isfinite(updated_at) or time.time() - updated_at > 3.0:
+            return {}
+        return status
+    except (OSError, OverflowError, TypeError, ValueError):
         return {}
 
 

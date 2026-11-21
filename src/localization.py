@@ -12,6 +12,137 @@ EN_TEXT = {
         "Uniform deadzone must be 0–20°. Activation must be 10–100%, and release must be at least 3 percentage points lower.",
     "瞄準設定": "Aim Settings",
     "測試設定": "Test Settings",
+    "補償計算": "Calculator",
+    "補償預覽": "Gyro Preview",
+    "補償設定": "Compensation Settings",
+    "陀螺儀補償計算": "Gyro Compensation Calculator",
+    "陀螺儀補償設定": "Gyro Compensation Settings",
+    "3D 陀螺儀補償預覽": "3D Gyro Compensation Preview",
+    "原始視角速度": "Original turn speeds",
+    "調整後視角速度": "Adjusted turn speeds",
+    "按確定後，請在主視窗按儲存／套用。": "After clicking OK, click Save / Apply in the main window.",
+    "開啟 S2P 陀螺儀設定": "Open S2P Gyro Settings",
+    "開啟 S2P 補償設定": "Open S2P Compensation Settings",
+    "無法開啟 S2P 主視窗。": "Could not open S2P settings.",
+    "量測原始 {axis}…": "Measuring original {axis}…",
+    "量測": "Measure",
+    "量測調整後 {axis}…": "Measuring adjusted {axis}…",
+    "以上以原補償倍率 1.00 試算。": "Preview assumes an original multiplier of 1.00.",
+    "請輸入大於 0 的倍率及耗時。": "Enter a positive multiplier and positive times.",
+    "調高遊戲視角速度後，如果陀螺儀微瞄變得太敏感，\n"
+    "可降低對應的倍率。X 調水平，Y 調垂直。\n"
+    "維持 1.00 會保留原本的陀螺儀輸出。\n"
+    "例如 X 設為 0.50，水平輸出在反死區前會減半。\n"
+    "倍率只作用於陀螺儀，實體搖桿維持原本的輸出。":
+        "If raising the in-game look speed makes gyro aim too\n"
+        "sensitive, lower X for horizontal or Y for vertical aim.\n"
+        "A multiplier of 1.00 keeps the original gyro output.\n"
+        "X at 0.50 halves horizontal output before anti-deadzone.\n"
+        "The physical stick keeps its original output.",
+    "補償倍率已填入，請按主視窗的儲存／套用。":
+        "Multipliers entered. Click Save/Apply in the main window.",
+    "1. 選 X 或 Y，確認自動帶入的補償倍率。\n"
+    "2. 改遊戲視角速度前後，用相同搖桿推幅\n"
+    "   從同一地標轉到另一地標，錄影並填入兩次耗時。\n"
+    "3. 到 S2P 的「補償設定」輸入建議倍率。":
+        "1. Pick X or Y and check the current multiplier.\n"
+        "2. Record turns between the same landmarks before and\n"
+        "   after the speed change. Use the same stick deflection.\n"
+        "3. Enter both times and use the result in S2P settings.",
+    "原補償倍率": "Original compensation",
+    "目前補償倍率": "Current compensation",
+    "已儲存的補償倍率": "Saved compensation",
+    "套用至瞄準測試": "Apply to Aim Test",
+    "已套用至瞄準測試：水平 {horizontal}／垂直 {vertical}°/秒。":
+        "Applied to the Aim Test: horizontal {horizontal} / vertical {vertical}°/s.",
+    "無法套用至瞄準測試。": "Could not apply to the Aim Test.",
+    "現行設定或方案使用滑鼠輸出，無法調整搖桿補償。":
+        "The current settings or profile use mouse output. Stick compensation is unavailable.",
+    "調整視角速度前": "Before changing turn speed",
+    "調整視角速度後": "After changing turn speed",
+    "耗時（秒）": "Time (s)",
+    "目前方案已調整補償倍率": "Compensation is already adjusted",
+    "目前補償倍率為 X {x:.2f}、Y {y:.2f}。\n\n"
+    "要將目前 S2P 設定的 X／Y 補償倍率還原為 1.00 嗎？"
+    "選「否」會以目前的倍率繼續。":
+        "Current compensation is X {x:.2f}, Y {y:.2f}.\n\n"
+        "Reset both axes to 1.00 in the current S2P settings? Choose No to keep these values.",
+    "手把或方案設定已變更，請重新開啟補償視窗。":
+        "The controller or profile settings changed. Reopen the compensation window.",
+    "無法讀取或還原補償倍率": "Could not read or reset compensation",
+    "手把或方案設定已變更，請關閉後重新開啟計算器。":
+        "The controller or profile settings changed. Close and reopen the calculator.",
+    "無法驗證目前的補償設定，請關閉後重新開啟計算器。":
+        "Could not verify the current compensation settings. Close and reopen the calculator.",
+    "目前方案有尚未儲存的變更。要儲存並套用目前方案嗎？":
+        "The current profile has unsaved changes. Save and apply it now?",
+    "目前使用唯讀的系統預設。要將尚未儲存的變更另存為新方案並套用嗎？":
+        "The system default is read-only. Save and apply the changes as a new profile?",
+    "補償倍率": "Compensation multiplier",
+    "補償倍率須介於 {low:.2f} 和 {high:.2f}。": "Enter a multiplier between {low:.2f} and {high:.2f}.",
+    "X（水平）": "X (Horizontal)",
+    "Y（垂直）": "Y (Vertical)",
+    "右搖桿輸出（%）": "Right-stick output (%)",
+    "輸出時間（秒）": "Output duration (s)",
+    "舊設定轉過角度（°）": "Old setting angle (°)",
+    "新設定轉過角度（°）": "New setting angle (°)",
+    "舊設定耗時（秒）": "Old setting time (s)",
+    "新設定耗時（秒）": "New setting time (s)",
+    "量測舊設定": "Measure old",
+    "量測新設定": "Measure new",
+    "倒數結束後會在 S2P 內開始模擬。": "Simulation starts inside S2P after the countdown.",
+    "正在模擬 {axis} 軸轉動。\n完成後會自動填入角度。":
+        "Simulating {axis}-axis movement.\nThe measured angle will fill in automatically.",
+    "請輸入大於 0 的原補償倍率。": "Enter an original compensation multiplier greater than zero.",
+    "請輸入大於 0 的角度。": "Enter an angle greater than zero.",
+    "請輸入大於 0 的秒數。": "Enter a time greater than zero.",
+    "1. 選擇 X 或 Y，填入原本的視角速度。\n按「量測舊設定」在 3D 預覽中模擬。":
+        "1. Pick X or Y and enter the original turn speed.\nClick Measure old to run the 3D preview.",
+    "1. 選好 X 或 Y，確認原補償倍率。\n錄下用舊設定從地標 A 轉到 B 的過程。\n回看錄影，填入舊設定的秒數。":
+        "1. Pick X or Y and check the original compensation.\n"
+        "Record a turn from landmark A to B with the old setting.\n"
+        "Review the clip and enter the turn time in seconds.",
+    "2. 在上方調整同一軸的視角速度。\n維持相同輸出與時間，再按「量測新設定」。":
+        "2. Change the same axis's turn speed above.\nKeep the output and duration, then click Measure new.",
+    "2. 調整遊戲內同一軸的視角速度。\n以相同推幅和瞄準狀態，再錄一次 A 到 B。\n回看錄影，填入新設定的秒數。":
+        "2. Change the in-game turn speed for that axis.\n"
+        "Keep the same stick deflection and aim state.\n"
+        "Record the turn from A to B again.\n"
+        "Review the clip and enter the new turn time.",
+    "請確認兩次量測值，必要時重測。": "Check the two measurements and repeat if needed.",
+    "3. 套用建議倍率，或手動輸入並套用。\n再到主視窗按「儲存／套用」。":
+        "3. Apply the suggested multiplier or enter one manually.\nThen click Save/Apply in the main window.",
+    "3. 查看所選軸的建議補償倍率。": "3. Check the suggested compensation for the selected axis.",
+    "取消量測": "Cancel measurement",
+    "套用建議倍率": "Apply suggestion",
+    "建議 {axis} 補償倍率 {value:.2f}": "Suggested {axis} compensation: {value:.2f}",
+    "建議 {axis} 補償倍率 {value:.2f}，超出 {low:.2f}–{high:.2f} 的設定範圍。":
+        "Suggested {axis} compensation {value:.2f} is outside the {low:.2f}–{high:.2f} range.",
+    "{axis} 補償倍率已填入，請按主視窗的儲存／套用。":
+        "{axis} compensation entered. Click Save/Apply in the main window.",
+    "設定的額外按鍵按下或放開時觸發防晃。\n\n"
+    "暫停輸出：在防晃時間內暫停陀螺儀輸出，視角可能短暫停住。\n\n"
+    "抑制突波：保留原本的轉動，限制按鍵瞬間的突波。若同時快速轉向，部分動作也可能被壓低。":
+        "Pressing or releasing a selected extra button activates protection.\n\n"
+        "Freeze output: Pauses gyro output for the configured duration. The view may briefly stop.\n\n"
+        "Suppress spikes: Preserves ongoing motion and limits sudden changes when the button toggles. "
+        "A fast turn at the same time may also be reduced.",
+    "請輸入 1–100% 的輸出和 0.1–5 秒的時間。": "Enter 1–100% output and a duration of 0.1–5 seconds.",
+    "請用相同的輸出與時間，或重新量測舊設定。":
+        "Use the same output and duration, or repeat the old measurement.",
+    "垂直轉動會超過 {limit}°。請降低輸出或縮短時間，再重測兩組設定。":
+        "The vertical turn would exceed {limit}°. Lower the output or duration and measure both settings again.",
+    "{seconds} 秒後開始量測": "Measuring in {seconds} s",
+    "正在量測 3D 預覽。": "Measuring the 3D preview.",
+    "量測完成。": "Measurement complete.",
+    "量測完成。補償倍率已寫入 S2P 設定。": "Measurement complete. Compensation was saved to S2P settings.",
+    "補償倍率已儲存，等待連接程式套用。": "Compensation saved. Waiting for the connector to apply it.",
+    "補償倍率已儲存並套用至目前連線。": "Compensation saved and applied to the current connection.",
+    "補償倍率即時套用失敗。": "Could not apply the compensation to the current connection.",
+    "補償倍率已儲存，尚未確認即時套用結果。": "Compensation saved. The connector has not confirmed live application.",
+    "建議倍率超出設定範圍，未寫入。": "Suggested compensation is outside the supported range and was not saved.",
+    "無法寫入補償倍率。": "Could not save compensation.",
+    "量測已取消。": "Measurement canceled.",
     "開始": "Start",
     "請先結束目前的測試再切換語言。": "End the current test before switching languages.",
     "無法儲存手把測試語言。": "Could not save the Gamepad Tester language.",
@@ -41,14 +172,12 @@ EN_TEXT = {
     "點靶時按滑鼠左鍵、RT 或空白鍵射擊。按 Enter 或手把 START 可開始或重測。":
         "In Targets, left-click or press RT or Space to shoot. "
         "Press Enter or controller START to start or retry.",
-    "同設定的紀錄須使用相同的模式、畫面尺寸、出靶種子、震動與音效。"
-    "也會比對該模式的靶數、秒數、靶心大小、遠近與出靶範圍。"
-    "靶色、準心顏色與大小不影響比對。"
-    "不同滑鼠感度的成績也能互相比較。":
-        "History matches the mode, viewport size, layout seed, vibration, and sound settings. "
-        "It also matches any target count, duration, target size, depth, and spread that apply. "
-        "Target color, reticle color, and reticle size are ignored. "
-        "Scores can be compared across mouse sensitivity settings.",
+    "比對只看「回合與靶」的設定：模式、解析度、出靶種子，以及該模式的靶數、秒數、靶心大小、"
+    "遠近、出靶範圍、環繞範圍與靶速。"
+    "手把視角速度、滑鼠感度、顏色、準心、震動與音效不影響比對。":
+        "History matches only the Drills and targets settings: the mode, resolution, layout seed, "
+        "and any target count, duration, target size, depth, spread, arc, and target speed that apply. "
+        "Controller turn speed, mouse sensitivity, colors, reticle, vibration, and sound are ignored.",
     "成績與同設定的歷史最佳回合比較。點靶依序比命中數、命中率、完成耗時與平均偏差。"
     "跟槍依序比跟靶率與平均偏差。":
         "Results are compared with the best earlier round using the same settings. "
@@ -72,6 +201,8 @@ EN_TEXT = {
     "跟槍秒數": "Tracking duration",
     "限時點靶秒數": "Timed targets duration",
     "出靶種子（0 為固定配置）": "Layout seed (0 for fixed layout)",
+    "按 ↻ 隨機產生種子。相同種子可重播路線。3D 環繞在種子非 0 時可往左或往右起跑。":
+        "Press ↻ to randomize the seed. Reuse a seed to replay the route. A nonzero seed can start a 3D orbit left or right.",
     "重新抽靶": "Randomize",
     "3D 點靶遠近差異": "3D target depth variation",
     "加深遠近效果": "Darken distant targets",
@@ -81,7 +212,38 @@ EN_TEXT = {
         "You can still use the mouse without a controller.",
     "3D 點靶水平範圍": "3D target horizontal spread",
     "3D 點靶垂直範圍": "3D target vertical spread",
+    "提高後，3D 點靶會在更多不同的距離出現。": "Raise this to spawn 3D targets at a wider range of distances.",
+    "控制 3D 點靶左右的出現範圍。數值越高，越常需要大幅轉身。":
+        "Controls how far left or right 3D targets appear. Higher values require more large turns.",
+    "控制 3D 點靶上下的出現範圍。數值越高，越常需要抬高或壓低視角。":
+        "Controls how high or low 3D targets appear. Higher values require more vertical aiming.",
+    "以畫面短邊的百分比設定 2D 靶心大小。": "Sets the 2D target diameter as a percentage of the shorter screen edge.",
+    "3D 靶離視角越遠，顏色越暗。": "Darkens 3D targets as their distance from the camera increases.",
     "3D 滑鼠感度（%）": "3D mouse sensitivity (%)",
+    "回合與靶（列入成績比對）": "Drills and targets (compared)",
+    "震動與音效": "Rumble and sound",
+    "視角與顯示": "Look and display",
+    "3D 水平視角速度（°/秒）": "3D horizontal turn speed (°/s)",
+    "3D 垂直視角速度（°/秒）": "3D vertical turn speed (°/s)",
+    "3D 跟槍環繞範圍（°）": "3D tracking arc (°)",
+    "3D 跟槍靶速（%）": "3D tracking target speed (%)",
+    "0° 使用原本的路線。180° 在左右各 90° 處折返。360° 在正後方折返，經過正面後往另一側移動。":
+        "0° uses the original path. 180° reverses 90° to either side. At 360°, the target reverses directly behind you and crosses the front toward the other side.",
+    "環繞路線在 100% 時為 90°/秒，最高 600% 為 540°/秒。":
+        "The orbit moves at 90°/s at 100%, up to 540°/s at 600%.",
+    "3D 跟槍可在測試設定調整環繞範圍與靶速。360° 會在正後方折返。":
+        "Set the tracking arc and target speed in Test Settings. At 360°, the target reverses directly behind you.",
+    "環繞 {angle}°": "Tracking arc {angle}°",
+    "原本路線": "Original path",
+    "靶速 {value}%": "Target speed {value}%",
+    "水平輸出峰值 {peak:.1f}%　最長連續滿桿 {duration:.0f} ms":
+        "Peak horizontal output {peak:.1f}% · Longest at full stick {duration:.0f} ms",
+    "右搖桿水平推到底時的轉向速度，包含映射至右搖桿的陀螺儀輸出。":
+        "Turn speed at full horizontal right-stick output, including gyro mapped to the right stick.",
+    "右搖桿垂直推到底時的轉向速度，包含映射至右搖桿的陀螺儀輸出。":
+        "Turn speed at full vertical right-stick output, including gyro mapped to the right stick.",
+    "手把視角速度 {horizontal}／{vertical}°/秒": "Stick turn speed {horizontal}/{vertical}°/s",
+    "回合中切換手把視角速度": "Stick turn speed changed during the round",
     "100% 為預設感度，每像素轉動 0.18°。50% 為一半感度。":
         "100% is the default (0.18° per cursor pixel). 50% halves the sensitivity.",
     "滑鼠感度 {value}%": "Mouse sensitivity {value}%",
@@ -112,8 +274,9 @@ EN_TEXT = {
     "關閉": "Close",
     "百分點": "pp",
     "尚無瞄準測試紀錄。": "No aim test results yet.",
-    "時限 {seconds} s · 種子 {seed} · {width}×{height}": "{seconds} s limit · Seed {seed} · {width}×{height}",
-    "不限時 · 種子 {seed} · {width}×{height}": "No time limit · Seed {seed} · {width}×{height}",
+    "時限 {seconds} s": "{seconds} s limit",
+    "不限時": "No time limit",
+    "種子 {seed}": "Seed {seed}",
     "遠近差異 {depth}%": "Depth variation {depth}%",
     "水平 {horizontal}%／垂直 {vertical}%": "Horizontal {horizontal}% / Vertical {vertical}%",
     "準心 {color}": "Reticle {color}",
@@ -151,6 +314,7 @@ EN_TEXT = {
     "繪圖 {fps:.0f} FPS　更新 {hz:.0f} Hz": "Draw {fps:.0f} FPS   Update {hz:.0f} Hz",
     "測試已中斷，請重新開始。": "Test interrupted. Start a new round.",
     "用滑鼠或右搖桿轉動視角，追蹤移動球靶。": "Turn with the mouse or right stick to follow the moving target.",
+    "用右搖桿轉動視角，以固定靶為地標。": "Turn with the right stick and use the fixed target as a landmark.",
     "按右鍵釋放游標。": "Right-click to release the pointer.",
     "游標已釋放。按右鍵繼續用滑鼠瞄準。": "Pointer released. Right-click to resume mouse aim.",
     "用滑鼠或右搖桿轉動視角，按左鍵、RT 或空白鍵射擊。":
@@ -343,11 +507,29 @@ EN_TEXT = {
     "正在初始化手把測試程式，請稍候…":
         "Initializing the gamepad tester. Please wait…",
     "手把測試無法開啟": "Could Not Open Gamepad Test",
+    "ESP32-S3 韌體刷寫": "ESP32-S3 Firmware Flash",
+    "正在讀取 ESP32-S3 目前的韌體版本…":
+        "Reading the current ESP32-S3 firmware version…",
+    "約需數秒，請稍候。": "This takes a few seconds. Please wait.",
+    "正在等待 ESP32-S3 進入刷機模式…":
+        "Waiting for the ESP32-S3 to enter flash mode…",
+    "按住 BOOT 再按一下 RESET / EN。剩餘約 {seconds} 秒。":
+        "Hold BOOT, then press RESET / EN. About {seconds} s left.",
+    "正在確認晶片與 Flash 容量（{port}）…":
+        "Checking the chip and flash capacity ({port})…",
+    "約需 5 到 20 秒，完成後會自動開始刷寫。請勿拔除 ESP32-S3。":
+        "This takes 5 to 20 seconds, then flashing starts automatically. "
+        "Do not unplug the ESP32-S3.",
+    "正在刷寫韌體…": "Flashing firmware…",
+    "刷寫進度顯示在 esptool 視窗。完成前請勿拔除 ESP32-S3。":
+        "Progress is shown in the esptool window. "
+        "Do not unplug the ESP32-S3 until it finishes.",
     "關閉程式": "Close Application",
-    "關閉設定視窗後：\n\n• 桌面橋接模式會中斷連線。\n• ESP32 獨立模式會繼續運作。":
-        "After closing the settings window:\n\n"
+    "結束程式後：\n\n• 桌面橋接模式會中斷連線。\n• ESP32 獨立模式會繼續運作。\n• 擴充工具會一併關閉。":
+        "After exiting:\n\n"
         "• Desktop bridge mode will disconnect.\n"
-        "• ESP32 standalone mode will continue running.",
+        "• ESP32 standalone mode will continue running.\n"
+        "• Extension tools will close too.",
     "以後不再提示": "Do not show this again",
     "仍要關閉": "Close Anyway",
     "無法讀取 Windows 手把介面。":
@@ -804,8 +986,8 @@ EN_TEXT = {
     "輸入方向": "Input Direction",
     "滾輪速度": "Wheel Speed",
     "線性滑鼠滾輪": "Linear Mouse Wheel",
-    "線性 Xbox LT": "Linear Xbox LT",
-    "線性 Xbox RT": "Linear Xbox RT",
+    "線性 XInput LT": "Linear XInput LT",
+    "線性 XInput RT": "Linear XInput RT",
     "映射層": "Layers",
     "只在「混合」模式生效。\n\n0.00 = 只保留遊戲原生震動\n0.35 = 建議起始值（遊戲 65%、音訊 35%）\n1.00 = 只保留音訊震動":
         "Only applies in Mix mode.\n\n0.00 = game rumble only\n0.35 = recommended starting point (65% game, 35% audio)\n1.00 = audio rumble only",
@@ -1017,6 +1199,12 @@ EN_TEXT = {
         "vertical axis mixing.\nWhen enabled, axes follow controller orientation; disable it to use fixed X/Z axes."
     ),    "手把傾斜時，自動修正左右與上下的方向，減少斜拿手把造成的串軸。\n關閉後會固定使用感測器的 X／Z 軸。":
         "Automatically corrects horizontal and vertical directions as the controller tilts, reducing axis mixing when held at an angle.\nWhen disabled, the sensor's fixed X/Z axes are used.",
+    "保留原本的速度上限": "Keep the original speed cap",
+    "勾選後，快速轉動時陀螺儀會停在調整前的視角速度，\n"
+    "手感和調整前一致。不勾選時可用到新視角速度的全部範圍。": (
+        "When checked, fast gyro turns stop at the turn speed you had before,\n"
+        "so it feels the same. Unchecked, the gyro can use the full new turn speed."
+    ),
     "陀螺儀反應": "Gyro Response",
     "搖桿感度": "Stick Sens",
     "滑鼠感度": "Mouse Sens",
@@ -1032,10 +1220,13 @@ EN_TEXT = {
     "加速抑制": "Accel Sup.",
     "自適死區": "Adaptive DZ",
     "防晃 ms": "Freeze ms",
+    "防晃模式": "Button guard",
+    "暫停輸出": "Freeze output",
+    "抑制突波": "Suppress spikes",
     "額外按鍵": "Extra Key",
     "校正陀螺儀": "Calibrate Gyro",
     "校正中...": "Calibrating...",
-    "感測器校正": "Sensor Cal",
+    "感測器校正": "Sensor Calibration",
     "靜止校正中...": "Still Cal...",
     "立體翻轉": "3D Rotate",
     "無法校正感測器": "Sensor Calibration Unavailable",
@@ -1060,7 +1251,8 @@ EN_TEXT = {
         "Could not safely write config.ini.\n\nDetails: {error}"
     ),
     "還原": "Reset",
-    "校正搖桿": "Calibrate",
+    "校正": "Calibrate",
+    "校正搖桿": "Stick Calibration",
     "刷入相容韌體": "Flash FW",
     "確認韌體版本": "Confirm Firmware Version",
     "目前韌體：": "Current firmware: ",
@@ -1086,6 +1278,115 @@ EN_TEXT = {
     "另存新方案": "Save New",
     "匯入方案": "Import Profile",
     "匯入設定": "Import Settings",
+    "擴充工具": "Extensions",
+    "權限": "Permissions",
+    "允許提交輸入": "Allow input",
+    "允許讀取控制器狀態": "Allow reading controller state",
+    "選擇擴充工具": "Select Extension Tool",
+    "執行檔": "Executables",
+    "Python 腳本（開發用）": "Python scripts (development)",
+    "工具": "Tool",
+    "輸入": "Input",
+    "讀取": "Read",
+    "未載入": "Not loaded",
+    "新增工具...": "Add Tool...",
+    "移除": "Remove",
+    "啟用／停用": "Enable/Disable",
+    "衝突檢查": "Conflict check",
+    "未發現衝突": "No conflicts",
+    "「{name}」重複加入清單": "\"{name}\" is listed more than once",
+    "最多同時啟用 {count} 個工具，「{name}」不會載入": (
+        "Up to {count} tools can be enabled at once; \"{name}\" will not load"
+    ),
+    "「{name}」沒有任何權限，無法連線": "\"{name}\" has no permission and cannot connect",
+    "「{name}」要求控制{stick}被拒絕：目前由「{other}」控制": (
+        "\"{name}\" was refused the {stick}: \"{other}\" controls it"
+    ),
+    "「{name}」要求「{permissions}」權限，但未允許": (
+        "\"{name}\" needs \"{permissions}\", which is not allowed"
+    ),
+    "「{name}」有另一份正在執行，第二份無法連線": (
+        "Another copy of \"{name}\" is running; the second copy cannot connect"
+    ),
+    "設定沒有衝突（連線未啟動，尚未檢查執行中的工具）": (
+        "No conflicts in the settings (the connection is not running, so running "
+        "tools are not checked yet)"
+    ),
+    "不在清單中的程式「{program}」嘗試連線，已拒絕": (
+        "\"{program}\" is not in the list; its connection was refused"
+    ),
+    "通訊管道已被其他程式占用（可能有另一個 S2P 正在執行），工具都無法連線": (
+        "The pipe is used by another program (perhaps another S2P is running); "
+        "no tool can connect"
+    ),
+    "最多可同時啟用 {count} 個工具。請先停用其他工具。": (
+        "Up to {count} tools can be enabled at once. Disable another tool first."
+    ),
+    "「{name}」已在清單中。": "\"{name}\" is already in the list.",
+    "工具至少需要一項權限才能連線。": "A tool needs at least one permission to connect.",
+    "搖桿控制衝突": "stick control conflict",
+    "開啟": "Open",
+    "內建": "Built-in",
+    "內建工具，隨 S2P 提供": "Built-in tool, included with S2P",
+    "有更新：v{latest}": "Update available: v{latest}",
+    "已是最新版本": "Up to date",
+    "未提供更新資訊": "No update info",
+    "更新檢查失敗": "Update check failed",
+    "檢查更新中…": "Checking for updates…",
+    "{name}：v{current} → v{latest}": "{name}: v{current} → v{latest}",
+    "{count} 個工具未提供更新資訊。": "Tools without update info: {count}.",
+    "{count} 個工具無法檢查更新。": "Tools that could not be checked: {count}.",
+    "以下工具有新版本：": "New versions are available:",
+    "所有可檢查的工具都已是最新版本。": "All tools that could be checked are up to date.",
+    "無法檢查更新。": "Could not check for updates.",
+    "清單中沒有擴充工具。": "There are no extension tools in the list.",
+    "要開啟下載頁面嗎？": "Open the download pages?",
+    "設定已變更，等待工具重新連線": "settings changed; waiting for the tool to reconnect",
+    "擴充工具注意事項：": "Notes on extension tools:",
+    "擴充工具是另外安裝的獨立程式，只能依你允許的權限提交輸入或讀取控制器狀態。": (
+        "Extension tools are separately installed programs that can only submit input or "
+        "read controller state with the permissions you allow."
+    ),
+    "請只安裝信任來源的工具。擴充工具由其開發者提供，使用後的操作與結果由使用者自行負責。": (
+        "Install tools only from sources you trust. Tools are provided by their own "
+        "developers, and you are responsible for how you use them."
+    ),
+    "部分遊戲或線上服務可能禁止外部輸入或自動化操作，使用前請先確認相關規範。": (
+        "Some games and online services prohibit external input or automation; check "
+        "their rules before use."
+    ),
+    "S2P 仍是唯一的虛擬手把輸出；同一支搖桿只能由一個工具控制，實體搖桿優先。": (
+        "S2P stays the only virtual controller output; each stick can be controlled by "
+        "only one tool, and the physical stick has priority."
+    ),
+    "工具關閉、逾時或當機時會立即清除其輸入；在清單停用工具即恢復原本操作。": (
+        "Tool input is cleared immediately when a tool closes, times out or crashes; "
+        "disabling a tool in the list restores normal operation."
+    ),
+    "未啟用": "Disabled",
+    "等待連線": "Waiting for connection",
+    "等待連線（連接程式未啟動）": "Waiting for connection (connector not running)",
+    "已中斷（{reason}）": "Disconnected ({reason})",
+    "連線失敗：{reason}": "Connection failed: {reason}",
+    "已連接": "Connected",
+    "已中斷": "Disconnected",
+    "連線失敗": "Connection failed",
+    "連接程式尚未啟動。請先在主視窗按「重啟連線」。": (
+        "The connector is not running. Click Restart in the main window first."
+    ),
+    "工具已關閉連線": "the tool closed the connection",
+    "已手動中斷": "disconnected manually",
+    "未授權的程式，請確認清單中的工具": "unauthorized program; check the tool list",
+    "工具的通訊協定版本不相容": "the tool uses an incompatible protocol version",
+    "工具未在時限內完成連線": "the tool did not finish connecting in time",
+    "工具送出無效資料": "the tool sent invalid data",
+    "工具送出的資料過大": "the tool sent an oversized message",
+    "通訊管道已被其他程式占用": "the pipe is already used by another program",
+    "通訊管道發生錯誤": "pipe error",
+    "找不到工具 EXE": "tool EXE not found",
+    "無法啟動工具": "could not launch the tool",
+    "工具要求的權限未開啟": "the requested permission is not allowed",
+    "輸入逾時，已清除工具輸入": "input timed out and was cleared",
     "目前畫面有尚未儲存的變更。匯入會以選取安裝的設定重新載入畫面。\n\n是：先儲存目前變更\n否：放棄目前變更並匯入\n取消：返回設定畫面": (
         "The current screen has unsaved changes. Importing reloads settings from "
         "the selected installation.\n\nYes: save current changes first\n"
@@ -1202,9 +1503,16 @@ EN_TEXT = {
     "確定要刪除這個方案嗎？": "Delete this profile?",
     "自定義鍵盤映射": "Custom Key Map",
     "自定義輸入映射": "Custom Input Map",
-    "選擇「自訂按鍵」後，按下要映射的輸入。\n\n支援鍵盤單鍵、Ctrl／Shift／Alt／Win 複合鍵，以及滑鼠左鍵、右鍵與中鍵。\n例如：F12、Ctrl + S、Win + D。":
-        "Choose Shortcut, then press the input to map.\n\nSupports single keys; Ctrl/Shift/Alt/Win combinations; and left, right, or middle mouse buttons.\nExamples: F12, Ctrl + S, Win + D.",
+    "選擇「自訂按鍵」後，按下要映射的輸入。\n\n支援鍵盤單鍵、Ctrl／Shift／Alt／Win 複合鍵，以及滑鼠左鍵、右鍵與中鍵。\n例如：F12、Ctrl + S、Win + D。\n\n選擇「自訂手把組合」可讓一個按鍵同時按下 2 到 4 個 XInput 按鍵，例如 X + Y。":
+        "Choose Shortcut, then press the input to map.\n\nSupports single keys; Ctrl/Shift/Alt/Win combinations; and left, right, or middle mouse buttons.\nExamples: F12, Ctrl + S, Win + D.\n\nChoose Gamepad Combo to have one button press 2 to 4 XInput buttons together, such as X + Y.",
     "等待按鍵...": "Press a key...",
+    "自訂手把組合": "Gamepad Combo",
+    "手把組合鍵": "Gamepad Combo",
+    "勾選要同時按下的 XInput 按鍵（{low} 到 {high} 個）。":
+        "Select the XInput buttons to press together ({low} to {high}).",
+    "尚未選擇按鍵": "No buttons selected",
+    "組合內的按鍵會在同一幀一起按下、一起放開，不含延遲、順序或連發。\n部分遊戲或比賽規則禁止一鍵觸發多個動作，使用前請自行確認。":
+        "The buttons press and release together in the same report, with no delay, order, or repeat.\nSome games and tournament rules forbid one input triggering several actions. Check before you use it.",
     "請按下要映射的鍵盤按鍵或複合按鍵。\n\n例如：F12、Ctrl + S、Ctrl + Shift + S":
         "Press a key or key combination to map.\n\nExamples: F12, Ctrl + S, Ctrl + Shift + S",
     "請按下要映射的鍵盤按鍵、複合按鍵或滑鼠按鍵。\n\n可使用滑鼠左鍵、右鍵及中鍵（滾輪按下）。":
@@ -1228,8 +1536,8 @@ EN_TEXT = {
     "無法啟動安裝程式": "Could Not Start Installer",
     "ViGEmBus 安裝程式已在執行，請先在安裝視窗完成操作。":
         "The ViGEmBus installer is already running. Complete it in the installer window.",
-    "未偵測到 ViGEmBus 驅動程式。\n\nXbox／XInput 輸出需要此驅動。\n\n安裝程式會從官方來源下載 ViGEmBus，需要網路連線及系統管理員權限。\n\n是否立即執行隨附的安裝程式？":
-        "ViGEmBus was not detected.\n\nThe Xbox/XInput output requires this driver.\n\nThe installer downloads ViGEmBus from the official source and requires internet access and administrator permission.\n\nRun the bundled installer now?",
+    "未偵測到 ViGEmBus 驅動程式。\n\nXInput 輸出需要此驅動。\n\n安裝程式會從官方來源下載 ViGEmBus，需要網路連線及系統管理員權限。\n\n是否立即執行隨附的安裝程式？":
+        "ViGEmBus was not detected.\n\nThe XInput output requires this driver.\n\nThe installer downloads ViGEmBus from the official source and requires internet access and administrator permission.\n\nRun the bundled installer now?",
     "找不到 Install-ViGEmBus.bat。\n\n請確認發佈包內容完整。":
         "Install-ViGEmBus.bat was not found.\n\nMake sure the release package is complete.",
     "無法啟動 ViGEmBus 安裝程式：": "Could not start the ViGEmBus installer:",
@@ -1255,8 +1563,8 @@ EN_TEXT = {
     "連接程式未啟動": "Connector not running",
     "狀態未知": "Unknown state",
     "● ViGEmBus 驅動程式：已安裝": "● ViGEmBus driver: installed",
-    "● 未偵測到 ViGEmBus 驅動程式，目前無法建立 Xbox 虛擬控制器。":
-        "● ViGEmBus driver not found; Xbox virtual controller unavailable.",
+    "● 未偵測到 ViGEmBus 驅動程式，目前無法建立 XInput 虛擬控制器。":
+        "● ViGEmBus driver not found; XInput virtual controller unavailable.",
     "● ViGEm：正常": "● ViGEm: Ready",
     "● ViGEm：缺少": "● ViGEm: Missing",
     "● HidHide：正常": "● HidHide: Ready",
@@ -1267,10 +1575,10 @@ EN_TEXT = {
     "● HidHide：錯誤": "● HidHide: Error",
     "HidHide 狀態錯誤": "HidHide Status Error",
     "尚未安裝 HidHide": "HidHide Not Installed",
-    "未偵測到 HidHide。USB 有線模式仍可使用，但遊戲可能同時收到實體手把與虛擬 Xbox 手把。\n\n是否前往 HidHide 官方下載頁面？":
-        "HidHide was not detected. Wired USB mode can still be used, but games may receive both the physical controller and virtual Xbox controller.\n\nOpen the official HidHide download page?",
-    "未偵測到 HidHide。USB 有線模式仍可使用，但遊戲可能同時收到實體手把與虛擬 Xbox 手把。\n\n是否前往 HidHide 官方下載頁面？\n\n選擇「否」後不再自動提醒；需要時可點擊視窗下方的「HidHide：缺少」。":
-        "HidHide was not detected. Wired USB mode can still be used, but games may receive both the physical controller and virtual Xbox controller.\n\nOpen the official HidHide download page?\n\nChoose No to stop automatic reminders. You can open the download page later by clicking HidHide: Missing at the bottom of the window.",
+    "未偵測到 HidHide。USB 有線模式仍可使用，但遊戲可能同時收到實體手把與虛擬 XInput 手把。\n\n是否前往 HidHide 官方下載頁面？":
+        "HidHide was not detected. Wired USB mode can still be used, but games may receive both the physical controller and virtual XInput controller.\n\nOpen the official HidHide download page?",
+    "未偵測到 HidHide。USB 有線模式仍可使用，但遊戲可能同時收到實體手把與虛擬 XInput 手把。\n\n是否前往 HidHide 官方下載頁面？\n\n選擇「否」後不再自動提醒；需要時可點擊視窗下方的「HidHide：缺少」。":
+        "HidHide was not detected. Wired USB mode can still be used, but games may receive both the physical controller and virtual XInput controller.\n\nOpen the official HidHide download page?\n\nChoose No to stop automatic reminders. You can open the download page later by clicking HidHide: Missing at the bottom of the window.",
     "無法開啟下載頁面": "Could Not Open Download Page",
     "請手動開啟以下網址：": "Open this URL manually:",
     "設定 HidHide": "Set Up HidHide",
@@ -1281,9 +1589,9 @@ EN_TEXT = {
         "Adjustable settings were reset, but HidHide could not be disabled. Close HidHide Configuration Client and try again.",
     "無法讀取 HidHide 設定。請先關閉 HidHide Configuration Client，再重新啟動連接程式。":
         "Could not read HidHide settings. Close HidHide Configuration Client, then restart the connector.",
-    "偵測到 USB 有線手把。為避免遊戲同時收到實體 HID 與虛擬 Xbox 手把，程式可以將實體手把加入 HidHide 隱藏清單，並允許攜帶版 Python 與 Raw HID 量測器繼續讀取。":
+    "偵測到 USB 有線手把。為避免遊戲同時收到實體 HID 與虛擬 XInput 手把，程式可以將實體手把加入 HidHide 隱藏清單，並允許攜帶版 Python 與 Raw HID 量測器繼續讀取。":
         "A wired USB controller was detected. To prevent games from receiving "
-        "both the physical HID and virtual Xbox controller, the app can hide "
+        "both the physical HID and virtual XInput controller, the app can hide "
         "the physical device while allowing the portable Python runtime and "
         "Raw HID probe to read it.",
     "HidHide 全域隱藏目前關閉；繼續將會開啟它。":
@@ -1384,8 +1692,8 @@ EN_TEXT = {
         "esptool flashing failed. Exit code: ",
     "偵測到尚未儲存的設定變更。\n\n是否先儲存設定，再重新啟動連接程式？\n\n是：儲存後重新啟動\n否：不儲存，直接重新啟動\n取消：返回設定畫面":
         "Unsaved changes were detected.\n\nSave before restarting the connector?\n\nYes: save and restart\nNo: restart without saving\nCancel: return to settings",
-    "未偵測到 ViGEmBus 驅動程式。\n\n目前無法啟動 Xbox 虛擬控制器。":
-        "ViGEmBus was not found.\n\nThe Xbox virtual controller cannot start.",
+    "未偵測到 ViGEmBus 驅動程式。\n\n目前無法啟動 XInput 虛擬控制器。":
+        "ViGEmBus was not found.\n\nThe XInput virtual controller cannot start.",
     "找不到 config.ini。\n請將 config_gui.py 放在主程式相同資料夾。":
         "config.ini was not found.\nPlace config_gui.py in the application folder.",
     "左搖桿中心死區必須介於 0.00 ～ 1.00": "Left center DZ must be 0.00–1.00.",
@@ -1449,18 +1757,18 @@ EN_TEXT = {
     "傾斜平滑 ms 必須介於 0 ～ 150。": "Tilt smoothing must be 0–150 ms.",
     "陀螺儀搖桿感度 必須介於 0.1 ～ 10。": "Gyro stick sensitivity must be 0.1–10.",
     "陀螺儀滑鼠感度 必須介於 0.5 ～ 30。": "Gyro mouse sensitivity must be 0.5–30.",
-    "陀螺儀 X 比例 必須介於 0.5 ～ 2。": "Gyro X ratio must be 0.5–2.0.",
-    "陀螺儀 Y 比例 必須介於 0.5 ～ 2。": "Gyro Y ratio must be 0.5–2.0.",
+    "陀螺儀 X 比例必須介於 0.1 ～ 2。": "Gyro X ratio must be 0.10–2.00.",
+    "陀螺儀 Y 比例必須介於 0.1 ～ 2。": "Gyro Y ratio must be 0.10–2.00.",
     "陀螺儀死區 必須介於 0 ～ 5。": "Gyro DZ must be 0–5.",
     "陀螺儀平滑 ms 必須介於 0 ～ 100。": "Gyro smoothing must be 0–100 ms.",
     "加速度抑制 必須介於 0 ～ 100。": "Accel suppression must be 0–100.",
     "自適應死區 必須介於 0 ～ 100。": "Adaptive DZ must be 0–100.",
     "按鍵防晃 ms 必須介於 0 ～ 120。": "Button freeze must be 0–120 ms.",
-    "按住：只有保持指定手把按鍵時啟用陀螺儀。\n\n切換：按一下啟用，再按一下關閉。\n\n啟動鍵原本的 Xbox／鍵盤映射仍會保留。":
-        "Hold: gyro is active only while the selected controller button is held.\n\nToggle: press once to enable and again to disable.\n\nThe button's original Xbox/keyboard mapping is preserved.",
-    "關閉：不產生任何陀螺儀映射輸出。\n\n按住：只有保持指定手把按鍵時啟用陀螺儀。\n\n切換：按一下啟用，再按一下關閉。\n\n啟動鍵原本的 Xbox／鍵盤映射仍會保留。":
-        "Off: no gyro-mapping output is produced.\n\nHold: gyro is active only while the selected controller button is held.\n\nToggle: press once to enable and again to disable.\n\nThe button's original Xbox/keyboard mapping is preserved.",
-    "關閉：不產生任何陀螺儀映射輸出。\n\n按住：選定按鍵符合任一／全部條件時啟用。\n\n切換：條件由未成立變成成立時切換一次。\n\n可選多顆按鍵；原本的 Xbox／鍵盤映射仍會保留。":
+    "按住：只有保持指定手把按鍵時啟用陀螺儀。\n\n切換：按一下啟用，再按一下關閉。\n\n啟動鍵原本的 XInput／鍵盤映射仍會保留。":
+        "Hold: gyro is active only while the selected controller button is held.\n\nToggle: press once to enable and again to disable.\n\nThe button's original XInput/keyboard mapping is preserved.",
+    "關閉：不產生任何陀螺儀映射輸出。\n\n按住：只有保持指定手把按鍵時啟用陀螺儀。\n\n切換：按一下啟用，再按一下關閉。\n\n啟動鍵原本的 XInput／鍵盤映射仍會保留。":
+        "Off: no gyro-mapping output is produced.\n\nHold: gyro is active only while the selected controller button is held.\n\nToggle: press once to enable and again to disable.\n\nThe button's original XInput/keyboard mapping is preserved.",
+    "關閉：不產生任何陀螺儀映射輸出。\n\n按住：選定按鍵符合任一／全部條件時啟用。\n\n切換：條件由未成立變成成立時切換一次。\n\n可選多顆按鍵；原本的 XInput／鍵盤映射仍會保留。":
         "Off: no gyro output.\n\nHold: active while the selected Any/All rule is satisfied.\n\nToggle: switches once when the rule changes from false to true.\n\nMultiple buttons are supported and their original mappings remain active.",    "回中：依陀螺儀角速度輸出，停止轉動便自動回中，適合瞄準。\n\n傾斜：以手把相對於啟用瞬間的傾斜角度控制搖桿，適合方向盤；僅支援左右搖桿輸出。\n\n自訂重設按鍵會專門用於重設中立，不再送出原本的遊戲映射。":
         "Center maps angular speed and recenters when rotation stops.\n\nTilt maps angle relative to activation and supports stick output only.\n\nThe custom recenter button is intercepted and no longer sends its game mapping.",
     "回中模式：陀螺儀角速度轉成搖桿偏移的倍率。\n僅用於回中模式。":
@@ -1469,12 +1777,16 @@ EN_TEXT = {
         "Tilt angle that reaches full output.\nLower values reach full output with less tilt.",
     "每轉動一度對應的游標像素倍率。\n數值越高，游標移動越快。":
         "Cursor-pixel multiplier per degree of rotation.\nHigher values move the cursor faster.",
-    "水平陀螺儀感度相對倍率。1.00 = 不改變。":
-        "Relative horizontal gyro sensitivity. 1.00 = unchanged.",
-    "垂直陀螺儀感度相對倍率。1.00 = 不改變。":
-        "Relative vertical gyro sensitivity. 1.00 = unchanged.",
-    "忽略小於此角速度的感測器漂移。單位：度／秒。\n自適應功能會在明確轉動時縮小死區。\n數值越高，需要更明顯的轉動才會開始輸出。":
-        "Ignores angular-speed drift. Adaptive mode reduces DZ during intentional motion.\nHigher values require more intentional motion before output begins.",
+    "水平陀螺儀感度相對倍率。1.00 = 不改變。\n"
+    "數值越高，左右轉動時的輸出越大。":
+        "Relative horizontal gyro sensitivity. 1.00 = unchanged.\n"
+        "Higher values give more output when turning left or right.",
+    "垂直陀螺儀感度相對倍率。1.00 = 不改變。\n"
+    "數值越高，上下轉動時的輸出越大。":
+        "Relative vertical gyro sensitivity. 1.00 = unchanged.\n"
+        "Higher values give more output when tilting up or down.",
+    "以水平與垂直的合成角速度判斷死區，保留斜向轉動的方向。單位：度／秒。\n自適應功能會在明確轉動時縮小死區。\n數值越高，需要更明顯的轉動才會開始輸出。":
+        "Uses the combined horizontal and vertical angular speed in degrees per second to preserve the direction of diagonal motion.\nAdaptive mode reduces the deadzone during intentional motion.\nHigher values require more intentional motion before output begins.",
     "補償遊戲內建搖桿死區；只作用於回中搖桿輸出，不改變實體搖桿。\n0 = 不補償；數值越高，越容易跨過遊戲內建的搖桿死區。":
         "Compensates for the game's built-in stick deadzone. Only affects Center stick gyro output and does not alter the physical stick.\n0 = no compensation; higher values cross the game's built-in deadzone more easily.",
     "忽略中立角度附近的小幅傾斜。單位：度。\n數值越高，中立附近越不容易誤觸。":
@@ -1489,12 +1801,21 @@ EN_TEXT = {
         "Reduces accelerometer pull during fast motion or vibration in 9-axis and Tilt Axis Compensation modes.\n0 = off; higher values reduce accelerometer pull during fast motion.",
     "回中模式靜止時保留死區，明確轉動時自動縮小。\n0 = 固定死區；數值越高，明確轉動時死區縮小得越多。":
         "Keeps Center DZ at rest and reduces it during intentional motion.\n0 = fixed DZ; higher values reduce the deadzone more during intentional motion.",
-    "設定的額外按鍵按下或放開時，短暫停止陀螺儀輸出。\n0 = 關閉；數值越高，額外按鍵動作後暫停輸出的時間越長。":
-        "Briefly freezes gyro output when a configured extra button is pressed or released.\n0 = off; higher values freeze gyro longer after an extra-button change.",
+    "設定額外按鍵按下或放開後的防晃時間。\n0 = 關閉；抑制突波可先試 20 ms。":
+        "Sets how long gyro protection lasts after an extra button is pressed or released.\n0 = off. Try 20 ms for spike suppression.",
     "選擇射擊鍵等容易造成手把晃動的按鍵。\n只暫停陀螺儀，不會取消該按鍵原本的遊戲映射。":
         "Select a fire key or another button that tends to shake the controller.\nOnly gyro is frozen; the original game mapping remains active.",
-    "可選多顆容易造成手把晃動的按鍵。\n任一按鍵按下或放開都會短暫停止陀螺儀，原映射仍保留。":
-        "Select multiple buttons that tend to shake the controller.\nPressing or releasing any selected button briefly freezes gyro while preserving its original mapping.",    "只有搖桿模式選擇「映射為滑鼠」時生效。\n\n代表搖桿推到最外圈時每秒移動的游標像素數。\n設定範圍：100 ～ 3000；數值越高，游標移動越快。":
+    "可選多顆容易造成手把晃動的按鍵。\n任一按鍵按下或放開都會觸發防晃，原映射仍保留。":
+        "Select multiple buttons that tend to shake the controller.\nPressing or releasing any selected button triggers gyro protection and preserves its original mapping.",
+    "目前 ESP32 韌體的陀螺儀比例下限為 0.50。若要使用低於 0.50 的比例，請先更新韌體。":
+        "This ESP32 firmware has a gyro ratio minimum of 0.50. Update the firmware to use a lower ratio.",
+    "目前 ESP32 韌體不支援陀螺儀輸出補償，請先更新韌體。":
+        "Update the ESP32 firmware to use gyro output compensation.",
+    "目前 ESP32 韌體不支援「保留原本的速度上限」，請先更新韌體。":
+        "Update the ESP32 firmware to keep the speed limit when compensating.",
+    "目前 ESP32 韌體不支援陀螺儀突波抑制，請先更新韌體。":
+        "The current ESP32 firmware does not support gyro spike suppression. Update the firmware first.",
+    "只有搖桿模式選擇「映射為滑鼠」時生效。\n\n代表搖桿推到最外圈時每秒移動的游標像素數。\n設定範圍：100 ～ 3000；數值越高，游標移動越快。":
         "Used only when a stick mode is Mouse.\n\nPixels per second at full stick deflection.\nRange: 100–3000; higher values move the cursor faster.",
     "請先啟動連接程式並確認手把已連線。":
         "Start the connector and make sure the controller is connected first.",
@@ -1514,8 +1835,23 @@ EN_TEXT = {
         "Calibration timed out. Keep the controller connected on a stable surface and try again.",
     "校正期間手把已斷線，請重新連線後再試。":
         "The controller disconnected during calibration. Reconnect and try again.",
+    "連接程式忙碌中，陀螺儀校正未開始，請稍後再試。":
+        "The connector was busy, so gyro calibration did not start. Try again shortly.",
+    "連接程式忙碌中，加速度計校正未開始，請稍後再試。":
+        "The connector was busy, so accelerometer calibration did not start. Try again shortly.",
+    "連接程式忙碌中，校正未開始；原有磁力計資料未被修改，請稍後再試。":
+        "The connector was busy, so calibration did not start. Existing magnetometer data was not changed. "
+        "Try again shortly.",
+    "校正期間手把連線已變更。請確認手把後重新開始感測器校正。":
+        "The controller connection changed during calibration. Check your controller and restart sensor calibration.",
+    "無法確認手把連線。請確認手把後重新開始感測器校正。":
+        "The controller connection could not be verified. Check your controller and restart sensor calibration.",
+    "陀螺儀校正已完成並儲存。加速度計沿用原有資料，磁力計也沿用原有資料。":
+        "Gyro calibration was saved. The accelerometer and magnetometer keep their existing calibration data.",
     "校正完成，但無法安全寫入 config.ini。":
         "Calibration completed, but config.ini could not be written safely.",
+    "校正已儲存。請重新連線以套用新校正。":
+        "Calibration was saved. Reconnect the controller to apply it.",
     "三軸數值變動過大。請勿碰觸手把或桌面後重試。":
         "The three-axis readings varied too much. Do not touch the controller or desk, then try again.",
     "持續偵測到移動，無法取得一秒穩定資料。":
@@ -1677,6 +2013,11 @@ PHRASES = (
     ("鍵盤按鍵不可空白", "Keyboard key cannot be blank"),
     ("鍵盤組合包含空白按鍵", "Keyboard combination contains a blank key"),
     ("不支援的鍵盤按鍵：", "Unsupported keyboard key: "),
+    ("手把組合尚未完成選擇", "Gamepad combo has no buttons selected"),
+    ("手把組合包含空白按鍵", "Gamepad combo contains a blank button"),
+    ("不支援的手把組合按鍵：", "Unsupported gamepad combo button: "),
+    ("手把組合不可重複同一個按鍵", "Gamepad combo cannot repeat a button"),
+    ("手把組合須包含 2 到 4 個按鍵", "Gamepad combo needs 2 to 4 buttons"),
     ("按鍵映射資料類型不正確", "Button mapping data has an invalid type"),
     ("搖桿設定資料類型不正確", "Stick settings have an invalid type"),
     (
@@ -1778,7 +2119,7 @@ PHRASES = (
     ("控制器已準備完成，可以開始使用。", "Controller ready."),
     ("提醒：連線期間請勿關閉此視窗。", "Keep this window open while connected."),
     ("若需要中斷連線，請關閉此視窗。", "Close this window to disconnect."),
-    ("如需校正搖桿，請先關閉本程式，再按下「校正搖桿」按鈕。", "To calibrate sticks, close this program and click Stick Calibration."),
+    ("如需校正搖桿，請先關閉本程式，再按下「校正」並選擇「校正搖桿」。", "To calibrate sticks, close this program, click Calibrate, and choose Stick Calibration."),
     ("接著依照校正程序的畫面提示操作即可。", "Then follow the calibration prompts."),
     ("Switch 2 Pro Controller 原生藍牙已中斷。", "Switch 2 Pro Controller native Bluetooth disconnected."),
     ("震動傳送失敗：", "Rumble transmission failed: "),
@@ -1836,7 +2177,16 @@ PHRASES = (
 )
 
 
+# Keys for Chinese words that need a different English word in another
+# context. The text before "|" is the Chinese shown in the UI.
+CONTEXT_TEXT = {
+    "關閉|off": "Off",
+}
+
+
 def translate_text(text, language):
+    if isinstance(text, str) and text in CONTEXT_TEXT:
+        return CONTEXT_TEXT[text] if language == "en" else text.split("|", 1)[0]
     if language != "en" or not isinstance(text, str):
         return text
     translated = EN_TEXT.get(text)

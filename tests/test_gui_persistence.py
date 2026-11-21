@@ -475,9 +475,10 @@ class GuiPersistenceTests(unittest.TestCase):
 
     def test_close_mode_warning_has_complete_english_copy(self):
         message = (
-            "關閉設定視窗後：\n\n"
+            "結束程式後：\n\n"
             "• 桌面橋接模式會中斷連線。\n"
-            "• ESP32 獨立模式會繼續運作。"
+            "• ESP32 獨立模式會繼續運作。\n"
+            "• 擴充工具會一併關閉。"
         )
 
         self.assertEqual(
@@ -486,6 +487,10 @@ class GuiPersistenceTests(unittest.TestCase):
         )
         self.assertIn(
             "Desktop bridge mode will disconnect",
+            config_gui.translate_text(message, "en"),
+        )
+        self.assertIn(
+            "Extension tools will close too",
             config_gui.translate_text(message, "en"),
         )
         self.assertEqual(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
 import time
@@ -13,7 +14,9 @@ from pathlib import Path
 COMMAND_QUEUE_DIR = Path(__file__).with_name("controller_commands")
 
 
-def enqueue_controller_command(command, queue_dir=COMMAND_QUEUE_DIR):
+def enqueue_controller_command(
+    command, queue_dir=COMMAND_QUEUE_DIR, *, connection_id=None, compensation_signature=None,
+):
     directory = Path(queue_dir)
     directory.mkdir(parents=True, exist_ok=True)
     request_id = uuid.uuid4().hex
@@ -22,6 +25,10 @@ def enqueue_controller_command(command, queue_dir=COMMAND_QUEUE_DIR):
         "command": str(command).strip(),
         "created_at": time.time(),
     }
+    if connection_id is not None:
+        payload["connection_id"] = connection_id
+    if compensation_signature is not None:
+        payload["compensation_signature"] = compensation_signature
     fd, temp_name = tempfile.mkstemp(
         prefix=".command-", suffix=".tmp", dir=str(directory), text=True
     )
@@ -42,24 +49,59 @@ def enqueue_controller_command(command, queue_dir=COMMAND_QUEUE_DIR):
     return request_id
 
 
-def next_controller_command(queue_dir=COMMAND_QUEUE_DIR):
+def _read_request(path):
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("Expected a controller command object")
+    command = payload.get("command")
+    request_id = payload.get("id")
+    if not isinstance(command, str) or not command.strip() or not isinstance(request_id, str) or not request_id.strip():
+        raise ValueError("Expected a controller command and request ID")
+    created_at = float(payload.get("created_at", 0.0) or 0.0)
+    if not math.isfinite(created_at):
+        raise ValueError("Invalid controller command timestamp")
+    connection_id = payload.get("connection_id")
+    if connection_id is not None and (
+        not isinstance(connection_id, str) or not connection_id.strip()
+    ):
+        raise ValueError("Invalid controller command connection ID")
+    compensation_signature = payload.get("compensation_signature")
+    if compensation_signature is not None and (
+        not isinstance(compensation_signature, str) or not compensation_signature.strip()
+    ):
+        raise ValueError("Invalid controller command compensation signature")
+    return command.strip(), request_id.strip(), created_at, connection_id, compensation_signature
+
+
+def _quarantine_request(path):
+    try:
+        path.rename(path.with_suffix(".invalid"))
+    except OSError:
+        pass
+
+
+def next_controller_command(queue_dir=COMMAND_QUEUE_DIR, *, not_before=0.0):
     directory = Path(queue_dir)
     if not directory.is_dir():
         return None
     for path in sorted(directory.glob("*.json"), key=lambda item: item.name):
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            command = str(payload.get("command", "")).strip()
-            request_id = str(payload.get("id", "")).strip()
-            if not command or not request_id:
-                path.rename(path.with_suffix(".invalid"))
+            command, request_id, created_at, connection_id, compensation_signature = _read_request(path)
+            if created_at < not_before:
+                path.unlink()
                 continue
-            return {"id": request_id, "command": command, "path": path}
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
-            try:
-                path.rename(path.with_suffix(".invalid"))
-            except OSError:
-                pass
+            # Claim the file before executing so failed cleanup cannot replay it.
+            claimed = path.rename(path.with_suffix(".processing"))
+        except OSError:
+            continue
+        except (ValueError, TypeError, OverflowError, RecursionError):
+            _quarantine_request(path)
+            continue
+        return {
+            "id": request_id, "command": command, "path": claimed,
+            "connection_id": connection_id,
+            "compensation_signature": compensation_signature,
+        }
     return None
 
 
@@ -71,19 +113,17 @@ def cleanup_controller_commands(not_before, queue_dir=COMMAND_QUEUE_DIR):
     removed = 0
     for path in directory.glob("*.json"):
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            created_at = float(payload.get("created_at", 0.0) or 0.0)
+            _, _, created_at, *_ = _read_request(path)
             if created_at >= float(not_before):
                 continue
             path.unlink()
             removed += 1
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
-            try:
-                path.rename(path.with_suffix(".invalid"))
-            except OSError:
-                pass
+        except OSError:
+            continue
+        except (ValueError, TypeError, OverflowError, RecursionError):
+            _quarantine_request(path)
     stale_before = time.time() - 60.0
-    for pattern in ("*.tmp", "*.invalid"):
+    for pattern in ("*.tmp", "*.invalid", "*.processing"):
         for path in directory.glob(pattern):
             try:
                 if path.stat().st_mtime < stale_before:

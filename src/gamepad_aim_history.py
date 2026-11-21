@@ -1,6 +1,7 @@
 """Local results for completed aim-test rounds."""
 
 import json
+import logging
 import math
 import tkinter as tk
 from contextlib import nullcontext
@@ -10,7 +11,7 @@ from tkinter import font, messagebox, ttk
 
 from config_utils import atomic_write_bytes, config_file_lock
 from dialog_layout import center_child_dialog
-from gamepad_aim_model import TIMED_MODES, TRACKING_MODES
+from gamepad_aim_model import DEFAULT_STICK_TURN_SPEED, TIMED_MODES, TRACKING_MODES
 
 
 METRIC_LABELS = {
@@ -34,7 +35,14 @@ _MODE_LABELS = {
     "timed-cursor-mouse": ("2D", "限時 · Windows 游標"),
 }
 _METRIC_UNITS = {"hits": "", "accuracy": "%", "seconds": " s", "tracking": "%"}
-_COMPARISON_IGNORED_KEYS = {"reticle", "reticle_size", "target_color", "mouse_sensitivity"}
+# Rounds compare only when the targets and screen are the same. Input speed,
+# colors, reticle, rumble, and sound do not change them. target_top is the 2D
+# playfield's top edge, which follows the close button height and DPI scaling.
+_COMPARISON_KEYS = (
+    "version", "mode", "viewport", "target_top", "targets", "seconds", "seed", "depth",
+    "horizontal_spread", "vertical_spread", "tracking_arc", "tracking_speed",
+    "target_size_2d",
+)
 
 
 def _precision(key, unit):
@@ -62,7 +70,7 @@ def _metric_unit(key, mode):
 
 
 def _comparison_basis(basis):
-    return {key: value for key, value in basis.items() if key not in _COMPARISON_IGNORED_KEYS}
+    return {key: basis.get(key) for key in _COMPARISON_KEYS}
 
 
 def _matching_records(records, basis):
@@ -224,8 +232,15 @@ class AimHistory:
         self._refresh_views()
 
     def _refresh_views(self):
-        for view in self._views:
-            view.refresh()
+        for view in tuple(self._views):
+            try:
+                view.refresh()
+            except tk.TclError:
+                # The result is already committed. A widget can be destroyed
+                # during teardown while another history view is still open.
+                logging.getLogger(__name__).warning(
+                    "Could not refresh an aiming history view", exc_info=True
+                )
 
     def create_view(self, parent, translate, on_clear=lambda: None, *, clear_button=None) -> ttk.Frame:
         """Create a live history view for the caller to place in its layout."""
@@ -301,9 +316,12 @@ class _HistoryView(ttk.Frame):
         self.scrollbar.grid(row=0, column=1, sticky="ns")
         self.tree.bind("<<TreeviewSelect>>", self._show_selection)
 
-        self.basis_label = ttk.Label(self, wraplength=total_width)
+        self._parameter_font = text_font
+        self._parameter_width = total_width
+        self._parameters = ()
+        self.basis_label = ttk.Label(self, width=1, font=text_font, justify="left")
         self.basis_label.pack(fill="x", pady=(6, 0))
-        self.settings_label = ttk.Label(self, wraplength=total_width)
+        self.basis_label.bind("<Configure>", self._fit_parameters)
         self.comparison = ttk.Frame(self)
 
         self.buttons = None
@@ -322,6 +340,27 @@ class _HistoryView(ttk.Frame):
             self.scrollbar.grid()
         else:
             self.scrollbar.grid_remove()
+
+    def _fit_parameters(self, event=None):
+        if event is not None:
+            self._parameter_width = event.width
+        separator = " · "
+        first, second = separator.join(self._parameters), ""
+        measure = self._parameter_font.measure
+        width = self._parameter_width - 4
+        if len(self._parameters) > 1 and measure(first) > width:
+            # Pick a boundary between parameters, keeping both rows in view where possible.
+            splits = [
+                (separator.join(self._parameters[:index]), separator.join(self._parameters[index:]))
+                for index in range(1, len(self._parameters))
+            ]
+            fitting = [pair for pair in splits if max(map(measure, pair)) <= width]
+            first, second = fitting[-1] if fitting else min(splits, key=lambda pair: max(map(measure, pair)))
+        self.basis_label.configure(text=f"{first}\n{second}")
+
+    def _set_parameters(self, *items):
+        self._parameters = items
+        self._fit_parameters()
 
     def _mode_text(self, mode):
         dimension, label = _MODE_LABELS[mode]
@@ -347,7 +386,8 @@ class _HistoryView(ttk.Frame):
             self.tree.insert(
                 "", "end", iid=str(index), values=(date, self._mode_text(basis["mode"]), *values),
             )
-        self.clear_button.state(["!disabled" if self.records else "disabled"])
+        if self.clear_button.winfo_exists():
+            self.clear_button.state(["!disabled" if self.records else "disabled"])
         if self.records:
             newest = str(len(self.records) - 1)
             self.tree.selection_set(newest)
@@ -360,33 +400,14 @@ class _HistoryView(ttk.Frame):
             child.destroy()
         selection = self.tree.selection()
         if not selection:
-            self.basis_label.configure(text=self.tr("尚無瞄準測試紀錄。"))
-            self.settings_label.pack_forget()
+            self._set_parameters(self.tr("尚無瞄準測試紀錄。"))
             self.comparison.pack_forget()
             return
         self.comparison.pack(fill="x", pady=(3, 0), before=self.buttons)
         index = int(selection[0])
         record = self.records[index]
         basis = record["basis"]
-        width, height = basis["viewport"]
-        settings_label = (
-            "時限 {seconds} s · 種子 {seed} · {width}×{height}"
-            if basis["seconds"] else "不限時 · 種子 {seed} · {width}×{height}"
-        )
-        settings = self.tr(settings_label).format(
-            seconds=basis["seconds"], seed=basis["seed"], width=width, height=height,
-        )
-        if basis["mode"] in ("shooting", "timed-shooting"):
-            settings += " · " + self.tr("遠近差異 {depth}%").format(depth=basis["depth"])
-            if "horizontal_spread" in basis or "vertical_spread" in basis:
-                settings += " · " + self.tr("水平 {horizontal}%／垂直 {vertical}%").format(
-                    horizontal=basis.get("horizontal_spread", 100),
-                    vertical=basis.get("vertical_spread", 100),
-                )
-        elif "target_size_2d" in basis:
-            settings += " · " + self.tr("靶心 {size}%").format(size=basis["target_size_2d"])
-        self.basis_label.configure(text=settings)
-        self._show_round_options(basis)
+        self._set_parameters(*self._round_options(basis))
         best = _best_record(self.records[:index], basis)
         changes = _changes(basis, record["metrics"], best["metrics"]) if best else ()
         if changes:
@@ -402,29 +423,46 @@ class _HistoryView(ttk.Frame):
             summary = "沒有可顯示的差異。" if best else "尚無相同設定的測試紀錄。"
             ttk.Label(self.comparison, text=self.tr(summary)).pack(side="left")
 
-    def _show_round_options(self, basis):
-        options = []
-        for key, label in (("reticle", "準心 {color}"), ("target_color", "靶色 {color}")):
-            value = basis.get(key)
-            if isinstance(value, str) and len(value) == 7 and value.startswith("#"):
-                detail = self.tr(label).format(color=value)
-                if key == "reticle" and "reticle_size" in basis:
-                    detail += f" / {basis['reticle_size']} px"
-                options.append(detail)
-        rumble = basis.get("rumble")
-        if type(rumble) is int and 0 <= rumble <= 100:
-            options.append(self.tr("震動 {value}%").format(value=rumble))
-        sound = basis.get("sound")
-        if type(sound) is bool:
-            options.append(self.tr("音效開啟" if sound else "音效關閉"))
-        sensitivity = basis.get("mouse_sensitivity", 100)
-        if _MODE_LABELS[basis["mode"]][0] == "3D" and type(sensitivity) is int:
-            options.append(self.tr("滑鼠感度 {value}%").format(value=sensitivity))
-        if options:
-            self.settings_label.configure(text=" · ".join(options))
-            self.settings_label.pack(fill="x", before=self.comparison)
-        else:
-            self.settings_label.pack_forget()
+    def _round_options(self, basis):
+        mode = basis["mode"]
+        duration = (
+            self.tr("時限 {seconds} s").format(seconds=basis["seconds"])
+            if basis["seconds"] else self.tr("不限時")
+        )
+        seed = self.tr("種子 {seed}").format(seed=basis["seed"])
+        options = [seed, duration] if mode in TIMED_MODES else [duration, seed]
+
+        if mode == "tracking":
+            arc = basis.get("tracking_arc", 0)
+            speed = basis.get("tracking_speed", 100)
+            if type(arc) is int and type(speed) is int and (arc or speed != 100):
+                route = self.tr("環繞 {angle}°").format(angle=arc) if arc else self.tr("原本路線")
+                options.extend((route, self.tr("靶速 {value}%").format(value=speed)))
+        if mode in ("shooting", "timed-shooting"):
+            options.append(self.tr("遠近差異 {depth}%").format(depth=basis["depth"]))
+            if "horizontal_spread" in basis or "vertical_spread" in basis:
+                options.append(self.tr("水平 {horizontal}%／垂直 {vertical}%").format(
+                    horizontal=basis.get("horizontal_spread", 100),
+                    vertical=basis.get("vertical_spread", 100),
+                ))
+        elif "target_size_2d" in basis:
+            options.append(self.tr("靶心 {size}%").format(size=basis["target_size_2d"]))
+
+        if _MODE_LABELS[mode][0] == "3D":
+            horizontal = basis.get("stick_horizontal_speed", DEFAULT_STICK_TURN_SPEED[0])
+            vertical = basis.get("stick_vertical_speed", DEFAULT_STICK_TURN_SPEED[1])
+            if basis.get("stick_speed_changed"):
+                options.append(self.tr("回合中切換手把視角速度"))
+            elif type(horizontal) is int and type(vertical) is int:
+                options.append(self.tr("手把視角速度 {horizontal}／{vertical}°/秒").format(
+                    horizontal=horizontal, vertical=vertical,
+                ))
+            sensitivity = basis.get("mouse_sensitivity", 100)
+            if type(sensitivity) is int:
+                options.append(self.tr("滑鼠感度 {value}%").format(value=sensitivity))
+        width, height = basis["viewport"]
+        options.append(f"{width}×{height}")
+        return options
 
     def _clear(self):
         if not messagebox.askyesno(

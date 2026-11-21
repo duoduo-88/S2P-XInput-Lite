@@ -27,7 +27,10 @@ from diagnostic_session import (
     read_controller_status,
 )
 from command_queue import enqueue_controller_command
-from config_utils import CONFIG_PATH
+from config_utils import (
+    CONFIG_PATH, PROFILE_DIR, SettingsFileChanges, config_file_lock,
+    is_protected_profile, load_config, profile_path, read_profile,
+)
 from gamepad_aim import AimTestPane
 from gamepad_aim_display import window_refresh_rate
 from gamepad_aim_feedback import AimFeedback
@@ -38,22 +41,37 @@ from gamepad_trail_photo import TrailPhotoUploader
 from gamepad_trail_worker import TrailRasterWorker, TrailStyle
 from gamepad_devices import (
     GamepadDevice,
+    GamepadState,
+    NINTENDO_PRO2_PID,
+    NINTENDO_PRO2_PROFILE,
+    NINTENDO_PRO2_VID,
     NativeGamepadSampler,
     WindowsGamepadBackend,
     XINPUT_BUTTON_NAMES,
     find_s2p_hid_firmware,
     xinput_packet_delta,
 )
+from gyro_compensation import (
+    COMPENSATION_FIELDS,
+    DEFAULT_COMPENSATION,
+    CompensationSnapshot,
+    compensation_connection,
+    compensation_reload_signature,
+    profile_compensation,
+)
 from gyro_processing import _apply_gyro_response_curve
 from raw_hid_probe import (
     RawHidAnalysisClient,
     RawHidStreamClient,
     enumerate_raw_hid_gamepads,
+    is_raw_hid_device_present,
 )
 from readable_combobox import ReadableCombobox
+from settings_schema import GYRO_RATIO_MAX, GYRO_RATIO_MIN
 from switch2_input import SWITCH_BUTTONS
 from support_log import format_support_log
 from test_telemetry import SharedTestTelemetry
+from parameter_controls import bind_drag_adjust, bind_restore_menu, widget_is_disabled
 from tooltip_layout import HoverTip
 from update_manager import (
     UpdateCheckError,
@@ -75,6 +93,8 @@ MAX_CANVAS_TRAIL_ITEMS = 2000
 TRIGGER_EVENT_THRESHOLD = 30.0 / 255.0
 SWITCH_RAW_HID_BUTTONS = tuple((mask, name) for name, mask in SWITCH_BUTTONS.items())
 SHAPE_TRACE_REFRESH_HZ = 60.0
+# Raw HID reports the aim test reads per tick (about 0.5 s at 1 kHz).
+AIM_RAW_STREAM_BATCH = 512
 SHAPE_CAPTURE_SETTLE_SECONDS = 1.0
 TRAIL_COLOR = "#1976D2"
 RIGHT_TRAIL_COLOR = "#D32F2F"
@@ -92,6 +112,19 @@ GYRO_ANTI_DEADZONE_COLOR = "#00897B"
 TEST_ICON_PATH = (
     Path(__file__).resolve().parent.parent / "image" / "testicon.png"
 )
+# Smaller copies let Windows pick a close size for title bars and the taskbar.
+TEST_ICON_SMALL_PATHS = tuple(
+    TEST_ICON_PATH.with_name(f"testicon{size}.png") for size in (32, 16)
+)
+
+
+def load_tester_icons(master):
+    """Return the tester icon at every bundled size (largest first)."""
+    icons = []
+    for path in (TEST_ICON_PATH, *TEST_ICON_SMALL_PATHS):
+        if path.is_file():
+            icons.append(tk.PhotoImage(master=master, file=str(path)))
+    return icons
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ABOUT_ICON_PATH = PROJECT_ROOT / "image" / "icon.png"
 LICENSE_PATH = PROJECT_ROOT / "LICENSE"
@@ -424,6 +457,16 @@ def shape_ease_amount(delta_seconds, time_constant=0.05):
     delta = max(0.0, min(0.1, float(delta_seconds)))
     constant = max(1e-6, float(time_constant))
     return 1.0 - math.exp(-delta / constant)
+
+
+# Defaults shared by the reset buttons and the right-click restore menus.
+DEFAULT_TRAIL_SECONDS = 2.5
+DEFAULT_RAW_HID_SECONDS = 10
+RAW_HID_DURATION_CHOICES = ("5", "10", "30", "60")
+DIAGNOSTIC_DURATION_CHOICES = ("30", "60", "120")
+DEFAULT_SAMPLE_PERCENT = 100.0
+DEFAULT_RUMBLE_REPEAT_HZ = 1.0
+DEFAULT_RUMBLE_STRENGTH = 100.0
 
 
 def normalize_test_parameter(value, minimum, maximum, step):
@@ -1785,6 +1828,9 @@ class StickPlot:
                 gyro.get("tilt_deadzone"),
                 gyro.get("x_ratio"),
                 gyro.get("y_ratio"),
+                gyro.get("x_compensation", 1.0),
+                gyro.get("y_compensation", 1.0),
+                gyro.get("compensation_keep_limit", False),
                 gyro.get("smoothing_ms"),
                 gyro.get("tilt_smoothing_ms"),
                 gyro.get("adaptive_deadzone"),
@@ -2242,7 +2288,7 @@ class GamepadTestWindow:
         self._nintendo_winmm_pair_key = None
         self._nintendo_winmm_pair_score = 0
         self.raw_hid_devices = {}
-        self.raw_hid_duration_var = tk.StringVar(value="10")
+        self.raw_hid_duration_var = tk.StringVar(value=str(DEFAULT_RAW_HID_SECONDS))
         self.raw_hid_state_var = tk.StringVar(value=self.gui.tr("尚未量測"))
         self.raw_hid_rate_var = tk.StringVar(value="— Hz")
         self.raw_hid_effective_rate_var = tk.StringVar(value="— Hz")
@@ -2383,10 +2429,10 @@ class GamepadTestWindow:
         if not TEST_ICON_PATH.is_file():
             return
         try:
-            icon = tk.PhotoImage(master=window, file=str(TEST_ICON_PATH))
-            window.iconphoto(False, icon)
+            icons = load_tester_icons(window)
+            window.iconphoto(False, *icons)
             # Tk image objects must remain referenced for the window lifetime.
-            self._window_icon = icon
+            self._window_icon = icons
         except tk.TclError:
             self._window_icon = None
 
@@ -2613,9 +2659,10 @@ class GamepadTestWindow:
         )
         self.raw_hid_stream_toggle = raw_hid_stream_toggle
         raw_hid_stream_toggle.grid(row=0, column=3, padx=(0, 7))
-        ttk.Label(
+        trail_name_label = ttk.Label(
             display_controls, text=self.gui.tr("軌跡")
-        ).grid(row=0, column=4, padx=(0, 3))
+        )
+        trail_name_label.grid(row=0, column=4, padx=(0, 3))
         trail_scale = ttk.Scale(
             display_controls,
             from_=0.5,
@@ -2642,10 +2689,13 @@ class GamepadTestWindow:
             number_format=".1f",
             on_change=self._update_trail_length_text,
             state_widget=trail_scale,
+            name_label=trail_name_label,
+            default=DEFAULT_TRAIL_SECONDS,
         )
-        ttk.Label(
+        sample_name_label = ttk.Label(
             display_controls, text=self.gui.tr("採樣點")
-        ).grid(row=0, column=7, padx=(0, 3))
+        )
+        sample_name_label.grid(row=0, column=7, padx=(0, 3))
         sample_scale = ttk.Scale(
             display_controls,
             from_=1.0,
@@ -2673,6 +2723,8 @@ class GamepadTestWindow:
             number_format=".0f",
             on_change=self._update_sample_display_percent,
             state_widget=sample_scale,
+            name_label=sample_name_label,
+            default=DEFAULT_SAMPLE_PERCENT,
         )
         sample_help = tk.Label(
             display_controls,
@@ -2809,6 +2861,12 @@ class GamepadTestWindow:
             feedback=AimFeedback(window, self._set_aim_rumble),
             gpu_renderer=Direct2DAimRenderer,
             render_in_worker=True,
+            open_gyro_settings=getattr(self.gui, "open_gyro_settings", None),
+            compensation_available=self._selected_device_supports_gyro_compensation,
+            read_gyro_compensation=self._read_gyro_compensation,
+            reset_gyro_compensation=self._reset_gyro_compensation,
+            apply_gyro_compensation=self._write_gyro_compensation,
+            read_gyro_reload_status=self._read_gyro_reload_status,
         )
         self._build_rumble_tab(rumble_tab)
         self._build_high_rate_tab(high_rate_tab)
@@ -2872,16 +2930,24 @@ class GamepadTestWindow:
         controls.grid(row=0, column=0, sticky="ew")
         controls.columnconfigure(3, weight=1, uniform="raw_actions")
         controls.columnconfigure(4, weight=1, uniform="raw_actions")
-        ttk.Label(
+        raw_hid_duration_name = ttk.Label(
             controls, text=self.gui.tr("量測秒數")
-        ).grid(row=0, column=0, padx=(0, 5))
+        )
+        raw_hid_duration_name.grid(row=0, column=0, padx=(0, 5))
         self.raw_hid_duration_combo = ReadableCombobox(
             controls,
             textvariable=self.raw_hid_duration_var,
-            values=("5", "10", "30", "60"),
+            values=RAW_HID_DURATION_CHOICES,
             width=5,
         )
         self.raw_hid_duration_combo.grid(row=0, column=1)
+        self._bind_choice_parameter(
+            raw_hid_duration_name,
+            self.raw_hid_duration_combo,
+            self.raw_hid_duration_var,
+            RAW_HID_DURATION_CHOICES,
+            DEFAULT_RAW_HID_SECONDS,
+        )
         raw_hid_help = tk.Label(
             controls,
             text="?",
@@ -3913,10 +3979,9 @@ class GamepadTestWindow:
 
     @staticmethod
     def _parameter_control_is_disabled(widget):
-        try:
-            return bool(widget.instate(["disabled"]))
-        except (AttributeError, tk.TclError):
-            return False
+        # Same check as dragging, so a click never opens the editor for a
+        # control that dragging treats as disabled.
+        return widget_is_disabled(widget)
 
     def _apply_parameter_value(
         self,
@@ -3950,79 +4015,63 @@ class GamepadTestWindow:
         number_format,
         on_change,
         state_widget=None,
+        name_label=None,
+        default=None,
     ):
-        """Add click-to-enter and four-direction scrubbing to a value label."""
-        pixels_per_step = 8
+        """Let a parameter be dragged by its value or name and restored by right-click.
+
+        Clicking the value text opens the numeric editor. The name text only
+        drags, like the settings window. Tester parameters are not saved, so
+        the right-click menu offers only the default.
+        """
         state_widget = state_widget or widget
-        state = {
-            "start_x": 0,
-            "start_y": 0,
-            "start_value": float(minimum),
-            "last_steps": 0,
-            "dragged": False,
-            "enabled": False,
-        }
-        widget.configure(cursor="sb_h_double_arrow")
 
-        def begin(event):
-            state["enabled"] = not self._parameter_control_is_disabled(
-                state_widget
-            )
-            if not state["enabled"]:
-                return "break"
-            try:
-                start_value = float(variable.get())
-            except (TypeError, ValueError, tk.TclError):
-                start_value = float(minimum)
-            state.update({
-                "start_x": event.x_root,
-                "start_y": event.y_root,
-                "start_value": start_value,
-                "last_steps": 0,
-                "dragged": False,
-            })
-            return "break"
-
-        def drag(event):
-            if not state["enabled"]:
-                return "break"
-            delta_x = event.x_root - state["start_x"]
-            delta_y = event.y_root - state["start_y"]
-            distance = delta_x if abs(delta_x) >= abs(delta_y) else -delta_y
-            step_count = int(distance / pixels_per_step)
-            if step_count == 0 or step_count == state["last_steps"]:
-                return "break"
-            state["dragged"] = True
-            state["last_steps"] = step_count
+        def apply(numeric):
             self._apply_parameter_value(
+                variable, numeric, minimum, maximum, step, on_change,
+            )
+
+        def open_editor():
+            self._open_parameter_editor(
                 variable,
-                state["start_value"] + step_count * float(step),
+                title,
                 minimum,
                 maximum,
-                step,
-                on_change,
+                step=step,
+                number_format=number_format,
+                on_change=on_change,
+                state_widget=state_widget,
             )
-            return "break"
 
-        def finish(_event):
-            if not state["enabled"]:
-                return "break"
-            if not state["dragged"]:
-                self._open_parameter_editor(
-                    variable,
-                    title,
-                    minimum,
-                    maximum,
-                    step=step,
-                    number_format=number_format,
-                    on_change=on_change,
-                    state_widget=state_widget,
-                )
-            return "break"
+        bind_drag_adjust(
+            widget, variable, minimum, maximum, apply,
+            step=step, state_widget=state_widget, click_command=open_editor,
+        )
+        if name_label is not None:
+            bind_drag_adjust(
+                name_label, variable, minimum, maximum, apply,
+                step=step, state_widget=state_widget,
+            )
+        if default is not None:
+            bind_restore_menu(
+                (widget, name_label, state_widget), self.gui.tr, apply, None, default,
+                state_widget=state_widget,
+            )
 
-        widget.bind("<ButtonPress-1>", begin)
-        widget.bind("<B1-Motion>", drag)
-        widget.bind("<ButtonRelease-1>", finish)
+    def _bind_choice_parameter(self, name_label, combo, variable, choices, default):
+        """Step through a duration list by dragging its name; right-click restores the default."""
+        numbers = tuple(int(choice) for choice in choices)
+
+        def apply(number):
+            variable.set(str(int(round(number))))
+
+        bind_drag_adjust(
+            name_label, variable, min(numbers), max(numbers), apply,
+            allowed_values=numbers, state_widget=combo,
+        )
+        bind_restore_menu(
+            (name_label, combo), self.gui.tr, apply, None, default, state_widget=combo,
+        )
 
     def _open_parameter_editor(
         self,
@@ -4550,16 +4599,25 @@ class GamepadTestWindow:
             command=self.export_diagnostic_log,
         )
         self.diagnostic_export_button.grid(row=0, column=2, padx=(0, 12))
-        ttk.Label(controls, text=self.gui.tr("診斷時間")).grid(
-            row=0, column=3, padx=(0, 5)
+        diagnostic_duration_name = ttk.Label(
+            controls, text=self.gui.tr("診斷時間")
         )
-        ReadableCombobox(
+        diagnostic_duration_name.grid(row=0, column=3, padx=(0, 5))
+        diagnostic_duration = ReadableCombobox(
             controls,
             textvariable=self.diagnostic_duration_var,
-            values=("30", "60", "120"),
+            values=DIAGNOSTIC_DURATION_CHOICES,
             state="readonly",
             width=5,
-        ).grid(row=0, column=4)
+        )
+        diagnostic_duration.grid(row=0, column=4)
+        self._bind_choice_parameter(
+            diagnostic_duration_name,
+            diagnostic_duration,
+            self.diagnostic_duration_var,
+            DIAGNOSTIC_DURATION_CHOICES,
+            DEFAULT_DIAGNOSTIC_SECONDS,
+        )
         diagnostic_help = tk.Label(
             controls,
             text="?",
@@ -5733,9 +5791,8 @@ class GamepadTestWindow:
             ("LF（左馬達）", self.manual_lf_var, self.manual_lf_text),
             ("HF（右馬達）", self.manual_hf_var, self.manual_hf_text),
         )):
-            ttk.Label(manual_group, text=self.gui.tr(label), width=14).grid(
-                row=row, column=0, sticky="w", padx=(0, 8)
-            )
+            name_label = ttk.Label(manual_group, text=self.gui.tr(label), width=14)
+            name_label.grid(row=row, column=0, sticky="w", padx=(0, 8))
             scale = ttk.Scale(
                 manual_group,
                 from_=0.0,
@@ -5762,6 +5819,8 @@ class GamepadTestWindow:
                 number_format=".0f",
                 on_change=self._on_manual_rumble_changed,
                 state_widget=scale,
+                name_label=name_label,
+                default=0.0,
             )
             self.manual_rumble_widgets.append(scale)
 
@@ -5856,9 +5915,8 @@ class GamepadTestWindow:
             sticky="ew", pady=(8, 0)
         )
         controls.columnconfigure(1, weight=1)
-        ttk.Label(controls, text=self.gui.tr("播放頻率"), width=14).grid(
-            row=0, column=0, sticky="w", padx=(0, 8)
-        )
+        repeat_rate_name = ttk.Label(controls, text=self.gui.tr("播放頻率"), width=14)
+        repeat_rate_name.grid(row=0, column=0, sticky="w", padx=(0, 8))
         repeat_rate = ttk.Scale(
             controls,
             from_=0.1,
@@ -5887,10 +5945,11 @@ class GamepadTestWindow:
             number_format=".1f",
             on_change=self._on_repeat_rate_changed,
             state_widget=repeat_rate,
+            name_label=repeat_rate_name,
+            default=DEFAULT_RUMBLE_REPEAT_HZ,
         )
-        ttk.Label(controls, text=self.gui.tr("模板強度"), width=14).grid(
-            row=1, column=0, sticky="w", padx=(0, 8), pady=(8, 0)
-        )
+        strength_name = ttk.Label(controls, text=self.gui.tr("模板強度"), width=14)
+        strength_name.grid(row=1, column=0, sticky="w", padx=(0, 8), pady=(8, 0))
         strength = ttk.Scale(
             controls,
             from_=0.0,
@@ -5917,6 +5976,8 @@ class GamepadTestWindow:
             number_format=".0f",
             on_change=self._on_rumble_strength_changed,
             state_widget=strength,
+            name_label=strength_name,
+            default=DEFAULT_RUMBLE_STRENGTH,
         )
         self.rumble_option_widgets.extend(
             (repeat, template_lf, template_hf, repeat_rate, strength)
@@ -5968,10 +6029,10 @@ class GamepadTestWindow:
         self.manual_lf_text.set("0%")
         self.manual_hf_text.set("0%")
         self.repeat_rumble_var.set(False)
-        self.rumble_repeat_hz_var.set(1.0)
-        self.rumble_repeat_hz_text.set("1.0 Hz")
-        self.rumble_strength_var.set(100.0)
-        self.rumble_strength_text.set("100%")
+        self.rumble_repeat_hz_var.set(DEFAULT_RUMBLE_REPEAT_HZ)
+        self.rumble_repeat_hz_text.set(f"{DEFAULT_RUMBLE_REPEAT_HZ:.1f} Hz")
+        self.rumble_strength_var.set(DEFAULT_RUMBLE_STRENGTH)
+        self.rumble_strength_text.set(f"{DEFAULT_RUMBLE_STRENGTH:.0f}%")
         self.template_lf_enabled_var.set(True)
         self.template_hf_enabled_var.set(True)
 
@@ -6239,7 +6300,7 @@ class GamepadTestWindow:
                     self._last_event_input_signature = event_signature
                     self._update_events(sample, is_s2p, now)
             self._draw_plots(
-                is_s2p, update_details=refresh_details
+                is_s2p, has_live_sample=sample is not None, update_details=refresh_details,
             )
         if refresh_details and not window_in_motion:
             self._last_detail_refresh = now
@@ -6374,13 +6435,13 @@ class GamepadTestWindow:
                     values = item.get(f"final_{side}") or (0.0, 0.0)
                 history.add(values[0], values[1], sample_time, record_shape)
 
-    def _draw_plots(self, is_s2p, update_details=True):
-        telemetry = self.latest_telemetry if is_s2p else {}
+    def _draw_plots(self, is_s2p, *, has_live_sample, update_details=True):
+        telemetry = self.latest_telemetry if is_s2p and has_live_sample else {}
         frame_changed = False
         presentation_now = time.perf_counter()
         for side, plot in self.plots.items():
             history = self.histories[side]
-            if history.trail:
+            if has_live_sample and history.trail:
                 _, x, y, _sequence = history.trail[-1]
             else:
                 x = y = 0.0
@@ -6457,6 +6518,9 @@ class GamepadTestWindow:
                 gyro.get("tilt_max_angle"),
                 gyro.get("x_ratio"),
                 gyro.get("y_ratio"),
+                gyro.get("x_compensation", 1.0),
+                gyro.get("y_compensation", 1.0),
+                gyro.get("compensation_keep_limit", False),
             ))
         return tuple(signature)
 
@@ -6489,6 +6553,9 @@ class GamepadTestWindow:
 
     def _on_device_selected(self, _event=None):
         self._device_selection_explicit = True
+        aim_pane = getattr(self, "aim_pane", None)
+        if aim_pane is not None:
+            aim_pane.close_gyro_compensation_for_device_change()
         if self.diagnostic_session.running:
             self.stop_diagnostic("device_changed")
             self.diagnostic_state_var.set(
@@ -6502,6 +6569,102 @@ class GamepadTestWindow:
 
     def _selected_device(self):
         return self.devices.get(self.selected_device_var.get())
+
+    def _selected_device_supports_gyro_compensation(self):
+        device = self._selected_device()
+        if device is None:
+            return False
+        if device.kind == "s2p":
+            gyro = self.latest_telemetry.get("gyro") or {}
+            return self._telemetry_is_fresh(self.latest_telemetry) and gyro.get("available") is not False
+        if device.kind == "winmm":
+            return (
+                device.input_profile == NINTENDO_PRO2_PROFILE
+                and self.latest_diagnostic_input.get("device_key") == device.key
+                and self.backend.is_nintendo_pro2_winmm(device.index)
+            )
+        raw = self._selected_raw_hid_device()
+        if raw is None or raw.is_virtual:
+            return False
+        return (
+            (raw.vendor_id, raw.product_id) == (NINTENDO_PRO2_VID, NINTENDO_PRO2_PID)
+            and is_raw_hid_device_present(raw.path)
+        )
+
+    def _gyro_compensation_snapshot(self, config, profile, status):
+        target = config.get("gyro_mapping", "target", fallback="RIGHT_STICK").strip().upper()
+        profile_target = (
+            profile.get("gyro_mapping", "target", fallback="RIGHT_STICK").strip().upper()
+            if profile is not None else None
+        )
+        if "MOUSE" in (target, profile_target):
+            raise ValueError(self.gui.tr("現行設定或方案使用滑鼠輸出，無法調整搖桿補償。"))
+        return CompensationSnapshot(
+            config.get("gui", "active_profile", fallback=""), profile_compensation(config),
+            profile_compensation(profile) if profile is not None else None,
+            connection=compensation_connection(status),
+            output_target=target,
+            saved_output_target=profile_target,
+        )
+
+    def _read_gyro_compensation(self):
+        with config_file_lock():
+            config = load_config(CONFIG_PATH, persist=False)
+            active_profile = config.get("gui", "active_profile", fallback="")
+            profile = None
+            if active_profile and not is_protected_profile(active_profile):
+                profile = read_profile(active_profile, PROFILE_DIR)
+            return self._gyro_compensation_snapshot(config, profile, self._read_gyro_reload_status())
+
+    def _reset_gyro_compensation(self, expected):
+        self._write_gyro_compensation(expected, DEFAULT_COMPENSATION)
+
+    @staticmethod
+    def _read_gyro_reload_status():
+        return read_controller_status(CONTROLLER_STATUS_PATH)
+
+    def _write_gyro_compensation(self, expected, ratios):
+        if ratios.keys() != COMPENSATION_FIELDS.keys() or not all(
+            GYRO_RATIO_MIN <= value <= GYRO_RATIO_MAX for value in ratios.values()
+        ):
+            raise ValueError(self.gui.tr("建議倍率超出設定範圍，未寫入。"))
+        stale_message = self.gui.tr("手把或方案設定已變更，請重新開啟補償視窗。")
+        with config_file_lock():
+            changes = SettingsFileChanges()
+            changes.watch(CONFIG_PATH)
+            config = load_config(CONFIG_PATH, persist=False)
+            active_profile = config.get("gui", "active_profile", fallback="")
+            if active_profile != expected.profile:
+                raise ValueError(stale_message)
+            profile = None
+            if active_profile and not is_protected_profile(active_profile):
+                path = profile_path(active_profile, PROFILE_DIR)
+                changes.watch(path)
+                profile = read_profile(active_profile, PROFILE_DIR)
+            status = self._read_gyro_reload_status()
+            if self._gyro_compensation_snapshot(config, profile, status) != expected:
+                raise ValueError(stale_message)
+            for axis, key in COMPENSATION_FIELDS.items():
+                value = f"{ratios[axis]:.2f}"
+                config.set("gyro_mapping", key, value)
+                if profile is not None:
+                    profile.set("gyro_mapping", key, value)
+            try:
+                changes.write_config(config, CONFIG_PATH)
+                if profile is not None:
+                    changes.write_config(profile, path)
+                status = self._read_gyro_reload_status()
+                if compensation_connection(status) != expected.connection:
+                    raise ValueError(stale_message)
+                if status.get("state") not in (None, "stopped"):
+                    connection_id = expected.connection[1] if expected.connection is not None else None
+                    return enqueue_controller_command(
+                        "reload_settings", connection_id=connection_id,
+                        compensation_signature=compensation_reload_signature(config),
+                    )
+            except (OSError, ValueError):
+                changes.restore()
+                raise
 
     def _set_aim_input_active(self, active):
         if active == getattr(self, "_aim_input_active", False):
@@ -6522,6 +6685,13 @@ class GamepadTestWindow:
         sampler = self.native_sampler
         device = self._aim_selected_device
         native = self._aim_native_device
+        if (
+            device is not None and device.kind == "raw_hid" and native is None
+            and self._aim_input_active
+        ):
+            # S2P Mobile Gamepad has no provable WinMM/XInput twin, so read
+            # the selected collection's own Raw HID reports instead.
+            return self._read_aim_raw_stream(device)
         if sampler is None or device is None or native is None or not self._aim_input_active:
             return None
         state, generation, samples = sampler.read_aim_snapshot(native)
@@ -6538,6 +6708,56 @@ class GamepadTestWindow:
         # Generation changes on disconnect and packet-counter resets. The
         # pane then establishes a fresh button baseline for the new device.
         return (device.key, device.index, native.key, generation), state, samples, source_rate
+
+    def _read_aim_raw_stream(self, device):
+        """Turn the selected Raw HID stream into aim-pane states.
+
+        The input monitor drains the same ring with its own cursor; this one
+        only reads, so neither view consumes the other's reports.
+        """
+        raw_device = self._selected_raw_hid_device()
+        stream = getattr(self, "raw_hid_stream", None)
+        path = getattr(self, "_raw_hid_stream_path", None)
+        if (
+            raw_device is None or stream is None or not stream.active
+            or path is None or raw_device.path != path
+        ):
+            return None
+        if getattr(self, "_aim_raw_stream_path", None) != path:
+            # A new stream restarts its sequence numbers; begin a new baseline.
+            self._aim_raw_stream_path = path
+            self._aim_raw_stream_cursor = 0
+            self._aim_raw_stream_state = None
+            self._aim_raw_stream_generation = getattr(self, "_aim_raw_stream_generation", 0) + 1
+        samples, newest, _dropped = stream.read_samples(
+            self._aim_raw_stream_cursor,
+            # After the tab was hidden, keep only fresh reports.
+            maximum=AIM_RAW_STREAM_BATCH,
+            include_axes=True, include_controls=True, include_buttons=True,
+        )
+        self._aim_raw_stream_cursor = newest
+        states = []
+        for sample_time, left, right, sequence, axes_mask, triggers, buttons_mask in samples:
+            # Interleaved reports without both sticks are not aim samples.
+            if axes_mask & 0x0F != 0x0F:
+                continue
+            state = GamepadState(
+                packet_number=int(sequence) & 0xFFFFFFFF,
+                buttons_mask=int(buttons_mask),
+                buttons=tuple(name for mask, name in XINPUT_BUTTON_NAMES if buttons_mask & mask),
+                left=tuple(left),
+                right=tuple(right),
+                left_trigger=triggers[0] if axes_mask & 0x10 else None,
+                right_trigger=triggers[1] if axes_mask & 0x20 else None,
+            )
+            states.append((sample_time, state))
+        if states:
+            self._aim_raw_stream_state = states[-1][1]
+        state = getattr(self, "_aim_raw_stream_state", None)
+        if state is None:
+            return None
+        key = (device.key, device.index, "raw-stream", self._aim_raw_stream_generation)
+        return key, state, tuple(states), self._read_aim_raw_report_rate()
 
     def _read_aim_raw_report_rate(self):
         now = time.perf_counter()
@@ -6761,6 +6981,9 @@ class GamepadTestWindow:
         next_device = mapping.get(next_name)
         next_device_key = next_device.key if next_device is not None else None
         if previous_device_key != next_device_key or bridge_slot_changed:
+            aim_pane = getattr(self, "aim_pane", None)
+            if aim_pane is not None:
+                aim_pane.close_gyro_compensation_for_device_change()
             self.stop_rumble()
             self.clear_measurements()
         self.selected_device_var.set(next_name)
@@ -6774,6 +6997,8 @@ class GamepadTestWindow:
         if self.window is None or not self.window.winfo_exists():
             return
         self._refresh_devices(force=False)
+        if self.aim_pane is not None:
+            self.aim_pane.refresh_compensation_connection()
         self._device_refresh_job = self.window.after(
             1000, self._refresh_devices_after_telemetry
         )
@@ -6786,6 +7011,9 @@ class GamepadTestWindow:
 
     def _configure_source_controls(self):
         device = self._selected_device()
+        aim_pane = getattr(self, "aim_pane", None)
+        if aim_pane is not None:
+            aim_pane.refresh_compensation_buttons()
         is_s2p = device is not None and device.kind == "s2p"
         is_raw_hid = device is not None and device.kind == "raw_hid"
         raw_hid_toggle = getattr(self, "raw_hid_stream_toggle", None)
@@ -7120,9 +7348,9 @@ class GamepadTestWindow:
         self._shape_capture_signature = None
         self.show_gyro_legend_var.set(True)
         self.raw_hid_stream_enabled_var.set(True)
-        self.trail_length_var.set(2.5)
+        self.trail_length_var.set(DEFAULT_TRAIL_SECONDS)
         self._update_trail_length_text()
-        self.sample_display_percent_var.set(100.0)
+        self.sample_display_percent_var.set(DEFAULT_SAMPLE_PERCENT)
         self._update_sample_display_percent()
 
     def reset_input_monitor(self):

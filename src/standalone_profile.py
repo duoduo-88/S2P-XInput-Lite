@@ -21,7 +21,7 @@ from direction_deadzones import CUSTOM_DEADZONE_KEY, DIRECTION_SECTORS, parse_cu
 import serial
 from serial.tools import list_ports
 
-from mapping_targets import XINPUT_BUTTON_TARGETS
+from mapping_targets import XINPUT_BUTTON_TARGETS, combo_target_error, is_combo_target
 from settings_schema import normalize_section_values
 from switch2_input import SWITCH_BUTTONS
 
@@ -31,6 +31,14 @@ STANDALONE_PROFILE_MAX_BYTES = 8192
 STANDALONE_CHUNK_BYTES = 96
 DEADZONE_EDGES_KEY = "direction_deadzone_edges"
 SUPPORTED_BUTTON_TARGETS = frozenset(XINPUT_BUTTON_TARGETS) | {"NONE"}
+GAMEPAD_COMBO_FEATURE = "standalone_gamepad_combo"
+
+
+def _standalone_target_supported(target):
+    """XInput buttons, NONE, and valid gamepad combos run on the ESP32."""
+    return target in SUPPORTED_BUTTON_TARGETS or (
+        is_combo_target(target) and not combo_target_error(target)
+    )
 STANDALONE_LAYER_BUTTONS = frozenset(SWITCH_BUTTONS) - {"SR_R", "SL_R", "SR_L", "SL_L"}
 STANDALONE_STICK_MODES = frozenset(DIRECTION_SECTORS) | {"XINPUT_LT_LINEAR", "XINPUT_RT_LINEAR"}
 STICK_DIRECTION_KEYS = (
@@ -62,6 +70,26 @@ class CompiledStandaloneProfile:
     @property
     def blocking_issues(self) -> tuple[CompatibilityIssue, ...]:
         return tuple(issue for issue in self.issues if issue.severity == "blocking")
+
+    @property
+    def uses_gamepad_combos(self) -> bool:
+        def combos(mapping):
+            return any(is_combo_target(target) for target in mapping.values())
+
+        document = self.document
+        return (
+            combos(document["buttons"])
+            or any(combos(values) for values in document["direction_mappings"].values())
+            or any(
+                combos(layer.get("buttons", {}))
+                or any(
+                    is_combo_target(layer.get(f"stick_{side}", {}).get(direction, ""))
+                    for side in ("left", "right")
+                    for direction in STICK_DIRECTION_KEYS
+                )
+                for layer in document["mapping_layers"]
+            )
+        )
 
     @property
     def uses_custom_deadzones(self) -> bool:
@@ -205,7 +233,7 @@ def analyze_standalone_v2_compatibility(
             )
     for source, raw_target in settings.get("buttons", {}).items():
         target = str(raw_target).strip().upper()
-        if target not in SUPPORTED_BUTTON_TARGETS:
+        if not _standalone_target_supported(target):
             _issue(
                 issues, "blocking", "按鍵 Windows 輸出",
                 f"{str(source).upper()} → {target or '<空白>'}",
@@ -222,7 +250,7 @@ def analyze_standalone_v2_compatibility(
             )
         for direction in DIRECTION_SECTORS.get(mode, ()):
             target = str(mappings.get(direction.lower(), "NONE")).strip().upper()
-            if target not in SUPPORTED_BUTTON_TARGETS:
+            if not _standalone_target_supported(target):
                 _issue(
                     issues, "blocking", "搖桿方向映射",
                     f"{side.upper()} {direction} → {target}",
@@ -250,7 +278,7 @@ def analyze_standalone_v2_compatibility(
             )
         for source, raw_target in layer.get("buttons", {}).items():
             target = str(raw_target).strip().upper()
-            if target not in SUPPORTED_BUTTON_TARGETS:
+            if not _standalone_target_supported(target):
                 _issue(
                     issues, "blocking", "映射層 Windows 輸出",
                     f"{name}: {str(source).upper()} → {target}",
@@ -266,7 +294,7 @@ def analyze_standalone_v2_compatibility(
                 )
             for direction in DIRECTION_SECTORS.get(mode, ()):
                 target = str(stick.get(direction.lower(), "NONE")).strip().upper()
-                if target not in SUPPORTED_BUTTON_TARGETS:
+                if not _standalone_target_supported(target):
                     _issue(
                         issues,
                         "blocking",
@@ -668,9 +696,52 @@ def write_standalone_profile(
             raise StandaloneTransferError(
                 "目前 ESP32 韌體只能儲存設定，不能完整套用；請先更新獨立模式韌體。"
             )
+        if compiled.uses_gamepad_combos and not features.get(GAMEPAD_COMBO_FEATURE):
+            raise StandaloneTransferError(
+                "目前 ESP32 韌體不支援手把組合鍵，請先更新韌體。"
+            )
         if compiled.uses_custom_deadzones and not features.get("standalone_custom_deadzones"):
             raise StandaloneTransferError(
                 "目前 ESP32 韌體不支援逐區方向死區，請先更新韌體。"
+            )
+        gyro = compiled.document["gyro_mapping"]
+        if (
+            gyro["activation_mode"] != "OFF"
+            and (gyro["x_compensation"], gyro["y_compensation"]) != (1.0, 1.0)
+            and not features.get("standalone_gyro_output_compensation")
+        ):
+            raise StandaloneTransferError(
+                "目前 ESP32 韌體不支援陀螺儀輸出補償，請先更新韌體。"
+            )
+        if (
+            gyro["activation_mode"] != "OFF"
+            and gyro["motion_mode"] == "CENTER"
+            and gyro["compensation_keep_limit"]
+            and (gyro["x_compensation"], gyro["y_compensation"]) != (1.0, 1.0)
+            # Firmware reports version 2 of this feature once it can cap first.
+            and int(features.get("standalone_gyro_output_compensation") or 0) < 2
+        ):
+            raise StandaloneTransferError(
+                "目前 ESP32 韌體不支援「保留原本的速度上限」，請先更新韌體。"
+            )
+        if (
+            gyro["activation_mode"] != "OFF"
+            and min(gyro["x_ratio"], gyro["y_ratio"]) < 0.50
+            and not features.get("standalone_extended_gyro_ratio")
+        ):
+            raise StandaloneTransferError(
+                "目前 ESP32 韌體的陀螺儀比例下限為 0.50。若要使用低於 0.50 的比例，請先更新韌體。"
+            )
+        if (
+            gyro["button_stabilization_mode"] == "SPIKE"
+            and gyro["activation_mode"] != "OFF"
+            and gyro["motion_mode"] == "CENTER"
+            and gyro["button_freeze_ms"] > 0
+            and compiled.document["gyro_stabilization_buttons"]
+            and not features.get("standalone_gyro_spike_guard")
+        ):
+            raise StandaloneTransferError(
+                "目前 ESP32 韌體不支援陀螺儀突波抑制，請先更新韌體。"
             )
         if (
             target_mode == "standalone_hid"

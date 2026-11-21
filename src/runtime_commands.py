@@ -23,6 +23,18 @@ class PendingControllerCommand:
     _queued_request: dict | None
     _legacy_path: Path
 
+    @property
+    def connection_id(self):
+        if self._queued_request is None:
+            return None
+        return self._queued_request.get("connection_id")
+
+    @property
+    def compensation_signature(self):
+        if self._queued_request is None:
+            return None
+        return self._queued_request.get("compensation_signature")
+
     def clear_legacy(self):
         if self._queued_request is None:
             try:
@@ -42,17 +54,19 @@ class ControllerCommandInbox:
     ):
         self.legacy_path = Path(legacy_path)
         self.queue_dir = Path(queue_dir)
+        self._process_started_at = 0.0
 
     def reset(self, process_started_at):
         """Discard commands left by a previous connector process."""
-        cleanup_controller_commands(process_started_at, self.queue_dir)
+        self._process_started_at = float(process_started_at)
+        cleanup_controller_commands(self._process_started_at, self.queue_dir)
         try:
             self.legacy_path.unlink(missing_ok=True)
         except OSError:
             pass
 
     def next(self):
-        queued_request = next_controller_command(self.queue_dir)
+        queued_request = next_controller_command(self.queue_dir, not_before=self._process_started_at)
         if queued_request is not None:
             return PendingControllerCommand(
                 command=queued_request["command"],
@@ -65,7 +79,7 @@ class ControllerCommandInbox:
             if not self.legacy_path.is_file():
                 return None
             command = self.legacy_path.read_text(encoding="utf-8").strip()
-        except OSError:
+        except (OSError, UnicodeError):
             return None
 
         if not command:

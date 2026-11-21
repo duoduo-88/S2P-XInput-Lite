@@ -37,7 +37,7 @@ def build_mapping_buttons_section(gui, right_frame):
     ttk.Label(mapping_frame, text="Switch 2 Pro").grid(
         row=0, column=0, sticky="e", padx=(0, 8), pady=(0, 4)
     )
-    ttk.Label(mapping_frame, text="XInput / Xbox").grid(
+    ttk.Label(mapping_frame, text="XInput").grid(
         row=0, column=1, sticky="w", pady=(0, 4)
     )
 
@@ -72,14 +72,10 @@ def build_mapping_buttons_section(gui, right_frame):
             event,
             current_variable=variable
         ):
-            if (
-                current_variable.get()
-                == "CUSTOM_KEYBOARD"
-            ):
-                gui.open_keyboard_capture(
-                    current_variable,
-                    mouse_mode="buttons",
-                )
+            gui.open_custom_mapping(
+                current_variable,
+                mouse_mode="buttons",
+            )
 
         combo.bind(
             "<<ComboboxSelected>>",
@@ -105,14 +101,18 @@ def build_mapping_buttons_section(gui, right_frame):
         "選擇「自訂按鍵」後，按下要映射的輸入。\n\n"
         "支援鍵盤單鍵、Ctrl／Shift／Alt／Win 複合鍵，"
         "以及滑鼠左鍵、右鍵與中鍵。\n"
-        "例如：F12、Ctrl + S、Win + D。"
+        "例如：F12、Ctrl + S、Win + D。\n\n"
+        "選擇「自訂手把組合」可讓一個按鍵同時按下 2 到 4 個 XInput 按鍵，"
+        "例如 X + Y。"
     ).place(
         relx=1.0,
-        x=-55,
+        x=-52,
         y=3,
         anchor="ne",
     )
 
+    # ttk buttons draw their border 1 px inside the widget box, so the
+    # box overhangs by 1 px to line the visible edge up with the dropdowns.
     ttk.Button(
         mapping_frame,
         text="還原",
@@ -120,7 +120,7 @@ def build_mapping_buttons_section(gui, right_frame):
         command=gui.reset_button_mapping
     ).place(
         relx=1.0,
-        x=-2,
+        x=1,
         y=0,
         anchor="ne"
     )
