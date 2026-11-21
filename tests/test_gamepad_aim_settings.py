@@ -89,6 +89,17 @@ class AimSettingsTests(unittest.TestCase):
         owner.attributes("-alpha", 0)
         owner.geometry("700x650+170+120")
         owner.update()
+        # Center the owner in its work area: on a small screen (CI runners) an
+        # owner near the bottom edge would push the dialog back inside the
+        # screen, and the centering check below would measure that instead.
+        import gamepad_aim_settings
+        try:
+            left, top, right, bottom = gamepad_aim_settings.window_work_area(owner.winfo_id())
+        except OSError:
+            left, top, right, bottom = 0, 0, owner.winfo_screenwidth(), owner.winfo_screenheight()
+        width, height = min(700, right - left - 40), min(650, bottom - top - 80)
+        owner.geometry(f"{width}x{height}+{left + (right - left - width) // 2}+{top + (bottom - top - height) // 2}")
+        owner.update()
         saved = []
         supported = ("1280x720", "1600x900", "1706x960", "1920x1080")
         with patch("gamepad_aim_settings.available_resolutions", return_value=supported):
