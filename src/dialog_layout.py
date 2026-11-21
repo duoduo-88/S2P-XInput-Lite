@@ -7,7 +7,7 @@ import sys
 import tkinter as tk
 from contextlib import contextmanager
 from ctypes import wintypes
-from tkinter import colorchooser, filedialog, messagebox
+from tkinter import colorchooser, filedialog, font as tkfont, messagebox
 
 from gamepad_aim_display import fullscreen_monitor_bounds
 
@@ -242,6 +242,37 @@ def startup_banner_geometry(root, width, height):
     x = left + max(0, (right - left - width) // 2)
     y = top + max(0, (bottom - top - height) // 2)
     return f"{width}x{height}+{x}+{y}"
+
+
+class StartupBannerText:
+    """The banner's version and loading line, steady while its dots animate.
+
+    Segoe UI has no CJK glyphs, so Windows filled them from whichever CJK font
+    the computer had, and the banner looked different on each PC. Microsoft
+    JhengHei UI ships with Windows and covers both the Latin and Chinese text.
+    The font is sized in pixels when the banner opens, so a later Tk scaling
+    change cannot resize it, and the left edge stays fixed for the widest
+    text so the line does not shift as the dots change.
+    """
+
+    FAMILY = "Microsoft JhengHei UI"
+    POINT_SIZE = 9
+    MARGIN_X = 12
+    MARGIN_Y = 8
+
+    def __init__(self, canvas, width, height, text_for_dots, *, dots=3):
+        self.canvas = canvas
+        self._text_for_dots = text_for_dots
+        pixels = round(self.POINT_SIZE * float(canvas.tk.call("tk", "scaling")))
+        self.font = tkfont.Font(root=canvas, family=self.FAMILY, size=-max(1, pixels))
+        widest = max(self.font.measure(text_for_dots(count)) for count in range(1, 4))
+        self.item = canvas.create_text(
+            width - self.MARGIN_X - widest, height - self.MARGIN_Y,
+            anchor="sw", text=text_for_dots(dots), font=self.font, fill="#4a4a4a",
+        )
+
+    def show(self, dots):
+        self.canvas.itemconfigure(self.item, text=self._text_for_dots(dots))
 
 
 def center_child_dialog(dialog, owner, *, bounds=None):

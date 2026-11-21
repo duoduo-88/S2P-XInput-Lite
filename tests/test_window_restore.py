@@ -70,10 +70,15 @@ class WindowRestoreTests(unittest.TestCase):
         image.width.return_value = 600
         image.height.return_value = 340
         window = Mock()
+        canvas = Mock()
+        canvas.tk.call.return_value = 96 / 72
+        banner_font = Mock()
+        banner_font.measure.side_effect = len
         with (
+            patch("dialog_layout.tkfont.Font", return_value=banner_font),
             patch.object(config_gui.tk, "Toplevel", return_value=window),
             patch.object(config_gui.tk, "PhotoImage", return_value=image),
-            patch.object(config_gui.tk, "Canvas"),
+            patch.object(config_gui.tk, "Canvas", return_value=canvas),
             patch("dialog_layout.fullscreen_monitor_bounds", return_value=(0, 0, 1920, 1080)),
         ):
             gui._show_restore_splash(1)

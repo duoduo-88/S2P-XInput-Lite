@@ -47,7 +47,7 @@ from esp32_detection import (
     find_esp32_firmware,
     find_esp32_port,
 )
-from dialog_layout import centered_message_box, install_centered_dialogs, startup_banner_geometry
+from dialog_layout import StartupBannerText, centered_message_box, install_centered_dialogs, startup_banner_geometry
 from direction_deadzones import CUSTOM_DEADZONE_KEY
 from firmware_flash_guard import FlashProbeError, probe_esp32_flash_size
 from gamepad_aim_display import DISPLAY_RESTORE_RETRY_MS
@@ -1828,13 +1828,8 @@ class StartupOverlay:
             anchor="nw",
             image=self.image,
         )
-        self._text_item = self.canvas.create_text(
-            width - 12,
-            height - 8,
-            anchor="se",
-            text=self._loading_text(),
-            font=("Segoe UI", 9),
-            fill="#4a4a4a",
+        self.text = StartupBannerText(
+            self.canvas, width, height, self._loading_text, dots=self._dot_count,
         )
 
         self.window.geometry(startup_banner_geometry(root, width, height))
@@ -1847,9 +1842,9 @@ class StartupOverlay:
             # its synchronous widget construction.
             root.update()
 
-    def _loading_text(self):
+    def _loading_text(self, dots):
         label = translate_text("啟動中", self.language)
-        return f"v{VERSION} {label}{'.' * self._dot_count}"
+        return f"v{VERSION} {label}{'.' * dots}"
 
     def _schedule_animation(self):
         try:
@@ -1871,10 +1866,7 @@ class StartupOverlay:
             if not self.window.winfo_exists():
                 return
             self._dot_count = (self._dot_count % 3) + 1
-            self.canvas.itemconfigure(
-                self._text_item,
-                text=self._loading_text(),
-            )
+            self.text.show(self._dot_count)
             self.window.update_idletasks()
         except (tk.TclError, AttributeError):
             pass
