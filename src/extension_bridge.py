@@ -6,8 +6,8 @@ merges every connected tool's state into the report built from the physical
 controller just before the one existing ``pad.update()``.  Tools never touch
 ViGEmBus.
 
-Threads: one daemon thread per enabled tool (at most ``MAX_TOOLS``), created
-only while Extensions is enabled.  Each blocks in ``WaitForMultipleObjects``
+Threads: one daemon thread per pipe instance (``MAX_TOOLS`` of them), created
+only while a listed tool is enabled.  Each blocks in ``WaitForMultipleObjects``
 on its own overlapped pipe instance plus a shared stop event, so nothing
 polls.  The input thread takes one uncontended lock per connected tool per
 report.
@@ -24,7 +24,7 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 try:
@@ -95,6 +95,13 @@ STATE_CONNECTED = "connected"
 STATE_DISCONNECTED = "disconnected"
 STATE_ERROR = "error"
 
+# How long a refused connection that leaves nothing behind (an unlisted
+# program, a second copy) stays listed after its last attempt.  Rejected
+# tools retry every few seconds, so a lasting problem stays visible.
+RECENT_CONFLICT_SECONDS = 30.0
+# Launch tokens kept per tool (each start of a tool adds one).
+LAUNCH_TOKENS_PER_TOOL = 4
+
 
 # ---------------------------------------------------------------------------
 # Settings
@@ -112,8 +119,12 @@ class ToolSettings:
 
 @dataclass(frozen=True)
 class ExtensionSettings:
-    enabled: bool = False
     tools: tuple = ()
+
+    @property
+    def enabled(self):
+        """Extensions run only while at least one listed tool is enabled."""
+        return bool(self.active_tools)
 
     @property
     def active_tools(self):
@@ -201,6 +212,9 @@ def load_extension_settings(config) -> ExtensionSettings:
             allow_input=flag(SETTINGS_SECTION, "allow_input", True),
             allow_read=flag(SETTINGS_SECTION, "allow_read"),
         )))
+    # Earlier builds had a master "enabled" switch; the list alone decides
+    # now.  A switch that was off keeps its tools off instead of starting them.
+    master_off = config.has_option(SETTINGS_SECTION, "enabled") and not flag(SETTINGS_SECTION, "enabled")
     tools = []
     seen = set()
     for _order, tool in entries:
@@ -208,18 +222,15 @@ def load_extension_settings(config) -> ExtensionSettings:
         if key in seen:  # a duplicate could never be told apart at connect
             continue
         seen.add(key)
-        tools.append(tool)
-    return ExtensionSettings(
-        enabled=flag(SETTINGS_SECTION, "enabled"), tools=tuple(tools),
-    )
+        tools.append(replace(tool, enabled=False) if master_off else tool)
+    return ExtensionSettings(tools=tuple(tools))
 
 
 def store_extension_settings(config, settings: ExtensionSettings):
     if not config.has_section(SETTINGS_SECTION):
         config.add_section(SETTINGS_SECTION)
-    for key in ("tool_path", "auto_launch", "allow_input", "allow_read"):
+    for key in ("enabled", "tool_path", "auto_launch", "allow_input", "allow_read"):
         config.remove_option(SETTINGS_SECTION, key)
-    config.set(SETTINGS_SECTION, "enabled", "true" if settings.enabled else "false")
     for section in [
         name for name in config.sections() if name.startswith(TOOL_SECTION_PREFIX)
     ]:
@@ -708,6 +719,7 @@ class ExtensionSession:
     name: str
     granted: tuple
     sticks: tuple
+    denied: tuple = ()  # capabilities the tool asked for but may not use
     mixer: ExtensionInputMixer = field(default_factory=ExtensionInputMixer)
 
 
@@ -774,13 +786,20 @@ class _PipeInstance:
             if outcome != "io":
                 api["CancelIoEx"](self.pipe, ctypes.byref(overlapped))
                 # Wait for the cancellation so the OVERLAPPED stays valid.
-                api["GetOverlappedResult"](
+                finished = api["GetOverlappedResult"](
                     self.pipe, ctypes.byref(overlapped), ctypes.byref(transferred), True
                 )
+                error = 0 if finished else ctypes.get_last_error()
                 if outcome == "stop":
                     raise _Stopping()
                 if outcome == "drop":
                     raise _Dropped()
+                if finished:
+                    # The call completed just before the cancel: keep its data
+                    # (a lost get_input would leave the tool waiting forever).
+                    return transferred.value
+                if error != ERROR_OPERATION_ABORTED:
+                    return self._raise_io(error)
                 raise _Timeout()
         if not api["GetOverlappedResult"](
             self.pipe, ctypes.byref(overlapped), ctypes.byref(transferred), False
@@ -1215,7 +1234,7 @@ def describe_tool_changes(previous, current, settings=None):
 class ExtensionManager:
     """Own the optional server, the merge hub, tool sessions and launching.
 
-    Nothing is created while Extensions is disabled; the controller's
+    Nothing is created while no listed tool is enabled; the controller's
     per-report cost is then a single ``is None`` check.
     """
 
@@ -1241,8 +1260,56 @@ class ExtensionManager:
         self._code = ""
         self._launch_tokens = {}  # token -> tool_id
         self._processes = {}      # tool_id -> Popen
+        # Refused connections, kept so the Extensions window can explain them
+        # after the tool has moved on (a macro gives up the stick and plays
+        # without it; a rejected tool retries every few seconds).
+        self._conflicts = {}      # key -> dict, see _record_conflict()
 
     # status ----------------------------------------------------------------
+
+    def _record_conflict(self, key, **entry):
+        with self._lock:
+            self._conflicts[key] = {**entry, "at": time.monotonic()}
+
+    def _current_conflicts(self):
+        """Conflicts that still apply, oldest first (caller holds the lock).
+
+        A stick conflict lasts while the other tool still owns that stick; a
+        second copy while the first copy is connected; an unauthorized program
+        for RECENT_CONFLICT_SECONDS after its last attempt.
+        """
+        now = time.monotonic()
+        active = {tool.tool_id for tool in self._settings.active_tools}
+        current = []
+        for key, entry in list(self._conflicts.items()):
+            kind = entry["kind"]
+            if kind == "stick":
+                keep = (
+                    entry["tool"] in active
+                    and self._stick_owner.get(entry["stick"]) == entry["with_id"]
+                    and entry["with_id"] != entry["tool"]
+                )
+            elif kind == "second_copy":
+                keep = entry["tool"] in self._sessions and now - entry["at"] < RECENT_CONFLICT_SECONDS
+            else:  # unauthorized
+                keep = now - entry["at"] < RECENT_CONFLICT_SECONDS
+            if not keep:
+                del self._conflicts[key]
+                continue
+            current.append({name: value for name, value in entry.items() if name != "at"})
+        for session in self._sessions.values():
+            if session.denied:
+                current.append({
+                    "kind": "permission", "tool": session.tool_id, "name": session.name,
+                    "denied": list(session.denied),
+                })
+        for tool_id, entry in self._tool_status.items():
+            if entry.get("code") == "permission_denied" and tool_id in active:
+                current.append({
+                    "kind": "permission", "tool": tool_id, "name": entry.get("name", ""),
+                    "denied": list(entry.get("denied") or ()),
+                })
+        return current
 
     def _set_tool(self, tool_id, state, code="", **extra):
         entry = {"state": state, "code": code, "updated_at": time.time(), **extra}
@@ -1256,6 +1323,7 @@ class ExtensionManager:
         with self._lock:
             tools = {key: dict(value) for key, value in self._tool_status.items()}
             state, code = self._state, self._code
+            conflicts = self._current_conflicts()
         for tool in self._settings.active_tools:
             tools.setdefault(tool.tool_id, {"state": STATE_WAITING, "code": ""})
         if state == STATE_WAITING and any(
@@ -1269,6 +1337,7 @@ class ExtensionManager:
             "protocol": PROTOCOL_VERSION,
             "max_tools": MAX_TOOLS,
             "tools": tools,
+            "conflicts": conflicts,
         }
 
     # sessions (called from IPC threads) --------------------------------------
@@ -1290,6 +1359,8 @@ class ExtensionManager:
     def open_session(self, pid, image_path, hello):
         tool = self._identify(image_path, hello)
         if tool is None:
+            program = Path(str(image_path or "")).name or "?"
+            self._record_conflict(("unauthorized", program.lower()), kind="unauthorized", program=program)
             with self._lock:
                 self._code = "unauthorized"
             raise ProtocolError("unauthorized")
@@ -1307,8 +1378,9 @@ class ExtensionManager:
             refuse("bad_message", "sticks must list left/right")
         allowed = {CAPABILITY_INPUT: tool.allow_input, CAPABILITY_READ: tool.allow_read}
         granted = tuple(item for item in KNOWN_CAPABILITIES if item in requested and allowed[item])
+        denied = tuple(item for item in KNOWN_CAPABILITIES if item in requested and not allowed[item])
         if not granted:
-            refuse("permission_denied")
+            refuse("permission_denied", denied=list(denied))
         sticks = tuple(side for side in STICKS if side in sticks) if CAPABILITY_INPUT in granted else ()
         with self._lock:
             if tool.tool_id in self._paused:
@@ -1319,15 +1391,13 @@ class ExtensionManager:
                     already = True
                 else:
                     already = False
-                    conflict = next(
-                        (
-                            (side, self._stick_owner[side]) for side in sticks
-                            if side in self._stick_owner
-                        ),
-                        None,
-                    )
+                    taken = [
+                        (side, self._stick_owner[side]) for side in sticks
+                        if side in self._stick_owner
+                    ]
+                    conflict = taken[0] if taken else None
                     if conflict is None:
-                        session = ExtensionSession(tool.tool_id, name, granted, sticks)
+                        session = ExtensionSession(tool.tool_id, name, granted, sticks, denied)
                         self._sessions[tool.tool_id] = session
                         for side in sticks:
                             self._stick_owner[side] = tool.tool_id
@@ -1336,8 +1406,17 @@ class ExtensionManager:
             raise ProtocolError("user_disconnected")
         if already:
             # A second copy must not take over the first copy's session.
+            self._record_conflict(("second_copy", tool.tool_id), kind="second_copy",
+                                  tool=tool.tool_id, name=name)
             raise ProtocolError("already_connected")
         if conflict is not None:
+            for taken_side, taken_by in taken:
+                holder = self._sessions.get(taken_by)
+                self._record_conflict(
+                    ("stick", tool.tool_id, taken_side), kind="stick", tool=tool.tool_id,
+                    name=name, stick=taken_side, with_id=taken_by,
+                    with_tool=holder.name if holder else taken_by,
+                )
             side, owner_id = conflict
             owner = self._sessions.get(owner_id)
             refuse(
@@ -1389,11 +1468,16 @@ class ExtensionManager:
     def apply(self, settings: ExtensionSettings, *, startup=False):
         previous = self._settings
         self._settings = settings
-        if not settings.enabled:
+        self._launch_tokens = {
+            token: tool_id for token, tool_id in self._launch_tokens.items()
+            if tool_id in {tool.tool_id for tool in settings.active_tools}
+        }
+        if not settings.enabled:  # no tool enabled in the list
             self._paused.clear()
             self._stop_server()
             with self._lock:
                 self._tool_status.clear()
+                self._conflicts.clear()
                 self._state, self._code = STATE_DISABLED, ""
             return
         active = settings.active_tools
@@ -1403,23 +1487,28 @@ class ExtensionManager:
             for tool_id in list(self._tool_status):
                 if tool_id not in active_ids:
                     del self._tool_status[tool_id]
-        if not active:
-            self._stop_server()
-            with self._lock:
-                self._state, self._code = STATE_WAITING, "no_tools"
-            return
+            refused = {
+                tool_id for tool_id, entry in self._tool_status.items()
+                if entry.get("state") == STATE_ERROR
+            }
+        before = {tool.tool_id: tool for tool in previous.active_tools}
+        for tool in active:
+            if tool.tool_id in refused and before.get(tool.tool_id) not in (None, tool):
+                # A refusal (for example a missing permission) may no longer
+                # apply; the tool's next attempt decides.
+                self._set_tool(tool.tool_id, STATE_WAITING, "settings_changed")
         server = self._server
-        if server is not None and server.instance_count != len(active):
-            self._stop_server()
-        elif server is not None:
-            before = {tool.tool_id: tool for tool in previous.active_tools}
+        if server is not None:
+            # The server always has MAX_TOOLS instances, so enabling or
+            # disabling one tool never disconnects the others; only tools
+            # whose path or permissions changed (or that were disabled) drop.
             for tool in active:
-                if before.get(tool.tool_id) != tool:
-                    server.drop(tool.tool_id, "settings_changed")  # path or permissions
+                if before.get(tool.tool_id) not in (None, tool):
+                    server.drop(tool.tool_id, "settings_changed")
             for tool_id in before.keys() - active_ids:
                 server.drop(tool_id, "settings_changed")
-        self._start_server(len(active))
-        previously_enabled = {tool.tool_id for tool in previous.active_tools} if previous.enabled else set()
+        self._start_server()
+        previously_enabled = {tool.tool_id for tool in previous.active_tools}
         for tool in active:
             # Enabled tools follow S2P: they start with the connection (or when
             # enabled) in the background; "Open" is what shows their window.
@@ -1441,7 +1530,7 @@ class ExtensionManager:
                 # A connected tool keeps its session (Open only shows its
                 # window), so its status must stay "connected".
                 self._set_tool(tool.tool_id, STATE_WAITING)
-        if not targets or not self._start_server(len(self._settings.active_tools)):
+        if not targets or not self._start_server():
             return False
         for tool in targets:
             if tool_id is not None:
@@ -1466,7 +1555,7 @@ class ExtensionManager:
     def close(self):
         self._stop_server()
 
-    def _start_server(self, instances):
+    def _start_server(self, instances=MAX_TOOLS):
         if self._server is not None and self._server.running:
             return True
         self._stop_server()
@@ -1530,6 +1619,11 @@ class ExtensionManager:
                 # A manually started copy will connect by itself.
                 return True
         token = secrets.token_hex(16)
+        # A tool reconnects with the token it was started with, so tokens stay
+        # valid while it runs; only the newest few per tool are kept.
+        mine = [key for key, owner in self._launch_tokens.items() if owner == tool_id]
+        for stale in mine[:max(0, len(mine) - (LAUNCH_TOKENS_PER_TOOL - 1))]:
+            del self._launch_tokens[stale]
         environment = dict(os.environ)
         environment[TOKEN_ENV] = token
         environment[PIPE_ENV] = self._pipe_name

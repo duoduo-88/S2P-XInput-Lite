@@ -19,23 +19,23 @@ Physical controller → S2P input processing (curves, gyro, mapping layers) → 
 | Component | Location | Role |
 |---|---|---|
 | `ExtensionManager` | `src/extension_bridge.py` | Created in the connector. Starts and stops the server from `config.ini`, identifies tools, resolves conflicts, reports status, and starts tools. |
-| `ExtensionPipeServer` | same file | Several instances of one pipe name, one per enabled tool, each with overlapped I/O. |
+| `ExtensionPipeServer` | same file | 4 instances of one pipe name (one per possible tool), each with overlapped I/O. |
 | `ExtensionInputHub` | same file | The single object attached to `XInputController`; merges every connected tool in order. |
 | `ExtensionInputMixer` | same file | One tool's input state; one lock per report. |
 | Merge point | `XInputController.update()` | After the report is built and before `pad.update()`. When disabled, the cost is a single `is None` check. |
 | Settings window | `src/gui_sections/extensions.py` | Tool list, permissions, conflict check. It only writes the global settings and sends commands. |
 
-Threads: one daemon thread `S2P-Extensions-IPC` per enabled tool (at most 4),
-present only while Extensions is enabled. Each blocks in
+Threads: one daemon thread `S2P-Extensions-IPC` per pipe instance (4),
+present only while a tool is enabled in the list. Each blocks in
 `WaitForMultipleObjects` (pipe I/O, a shared stop event, and its own drop
-event) and never polls. Disabling Extensions or stopping the connector sets
+event) and never polls. Disabling the last tool or stopping the connector sets
 the stop event and joins the threads (measured under 0.5 s).
 
 Connector commands (sent by the GUI through the `controller_commands` queue):
 
 | Command | Action |
 |---|---|
-| `extensions_apply` | Re-read the settings. Rebuild the pipe when the number of tools changes; otherwise drop only tools whose settings changed (state `waiting` / `settings_changed`; the tool reconnects by itself and gets its new permissions). |
+| `extensions_apply` | Re-read the settings. Enabling or disabling a tool never disconnects the others; only tools whose settings changed are dropped (state `waiting` / `settings_changed`; the tool reconnects by itself and gets its new permissions). |
 | `extensions_connect[:<tool id>]` | Used by the **Open** button and the notification area menu: start the tool (a `.py` development tool gets a one-time token). |
 | `extensions_disconnect[:<tool id>]` | Drop and pause that tool (or all tools) and clear its input at once. Not used by the UI; use **Enable/Disable** instead. |
 
@@ -112,8 +112,11 @@ allow_read = false
 | The same EXE is added twice | The settings window refuses it; when loading settings only the first entry is kept. |
 | More than 4 tools are enabled | The settings window refuses to enable more; the 5th and later are marked **Not loaded**. |
 | A tool has no permission | The settings window refuses it and the conflict check lists it. |
-| Two tools claim the same stick | The tool that connects later receives `conflict`, and the window shows that both want the left (or right) stick. |
-| The same tool connects twice | The second connection receives `already_connected` and does not take over the first. |
+| Two tools claim the same stick | The tool that connects later receives `conflict`. The conflict check lists it until the other tool releases the stick, even if the refused tool reconnects without it. |
+| The same tool connects twice | The second connection receives `already_connected` and does not take over the first; the conflict check lists it for 30 s after the last attempt. |
+| A tool asks for a permission that is not allowed | It connects with the allowed permissions only (or receives `permission_denied` when none is left); the conflict check lists the missing permission. |
+| A program that is not in the list connects | It receives `unauthorized`; the conflict check names the EXE for 30 s after its last attempt. |
+| Another program holds the pipe name | No tool can connect (`pipe_in_use`); the conflict check says so. |
 | Buttons and triggers | No conflict: buttons are ORed and triggers take the maximum. |
 
 ## Message format

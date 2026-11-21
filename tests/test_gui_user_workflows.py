@@ -178,8 +178,8 @@ class GUIUserWorkflowTests(unittest.TestCase):
                 config_utils.load_config(self.config_path)
             )
 
-        # The built-in Gamepad Test is always listed and opens even when
-        # Extensions is disabled; it cannot be removed or given permissions.
+        # The built-in Gamepad Test is always listed and opens even when no
+        # tool is enabled; it cannot be removed or given permissions.
         self.assertEqual(tree.get_children(), (tester,))
         self.assertEqual(tree.set(tester, "name"), "Gamepad Test")
         tree.selection_set(tester)
@@ -190,8 +190,9 @@ class GUIUserWorkflowTests(unittest.TestCase):
         self.assertEqual(opened, ["tester"])
         self.assertEqual(conflicts.cget("text"), "No conflicts")
 
-        window._s2p_enabled_checkbox.invoke()
-        macro = str(self.directory / "Macro.exe")
+        # No master switch: adding a tool enables it in the list.
+        self.assertFalse(hasattr(window, "_s2p_enabled_checkbox"))
+        macro =str(self.directory / "Macro.exe")
         multi = str(self.directory / "Multi.exe")
         picks.extend([macro, macro.upper(), multi])
         buttons["add"].invoke()
@@ -207,6 +208,11 @@ class GUIUserWorkflowTests(unittest.TestCase):
             tree.set(macro_id, "status"), "Waiting for connection (connector not running)",
         )
         self.assertEqual(commands, [])  # no connector running: nothing queued
+        self.assertEqual(
+            conflicts.cget("text"),
+            "No conflicts in the settings (the connection is not running, so running "
+            "tools are not checked yet)",
+        )
         self.assertEqual(
             [key for key, _label in extensions_window.tray_items(self.gui)],
             [tester, macro_id, multi_id],
@@ -226,7 +232,10 @@ class GUIUserWorkflowTests(unittest.TestCase):
                     "state": "error", "code": "conflict",
                     "stick": "left", "with_tool": "Macro Tool",
                 },
-            }},
+            }, "conflicts": [{
+                "kind": "stick", "tool": multi_id, "name": "Multi", "stick": "left",
+                "with_id": macro_id, "with_tool": "Macro Tool",
+            }]},
         }), encoding="utf-8")
         # Permission changes reach a running connector without a manual restart.
         window._s2p_options["allow_read"].invoke()
@@ -236,7 +245,7 @@ class GUIUserWorkflowTests(unittest.TestCase):
         self.assertEqual(tree.set(macro_id, "status"), "Connected")
         self.assertIn("Connection failed", tree.set(multi_id, "status"))
         self.assertIn(
-            '"Multi" and "Macro Tool" both want to control the Left Stick',
+            '"Multi" was refused the Left Stick: "Macro Tool" controls it',
             conflicts.cget("text"),
         )
 
@@ -269,7 +278,7 @@ class GUIUserWorkflowTests(unittest.TestCase):
             "update_url": "https://example.test/feed.json",
         }), encoding="utf-8")
         config = config_utils.load_config(self.config_path)
-        extension_bridge.store_extension_settings(config, extension_bridge.ExtensionSettings(True, (
+        extension_bridge.store_extension_settings(config, extension_bridge.ExtensionSettings((
             extension_bridge.ToolSettings("m", str(macro)),
             extension_bridge.ToolSettings("b", str(bare)),
         )))

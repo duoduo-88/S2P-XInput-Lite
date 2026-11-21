@@ -19,6 +19,7 @@ never downloads or runs anything.  ``url`` is the page S2P offers to open.
 
 from __future__ import annotations
 
+import http.client
 import json
 import urllib.error
 import urllib.parse
@@ -108,7 +109,22 @@ def read_tool_manifest(tool_path):
     )
 
 
-def fetch_update_feed(url, *, user_agent, opener=urllib.request.urlopen, timeout=8.0):
+class _HttpsOnlyRedirects(urllib.request.HTTPRedirectHandler):
+    """Follow redirects only to other HTTPS addresses."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not _https_url(newurl):
+            raise urllib.error.HTTPError(
+                newurl, code, "redirect away from https refused", headers, fp,
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _open_https(request, timeout):
+    return urllib.request.build_opener(_HttpsOnlyRedirects()).open(request, timeout=timeout)
+
+
+def fetch_update_feed(url, *, user_agent, opener=_open_https, timeout=8.0):
     """Download one update feed (HTTPS only, size limited)."""
     if not _https_url(url):
         raise ExtensionUpdateError("update feed must use https")
@@ -117,8 +133,12 @@ def fetch_update_feed(url, *, user_agent, opener=urllib.request.urlopen, timeout
     )
     try:
         with opener(request, timeout=float(timeout)) as response:
+            final_url = getattr(response, "geturl", lambda: url)()
+            if not _https_url(final_url):
+                raise ExtensionUpdateError("the update feed was redirected away from https")
             body = response.read(MAX_FEED_BYTES + 1)
-    except (OSError, ValueError, urllib.error.URLError) as exc:
+    except (OSError, ValueError, urllib.error.URLError, http.client.HTTPException) as exc:
+        # HTTPException covers IncompleteRead and other broken responses.
         raise ExtensionUpdateError(f"could not read the update feed: {exc}") from exc
     if len(body) > MAX_FEED_BYTES:
         raise ExtensionUpdateError("update feed too large")
@@ -146,7 +166,7 @@ def latest_in_feed(feed, name):
     return version, _https_url(entry.get("url"))
 
 
-def check_tool_updates(tools, *, user_agent, opener=urllib.request.urlopen, timeout=8.0):
+def check_tool_updates(tools, *, user_agent, opener=_open_https, timeout=8.0):
     """Check ``{tool_id: tool_path}``; returns ``{tool_id: UpdateResult}``.
 
     Tools that share one feed URL are answered from a single download.
@@ -172,8 +192,10 @@ def check_tool_updates(tools, *, user_agent, opener=urllib.request.urlopen, time
                         manifest.update_url, user_agent=user_agent, opener=opener,
                         timeout=timeout,
                     )
-                except ExtensionUpdateError as exc:
-                    feeds[manifest.update_url] = exc
+                except Exception as exc:  # any failure is reported, never lost
+                    error = exc if isinstance(exc, ExtensionUpdateError) else ExtensionUpdateError(
+                        f"could not read the update feed: {exc}")
+                    feeds[manifest.update_url] = error
             feed = feeds[manifest.update_url]
             if isinstance(feed, ExtensionUpdateError):
                 raise feed

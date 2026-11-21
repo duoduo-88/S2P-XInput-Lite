@@ -1279,7 +1279,6 @@ EN_TEXT = {
     "匯入方案": "Import Profile",
     "匯入設定": "Import Settings",
     "擴充工具": "Extensions",
-    "啟用擴充工具": "Enable Extensions",
     "權限": "Permissions",
     "允許提交輸入": "Allow input",
     "允許讀取控制器狀態": "Allow reading controller state",
@@ -1300,8 +1299,25 @@ EN_TEXT = {
         "Up to {count} tools can be enabled at once; \"{name}\" will not load"
     ),
     "「{name}」沒有任何權限，無法連線": "\"{name}\" has no permission and cannot connect",
-    "「{name}」與「{other}」同時要求控制{stick}": (
-        "\"{name}\" and \"{other}\" both want to control the {stick}"
+    "「{name}」要求控制{stick}被拒絕：目前由「{other}」控制": (
+        "\"{name}\" was refused the {stick}: \"{other}\" controls it"
+    ),
+    "「{name}」要求「{permissions}」權限，但未允許": (
+        "\"{name}\" needs \"{permissions}\", which is not allowed"
+    ),
+    "「{name}」有另一份正在執行，第二份無法連線": (
+        "Another copy of \"{name}\" is running; the second copy cannot connect"
+    ),
+    "設定沒有衝突（連線未啟動，尚未檢查執行中的工具）": (
+        "No conflicts in the settings (the connection is not running, so running "
+        "tools are not checked yet)"
+    ),
+    "不在清單中的程式「{program}」嘗試連線，已拒絕": (
+        "\"{program}\" is not in the list; its connection was refused"
+    ),
+    "通訊管道已被其他程式占用（可能有另一個 S2P 正在執行），工具都無法連線": (
+        "The pipe is used by another program (perhaps another S2P is running); "
+        "no tool can connect"
     ),
     "最多可同時啟用 {count} 個工具。請先停用其他工具。": (
         "Up to {count} tools can be enabled at once. Disable another tool first."
@@ -1343,9 +1359,9 @@ EN_TEXT = {
         "S2P stays the only virtual controller output; each stick can be controlled by "
         "only one tool, and the physical stick has priority."
     ),
-    "工具關閉、逾時或當機時會立即清除其輸入；停用擴充工具即恢復原本操作。": (
+    "工具關閉、逾時或當機時會立即清除其輸入；在清單停用工具即恢復原本操作。": (
         "Tool input is cleared immediately when a tool closes, times out or crashes; "
-        "disabling Extensions restores normal operation."
+        "disabling a tool in the list restores normal operation."
     ),
     "未啟用": "Disabled",
     "等待連線": "Waiting for connection",

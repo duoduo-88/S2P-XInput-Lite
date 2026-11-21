@@ -80,6 +80,7 @@ UPDATE_TEXT = {
     CHECK_FAILED: "更新檢查失敗",
 }
 STICK_TEXT = {"left": "左搖桿", "right": "右搖桿"}
+PERMISSION_TEXT = {"input": "允許提交輸入", "read": "允許讀取控制器狀態"}
 
 
 def read_connector_status(path=None, now=None):
@@ -109,7 +110,7 @@ def tool_name(tool, connector_status=None):
 
 def tool_status_text(tr, settings, tool, connector_status):
     """Map one list entry plus connector status to (text, state)."""
-    if not settings.enabled or not tool.enabled:
+    if not tool.enabled:
         return tr("未啟用"), STATE_DISABLED
     if tool not in settings.active_tools:
         return tr("未載入"), STATE_ERROR
@@ -197,18 +198,35 @@ def conflict_messages(tr, settings, connector_status):
             )
         elif code == "no_permission":
             lines.append(tr("「{name}」沒有任何權限，無法連線").format(name=name))
-    if settings.enabled and connector_status is not None:
-        tools = _runtime(connector_status).get("tools") or {}
-        for tool in settings.active_tools:
-            entry = tools.get(tool.tool_id) or {}
-            if entry.get("state") == STATE_ERROR and entry.get("code") == "conflict":
-                lines.append(
-                    tr("「{name}」與「{other}」同時要求控制{stick}").format(
-                        name=tool_name(tool, connector_status),
-                        other=entry.get("with_tool") or "?",
-                        stick=tr(STICK_TEXT.get(entry.get("stick"), "搖桿")),
-                    )
-                )
+    if not settings.enabled or connector_status is None:
+        return lines
+    runtime = _runtime(connector_status)
+    if runtime.get("state") == STATE_ERROR and runtime.get("code") == "pipe_in_use":
+        lines.append(tr("通訊管道已被其他程式占用（可能有另一個 S2P 正在執行），工具都無法連線"))
+    for conflict in runtime.get("conflicts") or ():
+        if not isinstance(conflict, dict):
+            continue
+        tool = by_id.get(conflict.get("tool"))
+        name = tool_name(tool, connector_status) if tool is not None else conflict.get("name") or "?"
+        kind = conflict.get("kind")
+        if kind == "stick":
+            lines.append(tr("「{name}」要求控制{stick}被拒絕：目前由「{other}」控制").format(
+                name=name, other=conflict.get("with_tool") or "?",
+                stick=tr(STICK_TEXT.get(conflict.get("stick"), "搖桿")),
+            ))
+        elif kind == "permission":
+            permissions = "、".join(
+                tr(PERMISSION_TEXT[item]) for item in conflict.get("denied") or () if item in PERMISSION_TEXT
+            )
+            lines.append(tr("「{name}」要求「{permissions}」權限，但未允許").format(
+                name=name, permissions=permissions or "?",
+            ))
+        elif kind == "second_copy":
+            lines.append(tr("「{name}」有另一份正在執行，第二份無法連線").format(name=name))
+        elif kind == "unauthorized":
+            lines.append(tr("不在清單中的程式「{program}」嘗試連線，已拒絕").format(
+                program=conflict.get("program") or "?",
+            ))
     return lines
 
 
@@ -222,7 +240,7 @@ def save_extension_settings(settings, config_path=None):
 
 
 # Built-in tools ship with S2P and open through the GUI's own launcher; they do
-# not use the Extensions pipe, so they work even when Extensions is disabled.
+# not use the Extensions pipe, so they work even when no tool is enabled.
 BUILTIN_GAMEPAD_TESTER = "builtin.gamepad_tester"
 BUILTIN_TOOLS = ((BUILTIN_GAMEPAD_TESTER, "手把測試", "open_gamepad_test_window"),)
 
@@ -232,7 +250,7 @@ NOTES = (
     "請只安裝信任來源的工具。擴充工具由其開發者提供，使用後的操作與結果由使用者自行負責。",
     "部分遊戲或線上服務可能禁止外部輸入或自動化操作，使用前請先確認相關規範。",
     "S2P 仍是唯一的虛擬手把輸出；同一支搖桿只能由一個工具控制，實體搖桿優先。",
-    "工具關閉、逾時或當機時會立即清除其輸入；停用擴充工具即恢復原本操作。",
+    "工具關閉、逾時或當機時會立即清除其輸入；在清單停用工具即恢復原本操作。",
 )
 
 
@@ -325,13 +343,6 @@ def open_extensions_window(gui):
     frame.pack(fill="both", expand=True)
     frame.columnconfigure(0, weight=1)
 
-    enabled_var = tk.BooleanVar(value=model["settings"].enabled)
-    window._s2p_enabled_checkbox = text_widget(
-        ttk.Checkbutton, frame, "啟用擴充工具", variable=enabled_var,
-        command=lambda: update(enabled=bool(enabled_var.get())),
-    )
-    window._s2p_enabled_checkbox.grid(row=0, column=0, sticky="w")
-
     # -- tool list -------------------------------------------------------------
     body_font = tkfont.nametofont("TkDefaultFont")
     columns = (
@@ -344,7 +355,7 @@ def open_extensions_window(gui):
         ), "w"),
     )
     listing = ttk.Frame(frame)
-    listing.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
+    listing.grid(row=1, column=0, sticky="nsew")
     listing.columnconfigure(0, weight=1)  # the list spans the full row width
     tree = ttk.Treeview(
         listing, columns=tuple(key for key, *_ in columns), show="headings",
@@ -416,6 +427,8 @@ def open_extensions_window(gui):
     # Wrap at the longest Chinese line so Chinese keeps one line per note and
     # the longer English text wraps to the same width.
     wrap = max(body_font.measure(f"{index}. {note}") for index, note in enumerate(NOTES, 1)) + 4
+    # Conflict lines wrap within the same width instead of widening the window.
+    conflict_label.configure(wraplength=max(200, wrap - body_font.measure(tr("衝突檢查")) - 8))
     text_widget(ttk.Label, notes, NOTES_TITLE, foreground="#555555").grid(
         row=0, column=0, columnspan=2, sticky="w")
     for index, note in enumerate(NOTES, start=1):
@@ -462,16 +475,10 @@ def open_extensions_window(gui):
         refresh(schedule=False)
         return True
 
-    def update(**changes):
-        current = model["settings"]
-        persist(ExtensionSettings(
-            enabled=changes.get("enabled", current.enabled), tools=current.tools,
-        ))
-
     def replace_tool(new_tool):
         current = model["settings"]
         tools = tuple(new_tool if tool.tool_id == new_tool.tool_id else tool for tool in current.tools)
-        return persist(ExtensionSettings(enabled=current.enabled, tools=tools))
+        return persist(ExtensionSettings(tools=tools))
 
     def enabled_count(excluding=None):
         return sum(
@@ -511,7 +518,7 @@ def open_extensions_window(gui):
         tool = ToolSettings(
             tool_id=new_tool_id(), path=path, enabled=enabled_count() < MAX_TOOLS,
         )
-        if persist(ExtensionSettings(enabled=current.enabled, tools=current.tools + (tool,))):
+        if persist(ExtensionSettings(tools=current.tools + (tool,))):
             tree.selection_set(tool.tool_id)
             if not tool.enabled:
                 warn_limit()
@@ -522,7 +529,6 @@ def open_extensions_window(gui):
             return
         current = model["settings"]
         persist(ExtensionSettings(
-            enabled=current.enabled,
             tools=tuple(item for item in current.tools if item.tool_id != tool.tool_id),
         ))
 
@@ -556,7 +562,7 @@ def open_extensions_window(gui):
         if any(tool_id == key for key, *_ in BUILTIN_TOOLS):
             return True
         tool = model["settings"].tool(tool_id)
-        return bool(model["settings"].enabled and tool is not None and tool in model["settings"].active_tools)
+        return bool(tool is not None and tool in model["settings"].active_tools)
 
     def open_selected():
         tool_id = selected_id()
@@ -664,7 +670,13 @@ def open_extensions_window(gui):
         refresh_options()
         lines = conflict_messages(tr, settings, connector)
         if lines:
-            conflict_label.configure(text="\n".join(lines), fg=STATE_COLORS[STATE_ERROR])
+            text = lines[0] if len(lines) == 1 else "\n".join(f"• {line}" for line in lines)
+            conflict_label.configure(text=text, fg=STATE_COLORS[STATE_ERROR])
+        elif connector is None and settings.enabled:
+            # Running tools can only be checked while the connector runs.
+            conflict_label.configure(
+                text=tr("設定沒有衝突（連線未啟動，尚未檢查執行中的工具）"), fg=OK_COLOR,
+            )
         else:
             conflict_label.configure(text=tr("未發現衝突"), fg=OK_COLOR)
         if model["finished"]:

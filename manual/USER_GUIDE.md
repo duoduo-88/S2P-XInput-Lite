@@ -242,12 +242,12 @@ disabled.
 > - **Allow reading controller state** lets a tool see your button and stick
 >   output. Enable it only for tools that need it.
 > - S2P clears a tool's input immediately when the tool closes, times out, or
->   crashes. If anything goes wrong, uncheck **Enable Extensions** to restore
+>   crashes. If anything goes wrong, disable the tool in the list to restore
 >   normal operation.
 
-1. Select **Extensions** and check **Enable Extensions**.
-2. Select **Add Tool...** and choose the tool EXE. You can add several tools;
-   up to 4 can be enabled at once.
+1. Select **Extensions**.
+2. Select **Add Tool...** and choose the tool EXE. A new tool is enabled in the
+   list right away. You can add several tools; up to 4 can be enabled at once.
 3. Select a tool in the list and, under **Permissions**, check **Allow input**
    (on by default) or **Allow reading controller state** (off by default). The
    tool reconnects by itself after a permission change.
@@ -259,7 +259,7 @@ disabled.
    tool must support this; S2P-Joystick-Macro does).
 
 The first row is always the built-in **Gamepad Test**. It ships with S2P,
-cannot be removed, and opens even while Extensions is disabled. See
+cannot be removed, and opens even when no tool is enabled. See
 [8. Gamepad Tester](#8-gamepad-tester).
 
 Only EXEs in the list (or tools S2P started) may connect; any other program is
@@ -273,8 +273,20 @@ shown as unauthorized.
 | **Disconnected** | The tool closed. |
 | **Connection failed** | Unauthorized, missing permission, stick conflict, incompatible version, or tool not found. |
 
-**Conflict check** lists the same EXE added twice, more than 4 enabled tools,
-tools without any permission, and two tools that both want the same stick.
+**Conflict check** lists every problem that keeps a tool from working as
+expected:
+
+- In the settings: the same EXE added twice, more than 4 enabled tools, or a
+  tool without any permission.
+- While tools run: a tool that was refused a stick because another tool
+  controls it (listed until that tool releases the stick), a tool that asks
+  for a permission you have not allowed, a second copy of a running tool,
+  a program that is not in the list trying to connect, and another program
+  holding S2P's pipe.
+
+Running tools are checked only while the S2P connection runs. Buttons and
+triggers never conflict: buttons are combined and triggers take the
+larger value.
 
 **Check for Updates** asks each tool's update source whether a newer version
 exists and adds the result to the **State** column: **Update available**

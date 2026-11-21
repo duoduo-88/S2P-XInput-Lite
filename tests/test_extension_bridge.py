@@ -296,6 +296,44 @@ def _tool(tool_id, path, **options):
     return bridge.ToolSettings(tool_id=tool_id, path=path, **options)
 
 
+class CancelRaceTests(unittest.TestCase):
+    """A read that completes just as its timeout cancels it keeps its data."""
+
+    def run_timeout(self, finished, error=0):
+        import ctypes
+
+        def overlapped_result(_pipe, _overlapped, transferred, wait):
+            self.assertTrue(wait)  # only the post-cancel call reaches here
+            if finished:
+                transferred._obj.value = 42
+                return 1
+            ctypes.set_last_error(error)
+            return 0
+
+        api = {
+            "WaitForMultipleObjects": lambda *args: bridge.WAIT_TIMEOUT,
+            "CancelIoEx": lambda *args: 1,
+            "GetOverlappedResult": overlapped_result,
+        }
+        instance = object.__new__(bridge._PipeInstance)
+        instance.pipe, instance.io_event, instance.drop_event = 1, 2, 3
+        instance.server = SimpleNamespace(stop_event=4)
+        with patch.object(bridge, "_win32", return_value=api), \
+                patch.object(ctypes, "get_last_error", side_effect=[bridge.ERROR_IO_PENDING, error]):
+            return instance._complete(ctypes.c_int(), False, 10)
+
+    def test_completed_read_is_kept(self):
+        self.assertEqual(self.run_timeout(True), 42)
+
+    def test_cancelled_read_times_out(self):
+        with self.assertRaises(bridge._Timeout):
+            self.run_timeout(False, bridge.ERROR_OPERATION_ABORTED)
+
+    def test_client_gone_during_cancel(self):
+        with self.assertRaises(bridge._ClientGone):
+            self.run_timeout(False, bridge.ERROR_BROKEN_PIPE)
+
+
 class SettingsTests(unittest.TestCase):
     def test_missing_or_malformed_section_is_disabled(self):
         self.assertEqual(load_extension_settings(configparser.ConfigParser()), ExtensionSettings())
@@ -305,15 +343,37 @@ class SettingsTests(unittest.TestCase):
 
     def test_tool_list_round_trip_keeps_order(self):
         config = configparser.ConfigParser()
-        settings = ExtensionSettings(True, (
+        settings = ExtensionSettings((
             _tool("b2", r"C:\Tools\Multi.exe", allow_read=True),
             _tool("a1", r"C:\Tools\Macro.exe", enabled=False, auto_launch=True),
         ))
         store_extension_settings(config, settings)
         self.assertEqual(load_extension_settings(config), settings)
         # Rewriting with fewer tools removes the old sections.
-        store_extension_settings(config, ExtensionSettings(True, settings.tools[:1]))
+        store_extension_settings(config, ExtensionSettings(settings.tools[:1]))
         self.assertEqual(len(load_extension_settings(config).tools), 1)
+
+    def test_the_list_alone_decides_whether_extensions_run(self):
+        self.assertFalse(ExtensionSettings().enabled)
+        self.assertFalse(ExtensionSettings((_tool("a", r"C:\a.exe", enabled=False),)).enabled)
+        self.assertTrue(ExtensionSettings((_tool("a", r"C:\a.exe"),)).enabled)
+
+    def test_old_master_switch_that_was_off_keeps_its_tools_off(self):
+        config = configparser.ConfigParser()
+        config.read_string(
+            "[extensions]\nenabled = false\n"
+            "[extensions.tool.a]\npath = C:\\a.exe\nenabled = true\n"
+        )
+        settings = load_extension_settings(config)
+        self.assertEqual([tool.enabled for tool in settings.tools], [False])
+        self.assertFalse(settings.enabled)
+        store_extension_settings(config, settings)
+        self.assertFalse(config.has_option("extensions", "enabled"))
+        self.assertEqual(load_extension_settings(config), settings)
+        # A switch that was on changes nothing.
+        config.read_string("[extensions]\nenabled = true\n")
+        config.set("extensions.tool.a", "enabled", "true")
+        self.assertTrue(load_extension_settings(config).enabled)
 
     def test_tool_defaults_allow_input_and_deny_read(self):
         config = configparser.ConfigParser()
@@ -341,11 +401,11 @@ class SettingsTests(unittest.TestCase):
     def test_configuration_conflicts(self):
         tools = tuple(_tool(f"t{index}", f"C:\\t{index}.exe") for index in range(bridge.MAX_TOOLS + 1))
         tools += (_tool("dup", "C:\\T0.EXE"), _tool("none", "C:\\n.exe", allow_input=False))
-        problems = bridge.settings_problems(ExtensionSettings(True, tools))
+        problems = bridge.settings_problems(ExtensionSettings(tools))
         self.assertIn(("too_many_tools", f"t{bridge.MAX_TOOLS}"), problems)
         self.assertIn(("duplicate_tool", "dup"), problems)
         self.assertIn(("no_permission", "none"), problems)
-        self.assertEqual(len(ExtensionSettings(True, tools).active_tools), bridge.MAX_TOOLS)
+        self.assertEqual(len(ExtensionSettings(tools).active_tools), bridge.MAX_TOOLS)
 
 
 class _FakeServer:
@@ -397,27 +457,33 @@ class ManagerTests(unittest.TestCase):
         self.manager.launch_tool = launch
 
     def enable(self, *tools):
-        self.manager.apply(ExtensionSettings(True, tools))
+        self.manager.apply(ExtensionSettings(tools))
 
     def open(self, path, **hello):
         return self.manager.open_session(1, path, {"name": Path(path).stem, **hello})
 
     def test_disabled_creates_no_server(self):
-        self.manager.apply(ExtensionSettings(False, (_tool("m", MACRO),)), startup=True)
+        self.manager.apply(ExtensionSettings((_tool("m", MACRO, enabled=False),)), startup=True)
         self.assertEqual(_FakeServer.instances, [])
         self.assertEqual(self.manager.status()["state"], bridge.STATE_DISABLED)
 
-    def test_one_pipe_instance_per_enabled_tool(self):
-        self.enable(_tool("m", MACRO), _tool("x", MULTI))
+    def test_enabling_or_disabling_a_tool_keeps_the_others_connected(self):
+        macro_tool = _tool("m", MACRO)
+        self.enable(macro_tool)
         server = _FakeServer.instances[-1]
-        self.assertEqual(server.instance_count, 2)
+        self.assertEqual(server.instance_count, bridge.MAX_TOOLS)
         self.assertIs(self.attached[-1], server.hub)
-        self.enable(_tool("m", MACRO))
-        self.assertTrue(server.stopped)
-        self.assertEqual(_FakeServer.instances[-1].instance_count, 1)
+        self.open(MACRO)
+        self.enable(macro_tool, _tool("x", MULTI))   # enable another tool
+        self.enable(macro_tool)                      # and disable it again
+        self.assertEqual(_FakeServer.instances, [server])
+        self.assertFalse(server.stopped)
+        self.assertEqual((server.dropped, server.drop_codes), (["x"], ["settings_changed"]))
+        self.assertEqual(self.manager.status()["tools"]["m"]["state"], bridge.STATE_CONNECTED)
         self.enable()
+        self.assertTrue(server.stopped)
         self.assertIsNone(self.attached[-1])
-        self.assertEqual(self.manager.status()["code"], "no_tools")
+        self.assertEqual(self.manager.status()["state"], bridge.STATE_DISABLED)
 
     def test_tools_are_identified_by_path_or_launch_token(self):
         self.enable(_tool("m", MACRO), _tool("x", MULTI))
@@ -473,6 +539,60 @@ class ManagerTests(unittest.TestCase):
         with self.assertRaises(ProtocolError):
             self.open(MULTI, capabilities="read")
 
+    def conflicts(self):
+        return [
+            {key: value for key, value in item.items() if key != "name"}
+            for item in self.manager.status()["conflicts"]
+        ]
+
+    def test_stick_conflict_stays_listed_while_the_other_tool_holds_the_stick(self):
+        self.enable(_tool("m", MACRO), _tool("x", MULTI))
+        owner = self.open(MULTI, sticks=["left"])
+        with self.assertRaises(ProtocolError):
+            self.open(MACRO, sticks=["left", "right"])
+        expected = [{"kind": "stick", "tool": "m", "stick": "left", "with_id": "x", "with_tool": "Multi"}]
+        self.assertEqual(self.conflicts(), expected)
+        # The macro tool gives up the stick and reconnects: still listed.
+        self.open(MACRO)
+        self.assertEqual(self.manager.status()["tools"]["m"]["state"], bridge.STATE_CONNECTED)
+        self.assertEqual(self.conflicts(), expected)
+        self.manager.close_session(owner, bridge.STATE_DISCONNECTED, "tool_closed")
+        self.assertEqual(self.conflicts(), [])
+
+    def test_missing_permissions_are_listed(self):
+        self.enable(_tool("m", MACRO), _tool("x", MULTI, allow_input=False, allow_read=True))
+        macro = self.open(MACRO, capabilities=["input", "read"])
+        with self.assertRaises(ProtocolError):
+            self.open(MULTI, capabilities=["input"])
+        self.assertEqual(self.conflicts(), [
+            {"kind": "permission", "tool": "m", "denied": ["read"]},
+            {"kind": "permission", "tool": "x", "denied": ["input"]},
+        ])
+        self.manager.close_session(macro, bridge.STATE_DISCONNECTED, "tool_closed")
+        self.enable(_tool("x", MULTI, allow_input=True, allow_read=True))
+        self.assertEqual(self.conflicts(), [])
+
+    def test_second_copies_and_unlisted_programs_are_listed_for_a_while(self):
+        self.enable(_tool("m", MACRO))
+        first = self.open(MACRO)
+        with self.assertRaises(ProtocolError):
+            self.open(MACRO)
+        with self.assertRaises(ProtocolError):
+            self.open(r"C:\Other\Spy.exe")
+        self.assertEqual(self.conflicts(), [
+            {"kind": "second_copy", "tool": "m"},
+            {"kind": "unauthorized", "program": "Spy.exe"},
+        ])
+        # The unlisted program stops trying: it is dropped after a while.
+        for entry in self.manager._conflicts.values():
+            entry["at"] -= bridge.RECENT_CONFLICT_SECONDS + 1
+        self.assertEqual(self.conflicts(), [])
+        # A second copy is no longer a problem once the first one has closed.
+        with self.assertRaises(ProtocolError):
+            self.open(MACRO)
+        self.manager.close_session(first, bridge.STATE_DISCONNECTED, "tool_closed")
+        self.assertEqual(self.conflicts(), [])
+
     def test_disconnect_one_tool_pauses_only_that_tool(self):
         self.enable(_tool("m", MACRO), _tool("x", MULTI))
         server = _FakeServer.instances[-1]
@@ -516,17 +636,17 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual((entry["state"], entry["code"]), (bridge.STATE_WAITING, "settings_changed"))
 
     def test_enabled_tools_start_in_the_background_with_s2p(self):
-        self.manager.apply(ExtensionSettings(True, (
+        self.manager.apply(ExtensionSettings((
             _tool("m", MACRO), _tool("x", MULTI, enabled=False),
         )), startup=True)
         self.assertEqual((self.launches, self.background), (["m"], [True]))
         # Re-applying unchanged settings does not start anything again...
-        self.manager.apply(ExtensionSettings(True, (
+        self.manager.apply(ExtensionSettings((
             _tool("m", MACRO), _tool("x", MULTI, enabled=False),
         )))
         self.assertEqual(self.launches, ["m"])
         # ...but enabling another tool starts it right away, also hidden.
-        self.manager.apply(ExtensionSettings(True, (_tool("m", MACRO), _tool("x", MULTI))))
+        self.manager.apply(ExtensionSettings((_tool("m", MACRO), _tool("x", MULTI))))
         self.assertEqual((self.launches, self.background), (["m", "x"], [True, True]))
 
     def test_launch_tells_the_tool_whether_to_stay_hidden(self):
@@ -537,8 +657,8 @@ class ManagerTests(unittest.TestCase):
         tool_file.write_bytes(b"")
         manager = ExtensionManager(SimpleNamespace(set_extension_input=lambda hub: None),
                                    server_factory=_FakeServer)
-        manager.apply(ExtensionSettings(True, ()))
-        manager._settings = ExtensionSettings(True, (_tool("t", str(tool_file.resolve())),))
+        manager.apply(ExtensionSettings(()))
+        manager._settings = ExtensionSettings((_tool("t", str(tool_file.resolve())),))
         seen = []
         with patch.object(subprocess_module, "Popen",
                           side_effect=lambda command, **kwargs: seen.append(kwargs["env"]) or SimpleNamespace(poll=lambda: None)):
@@ -547,6 +667,17 @@ class ManagerTests(unittest.TestCase):
                 manager.launch_tool("t", reopen=True)
         self.assertEqual(seen[0].get(bridge.BACKGROUND_ENV), "1")
         self.assertNotIn(bridge.BACKGROUND_ENV, seen[1])
+
+        # Tokens do not pile up: only the newest few per tool stay valid,
+        # and a tool that leaves the list loses them all.
+        with patch.object(subprocess_module, "Popen",
+                          side_effect=lambda command, **kwargs: seen.append(kwargs["env"]) or SimpleNamespace(poll=lambda: None)):
+            for _ in range(10):
+                manager.launch_tool("t", reopen=True)
+        newest = [env[bridge.TOKEN_ENV] for env in seen[-bridge.LAUNCH_TOKENS_PER_TOOL:]]
+        self.assertEqual(list(manager._launch_tokens), newest)
+        manager.apply(ExtensionSettings(()))
+        self.assertEqual(manager._launch_tokens, {})
 
 
 @unittest.skipUnless(sys.platform == "win32", "Windows named pipes")
@@ -569,8 +700,11 @@ class NamedPipeServerTests(unittest.TestCase):
         self.addCleanup(self.manager.close)
 
     def enable(self, *tools):
-        self.manager.apply(ExtensionSettings(True, tools))
+        self.manager.apply(ExtensionSettings(tools))
         self.assertIsNotNone(self.manager._server)
+        # Stand-in for S2P starting the in-process clients: a tool that left
+        # the list lost its tokens, so they are handed out again here.
+        self.manager._launch_tokens.update({"tok-m": "m", "tok-x": "x"})
 
     @property
     def hub(self):
@@ -768,14 +902,14 @@ class NamedPipeServerTests(unittest.TestCase):
         baseline = threading.active_count()
         for _ in range(10):
             self.enable(_tool("m", MACRO), _tool("x", MULTI))
-            self.assertEqual(threading.active_count(), baseline + 2)
+            self.assertEqual(threading.active_count(), baseline + bridge.MAX_TOOLS)
             client = self.client()
             client.connect()
             client.state(["A"])
             self.assertTrue(self.wait_for(lambda: self.merged().wButtons == A))
             started = time.perf_counter()
             # FIRST_PIPE_INSTANCE on the next pass fails if a handle leaked.
-            self.manager.apply(ExtensionSettings(False, ()))
+            self.manager.apply(ExtensionSettings(()))
             self.assertLess(time.perf_counter() - started, 0.5)
             self.assertIsNone(self.attached[-1])
             self.abort(client)
@@ -831,7 +965,7 @@ class ConsoleMessageTests(unittest.TestCase):
         self.assertEqual(bridge.describe_tool_changes(timeout, connected), [])
 
     def test_name_falls_back_to_the_listed_exe(self):
-        settings = ExtensionSettings(True, (_tool("m", MACRO),))
+        settings = ExtensionSettings((_tool("m", MACRO),))
         lines = bridge.describe_tool_changes({}, {"m": {"state": "waiting", "code": "settings_changed"}}, settings)
         self.assertIn("「Macro」", lines[0][0])
 
@@ -839,7 +973,7 @@ class ConsoleMessageTests(unittest.TestCase):
         manager = ExtensionManager(SimpleNamespace(set_extension_input=lambda hub: None),
                                    server_factory=_FakeServer)
         manager.launch_tool = lambda tool_id, reopen=False, background=False: True
-        manager.apply(ExtensionSettings(True, (_tool("m", MACRO),)))
+        manager.apply(ExtensionSettings((_tool("m", MACRO),)))
         self.assertEqual(manager.status()["state"], bridge.STATE_WAITING)
         manager.open_session(1, MACRO, {"name": "Macro"})
         self.assertEqual(manager.status()["state"], bridge.STATE_CONNECTED)
@@ -851,7 +985,7 @@ class GuiStatusTextTests(unittest.TestCase):
 
         self.window = window
         self.tool = _tool("m", MACRO)
-        self.settings = ExtensionSettings(True, (self.tool,))
+        self.settings = ExtensionSettings((self.tool,))
 
     def text(self, status, settings=None, tool=None):
         return self.window.tool_status_text(
@@ -862,7 +996,8 @@ class GuiStatusTextTests(unittest.TestCase):
         def runtime(**entry):
             return {"extensions": {"state": "waiting", "tools": {"m": entry}}}
 
-        self.assertEqual(self.text(None, ExtensionSettings(False, (self.tool,))), "未啟用")
+        off = bridge.replace(self.tool, enabled=False)
+        self.assertEqual(self.text(None, ExtensionSettings((off,)), off), "未啟用")
         self.assertEqual(self.text(None), "等待連線（連接程式未啟動）")
         self.assertEqual(self.text(runtime(state="waiting")), "等待連線")
         self.assertEqual(self.text(runtime(state="connected")), "已連接")
@@ -878,13 +1013,24 @@ class GuiStatusTextTests(unittest.TestCase):
         tools = (
             self.tool, _tool("x", MULTI), _tool("d", MACRO.upper()),
         )
-        settings = ExtensionSettings(True, tools)
-        status = {"extensions": {"state": "waiting", "tools": {
-            "x": {"state": "error", "code": "conflict", "stick": "left", "with_tool": "Macro"},
-        }}}
+        settings = ExtensionSettings(tools)
+        status = {"extensions": {"state": "error", "code": "pipe_in_use", "tools": {}, "conflicts": [
+            {"kind": "stick", "tool": "x", "name": "Multi", "stick": "left", "with_id": "m",
+             "with_tool": "Macro"},
+            {"kind": "permission", "tool": "m", "name": "Macro", "denied": ["read"]},
+            {"kind": "second_copy", "tool": "m", "name": "Macro"},
+            {"kind": "unauthorized", "program": "Spy.exe"},
+            {"kind": "unknown-later-kind"}, "not a dict",
+        ]}}
         lines = self.window.conflict_messages(lambda value: value, settings, status)
-        self.assertIn("「MACRO」重複加入清單", lines)
-        self.assertIn("「Multi」與「Macro」同時要求控制左搖桿", lines)
+        self.assertEqual(lines, [
+            "「MACRO」重複加入清單",
+            "通訊管道已被其他程式占用（可能有另一個 S2P 正在執行），工具都無法連線",
+            "「Multi」要求控制左搖桿被拒絕：目前由「Macro」控制",
+            "「Macro」要求「允許讀取控制器狀態」權限，但未允許",
+            "「Macro」有另一份正在執行，第二份無法連線",
+            "不在清單中的程式「Spy.exe」嘗試連線，已拒絕",
+        ])
         self.assertEqual(
             self.window.conflict_messages(lambda value: value, self.settings, None), [],
         )

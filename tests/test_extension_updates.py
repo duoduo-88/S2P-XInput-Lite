@@ -122,6 +122,36 @@ class CheckTests(unittest.TestCase):
             results, _opener = self.check({"t": tool}, {FEED_URL: document})
             self.assertEqual(results["t"].state, updates.CHECK_FAILED, document)
 
+    def test_broken_responses_and_unexpected_errors_are_reported_as_failed(self):
+        import http.client
+
+        tool = write_manifest(self.folder, "Tool.exe")
+        for document in (http.client.IncompleteRead(b"{"), RuntimeError("surprise")):
+            results, _opener = self.check({"t": tool}, {FEED_URL: document})
+            self.assertEqual(results["t"].state, updates.CHECK_FAILED, document)
+
+    def test_redirect_away_from_https_is_refused(self):
+        import urllib.error
+        import urllib.request
+
+        handler = updates._HttpsOnlyRedirects()
+        request = urllib.request.Request(FEED_URL)
+        with self.assertRaises(urllib.error.HTTPError):
+            handler.redirect_request(request, None, 302, "Found", {}, "http://example.test/feed.json")
+        allowed = handler.redirect_request(request, None, 302, "Found", {}, "https://cdn.example.test/f.json")
+        self.assertEqual(allowed.full_url, "https://cdn.example.test/f.json")
+
+        class PlainResponse(io.BytesIO):
+            def geturl(self):
+                return "http://example.test/feed.json"
+
+        tool = write_manifest(self.folder, "Tool.exe")
+        feed = json.dumps({"format": "s2p-extension-updates", "version": "0.2.0"}).encode()
+        results = updates.check_tool_updates(
+            {"t": tool}, user_agent="test", opener=lambda request, timeout: PlainResponse(feed),
+        )
+        self.assertEqual(results["t"].state, updates.CHECK_FAILED)
+
     def test_download_page_must_be_https(self):
         tool = write_manifest(self.folder, "Tool.exe", homepage="https://example.test/home")
         feed = {"format": "s2p-extension-updates", "version": "0.2.0", "url": "file:///C:/x"}

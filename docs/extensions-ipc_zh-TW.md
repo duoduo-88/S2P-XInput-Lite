@@ -17,13 +17,13 @@ S2P-XInput-Lite 透過本機 Windows Named Pipe 接收獨立擴充工具（S2P-E
 | 元件 | 位置 | 說明 |
 |---|---|---|
 | `ExtensionManager` | `src/extension_bridge.py` | 連接程式內建立；依 `config.ini` 啟停伺服器、辨識工具、處理衝突、回報狀態、啟動工具。 |
-| `ExtensionPipeServer` | 同上 | 同名 pipe 的多個 instance，每個啟用的工具一個，各自用 overlapped I/O。 |
+| `ExtensionPipeServer` | 同上 | 同名 pipe 的 4 個 instance（每個可啟用的工具一個），各自用 overlapped I/O。 |
 | `ExtensionInputHub` | 同上 | 掛在 `XInputController` 上的唯一物件，依序合併每個已連線工具。 |
 | `ExtensionInputMixer` | 同上 | 單一工具的輸入狀態；每份報告只取一次鎖。 |
 | 合併點 | `XInputController.update()` | 報告寫完、`pad.update()` 之前。未啟用時只多一次 `is None` 判斷。 |
 | 設定視窗 | `src/gui_sections/extensions.py` | 工具清單、權限、衝突檢查；只寫入全域設定並送出指令。 |
 
-執行緒：每個啟用的工具一條 daemon 執行緒 `S2P-Extensions-IPC`（最多 4 條），只在擴充工具啟用時存在。
+執行緒：每個 pipe instance 一條 daemon 執行緒 `S2P-Extensions-IPC`（共 4 條），只在清單中有啟用的工具時存在。
 每條執行緒阻塞在 `WaitForMultipleObjects`（pipe I/O、共用停止事件、個別中斷事件），不輪詢；
 停用或連接程式結束時設定停止事件並 join（實測 < 0.5 秒）。
 
@@ -31,7 +31,7 @@ S2P-XInput-Lite 透過本機 Windows Named Pipe 接收獨立擴充工具（S2P-E
 
 | 指令 | 動作 |
 |---|---|
-| `extensions_apply` | 重新讀取設定；工具數量改變時重建 pipe，其餘只中斷設定有變動的工具（狀態 `waiting`／`settings_changed`，工具自動重連後取得新權限）。 |
+| `extensions_apply` | 重新讀取設定；啟用或停用工具不會中斷其他工具，只中斷設定有變動的工具（狀態 `waiting`／`settings_changed`，工具自動重連後取得新權限）。 |
 | `extensions_connect[:<tool id>]` | 「開啟」按鈕與系統匣選單使用：工具未連線時啟動它（`.py` 開發工具帶一次性權杖）。 |
 | `extensions_disconnect[:<tool id>]` | 中斷並暫停該工具（或全部），立即清除其輸入；目前 UI 不使用，停用請用「啟用／停用」。 |
 
@@ -88,8 +88,11 @@ allow_read = false
 | 同一個 EXE 重複加入清單 | 設定視窗拒絕加入；載入設定時只保留第一筆。 |
 | 啟用超過 4 個工具 | 設定視窗拒絕啟用；第 5 個以後標示「未載入」。 |
 | 工具沒有任何權限 | 設定視窗拒絕並在衝突檢查顯示。 |
-| 兩個工具要求同一支搖桿 | 後連線的工具收到 `conflict`，畫面顯示「A 與 B 同時要求控制左搖桿」。 |
-| 同一個工具重複連線 | 第二個連線收到 `already_connected`，不會搶走原本的連線。 |
+| 兩個工具要求同一支搖桿 | 後連線的工具收到 `conflict`。即使被拒的工具改成不帶搖桿重新連線，衝突檢查仍會顯示，直到對方放開搖桿。 |
+| 同一個工具重複連線 | 第二個連線收到 `already_connected`，不會搶走原本的連線；衝突檢查在最後一次嘗試後顯示 30 秒。 |
+| 工具要求未允許的權限 | 只取得已允許的權限連線（全部未允許時收到 `permission_denied`）；衝突檢查列出缺少的權限。 |
+| 不在清單中的程式連線 | 收到 `unauthorized`；衝突檢查在最後一次嘗試後顯示該 EXE 名稱 30 秒。 |
+| 通訊管道名稱被其他程式占用 | 所有工具都無法連線（`pipe_in_use`），衝突檢查會顯示。 |
 | 按鍵、扳機 | 不衝突：按鍵 OR、扳機取最大值。 |
 
 ## 訊息格式
