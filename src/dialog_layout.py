@@ -3,6 +3,7 @@
 import ctypes
 import functools
 import logging
+import os
 import sys
 import tkinter as tk
 from contextlib import contextmanager
@@ -231,6 +232,80 @@ def install_centered_dialogs(default_anchor, *, messageboxes=True):
         targets.extend((messagebox, name) for name in MESSAGEBOX_FUNCTIONS)
     for module, name in targets:
         _wrap_centered(module, name, default_anchor)
+
+
+def process_owns_foreground():
+    """Return True when the active Windows window belongs to this process."""
+    if sys.platform != "win32":
+        return True
+    try:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.GetForegroundWindow.restype = wintypes.HWND
+        user32.GetWindowThreadProcessId.argtypes = (
+            wintypes.HWND, ctypes.POINTER(wintypes.DWORD),
+        )
+        user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return False
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        return int(pid.value) == os.getpid()
+    except (AttributeError, OSError):
+        return False
+
+
+def _focus_is_inside(window):
+    try:
+        focused = window.focus_get()
+    except (tk.TclError, KeyError):
+        # focus_get() raises KeyError for widgets Tk created internally.
+        return False
+    return focused is not None and focused.winfo_toplevel() is window
+
+
+def focus_new_window(window, owns_foreground=process_owns_foreground):
+    """Give a newly shown window the keyboard focus inside this application.
+
+    ``focus_set()`` only moves Tk's focus. Windows can keep the previous
+    window active, so typing and Enter still went to the window behind the
+    new dialog. The focus is forced only while S2P is already the active
+    application, so a window opened in the background never steals the
+    foreground from another program.
+    """
+    try:
+        if not window.winfo_exists() or not window.winfo_viewable():
+            return False
+        if window.wm_overrideredirect() or getattr(window, "_s2p_keep_focus", False):
+            return False
+        grab = window.grab_current()
+        if grab is not None and grab.winfo_toplevel() is not window:
+            return False  # another modal dialog owns the input
+        if not owns_foreground() or _focus_is_inside(window):
+            return False
+        window.lift()
+        window.focus_force()
+        return True
+    except (tk.TclError, AttributeError):
+        return False
+
+
+def install_focus_new_windows(root, owns_foreground=process_owns_foreground):
+    """Focus every top-level window the first time it is shown."""
+
+    def on_map(event):
+        window = event.widget
+        if not isinstance(window, tk.Toplevel) or getattr(window, "_s2p_focus_on_map_done", False):
+            return
+        window._s2p_focus_on_map_done = True
+        # Let the opening code finish (focus_set on a field, grab_set) first.
+        try:
+            window.after_idle(lambda: focus_new_window(window, owns_foreground))
+        except tk.TclError:
+            pass
+
+    root.bind_class("Toplevel", "<Map>", on_map, add="+")
+    return on_map
 
 
 def startup_banner_geometry(root, width, height):

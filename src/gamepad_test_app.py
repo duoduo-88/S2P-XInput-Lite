@@ -11,7 +11,12 @@ import tkinter as tk
 from pathlib import Path
 
 from config_utils import CONFIG_PATH, atomic_write_config, config_file_lock, load_config
-from dialog_layout import StartupBannerText, install_centered_dialogs, startup_banner_geometry
+from dialog_layout import (
+    StartupBannerText,
+    install_centered_dialogs,
+    install_focus_new_windows,
+    startup_banner_geometry,
+)
 from gamepad_test_window import GamepadTestWindow, TEST_ICON_PATH, load_tester_icons
 from localization import translate_text
 from single_instance import GYRO_SETTINGS_ACTION, SETTINGS_INSTANCE_NAME, SingleInstance, activate_tk_window
@@ -273,6 +278,8 @@ def main(instance=None):
         # Keep the PhotoImage alive for the complete Tk interpreter lifetime.
         root._gamepad_test_icon = root_icon
         root.withdraw()
+        # New dialogs take the keyboard focus from the window that opened them.
+        install_focus_new_windows(root)
         host = GamepadTestHost(
             root,
             language=command_line_language(sys.argv[1:]),

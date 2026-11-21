@@ -5,6 +5,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import tkinter as tk
 import unittest
 from unittest.mock import patch
@@ -137,6 +138,92 @@ class GUIUserWorkflowTests(unittest.TestCase):
             if isinstance(widget, ttk.Button)
         ]
         self.assertNotIn(gui.tr("感測器校正"), gyro_buttons)
+
+    class _RunningConnector:
+        def __init__(self):
+            self.exit_code = None
+
+        def poll(self):
+            return self.exit_code
+
+    def _start_sensor_calibration_without_controller(self, prompts):
+        gui = self.gui
+        connector = self._RunningConnector()
+        gui.main_process = None
+        started = []
+
+        def restart_main():
+            started.append(True)
+            gui.main_process = connector
+
+        asked = []
+
+        def askokcancel(title, message, **_kwargs):
+            asked.append(title)
+            return prompts.pop(0)
+
+        for patcher in (
+            patch.object(gui, "restart_main", side_effect=restart_main),
+            patch.object(config_gui.messagebox, "askokcancel", side_effect=askokcancel),
+            patch.object(config_gui, "GYRO_CALIBRATION_CONNECT_POLL_MS", 1),
+            patch.object(config_gui, "activate_tk_window"),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        gui.calibrate_gyro()
+        return connector, started, asked
+
+    def _pump_until(self, condition, seconds=2.0):
+        deadline = time.monotonic() + seconds
+        while not condition() and time.monotonic() < deadline:
+            self.root.update()
+            time.sleep(0.005)
+
+    def test_sensor_calibration_connects_first_and_then_continues(self):
+        gui = self.gui
+        with patch.object(config_gui, "enqueue_controller_command") as enqueue:
+            connector, started, asked = self._start_sensor_calibration_without_controller(
+                [True, True],
+            )
+            # The connection starts at once and the button shows the wait.
+            self.assertEqual(started, [True])
+            self.assertEqual(asked, ["手把尚未連線"])
+            self.assertIn("disabled", gui.gyro_calibration_button.state())
+            self.assertEqual(gui.gyro_calibration_button.cget("text"), "Waiting for controller...")
+            self.root.update()
+            self.assertEqual(asked, ["手把尚未連線"])
+
+            config_gui.STATUS_PATH.write_text(json.dumps({
+                "state": "connected", "updated_at": time.time(),
+                "controller_id": "pad", "connection_id": "c1",
+            }), encoding="utf-8")
+            self._pump_until(lambda: enqueue.called)
+
+        # Sensor calibration continued with its first step by itself.
+        self.assertEqual(asked, ["手把尚未連線", "感測器校正（1/3）"])
+        config_gui.activate_tk_window.assert_called_with(gui.root)
+        enqueue.assert_called_once_with("calibrate_gyro", connection_id="c1")
+        self.assertIsNone(gui._gyro_calibration_wait_job)
+
+    def test_sensor_calibration_wait_ends_when_the_connector_exits(self):
+        gui = self.gui
+        with patch.object(config_gui.messagebox, "showwarning") as warning:
+            connector, started, asked = self._start_sensor_calibration_without_controller([True])
+            connector.exit_code = 1
+            self._pump_until(lambda: warning.called)
+        warning.assert_called_once()
+        self.assertEqual(asked, ["手把尚未連線"])
+        self.assertNotIn("disabled", gui.gyro_calibration_button.state())
+        self.assertEqual(gui.gyro_calibration_button.cget("text"), "Calibrate")
+        self.assertIsNone(gui._gyro_calibration_wait_job)
+
+    def test_sensor_calibration_without_controller_can_be_cancelled(self):
+        gui = self.gui
+        _connector, started, asked = self._start_sensor_calibration_without_controller([False])
+        self.assertEqual(started, [])
+        self.assertEqual(asked, ["手把尚未連線"])
+        self.assertIsNone(getattr(gui, "_gyro_calibration_wait_job", None))
+        self.assertNotIn("disabled", gui.gyro_calibration_button.state())
 
     def test_extensions_window_manages_a_tool_list(self):
         from gui_sections import extensions as extensions_window

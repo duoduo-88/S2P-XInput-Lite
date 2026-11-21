@@ -47,7 +47,14 @@ from esp32_detection import (
     find_esp32_firmware,
     find_esp32_port,
 )
-from dialog_layout import StartupBannerText, centered_message_box, install_centered_dialogs, startup_banner_geometry
+from dialog_layout import (
+    StartupBannerText,
+    centered_message_box,
+    focus_new_window,
+    install_centered_dialogs,
+    install_focus_new_windows,
+    startup_banner_geometry,
+)
 from direction_deadzones import CUSTOM_DEADZONE_KEY
 from firmware_flash_guard import FlashProbeError, probe_esp32_flash_size
 from gamepad_aim_display import DISPLAY_RESTORE_RETRY_MS
@@ -445,6 +452,9 @@ def configure_tk_dpi(root):
     return dpi / 96.0
 
 STATUS_PATH = Path(__file__).with_name("controller_status.json")
+# Sensor calibration started without a controller waits this long for one.
+GYRO_CALIBRATION_CONNECT_TIMEOUT_SECONDS = 120
+GYRO_CALIBRATION_CONNECT_POLL_MS = 500
 
 PYTHON_EXE = Path(sys.executable)
 
@@ -1897,6 +1907,8 @@ class ConfigGUI:
         global _GUI_ROOT
         _GUI_ROOT = root
         self.root = root
+        # New dialogs take the keyboard focus from the window that opened them.
+        install_focus_new_windows(root)
         self.ui_scale = configure_tk_dpi(root)
         
         self.vigembus_installed = (
@@ -5392,19 +5404,104 @@ class ConfigGUI:
                 f"無法呼叫手把：\n{exc}"
             )
 
-    def calibrate_gyro(self):
-        """Run gyro, six-position accelerometer, then 3D magnetic calibration."""
+    @staticmethod
+    def _connected_controller_status():
+        """Return the connector status while a controller is connected, else None."""
         try:
             status = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
             age = time.time() - float(status.get("updated_at", 0.0))
             if age > 3.0 or status.get("state") != "connected":
-                raise RuntimeError("controller_not_connected")
+                return None
         # AttributeError: a valid JSON list or value is not a status object.
-        except (OSError, ValueError, TypeError, AttributeError, RuntimeError):
-            messagebox.showerror(
-                "無法校正感測器",
-                "請先啟動連接程式並確認手把已連線。",
+        except (OSError, ValueError, TypeError, AttributeError):
+            return None
+        return status
+
+    def _connector_running_or_starting(self):
+        main_process = getattr(self, "main_process", None)
+        return (
+            getattr(self, "_main_start_job", None) is not None
+            or (main_process is not None and main_process.poll() is None)
+        )
+
+    def _connect_then_calibrate_gyro(self):
+        """Start the connection, then reopen sensor calibration once connected."""
+        if getattr(self, "_gyro_calibration_wait_job", None) is not None:
+            return
+        running = self._connector_running_or_starting()
+        if running:
+            message = (
+                "感測器校正需要先連線手把。\n\n"
+                "連接程式已在執行。請依連接程式視窗的提示喚醒或配對手把，"
+                "手把連線後會自動繼續感測器校正。"
             )
+        else:
+            message = (
+                "感測器校正需要先連線手把。\n\n"
+                "按下「確定」後會自動啟動連線並開啟連接程式視窗。"
+                "請依視窗中的提示喚醒或配對手把，手把連線後會自動繼續感測器校正。"
+            )
+        if not messagebox.askokcancel("手把尚未連線", message):
+            return
+        if not running:
+            self.restart_main()
+            if not self._connector_running_or_starting():
+                return  # restart_main explained why it could not start
+
+        deadline = time.monotonic() + GYRO_CALIBRATION_CONNECT_TIMEOUT_SECONDS
+        try:
+            self.gyro_calibration_button.state(["disabled"])
+            self.gyro_calibration_button.configure(text=self.tr("等待手把連線..."))
+        except (AttributeError, tk.TclError):
+            pass
+
+        def stop_waiting():
+            self._gyro_calibration_wait_job = None
+            try:
+                self.gyro_calibration_button.state(["!disabled"])
+                self.gyro_calibration_button.configure(text=self.tr("校正"))
+            except (AttributeError, tk.TclError):
+                pass
+
+        def poll():
+            self._gyro_calibration_wait_job = None
+            if getattr(self, "_close_in_progress", False):
+                stop_waiting()
+                return
+            if self._connected_controller_status() is not None:
+                stop_waiting()
+                # The connector window is in front; bring the settings back
+                # so the first calibration step opens over them.
+                activate_tk_window(self.root)
+                self.calibrate_gyro()
+                return
+            if not self._connector_running_or_starting():
+                stop_waiting()
+                messagebox.showwarning(
+                    "無法校正感測器",
+                    "連接程式已結束，手把未連線。請重新開始感測器校正。",
+                )
+                return
+            if time.monotonic() >= deadline:
+                stop_waiting()
+                messagebox.showwarning(
+                    "無法校正感測器",
+                    "等待手把連線逾時。手把連線後請再選擇「感測器校正」。",
+                )
+                return
+            self._gyro_calibration_wait_job = self.root.after(
+                GYRO_CALIBRATION_CONNECT_POLL_MS, poll
+            )
+
+        self._gyro_calibration_wait_job = self.root.after(
+            GYRO_CALIBRATION_CONNECT_POLL_MS, poll
+        )
+
+    def calibrate_gyro(self):
+        """Run gyro, six-position accelerometer, then 3D magnetic calibration."""
+        status = self._connected_controller_status()
+        if status is None:
+            self._connect_then_calibrate_gyro()
             return
 
         controller_id = status.get("controller_id")
@@ -9665,6 +9762,9 @@ class ConfigGUI:
             self._clamp_child_to_work_area(window)
             window.grab_set()
             (focus_widget or window).focus_set()
+            # focus_set() alone can leave Windows on the window behind it,
+            # also when an already open dialog is brought back.
+            focus_new_window(window)
         except (tk.TclError, AttributeError):
             pass
 

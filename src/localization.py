@@ -1816,6 +1816,22 @@ EN_TEXT = {
         "The current ESP32 firmware does not support gyro spike suppression. Update the firmware first.",
     "只有搖桿模式選擇「映射為滑鼠」時生效。\n\n代表搖桿推到最外圈時每秒移動的游標像素數。\n設定範圍：100 ～ 3000；數值越高，游標移動越快。":
         "Used only when a stick mode is Mouse.\n\nPixels per second at full stick deflection.\nRange: 100–3000; higher values move the cursor faster.",
+    "手把尚未連線":
+        "Controller Not Connected",
+    "感測器校正需要先連線手把。\n\n連接程式已在執行。請依連接程式視窗的提示喚醒或配對手把，手把連線後會自動繼續感測器校正。":
+        "Sensor calibration needs a connected controller.\n\n"
+        "The connector is already running. Wake or pair the controller as the connector window shows; "
+        "sensor calibration continues by itself once the controller connects.",
+    "感測器校正需要先連線手把。\n\n按下「確定」後會自動啟動連線並開啟連接程式視窗。請依視窗中的提示喚醒或配對手把，手把連線後會自動繼續感測器校正。":
+        "Sensor calibration needs a connected controller.\n\n"
+        "Select OK to start the connection and open the connector window. Wake or pair the controller as the window shows; "
+        "sensor calibration continues by itself once the controller connects.",
+    "等待手把連線...":
+        "Waiting for controller...",
+    "連接程式已結束，手把未連線。請重新開始感測器校正。":
+        "The connector exited before the controller connected. Start sensor calibration again.",
+    "等待手把連線逾時。手把連線後請再選擇「感測器校正」。":
+        "Timed out waiting for the controller. Once it connects, choose Sensor Calibration again.",
     "請先啟動連接程式並確認手把已連線。":
         "Start the connector and make sure the controller is connected first.",
     "連接程式沒有回覆重設指令，請確認程式仍在執行。":
