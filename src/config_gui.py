@@ -131,7 +131,6 @@ from gyro_compensation_window import GyroCompensationSettings
 from runtime_status import settings_reload_result
 from parameter_controls import (
     bind_drag_adjust,
-    scrub_numeric_value,
     show_restore_menu,
     widget_is_disabled,
 )
