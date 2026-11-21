@@ -239,7 +239,7 @@ def build_gyro_section(gui, mapping_notebook):
         help_text, target_scope
     ) in enumerate(gyro_rows):
         label_widget = ttk.Label(
-            gyro_settings_content, text=label, width=8, anchor="e"
+            gyro_settings_content, text=label, width=11, anchor="e"
         )
         label_widget.grid(row=row_index, column=0, sticky="e", pady=2)
 
@@ -349,7 +349,7 @@ def build_gyro_section(gui, mapping_notebook):
         label, variable, minimum, maximum, step, help_text, target_scope
     ) in enumerate(stability_rows):
         label_widget = ttk.Label(
-            stability_content, text=label, width=8, anchor="e"
+            stability_content, text=label, width=11, anchor="e"
         )
         label_widget.grid(row=row_index, column=0, sticky="e", pady=3)
 
