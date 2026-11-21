@@ -67,7 +67,7 @@ class AimHistoryTests(unittest.TestCase):
             self.assertEqual(history.records[0]["basis"], old_basis)
             self.assertFalse(history.has_matching_record(dict(recolored, depth=100)))
 
-    def test_reopened_history_compares_with_best_matching_round(self):
+    def test_reopened_history_compares_each_metric_with_its_best_matching_value(self):
         from gamepad_aim_history import AimHistory
 
         with tempfile.TemporaryDirectory() as directory:
@@ -87,7 +87,7 @@ class AimHistoryTests(unittest.TestCase):
             self.assertTrue(reopened.has_matching_record(tuned))
             changes = reopened.add(tuned, {"hits": 10, "accuracy": 82.5, "seconds": 14, "error": 2.75})
             self.assertEqual(changes, (
-                ("accuracy", -2.5, False), ("seconds", -1.0, True), ("error", -0.25, True),
+                ("accuracy", -2.5, False), ("seconds", 2.0, False), ("error", 0.75, False),
             ))
             self.assertEqual(reopened.records[-1]["basis"]["mouse_sensitivity"], 125)
 
@@ -110,19 +110,18 @@ class AimHistoryTests(unittest.TestCase):
             history.add(basis(), best_possible)
             self.assertEqual(history.add(dict(timed, targets=11), dict(best_possible, hits=11)), ())
             self.assertEqual(history.add(dict(timed, seconds=45), best_possible), ())
-            self.assertEqual(history.add(timed, dict(best_possible, hits=9)), ())
             history.add(timed, {"hits": 10, "accuracy": 80, "seconds": 18, "error": 1})
             history.add(timed, {"hits": 10, "accuracy": 90, "seconds": 30, "error": 2})
-            # Stored timing differences must not affect a fixed-duration ranking.
+            # Stored timing differences must not affect a fixed-duration comparison.
             self.assertEqual(
                 history.add(timed, {"hits": 10, "accuracy": 90, "seconds": 25, "error": 4}),
-                (("error", 2.0, False),),
+                (("error", 3.0, False),),
             )
             reopened = AimHistory(path)
             self.assertTrue(reopened.has_matching_record(timed))
             self.assertEqual(
                 reopened.add(timed, {"hits": 10, "accuracy": 85.5, "seconds": 27, "error": 3.5}),
-                (("accuracy", -4.5, False), ("error", 1.5, False)),
+                (("accuracy", -4.5, False), ("error", 2.5, False)),
             )
 
     def test_missing_and_equal_display_values_are_excluded(self):
@@ -137,7 +136,25 @@ class AimHistoryTests(unittest.TestCase):
             (("error", 0.1, False), ("tracking", 0.1, True)),
         )
 
-    def test_2d_tracking_compares_against_best_tracking_score_in_pixels(self):
+    def test_lower_accuracy_is_never_shown_as_an_improvement(self):
+        from gamepad_aim_history import AimHistory
+
+        history = AimHistory(None)
+        timed = basis(mode="timed-shooting", targets=0)
+        history.add(timed, {"hits": 80, "accuracy": 80.8, "seconds": 30, "error": 2})
+        history.add(timed, {"hits": 70, "accuracy": 87.4, "seconds": 30, "error": 2})
+        # The round with the most hits had the lower accuracy. A drop from the
+        # best accuracy must still read as a decline.
+        self.assertEqual(
+            history.add(timed, {"hits": 72, "accuracy": 85.4, "seconds": 30, "error": 2}),
+            (("hits", -8, False), ("accuracy", -2.0, False)),
+        )
+        self.assertEqual(
+            history.add(timed, {"hits": 81, "accuracy": 88, "seconds": 30, "error": 1.5}),
+            (("hits", 1, True), ("accuracy", 0.6, True), ("error", -0.5, True)),
+        )
+
+    def test_2d_tracking_compares_each_metric_with_its_best_in_pixels(self):
         from gamepad_aim_history import AimHistory
 
         history = AimHistory(None)
@@ -146,7 +163,7 @@ class AimHistoryTests(unittest.TestCase):
         history.add(tracking, {"tracking": 60, "error": 5, "seconds": 30})
         self.assertEqual(
             history.add(tracking, {"tracking": 80.5, "error": 14.06, "seconds": 30}),
-            (("error", 0.1, False), ("tracking", 0.5, True)),
+            (("error", 9.1, False), ("tracking", 0.5, True)),
         )
 
     def test_unified_2d_target_modes_keep_legacy_input_groups_separate(self):

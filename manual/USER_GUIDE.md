@@ -846,9 +846,9 @@ The **Aim Test** tab has four areas:
   comparison rules.
 - **Upper right**: **Gyro Preview**, **Calculator**, **Clear History**,
   **Test Settings**, and **Start**.
-- **Center**: saved rounds. Select one to see how it compares with the best match.
-- **Bottom**: the current test conditions and the change from the best round
-  with the same target settings.
+- **Center**: saved rounds. Select one to see how each result compares with its best.
+- **Bottom**: the current test conditions and how each result differs from its
+  best with the same target settings.
 
 #### Test mapped gyro output
 
@@ -1017,20 +1017,23 @@ input, the result also shows the peak horizontal output and the longest
 continuous full-deflection time in milliseconds. That timer stops when
 horizontal output leaves full deflection or reverses.
 
-The end screen shows your result in the center and the change from the best
-earlier round with the same target settings. The comparison uses only the
+The end screen shows your result in the center and how each result differs
+from its best in earlier rounds with the same target settings. The comparison uses only the
 settings in the **Drills and targets (compared)** panel of Test Settings: the
 mode, resolution, seed, and the relevant target count, duration, 2D target
 size, depth, and spread. 3D Tracking also compares the arc and target speed.
 Results remain comparable across changes to controller turn speed, mouse
 sensitivity, colors, reticle, vibration, and sound.
 
-- **Targets** ranks by hits, then accuracy, completion time, and mean error.
-  Completion time is compared only when both rounds hit every target.
-- **Timed Targets** ranks by hits, then accuracy and mean error.
-- **Tracking** ranks by time on target, then mean error.
+Each result is compared with its own best, not with one particular round:
 
-Arrows show the direction of change. Green means better and red means worse.
+- Hits, accuracy, and On Target are compared with their highest values.
+- Completion time and mean error are compared with their lowest values.
+  Completion time counts only for **Targets** rounds that hit every target.
+  **Timed Targets** does not compare time.
+
+Arrows show the direction of change. Green marks a new best and red marks a
+result short of the best.
 Accuracy and On Target changes are in percentage points. **Clear History**
 removes saved rounds.
 

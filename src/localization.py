@@ -178,19 +178,18 @@ EN_TEXT = {
         "History matches only the Drills and targets settings: the mode, resolution, layout seed, "
         "and any target count, duration, target size, depth, spread, arc, and target speed that apply. "
         "Controller turn speed, mouse sensitivity, colors, reticle, vibration, and sound are ignored.",
-    "成績與同設定的歷史最佳回合比較。點靶依序比命中數、命中率、完成耗時與平均偏差。"
-    "跟槍依序比跟靶率與平均偏差。":
-        "Results are compared with the best earlier round using the same settings. "
-        "Targets ranks by hits, accuracy, completion time, then mean error. "
-        "Tracking ranks by time on target, then mean error.",
-    "↑ 和 ↓ 表示數值上升或下降，綠色代表進步，紅色代表退步。"
+    "每項成績各自與同設定的歷史最佳值比較：命中數、命中率與跟靶率比最高值，"
+    "完成耗時與平均偏差比最低值。":
+        "Each result is compared with its own best from earlier rounds using the same settings: "
+        "the highest hits, accuracy, and time on target, and the lowest completion time and mean error.",
+    "↑ 和 ↓ 表示數值上升或下降，綠色代表刷新最佳紀錄，紅色代表不及最佳紀錄。"
     "命中率和跟靶率的差異以百分點（pp）表示，例如從 80% 降到 65.6% 顯示 −14.4 pp。":
-        "↑ and ↓ show whether a value rose or fell. Green marks improvement and red marks a decline. "
+        "↑ and ↓ show whether a value rose or fell. Green marks a new best and red marks a result short of the best. "
         "Accuracy and on-target changes use percentage points (pp). A drop from 80% to 65.6% is shown as −14.4 pp.",
-    "命中率是命中數除以射擊次數。兩次都打完所有靶才比較耗時。"
+    "命中率是命中數除以射擊次數。打完所有靶的回合才比較耗時。"
     "平均偏差是準心與靶心的平均距離，2D 用像素（px），3D 用角度（°）。"
     "耗時和平均偏差越小越好。":
-        "Accuracy is hits divided by shots. Completion times are compared when both rounds hit every target. "
+        "Accuracy is hits divided by shots. Completion time is compared only across rounds that hit every target. "
         "Mean error is the average distance from the reticle to the target center, in pixels for 2D and degrees for 3D. "
         "Lower time and mean error are better.",
     "重新開始": "Restart",

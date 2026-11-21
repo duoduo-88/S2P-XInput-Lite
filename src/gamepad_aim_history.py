@@ -11,7 +11,7 @@ from tkinter import font, messagebox, ttk
 
 from config_utils import atomic_write_bytes, config_file_lock
 from dialog_layout import center_child_dialog
-from gamepad_aim_model import DEFAULT_STICK_TURN_SPEED, TIMED_MODES, TRACKING_MODES
+from gamepad_aim_model import DEFAULT_STICK_TURN_SPEED, TIMED_MODES
 
 
 METRIC_LABELS = {
@@ -78,24 +78,35 @@ def _matching_records(records, basis):
     return (record for record in reversed(records) if _comparison_basis(record["basis"]) == comparison)
 
 
-def _record_rank(record):
-    basis, metrics = record["basis"], record["metrics"]
-    mode = basis["mode"]
-    error = -round(metrics.get("error", math.inf), _precision("error", _metric_unit("error", mode)))
-    if mode in TRACKING_MODES:
-        return round(metrics.get("tracking", -math.inf), 1), error
-    hits = metrics.get("hits", -math.inf)
-    accuracy = round(metrics.get("accuracy", -math.inf), 1)
-    if mode in TIMED_MODES:
-        return hits, accuracy, error
-    seconds = metrics.get("seconds", math.inf) if hits >= basis["targets"] else math.inf
-    return hits, accuracy, -round(seconds, 1), error
+_LOWER_IS_BETTER = ("error", "seconds")
 
 
-def _best_record(records, basis):
-    return max(
-        _matching_records(records, basis), key=_record_rank, default=None,
+def _counts_seconds(basis, metrics):
+    """Completion time counts only for untimed rounds that hit every target."""
+    targets = basis["targets"]
+    return (
+        bool(targets) and basis["mode"] not in TIMED_MODES
+        and metrics.get("hits", 0) >= targets
     )
+
+
+def _best_metrics(records, basis):
+    """Return each metric's best value among matching rounds, or None without a match.
+
+    Every metric keeps its own record, so a lower accuracy never looks like an
+    improvement because the round with the most hits happened to miss more.
+    """
+    best, matched = {}, False
+    for record in _matching_records(records, basis):
+        matched = True
+        metrics = record["metrics"]
+        for key, value in metrics.items():
+            if key == "seconds" and not _counts_seconds(basis, metrics):
+                continue
+            current = best.get(key)
+            if current is None or (value < current if key in _LOWER_IS_BETTER else value > current):
+                best[key] = value
+    return best if matched else None
 
 
 def _changes(basis, metrics, baseline):
@@ -103,17 +114,14 @@ def _changes(basis, metrics, baseline):
     for key in METRIC_LABELS:
         if key not in metrics or key not in baseline:
             continue
-        if key == "seconds":
-            targets = basis["targets"]
-            completed = targets and min(metrics.get("hits", 0), baseline.get("hits", 0)) >= targets
-            if not completed or basis["mode"] in TIMED_MODES:
-                continue
+        if key == "seconds" and not _counts_seconds(basis, metrics):
+            continue
         precision = _precision(key, _metric_unit(key, basis["mode"]))
         current_value = round(metrics[key], precision)
         baseline_value = round(baseline[key], precision)
         difference = round(current_value - baseline_value, precision)
         if difference:
-            improved = difference < 0 if key in ("error", "seconds") else difference > 0
+            improved = difference < 0 if key in _LOWER_IS_BETTER else difference > 0
             changes.append((key, float(difference), improved))
     return tuple(changes)
 
@@ -220,8 +228,8 @@ class AimHistory:
         }
         with config_file_lock() if self.path is not None else nullcontext():
             records = self._read() if self.path is not None else self._records
-            best = _best_record(records, basis)
-            changes = _changes(basis, metrics, best["metrics"]) if best else ()
+            best = _best_metrics(records, basis)
+            changes = _changes(basis, metrics, best) if best is not None else ()
             self._replace([*records, record])
         self._refresh_views()
         return changes, best is not None
@@ -408,8 +416,8 @@ class _HistoryView(ttk.Frame):
         record = self.records[index]
         basis = record["basis"]
         self._set_parameters(*self._round_options(basis))
-        best = _best_record(self.records[:index], basis)
-        changes = _changes(basis, record["metrics"], best["metrics"]) if best else ()
+        best = _best_metrics(self.records[:index], basis)
+        changes = _changes(basis, record["metrics"], best) if best is not None else ()
         if changes:
             ttk.Label(self.comparison, text=self.tr("與同設定最佳成績比較")).pack(side="left")
             for key, difference, improved in changes:
@@ -420,7 +428,7 @@ class _HistoryView(ttk.Frame):
                     foreground=CHANGE_COLORS[improved],
                 ).pack(side="left", padx=(10, 0))
         else:
-            summary = "沒有可顯示的差異。" if best else "尚無相同設定的測試紀錄。"
+            summary = "沒有可顯示的差異。" if best is not None else "尚無相同設定的測試紀錄。"
             ttk.Label(self.comparison, text=self.tr(summary)).pack(side="left")
 
     def _round_options(self, basis):
