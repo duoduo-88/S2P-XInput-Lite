@@ -108,6 +108,16 @@ use **Import Settings** to bring over your profiles, layers, and calibration.
   remain available for recovery.
 - Built-in firmware flashing that checks the installed version first.
 
+**Extensions**
+- Independent tools such as [S2P-Joystick-Macro](https://github.com/duoduo-88/S2P-Extensions)
+  send input through S2P or read its controller output, only with the
+  permissions you allow. S2P stays the only virtual controller, and the
+  physical stick always has priority.
+- Enabled tools start with S2P and close with it. The conflict check lists
+  stick conflicts, missing permissions, and unknown programs, and **Check for
+  Updates** shows which tools have a newer version.
+  [Extensions guide](manual/USER_GUIDE.md#27-extensions)
+
 **Gamepad Tester**
 - Input Monitor with stick trails, output-shape measurement, button events,
   and trigger values.

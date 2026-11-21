@@ -88,6 +88,12 @@ S2P-XInput-Lite 讓 Windows 遊戲把 Switch 2 Pro Controller 當成 XInput 相�
   可用於救援。
 - 內建韌體刷寫，刷寫前會先檢查已安裝的版本。
 
+**擴充工具**
+- [S2P-Joystick-Macro](https://github.com/duoduo-88/S2P-Extensions) 等獨立工具可透過 S2P 送出輸入或讀取控制器輸出，
+  只能使用你允許的權限。S2P 仍是唯一的虛擬手把，實體搖桿永遠優先。
+- 啟用的工具會隨 S2P 啟動與關閉。衝突檢查會列出搖桿衝突、缺少的權限與不明程式，「檢查更新」可查看哪些工具有新版本。
+  [擴充工具手冊](manual/USER_GUIDE_zh-TW.md#27-extensions擴充工具)
+
 **手把測試**
 - 輸入監看：搖桿軌跡、輸出形狀量測、按鍵事件與扳機數值。
 - 2D／3D 瞄準測試：跟槍、點靶、限時點靶，以及陀螺儀補償預覽與補償計算。[瞄準測試手冊](manual/USER_GUIDE_zh-TW.md#aim-test-guide)
