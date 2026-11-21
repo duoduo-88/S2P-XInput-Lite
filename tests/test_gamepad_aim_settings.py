@@ -103,7 +103,19 @@ class AimSettingsTests(unittest.TestCase):
                 saved.append,
             )
         owner.update()
-        content, footer = dialog.winfo_children()
+
+        def help_markers(widget):
+            for child in widget.winfo_children():
+                if isinstance(child, tk.Label) and child.cget("text") == "?":
+                    yield child
+                yield from help_markers(child)
+
+        # A pointer resting on a "?" (as on CI runners) opens a tooltip window
+        # inside the dialog; the layout checks must not depend on that.
+        next(help_markers(dialog)).event_generate("<Enter>")
+        owner.update()
+        self.assertTrue(any(isinstance(child, tk.Toplevel) for child in dialog.winfo_children()))
+        content, footer = [child for child in dialog.winfo_children() if not isinstance(child, tk.Toplevel)]
         canvas = next(child for child in content.winfo_children() if isinstance(child, tk.Canvas))
         body = canvas.winfo_children()[0]
         drills = body.grid_slaves(row=0, column=0)[0]
