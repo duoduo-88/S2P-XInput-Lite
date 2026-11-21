@@ -954,6 +954,49 @@ so dips show up even when the average is high. The drawing target follows the
 monitor's current refresh rate, and actual presentation also depends on
 Windows and the GPU.
 
+#### Screen Resolution, Size, and Aspect Ratio
+
+Resolution and physical screen size do not change how the Aim Test converts
+input into movement. You do not need different turn speeds or gyro settings
+for different resolutions:
+
+- **3D** works in angles. The vertical field of view is fixed at 60°, full
+  right-stick deflection turns at the **3D horizontal / vertical turn speed**
+  in °/s, and the balls have a size and position in 3D space. A higher
+  resolution only draws them more finely: about 16 pixels per degree at
+  1080p, 22 at 1440p, and 33 at 4K, far finer than aiming needs.
+- **2D** scales with the screen height. At full right-stick deflection the
+  reticle moves one screen height per second, and the target diameter is a
+  percentage of the shorter screen edge, so 1080p and 4K feel the same.
+- **3D mouse sensitivity** counts pointer movement in pixels. It depends on
+  the mouse DPI and the Windows pointer speed, not the screen resolution.
+
+The **aspect ratio** is what makes a difference. Because the vertical field
+of view is fixed, a wider screen shows more to the left and right in 3D. In
+2D, targets spread across the full screen width, so a wider screen also means
+longer horizontal moves:
+
+| Aspect ratio | Example resolutions | 3D horizontal field of view | 2D crossing at full right stick |
+|---|---|---|---|
+| 4:3 | 1600×1200 | about 75° | 1.33 s |
+| 16:10 | 1920×1200 | about 86° | 1.60 s |
+| 16:9 | 1920×1080, 2560×1440, 3840×2160 | about 92° | 1.78 s |
+| 21:9 | 2560×1080, 3440×1440 | about 108° | 2.37 s |
+| 32:9 | 5120×1440 | about 128° | 3.56 s |
+
+- In 3D, a wide screen needs fewer large turns to find a target, but tracking
+  and fine aim still need the same turning angles.
+- In 2D, rounds take longer on a wide screen, and **Mean Error** is measured
+  in pixels, so 2D results from different resolutions do not compare
+  directly. Resolution is part of the **Drills and targets (compared)** panel,
+  so rounds at different resolutions are never compared with each other.
+
+On a larger screen, or when you sit closer, the same °/s looks faster and the
+targets look bigger. How far the view turns for a given controller rotation
+stays the same. Matching the **3D horizontal / vertical turn speed** to the
+game you play matters more than the screen: the closer it is to the game's
+turn speed, the closer the test feels to the game.
+
 #### Gyro Preview and Calculator
 
 Raising the in-game look speed also speeds up gyro mapped to the right stick.
