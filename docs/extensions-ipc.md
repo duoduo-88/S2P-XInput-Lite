@@ -141,7 +141,7 @@ message is limited to 4096 bytes.
 Success:
 
 ```json
-{"type": "welcome", "protocol": 1, "server": "S2P-XInput-Lite", "server_version": "0.8.2",
+{"type": "welcome", "protocol": 1, "server": "S2P-XInput-Lite", "server_version": "0.8.3",
  "capabilities": ["input"], "sticks": ["left"], "input_timeout_ms": 1000, "host_pid": 12345}
 ```
 
