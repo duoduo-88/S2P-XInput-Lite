@@ -195,6 +195,11 @@ S2P 可以加入另外安裝、獨立執行的擴充工具。工具只能依你�
 或讀取控制器狀態；S2P 合併實體手把輸入後，從原本唯一的虛擬 Xbox 手把輸出。不會建立第二支虛擬手把，
 也不會影響震動、搖桿曲線、陀螺儀與按鍵映射。未啟用時不會啟動任何額外工作。
 
+**取得擴充工具：** S2P 本身不附帶外部擴充工具。[S2P-Extensions](https://github.com/duoduo-88/S2P-Extensions)
+是由 S2P 作者另外維護的獨立專案，提供 S2P-Joystick-Macro 等工具，請從它的
+[最新發佈頁面](https://github.com/duoduo-88/S2P-Extensions/releases/latest) 下載並依該專案的說明安裝。
+它與 S2P-XInput-Lite 分開發佈與更新，使用時同樣適用下方的注意事項。
+
 > [!IMPORTANT]
 > **責任與注意事項**
 >
@@ -210,7 +215,7 @@ S2P 可以加入另外安裝、獨立執行的擴充工具。工具只能依你�
    **Allow reading controller state**（允許讀取控制器狀態，預設關閉）。權限變更後工具會自動重新連線。
 4. 已啟用的工具會跟著 S2P 一起啟動：連線開始時（或剛啟用工具時）S2P 會在背景開啟它，不會跳出視窗，
    工具自行連線。要使用工具的畫面時，選取工具按 **Open**（開啟），或從系統匣右鍵選單點工具名稱。
-   不需要時以 **Enable/Disable**（啟用／停用）停用。關閉 S2P 時，工具也會一起關閉（需工具本身支援，S2P-Joystick-Macro 已支援）。
+   不需要時以 **Enable/Disable**（啟用／停用）停用。關閉 S2P 時，工具也會一起關閉（需工具本身支援，[S2P-Joystick-Macro](https://github.com/duoduo-88/S2P-Extensions) 已支援）。
 
 清單第一列固定是內建的 **Gamepad Test**（手把測試），隨 S2P 提供、不能移除，即使清單中沒有啟用的工具也能開啟，
 見 [8. 手把測試](#8-手把測試)。

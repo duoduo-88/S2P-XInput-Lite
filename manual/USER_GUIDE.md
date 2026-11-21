@@ -234,6 +234,14 @@ controller: no second virtual controller is created, and rumble, stick curves,
 gyro, and button mapping are unaffected. Nothing extra runs while Extensions is
 disabled.
 
+**Getting extension tools:** S2P does not ship with external extension tools.
+[S2P-Extensions](https://github.com/duoduo-88/S2P-Extensions) is a separate
+project maintained by the S2P author that provides tools such as
+S2P-Joystick-Macro. Download them from its
+[latest release page](https://github.com/duoduo-88/S2P-Extensions/releases/latest)
+and install them as that project describes. It is released and updated
+separately from S2P-XInput-Lite, and the notes below apply to it as well.
+
 > [!IMPORTANT]
 > **Responsibility and notes**
 >
@@ -260,7 +268,8 @@ disabled.
    and the tool connects by itself. To use a tool's window, select it and
    choose **Open**, or click its name in the notification area menu. Use
    **Enable/Disable** to turn one off. Closing S2P closes the tools too (a
-   tool must support this; S2P-Joystick-Macro does).
+   tool must support this;
+   [S2P-Joystick-Macro](https://github.com/duoduo-88/S2P-Extensions) does).
 
 The first row is always the built-in **Gamepad Test**. It ships with S2P,
 cannot be removed, and opens even when no tool is enabled. See
