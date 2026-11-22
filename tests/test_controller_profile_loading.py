@@ -50,13 +50,30 @@ except ImportError:
     sys.modules["imufusion"] = module
     _injected_modules["imufusion"] = module
 
+_modules_before_import = set(sys.modules)
+
 from settings_schema import read_section_settings
 from switch2_input import SWITCH_BUTTONS
+import xinput_controller as _xinput_controller
 from xinput_controller import XInputController
 
 for _module_name, _module in _injected_modules.items():
     if sys.modules.get(_module_name) is _module:
         del sys.modules[_module_name]
+
+# Project modules imported above bound the fakes (for example XB_BUTTONS and
+# imufusion.Ahrs). Evict them so later test modules import the real code, or
+# fail to import clearly, instead of reusing a module built on the fakes. This
+# module keeps its own references. Third-party modules such as numpy stay.
+if _injected_modules:
+    for _module_name in set(sys.modules) - _modules_before_import:
+        _file = getattr(sys.modules[_module_name], "__file__", None) or ""
+        try:
+            _is_project = Path(_file).resolve().is_relative_to(SRC_DIR)
+        except (OSError, ValueError):
+            _is_project = False
+        if _is_project:
+            del sys.modules[_module_name]
 
 
 class ControllerProfileLoadingTests(unittest.TestCase):
@@ -78,7 +95,7 @@ class ControllerProfileLoadingTests(unittest.TestCase):
             buttons=zl, gyroscope=(0, 0, -143),
             accelerometer=(0, 0, 4096), magnetometer=(0, 0, 0),
         )
-        with patch("xinput_controller.time.perf_counter", return_value=100.0):
+        with patch.object(_xinput_controller.time, "perf_counter", return_value=100.0):
             tracking = controller._get_gyro_output(state, 0.008)[0]
             for buttons in (zl | zr, zl):
                 with self.subTest(buttons=buttons):
