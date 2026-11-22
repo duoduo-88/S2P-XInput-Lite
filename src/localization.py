@@ -356,7 +356,6 @@ EN_TEXT = {
     "ESP32 裝置序號不符。": "ESP32 device serial number does not match.",
     "ESP32 缺少可安全重連的唯一序號；請更新韌體。":
         "ESP32 has no unique serial number for safe reconnection. Update the firmware.",
-    "寫入並啟用 Android USB HID 獨立模式": "Write and enable Android USB HID standalone",
     "ESP32 模式已更新": "ESP32 Mode Updated",
     "獨立 PC XInput／Auto 已取消，已改為 Android USB HID；桌面 XInput 請切回 Bridge。":
         "Standalone PC XInput / Auto have been removed and migrated to Android USB HID. "
@@ -1252,7 +1251,28 @@ EN_TEXT = {
     "還原": "Reset",
     "校正": "Calibrate",
     "校正搖桿": "Stick Calibration",
-    "刷入相容韌體": "Flash FW",
+    "刷入韌體": "Flash FW",
+    "刷入內建韌體": "Flash bundled firmware",
+    "刷入自訂韌體…": "Flash custom firmware…",
+    "選擇自訂韌體": "Select Custom Firmware",
+    "ESP32 韌體": "ESP32 firmware",
+    "無法使用這個韌體": "Cannot Use This Firmware",
+    "確認自訂韌體": "Confirm Custom Firmware",
+    "自訂韌體：": "Custom firmware: ",
+    "韌體版本：": "Firmware version: ",
+    "檔案大小：": "File size: ",
+    "只會替換韌體本體，bootloader 與分割表使用內建版本。":
+        "Only the application image is replaced; the bundled bootloader and "
+        "partition table are used.",
+    "是否刷入自訂韌體？": "Flash the custom firmware?",
+    "這個韌體沒有 S2P 韌體識別資訊。刷入後 S2P 可能無法連線或寫入設定，"
+    "之後可以用「刷入內建韌體」還原。\n\n是否仍要使用？":
+        "This firmware has no S2P firmware identity. After flashing, S2P may "
+        "not connect or write profiles; use Flash bundled firmware to restore "
+        "it.\n\nUse it anyway?",
+    "選擇的自訂韌體檔案在確認後已變更或無法讀取，已取消刷寫。":
+        "The selected custom firmware changed or became unreadable after "
+        "confirmation. Flashing cancelled.",
     "確認韌體版本": "Confirm Firmware Version",
     "目前韌體：": "Current firmware: ",
     "內建韌體：": "Bundled firmware: ",

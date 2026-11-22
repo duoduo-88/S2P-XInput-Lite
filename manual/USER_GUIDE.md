@@ -162,7 +162,7 @@ The main window has four areas:
 | **Pin** | Make the detected controller the preferred device. The controller vibrates when this succeeds. |
 | **Defaults** | Reset everything on screen to defaults. See [Restore a stable setup](#restore-a-stable-setup). |
 | **Calibrate ▼** | Menu: **Stick Calibration** (see [3.4](#34-stick-calibration)) and **Sensor Calibration**, which calibrates the gyro, accelerometer, and magnetometer (see [6.4](#64-gyro-response)). |
-| **Flash FW** | Check and flash the ESP32-S3 firmware. See [9.2](#flash-esp32-s3). |
+| **Flash FW ▼** | Check and flash the bundled or a custom ESP32-S3 firmware. See [9.2](#flash-esp32-s3). |
 | **ESP32 ▼** | Write the profile and switch to Android USB HID standalone mode, or switch back to Bridge. See [9.5](#95-write-settings-and-enable-android-usb-hid). |
 | **Restart** | Restart the desktop connection with the saved settings. Nothing is written to the ESP32. |
 | **Idle Disc.** | Choose how long a wireless connection may stay idle before it disconnects. See [2.6](#26-idle-disc). |
@@ -1215,7 +1215,7 @@ Before you start, have ready:
 
 **1. Check the version**
 
-Select **Flash FW** at the bottom of the main window. The program reads the
+Select **Flash FW ▼ → Flash bundled firmware** at the bottom of the main window. The program reads the
 installed firmware version first and shows "Reading the current ESP32-S3
 firmware version…" for a few seconds.
 
@@ -1224,6 +1224,13 @@ firmware version…" for a few seconds.
 The confirmation lists the installed version and the bundled **S2P-FW 1.0.9**.
 Choose **Yes** to continue or **No** to cancel. If the version check paused the
 connector, canceling resumes it. You can also reflash the same version.
+
+**Flash custom firmware…** first opens a window to select a `.bin` file. Only the
+application image is replaced; the bundled bootloader and partition table are always
+used. Files that are not ESP32-S3 firmware or exceed the app partition are rejected,
+and a file without the S2P firmware identity shows a warning first. The confirmation
+lists the file name, version, size and SHA-256; the remaining steps are the same.
+To restore, select **Flash bundled firmware**.
 
 **2. Put the ESP32-S3 into flash mode**
 
@@ -1295,7 +1302,7 @@ for the completion message before closing the program or starting another operat
 1. Choose the profile to write, finish your changes, and select **Save/Apply**.
    Changes to `System Default` must first be saved with **Save New**.
 2. Check that the ESP32 is connected and has the bundled S2P-FW 1.0.9.
-3. Select **ESP32 ▼ → Write and enable Android USB HID standalone**.
+3. Select **ESP32 ▼ → Write and enable standalone**.
 4. Review the compatibility notice. If the profile uses Windows-only outputs,
    cancel to change them or confirm skipping the unsupported items.
 5. Wait for the write, length / CRC check, apply, and controlled restart, and

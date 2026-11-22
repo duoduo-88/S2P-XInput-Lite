@@ -57,6 +57,11 @@ from dialog_layout import (
 )
 from direction_deadzones import CUSTOM_DEADZONE_KEY
 from firmware_flash_guard import FlashProbeError, probe_esp32_flash_size
+from custom_firmware import (
+    CustomFirmwareError,
+    file_sha256,
+    inspect_custom_firmware,
+)
 from gamepad_aim_display import DISPLAY_RESTORE_RETRY_MS
 from standalone_profile import (
     StandaloneTransferError,
@@ -2274,6 +2279,9 @@ class ConfigGUI:
     def confirm_firmware_flash(self, firmware_info):
         """Show detected and bundled versions, then return the user's choice."""
 
+        custom = getattr(self, "_flash_custom_firmware", None)
+        if custom is not None:
+            return self._confirm_custom_firmware_flash(firmware_info, custom)
         target = f"{S2P_FIRMWARE_PRODUCT} v{S2P_FIRMWARE_VERSION}"
         if firmware_info:
             product = str(
@@ -2306,6 +2314,67 @@ class ConfigGUI:
             message,
         )
 
+    def _confirm_custom_firmware_flash(self, firmware_info, custom):
+        """Confirm the selected image, naming exactly which file is written."""
+        if firmware_info:
+            product = str(firmware_info.get("product") or S2P_FIRMWARE_PRODUCT)
+            version = firmware_info.get("version")
+            current = (
+                f"{product} v{version}" if version
+                else f"{product} ({self.tr('版本未知')})"
+            )
+        else:
+            current = self.tr("未偵測到可讀取版本的相容韌體。")
+        details = [
+            self.tr("目前韌體：") + current,
+            self.tr("自訂韌體：") + custom.path.name,
+        ]
+        if custom.version:
+            details.append(self.tr("韌體版本：") + custom.version)
+        details.append(self.tr("檔案大小：") + f"{custom.size:,} bytes")
+        details.append("SHA-256: " + custom.sha256)
+        message = (
+            "\n".join(details) + "\n\n"
+            + self.tr("只會替換韌體本體，bootloader 與分割表使用內建版本。")
+            + "\n\n" + self.tr("是否刷入自訂韌體？")
+        )
+        return messagebox.askyesno(self.tr("確認自訂韌體"), message)
+
+    def flash_custom_firmware(self):
+        """Ask for an ESP32-S3 application image, then run the normal flash flow."""
+        return self.flash_firmware(custom=True)
+
+    def _select_custom_firmware(self):
+        """Return validated image details, or None when the user cancels."""
+        selected_path = filedialog.askopenfilename(
+            parent=self.root,
+            title=self.tr("選擇自訂韌體"),
+            filetypes=(
+                (self.tr("ESP32 韌體"), "*.bin"),
+                (self.tr("所有檔案"), "*.*"),
+            ),
+        )
+        if not selected_path:
+            return None
+        try:
+            info = inspect_custom_firmware(selected_path, PARTITION_PATH)
+        except CustomFirmwareError as exc:
+            messagebox.showerror(
+                self.tr("無法使用這個韌體"),
+                exc.message(getattr(self, "language", "zh")),
+            )
+            return None
+        if not info.s2p_identity and not messagebox.askyesno(
+            self.tr("確認自訂韌體"),
+            self.tr(
+                "這個韌體沒有 S2P 韌體識別資訊。刷入後 S2P 可能無法連線或寫入設定，"
+                "之後可以用「刷入內建韌體」還原。\n\n是否仍要使用？"
+            ),
+            icon="warning",
+        ):
+            return None
+        return info
+
     def _firmware_operation_is_active(self):
         process = getattr(self, "flash_process", None)
         return bool(
@@ -2313,8 +2382,8 @@ class ConfigGUI:
             or (process is not None and process.poll() is None)
         )
 
-    def flash_firmware(self):
-        """自動偵測 ESP32-S3 刷機連接埠並刷入相容韌體。"""
+    def flash_firmware(self, custom=False):
+        """自動偵測 ESP32-S3 刷機連接埠並刷入內建或自訂韌體。"""
 
         if getattr(self, "_close_in_progress", False):
             return
@@ -2343,8 +2412,9 @@ class ConfigGUI:
             ESPTOOL_PATH,
             BOOTLOADER_PATH,
             PARTITION_PATH,
-            APP_FIRMWARE_PATH,
         ]
+        if not custom:
+            required_files.append(APP_FIRMWARE_PATH)
 
         missing_files = [
             path.name
@@ -2359,6 +2429,13 @@ class ConfigGUI:
                 + "\n".join(missing_files)
             )
             return
+
+        custom_firmware = None
+        if custom:
+            custom_firmware = self._select_custom_firmware()
+            if custom_firmware is None:
+                return
+        self._flash_custom_firmware = custom_firmware
 
         restart_pending = self._cancel_scheduled_job("_main_start_job")
         self._flash_operation_active = True
@@ -2430,6 +2507,7 @@ class ConfigGUI:
         self._flash_preflight_verified_port = None
         self._flash_preflight_verified_generation = None
         self._flash_operation_active = False
+        self._flash_custom_firmware = None
         self._close_flash_progress()
 
     def _set_flash_progress(self, message, detail=""):
@@ -2692,6 +2770,21 @@ class ConfigGUI:
             return
         self._flash_preflight_verified_port = None
         self._flash_preflight_verified_generation = None
+        custom = getattr(self, "_flash_custom_firmware", None)
+        app_firmware_path = APP_FIRMWARE_PATH
+        if custom is not None:
+            app_firmware_path = custom.path
+            try:
+                unchanged = file_sha256(custom.path) == custom.sha256
+            except OSError:
+                unchanged = False
+            if not unchanged:
+                self._finish_flash_operation()
+                messagebox.showerror(
+                    self.tr("韌體刷寫已取消"),
+                    self.tr("選擇的自訂韌體檔案在確認後已變更或無法讀取，已取消刷寫。"),
+                )
+                return
         try:
             command = [
                 str(ESPTOOL_PATH),
@@ -2723,7 +2816,7 @@ class ConfigGUI:
                 str(PARTITION_PATH),
 
                 "0x10000",
-                str(APP_FIRMWARE_PATH),
+                str(app_firmware_path),
             ]
 
             self.flash_process = subprocess.Popen(

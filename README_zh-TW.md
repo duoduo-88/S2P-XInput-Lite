@@ -11,7 +11,7 @@ S2P-XInput-Lite 讓 Windows 遊戲把 Switch 2 Pro Controller 當成 XInput 相�
 
 > [!IMPORTANT]
 > **v0.8.2 隨附 ESP32-S3 韌體 S2P-FW 1.0.9。** Android USB HID 獨立模式新增圓形陀螺儀死區、
-> 按鍵突波抑制、分軸陀螺儀補償與手把組合鍵。使用 ESP32-S3 橋接器時，請在主視窗按 **刷入相容韌體（Flash FW）**
+> 按鍵突波抑制、分軸陀螺儀補償與手把組合鍵。使用 ESP32-S3 橋接器時，請在主視窗按 **刷入韌體 ▼ → 刷入內建韌體**
 > 確認並更新韌體。[刷寫步驟](manual/USER_GUIDE_zh-TW.md#flash-esp32-s3)
 
 ![S2P-XInput-Lite 橫幅](image/S2P-XInput-Lite-banner.jpg)
