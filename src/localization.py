@@ -1830,6 +1830,8 @@ EN_TEXT = {
         "Waiting for controller...",
     "連接程式已結束，手把未連線。請重新開始感測器校正。":
         "The connector exited before the controller connected. Start sensor calibration again.",
+    "連接程式已停止，手把未連線。請查看連接程式視窗中的訊息，排除問題後再重新開始感測器校正。":
+        "The connector stopped before the controller connected. Read the message in the connector window, fix the problem, and start sensor calibration again.",
     "等待手把連線逾時。手把連線後請再選擇「感測器校正」。":
         "Timed out waiting for the controller. Once it connects, choose Sensor Calibration again.",
     "請先啟動連接程式並確認手把已連線。":

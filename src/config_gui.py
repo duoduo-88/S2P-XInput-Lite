@@ -5417,6 +5417,21 @@ class ConfigGUI:
             return None
         return status
 
+    @staticmethod
+    def _connector_stopped_at():
+        """Return when the connector reported it stopped, or None.
+
+        After an error the connector writes ``stopped`` and keeps its window
+        open until the user presses a key, so its process is still running.
+        """
+        try:
+            status = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
+            if status.get("state") != "stopped":
+                return None
+            return float(status.get("updated_at", 0.0))
+        except (OSError, ValueError, TypeError, AttributeError):
+            return None
+
     def _connector_running_or_starting(self):
         main_process = getattr(self, "main_process", None)
         return (
@@ -5428,7 +5443,11 @@ class ConfigGUI:
         """Start the connection, then reopen sensor calibration once connected."""
         if getattr(self, "_gyro_calibration_wait_job", None) is not None:
             return
-        running = self._connector_running_or_starting()
+        # A connector that stopped on an error is restarted like a closed one.
+        running = (
+            self._connector_running_or_starting()
+            and self._connector_stopped_at() is None
+        )
         if running:
             message = (
                 "感測器校正需要先連線手把。\n\n"
@@ -5447,6 +5466,9 @@ class ConfigGUI:
             self.restart_main()
             if not self._connector_running_or_starting():
                 return  # restart_main explained why it could not start
+        # restart_main() has already let an old connector write its final
+        # "stopped"; only a stop reported after this point ends the wait.
+        waiting_since = time.time()
 
         deadline = time.monotonic() + GYRO_CALIBRATION_CONNECT_TIMEOUT_SECONDS
         try:
@@ -5483,6 +5505,15 @@ class ConfigGUI:
                 messagebox.showwarning(
                     "無法校正感測器",
                     "連接程式已結束，手把未連線。請重新開始感測器校正。",
+                )
+                return
+            stopped_at = self._connector_stopped_at()
+            if stopped_at is not None and stopped_at >= waiting_since:
+                stop_waiting()
+                messagebox.showwarning(
+                    "無法校正感測器",
+                    "連接程式已停止，手把未連線。請查看連接程式視窗中的訊息，"
+                    "排除問題後再重新開始感測器校正。",
                 )
                 return
             if time.monotonic() >= deadline:

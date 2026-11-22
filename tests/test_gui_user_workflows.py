@@ -146,10 +146,10 @@ class GUIUserWorkflowTests(unittest.TestCase):
         def poll(self):
             return self.exit_code
 
-    def _start_sensor_calibration_without_controller(self, prompts):
+    def _start_sensor_calibration_without_controller(self, prompts, running=None):
         gui = self.gui
         connector = self._RunningConnector()
-        gui.main_process = None
+        gui.main_process = running
         started = []
 
         def restart_main():
@@ -157,9 +157,11 @@ class GUIUserWorkflowTests(unittest.TestCase):
             gui.main_process = connector
 
         asked = []
+        self.prompt_messages = []
 
         def askokcancel(title, message, **_kwargs):
             asked.append(title)
+            self.prompt_messages.append(message)
             return prompts.pop(0)
 
         for patcher in (
@@ -219,6 +221,35 @@ class GUIUserWorkflowTests(unittest.TestCase):
         restore.assert_called_once_with()
         config_gui.activate_tk_window.assert_not_called()
         enqueue.assert_called_once_with("calibrate_gyro", connection_id="c1")
+
+    def test_sensor_calibration_wait_ends_when_the_connector_stops_on_an_error(self):
+        gui = self.gui
+        with patch.object(config_gui.messagebox, "showwarning") as warning:
+            self._start_sensor_calibration_without_controller([True])
+            # The connector stays open on its error until a key is pressed.
+            config_gui.STATUS_PATH.write_text(json.dumps({
+                "state": "stopped", "updated_at": time.time() + 0.01,
+            }), encoding="utf-8")
+            self._pump_until(lambda: warning.called)
+        warning.assert_called_once()
+        self.assertIn("連接程式視窗", warning.call_args.args[1])
+        self.assertNotIn("disabled", gui.gyro_calibration_button.state())
+        self.assertIsNone(gui._gyro_calibration_wait_job)
+
+    def test_sensor_calibration_restarts_a_connector_stopped_on_an_error(self):
+        config_gui.STATUS_PATH.write_text(json.dumps({
+            "state": "stopped", "updated_at": time.time() - 30,
+        }), encoding="utf-8")
+        _connector, started, asked = self._start_sensor_calibration_without_controller(
+            [True], running=self._RunningConnector(),
+        )
+        # A connector waiting on its error message is restarted, and the old
+        # "stopped" written before the wait does not end it.
+        self.assertEqual(started, [True])
+        self.assertIn("自動啟動連線", self.prompt_messages[0])
+        self.root.update()
+        self.assertIsNotNone(self.gui._gyro_calibration_wait_job)
+        self.assertEqual(self.gui.gyro_calibration_button.cget("text"), "Waiting for controller...")
 
     def test_sensor_calibration_wait_ends_when_the_connector_exits(self):
         gui = self.gui
