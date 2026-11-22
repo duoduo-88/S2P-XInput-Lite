@@ -234,20 +234,26 @@ def install_centered_dialogs(default_anchor, *, messageboxes=True):
         _wrap_centered(module, name, default_anchor)
 
 
+def _foreground_hwnd():
+    """Return the active Windows window, or None."""
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.GetForegroundWindow.restype = wintypes.HWND
+    return user32.GetForegroundWindow() or None
+
+
 def process_owns_foreground():
     """Return True when the active Windows window belongs to this process."""
     if sys.platform != "win32":
         return True
     try:
+        hwnd = _foreground_hwnd()
+        if not hwnd:
+            return False
         user32 = ctypes.WinDLL("user32", use_last_error=True)
-        user32.GetForegroundWindow.restype = wintypes.HWND
         user32.GetWindowThreadProcessId.argtypes = (
             wintypes.HWND, ctypes.POINTER(wintypes.DWORD),
         )
         user32.GetWindowThreadProcessId.restype = wintypes.DWORD
-        hwnd = user32.GetForegroundWindow()
-        if not hwnd:
-            return False
         pid = wintypes.DWORD()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
         return int(pid.value) == os.getpid()
@@ -255,23 +261,45 @@ def process_owns_foreground():
         return False
 
 
-def _focus_is_inside(window):
-    try:
-        focused = window.focus_get()
-    except (tk.TclError, KeyError):
-        # focus_get() raises KeyError for widgets Tk created internally.
+def window_is_foreground(window):
+    """Return True when Windows already treats this Tk window as the active one.
+
+    Tk's own focus (``focus_get()``) is not enough: ``focus_set()`` moves it
+    to the new dialog at once even when Windows keeps the window behind it
+    active, which is exactly the case to repair.
+    """
+    if sys.platform != "win32":
         return False
-    return focused is not None and focused.winfo_toplevel() is window
+    try:
+        frame = int(window.wm_frame(), 16)
+        return int(_foreground_hwnd() or 0) == frame
+    except (AttributeError, OSError, TypeError, ValueError, tk.TclError):
+        return False
 
 
-def focus_new_window(window, owns_foreground=process_owns_foreground):
+def _remembered_focus(window):
+    """The widget that should receive the focus inside ``window``."""
+    try:
+        target = window.focus_lastfor()
+    except (tk.TclError, KeyError):
+        # focus_lastfor() raises KeyError for widgets Tk created internally.
+        return window
+    if target is None or target.winfo_toplevel() is not window:
+        return window
+    return target
+
+
+def focus_new_window(
+    window, owns_foreground=process_owns_foreground, is_foreground=window_is_foreground,
+):
     """Give a newly shown window the keyboard focus inside this application.
 
     ``focus_set()`` only moves Tk's focus. Windows can keep the previous
     window active, so typing and Enter still went to the window behind the
     new dialog. The focus is forced only while S2P is already the active
     application, so a window opened in the background never steals the
-    foreground from another program.
+    foreground from another program. The field the dialog chose with
+    ``focus_set()`` keeps the focus.
     """
     try:
         if not window.winfo_exists() or not window.winfo_viewable():
@@ -281,16 +309,18 @@ def focus_new_window(window, owns_foreground=process_owns_foreground):
         grab = window.grab_current()
         if grab is not None and grab.winfo_toplevel() is not window:
             return False  # another modal dialog owns the input
-        if not owns_foreground() or _focus_is_inside(window):
+        if not owns_foreground() or is_foreground(window):
             return False
         window.lift()
-        window.focus_force()
+        _remembered_focus(window).focus_force()
         return True
     except (tk.TclError, AttributeError):
         return False
 
 
-def install_focus_new_windows(root, owns_foreground=process_owns_foreground):
+def install_focus_new_windows(
+    root, owns_foreground=process_owns_foreground, is_foreground=window_is_foreground,
+):
     """Focus every top-level window the first time it is shown."""
 
     def on_map(event):
@@ -300,7 +330,7 @@ def install_focus_new_windows(root, owns_foreground=process_owns_foreground):
         window._s2p_focus_on_map_done = True
         # Let the opening code finish (focus_set on a field, grab_set) first.
         try:
-            window.after_idle(lambda: focus_new_window(window, owns_foreground))
+            window.after_idle(lambda: focus_new_window(window, owns_foreground, is_foreground))
         except tk.TclError:
             pass
 

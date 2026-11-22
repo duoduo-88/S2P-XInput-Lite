@@ -205,6 +205,21 @@ class GUIUserWorkflowTests(unittest.TestCase):
         enqueue.assert_called_once_with("calibrate_gyro", connection_id="c1")
         self.assertIsNone(gui._gyro_calibration_wait_job)
 
+    def test_sensor_calibration_restores_settings_hidden_in_the_tray(self):
+        gui = self.gui
+        with patch.object(config_gui, "enqueue_controller_command") as enqueue, \
+                patch.object(gui, "restore_from_system_tray", return_value=True) as restore:
+            self._start_sensor_calibration_without_controller([True, True])
+            config_gui.STATUS_PATH.write_text(json.dumps({
+                "state": "connected", "updated_at": time.time(),
+                "controller_id": "pad", "connection_id": "c1",
+            }), encoding="utf-8")
+            self._pump_until(lambda: enqueue.called)
+        # The tray restore keeps the tray icon in step; no second activation.
+        restore.assert_called_once_with()
+        config_gui.activate_tk_window.assert_not_called()
+        enqueue.assert_called_once_with("calibrate_gyro", connection_id="c1")
+
     def test_sensor_calibration_wait_ends_when_the_connector_exits(self):
         gui = self.gui
         with patch.object(config_gui.messagebox, "showwarning") as warning:

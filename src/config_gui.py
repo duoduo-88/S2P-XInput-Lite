@@ -5471,8 +5471,11 @@ class ConfigGUI:
             if self._connected_controller_status() is not None:
                 stop_waiting()
                 # The connector window is in front; bring the settings back
-                # so the first calibration step opens over them.
-                activate_tk_window(self.root)
+                # so the first calibration step opens over them. Settings
+                # hidden in the notification area are restored the normal
+                # way so the tray icon and its state stay in step.
+                if not self.restore_from_system_tray():
+                    activate_tk_window(self.root)
                 self.calibrate_gyro()
                 return
             if not self._connector_running_or_starting():
