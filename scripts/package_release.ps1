@@ -254,6 +254,28 @@ Copy-ReleaseFile `
     -RelativePath "esp32s3\tools\esptool.exe" `
     -DestinationRoot $packageRoot
 
+# Ship the complete corresponding firmware source next to the bundled images
+# (GPL-3.0). Only committed files are copied, so local build output, sdkconfig
+# and uncommitted edits never reach the package.
+$firmwareSourceRelative = "esp32s3/source"
+& git -C $repoRoot diff --quiet HEAD -- $firmwareSourceRelative
+if ($LASTEXITCODE -ne 0) {
+    throw "Firmware source has uncommitted changes. Commit or revert them before packaging."
+}
+$firmwareSourceFiles = @(
+    & git -C $repoRoot ls-files -- $firmwareSourceRelative
+)
+if ($LASTEXITCODE -ne 0 -or $firmwareSourceFiles.Count -eq 0) {
+    throw "Could not list the committed firmware source files."
+}
+foreach ($trackedFile in $firmwareSourceFiles) {
+    $relative = $trackedFile.Replace("/", "\")
+    Copy-ReleaseFile `
+        -Source (Join-Path $repoRoot $relative) `
+        -RelativePath $relative `
+        -DestinationRoot $packageRoot
+}
+
 Copy-CuratedTree `
     -SourceRoot (Join-Path $repoRoot "src") `
     -RelativeRoot "src" `

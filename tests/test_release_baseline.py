@@ -44,6 +44,16 @@ class ReleaseBaselineTests(unittest.TestCase):
         self.assertIn("Launcher build version does not match", package_source)
         self.assertIn('"third_party"', package_source)
         self.assertIn('".ico"', package_source)
+        self.assertIn("ls-files -- $firmwareSourceRelative", package_source)
+        self.assertIn("diff --quiet HEAD -- $firmwareSourceRelative", package_source)
+        self.assertIn(
+            '"esp32s3\\source\\esp32s3_usb_bridge_bluedroid\\main\\main.c"',
+            source,
+        )
+        self.assertIn(
+            '"esp32s3\\source\\esp32s3_usb_bridge_bluedroid\\sdkconfig"',
+            source,
+        )
         self.assertIn("source_version = $version", build_source)
 
         launcher_source = (

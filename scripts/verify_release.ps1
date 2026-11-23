@@ -143,6 +143,12 @@ $required = @(
     "esp32s3\firmware\esp32s3_bluedroid_bridge.bin",
     "esp32s3\firmware\usb-descriptors.json",
     "esp32s3\firmware\SHA256SUMS.txt",
+    "esp32s3\source\README.md",
+    "esp32s3\source\esp32s3_usb_bridge_bluedroid\CMakeLists.txt",
+    "esp32s3\source\esp32s3_usb_bridge_bluedroid\dependencies.lock",
+    "esp32s3\source\esp32s3_usb_bridge_bluedroid\sdkconfig.defaults",
+    "esp32s3\source\esp32s3_usb_bridge_bluedroid\main\main.c",
+    "esp32s3\source\esp32s3_usb_bridge_bluedroid\main\standalone_xinput.c",
     "esp32s3\tools\esptool.exe",
     "SHA256SUMS.txt"
 )
@@ -232,7 +238,10 @@ foreach ($name in @("S2P-XInput-Lite.exe", "GamepadTester.exe")) {
 $forbiddenFiles = @(
     "src\config.ini",
     "src\controller_status.json",
-    "src\profiles\ZZZ.ini"
+    "src\profiles\ZZZ.ini",
+    "esp32s3\source\esp32s3_usb_bridge_bluedroid\sdkconfig",
+    "esp32s3\source\esp32s3_usb_bridge_bluedroid\build",
+    "esp32s3\source\esp32s3_usb_bridge_bluedroid\managed_components"
 )
 foreach ($relative in $forbiddenFiles) {
     if (Test-Path -LiteralPath (Join-Path $ApplicationDirectory $relative)) {
