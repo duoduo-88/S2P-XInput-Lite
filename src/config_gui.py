@@ -2476,8 +2476,8 @@ class ConfigGUI:
                 "3. 按一下 RESET / EN 按鈕\n"
                 "4. 放開 RESET / EN\n"
                 "5. 再放開 BOOT\n\n"
-                "完成後不需要做其他操作。\n"
-                "程式會自動偵測刷機連接埠。"
+                "按「確定」後程式才開始偵測刷機連接埠（最多 30 秒），\n"
+                "可以先按「確定」再操作。"
             )
 
             self.flash_detect_attempts = 0
@@ -2510,8 +2510,14 @@ class ConfigGUI:
         self._flash_custom_firmware = None
         self._close_flash_progress()
 
-    def _set_flash_progress(self, message, detail=""):
-        """Show which firmware step is running so silent waits do not look hung."""
+    def _set_flash_progress(self, message, detail="", cancel=None):
+        """Show which firmware step is running so silent waits do not look hung.
+
+        Pass cancel only for a step that can stop safely (waiting for the
+        flash port); it then backs the Cancel button and the close button.
+        Without it, closing does nothing: esptool would not stop with the
+        window, so those steps end on their own.
+        """
         window = getattr(self, "_flash_progress_window", None)
         try:
             if window is None or not window.winfo_exists():
@@ -2520,8 +2526,6 @@ class ConfigGUI:
                 window.title(self.tr("ESP32-S3 韌體刷寫"))
                 window.resizable(False, False)
                 window.transient(self.root)
-                # Closing would not stop esptool; the step ends on its own.
-                window.protocol("WM_DELETE_WINDOW", lambda: None)
                 content = ttk.Frame(window, padding=(18, 16))
                 content.pack(fill="both", expand=True)
                 wrap = window.winfo_pixels("240p")
@@ -2537,20 +2541,42 @@ class ConfigGUI:
                     content, anchor="w", justify="left", wraplength=wrap,
                 )
                 self._flash_progress_detail.pack(fill="x")
+                self._flash_progress_cancel_button = ttk.Button(
+                    content, text=self.tr("取消"),
+                )
                 self._flash_progress_window = window
                 self._flash_progress_message.configure(text=message)
                 self._flash_progress_detail.configure(text=detail)
+                self._configure_flash_progress_cancel(window, cancel)
                 self._center_child_window(window)
                 window.deiconify()
             else:
                 self._flash_progress_message.configure(text=message)
                 self._flash_progress_detail.configure(text=detail)
+                self._configure_flash_progress_cancel(window, cancel)
                 # Drop the fixed size so a longer step message is not clipped.
                 window.geometry("")
             # Paint now: the version check runs on the Tk thread right after.
             window.update_idletasks()
         except tk.TclError:
             self._flash_progress_window = None
+
+    def _configure_flash_progress_cancel(self, window, cancel):
+        button = self._flash_progress_cancel_button
+        if cancel is None:
+            window.protocol("WM_DELETE_WINDOW", lambda: None)
+            button.pack_forget()
+            return
+        window.protocol("WM_DELETE_WINDOW", cancel)
+        button.configure(command=cancel)
+        if not button.winfo_manager():
+            button.pack(anchor="e", pady=(10, 0))
+
+    def _cancel_flash_port_wait(self):
+        """Stop waiting for flash mode; nothing has been written yet."""
+        if getattr(self, "_flash_detection_job", None) is None:
+            return  # Detection already moved on to a step that cannot stop.
+        self._finish_flash_operation()
 
     def _run_while_flash_progress_animates(self, work):
         """Run blocking serial work off the Tk thread and keep the progress window live.
@@ -2657,6 +2683,7 @@ class ConfigGUI:
             self.tr("按住 BOOT 再按一下 RESET / EN。剩餘約 {seconds} 秒。").format(
                 seconds=seconds_left
             ),
+            cancel=self._cancel_flash_port_wait,
         )
 
         def poll_again():

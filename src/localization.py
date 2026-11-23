@@ -1691,8 +1691,8 @@ EN_TEXT = {
         "Limits how strong LF and HF rumble can become, acting as the overall output ceiling.\n\nRange: 0–1023\nBundled profiles currently use 500; increase it gradually if stronger feedback is needed.\nHigher values allow stronger peaks; values near 1023 may increase noise, resonance, and hardware load.",
     "即將刷入相容的 ESP32-S3 韌體。\n\n程式將自動偵測 ESP32-S3 的刷機連接埠。\n\n是否繼續？":
         "Compatible ESP32-S3 firmware will be flashed.\n\nThe flash port will be detected automatically.\n\nContinue?",
-    "請讓 ESP32-S3 進入刷機模式：\n\n1. 連接 ESP32-S3 的 OTG 接口\n2. 按住 BOOT 按鈕\n3. 按一下 RESET / EN 按鈕\n4. 放開 RESET / EN\n5. 再放開 BOOT\n\n完成後不需要做其他操作。\n程式會自動偵測刷機連接埠。":
-        "Put the ESP32-S3 into flash mode:\n\n1. Connect its OTG port\n2. Hold BOOT\n3. Press RESET / EN\n4. Release RESET / EN\n5. Release BOOT\n\nThe flash port will then be detected automatically.",
+    "請讓 ESP32-S3 進入刷機模式：\n\n1. 連接 ESP32-S3 的 OTG 接口\n2. 按住 BOOT 按鈕\n3. 按一下 RESET / EN 按鈕\n4. 放開 RESET / EN\n5. 再放開 BOOT\n\n按「確定」後程式才開始偵測刷機連接埠（最多 30 秒），\n可以先按「確定」再操作。":
+        "Put the ESP32-S3 into flash mode:\n\n1. Connect its OTG port\n2. Hold BOOT\n3. Press RESET / EN\n4. Release RESET / EN\n5. Release BOOT\n\nThe flash port is detected for up to 30 seconds after you click OK,\nso you can click OK first and then do these steps.",
     "30 秒內未偵測到新的 COM Port。\n\n請確認 ESP32-S3 已正確進入刷機模式，然後重新嘗試。":
         "No new COM port was found within 30 seconds.\n\nConfirm that the ESP32-S3 is in flash mode and try again.",
     "韌體刷寫中": "Firmware flashing",

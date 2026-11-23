@@ -8,7 +8,7 @@ import tempfile
 import time
 import tkinter as tk
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from tkinter import ttk
 
 
@@ -775,6 +775,26 @@ class GUIUserWorkflowTests(unittest.TestCase):
         )
         self.gui._finish_flash_operation()
         self.assertFalse(window.winfo_exists())
+
+    def test_flash_progress_offers_cancel_only_for_cancellable_steps(self):
+        before_children = set(self.root.winfo_children())
+        cancel = Mock()
+        self.gui._set_flash_progress("waiting", "", cancel=cancel)
+        window = next(child for child in self.root.winfo_children()
+                      if child not in before_children and isinstance(child, tk.Toplevel))
+        button = next(widget for widget in self.descendants(window)
+                      if isinstance(widget, ttk.Button))
+        self.assertEqual(button.winfo_manager(), "pack")
+        button.invoke()
+        window.tk.call(window.protocol("WM_DELETE_WINDOW"))
+        self.assertEqual(cancel.call_count, 2)
+
+        self.gui._set_flash_progress("flashing", "")
+        self.assertEqual(button.winfo_manager(), "")
+        window.tk.call(window.protocol("WM_DELETE_WINDOW"))
+        self.assertEqual(cancel.call_count, 2)
+        self.assertTrue(window.winfo_exists())
+        self.gui._finish_flash_operation()
 
     def test_gamepad_combo_picker_saves_and_cancel_restores(self):
         variable = self.gui.button_vars["A"]

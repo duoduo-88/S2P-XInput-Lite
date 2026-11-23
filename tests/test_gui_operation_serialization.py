@@ -91,6 +91,34 @@ class GuiOperationSerializationTests(unittest.TestCase):
         self.assertIn("Flash 容量（COM4）", message)
         self.assertIn("請勿拔除", detail)
 
+    def test_waiting_for_flash_mode_can_be_cancelled(self):
+        gui = self.make_gui()
+        gui._flash_operation_active = True
+        gui.flash_detect_attempts = 0
+        gui.ports_before_flash = set()
+        gui.detect_flash_port()
+        cancel = gui._set_flash_progress.call_args.kwargs["cancel"]
+        self.assertEqual(gui.root.active_job_count, 1)
+
+        cancel()
+
+        self.assertFalse(gui._flash_operation_active)
+        self.assertIsNone(gui._flash_detection_job)
+        self.assertEqual(gui.root.active_job_count, 0)
+
+    def test_flash_steps_after_the_port_wait_cannot_be_cancelled(self):
+        gui = self.make_gui()
+        gui._flash_operation_active = True
+        gui.get_serial_port_infos = Mock(return_value=(
+            SimpleNamespace(device="COM4", vid=0x303A, pid=0x1001),
+        ))
+        with patch.object(config_gui.threading, "Thread", _DeferredThread):
+            gui.preflight_firmware_flash("COM4")
+        self.assertIsNone(gui._set_flash_progress.call_args.kwargs.get("cancel"))
+        # A stale cancel from the wait step does not stop the capacity check.
+        gui._cancel_flash_port_wait()
+        self.assertTrue(gui._flash_operation_active)
+
     def test_version_probe_shows_progress_and_closes_it(self):
         gui = self.make_gui()
         gui._close_flash_progress = Mock()
