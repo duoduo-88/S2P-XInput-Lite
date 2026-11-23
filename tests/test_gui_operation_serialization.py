@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -105,6 +106,46 @@ class GuiOperationSerializationTests(unittest.TestCase):
         self.assertFalse(gui._flash_operation_active)
         self.assertIsNone(gui._flash_detection_job)
         self.assertEqual(gui.root.active_job_count, 0)
+
+    def _wait_for_flash_port_then_cancel(self, connector_running):
+        """Run the real flash flow up to the port wait, then press Cancel."""
+        gui = self.make_gui()
+        gui.main_process = _AliveProcess() if connector_running else None
+        # A cached version check reports resume=False with the connector still up.
+        gui.inspect_esp32_firmware = Mock(return_value=({"version": "1.0.0"}, False))
+        gui.confirm_firmware_flash = Mock(return_value=True)
+        gui.stop_main_process = Mock(
+            side_effect=lambda: setattr(gui, "main_process", None)
+        )
+        gui.get_serial_ports = Mock(return_value=[])
+        gui._close_flash_progress = Mock()
+        gui._resume_connector_after_firmware_check = Mock()
+        present = Path(config_gui.__file__)
+        with (
+            patch.object(config_gui, "ESPTOOL_PATH", present),
+            patch.object(config_gui, "BOOTLOADER_PATH", present),
+            patch.object(config_gui, "PARTITION_PATH", present),
+            patch.object(config_gui, "APP_FIRMWARE_PATH", present),
+            patch.object(config_gui.messagebox, "showinfo"),
+        ):
+            gui.flash_firmware()
+        self.assertTrue(gui._flash_operation_active)
+        gui.stop_main_process.assert_called_once_with()
+        gui._resume_connector_after_firmware_check.assert_not_called()
+        cancel = gui._set_flash_progress.call_args.kwargs["cancel"]
+        cancel()
+        self.assertFalse(gui._flash_operation_active)
+        self.assertEqual(gui.root.active_job_count, 0)
+        return gui
+
+    def test_cancelling_the_port_wait_resumes_a_connector_the_flash_stopped(self):
+        gui = self._wait_for_flash_port_then_cancel(connector_running=True)
+        gui._resume_connector_after_firmware_check.assert_called_once_with()
+        self.assertFalse(gui._flash_resume_connector_on_cancel)
+
+    def test_cancelling_the_port_wait_leaves_a_stopped_connector_stopped(self):
+        gui = self._wait_for_flash_port_then_cancel(connector_running=False)
+        gui._resume_connector_after_firmware_check.assert_not_called()
 
     def test_flash_steps_after_the_port_wait_cannot_be_cancelled(self):
         gui = self.make_gui()

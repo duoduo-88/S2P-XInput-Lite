@@ -2463,6 +2463,13 @@ class ConfigGUI:
                 return
 
             # 查詢版本時可能已關閉主連接程式；若使用快取則在此釋放 COM Port。
+            connector_alive = (
+                self.main_process is not None
+                and self.main_process.poll() is None
+            )
+            self._flash_resume_connector_on_cancel = bool(
+                resume_connector or restart_pending or connector_alive
+            )
             self.stop_main_process()
 
             # 記錄目前存在的 COM Port
@@ -2508,6 +2515,7 @@ class ConfigGUI:
         self._flash_preflight_verified_generation = None
         self._flash_operation_active = False
         self._flash_custom_firmware = None
+        self._flash_resume_connector_on_cancel = False
         self._close_flash_progress()
 
     def _set_flash_progress(self, message, detail="", cancel=None):
@@ -2576,7 +2584,11 @@ class ConfigGUI:
         """Stop waiting for flash mode; nothing has been written yet."""
         if getattr(self, "_flash_detection_job", None) is None:
             return  # Detection already moved on to a step that cannot stop.
+        # Like declining the flash, bring back a connector this flash stopped.
+        resume = getattr(self, "_flash_resume_connector_on_cancel", False)
         self._finish_flash_operation()
+        if resume and not getattr(self, "_close_in_progress", False):
+            self._resume_connector_after_firmware_check()
 
     def _run_while_flash_progress_animates(self, work):
         """Run blocking serial work off the Tk thread and keep the progress window live.
