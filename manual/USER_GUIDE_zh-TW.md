@@ -32,6 +32,7 @@ S2P-XInput-Lite 把 Switch 2 Pro Controller 轉成 Windows 遊戲可直接使用
   - [8.5 瞄準測試](#aim-test-guide)
 - [9. ESP32-S3](#9-esp32-s3)
   - [9.2 刷入韌體](#flash-esp32-s3)
+  - [9.8 自行編譯韌體](#build-firmware)
 - [10. 快速操作技巧](#10-快速操作技巧)
 - [11. 疑難排解](#11-疑難排解)
 - [附錄：建議調整順序](#附錄建議調整順序)
@@ -206,6 +207,7 @@ S2P 可以加入另外安裝、獨立執行的擴充工具。工具只能依你�
 > - 擴充工具由其各自的開發者提供，S2P-XInput-Lite 不負責第三方工具的內容、品質或安全性。請只安裝信任來源的工具。
 > - 使用擴充工具所產生的操作與結果，由使用者自行負責。
 > - 部分遊戲或線上服務可能禁止外部輸入或自動化操作，使用前請先確認相關規範。
+> - 部分擴充工具不一定適用於 ESP32 獨立模式：獨立模式下手把直接連接主機或手機，不經過電腦上的 S2P。各工具是否支援獨立模式，請以該工具或其開發套件的說明為準。
 > - 「允許讀取控制器狀態」會讓工具讀到你的按鍵與搖桿輸出，只對需要的工具開啟。
 > - 工具關閉、逾時或當機時，S2P 會立即清除其輸入；遇到異常時，在清單停用該工具即恢復原本操作。
 
@@ -988,6 +990,7 @@ Bridge 測試會套用目前方案的 LF／HF 設定；Source 為純 Audio 時�
 
 程式會顯示倒數，最多等待 30 秒。它會依 USB 身分辨識 ESP32-S3 的 ROM 刷機連接埠，
 即使該 COM 已存在也能使用。逾時會顯示「未偵測到刷機連接埠」，請重新按一次 **Flash FW**。
+等待期間可按 **取消** 或關閉視窗停止，此時尚未寫入任何資料。
 
 **3. 檢查晶片與 Flash 容量**
 
@@ -1068,6 +1071,97 @@ output report，不提供 Android 遊戲震動，也不提供 BLE HID。Windows 
 
 Android 相容性依裝置、系統與遊戲而異，Apple 裝置不在支援範圍內。實機驗證狀態請見
 [驗證與官方參考](../docs/usb-hid-standardization.md)。
+
+<a name="build-firmware"></a>
+
+### 9.8 自行編譯韌體
+
+隨附的 S2P-FW 1.0.9 附有完整原始碼，可依自己的需求修改後重新編譯，再用 **刷入自訂韌體…** 刷入。
+原始碼位置：
+
+- 發行包：`app\esp32s3\source\esp32s3_usb_bridge_bluedroid`
+- GitHub：同一版本標籤下的 `esp32s3/source/esp32s3_usb_bridge_bluedroid`
+
+> [!WARNING]
+> 自行修改的韌體不在支援範圍內，使用風險請自行承擔。刷入前請先確認會用 [9.6](#96-切回-bridge-與救援)
+> 的 ROM Download Mode 救援，刷壞時才能刷回內建韌體。
+
+**1. 準備編譯環境**
+
+- 安裝 Espressif 官方的 **ESP-IDF 5.5.4**。請使用這個版本，其他版本可能無法編譯，或產生不同的結果。
+- `esp_tinyusb 1.7.6~2` 與 `tinyusb 0.19.0~3` 已鎖定在 `dependencies.lock`，第一次編譯時
+  Component Manager 會自動下載，不需要手動安裝。
+- 16 MB Flash 的 ESP32-S3 開發板。
+
+**2. 編譯**
+
+開啟 ESP-IDF 5.5.4 的命令列環境（安裝程式建立的 ESP-IDF PowerShell 或 CMD 捷徑），執行：
+
+```text
+cd esp32s3\source\esp32s3_usb_bridge_bluedroid
+idf.py set-target esp32s3
+idf.py build
+```
+
+完成後的韌體本體在 `build\esp32s3_bluedroid_bridge.bin`。`build`、`managed_components`、`sdkconfig`
+都是編譯時產生的檔案，修改設定請改 `sdkconfig.defaults`。
+
+原始碼倉庫裡的 `scripts\build_firmware.ps1` 是用來核對隨附映像是否一致的；原始碼改過後雜湊必然不同，
+該腳本報錯屬正常現象，直接用 `idf.py build` 即可。
+
+**3. 刷入**
+
+1. 按 **刷入韌體 ▼ → 刷入自訂韌體…**，選擇 `build\esp32s3_bluedroid_bridge.bin`。
+2. 依 [9.2](#flash-esp32-s3) 的步驟進入刷機模式並完成刷寫。
+
+程式只替換 `0x10000` 的韌體本體，bootloader 與分割表固定使用內建版本，因此：
+
+- 不要修改分割表或 Flash 大小設定。
+- 韌體大小必須小於 app 分割區，否則會直接拒絕。
+
+**4. 保持與桌面程式相容**
+
+- 桌面程式依韌體回報的產品、通訊協定與身分辨識 S2P 韌體。請保留 `S2P-FW` 與 `s2p_bridge` 這兩個
+  識別字串；缺少時刷入前會警告，連線後也不會啟用寫入方案、切換模式等 S2P 功能。
+- 修改 CDC 命令或方案資料格式後，目前的桌面程式可能無法寫入設定，請同時調整桌面端。
+- 想刷回原版時，選擇 **刷入內建韌體** 即可。
+
+**Android USB HID 基本資料**
+
+| 項目 | 內容 |
+|---|---|
+| VID:PID | `303A:4005`（Espressif／TinyUSB 共用預設值） |
+| 字串 | 製造商 `S2P-XInput-Lite`、產品 `S2P Mobile Gamepad`、序號 `S2P-<12 位 MAC>` |
+| 介面 | CDC control `0`、CDC data `1`、HID `2` |
+| 端點 | CDC 通知 `0x81`、CDC OUT/IN `0x02`／`0x82`、HID interrupt IN `0x83`（32 bytes，輪詢間隔 1 ms） |
+| 輸出報告 | 無，因此不支援 Android 遊戲震動 |
+
+HID input report 共 13 bytes，沒有 Report ID：
+
+| Byte | 內容 |
+|---|---|
+| 0–1 | 16 個按鍵位元，little-endian。bit 0–15 依序為 A、B、X、Y、L1、R1、Select、Start、LS、RS、Mode（HOME）、保留、保留、L2、R2、保留 |
+| 2 | 低 4 bits 為十字鍵：`0`＝上，順時針每 45° 加 1，`8`＝放開；高 4 bits 補零 |
+| 3–10 | 四軸 int16（−32768～32767，little-endian）：左 X、左 Y、右 X（Usage Z）、右 Y（Usage Rz），Y 軸向下為正 |
+| 11 | 左扳機 0–255（Simulation Brake） |
+| 12 | 右扳機 0–255（Simulation Accelerator） |
+
+按鍵位元使用 Android 的標準 HID 按鍵 usage，而不是 1～16 的連號。扳機達到 32 以上時，也會同時送出
+L2／R2 數位按鍵，供只讀按鍵事件的 Android 遊戲使用。完整描述符請見原始碼 `main/standalone_xinput.c`
+的 `s_hid_report_descriptor`、編譯後的描述符紀錄
+[`esp32s3/firmware/usb-descriptors.json`](../esp32s3/firmware/usb-descriptors.json)，以及
+[韌體原始碼說明](../esp32s3/source/esp32s3_usb_bridge_bluedroid/README.md)。
+
+**授權與注意事項**
+
+- 韌體源自 [Switch2Connect](https://github.com/TommyWabg/Switch2Connect)，以 **GPL-3.0** 授權。
+  自己使用的修改沒有限制。
+- 若把修改後的韌體（`.bin`）提供給別人，必須同時以 GPL-3.0 提供對應的完整原始碼，並標示為修改版、
+  註明修改內容與日期，也要保留 `LICENSE`、`THIRD_PARTY_NOTICES.md` 與 `third_party/licenses` 的授權聲明。
+- `303A:4005` 是 Espressif 開放給開發與測試共用的識別碼。要對外發行或做成產品，請依
+  [Espressif 的 PID 規定](https://github.com/espressif/usb-pids/blob/main/README.md)申請自己的 PID。
+  不要使用其他廠商的 VID/PID、產品名稱或商標，讓裝置冒充他們的產品。
+- 不要加入沒有權利散布的程式碼、韌體或描述符，例如從市售裝置傾印出來的韌體。
 
 ---
 
