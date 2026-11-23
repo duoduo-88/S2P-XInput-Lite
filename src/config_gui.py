@@ -2584,9 +2584,18 @@ class ConfigGUI:
         """Stop waiting for flash mode; nothing has been written yet."""
         if getattr(self, "_flash_detection_job", None) is None:
             return  # Detection already moved on to a step that cannot stop.
-        # Like declining the flash, bring back a connector this flash stopped.
+        self._resume_connector_after_abandoned_flash(
+            self._finish_flash_operation_before_resume()
+        )
+
+    def _finish_flash_operation_before_resume(self):
+        """End a flash that wrote nothing; return whether it stopped the connector."""
         resume = getattr(self, "_flash_resume_connector_on_cancel", False)
         self._finish_flash_operation()
+        return resume
+
+    def _resume_connector_after_abandoned_flash(self, resume):
+        # Like declining the flash, bring back a connector this flash stopped.
         if resume and not getattr(self, "_close_in_progress", False):
             self._resume_connector_after_firmware_check()
 
@@ -2678,7 +2687,7 @@ class ConfigGUI:
         self.flash_detect_attempts += 1
 
         if self.flash_detect_attempts >= 60:
-            self._finish_flash_operation()
+            resume = self._finish_flash_operation_before_resume()
             messagebox.showerror(
                 self.tr("未偵測到刷機連接埠"),
                 self.tr(
@@ -2687,6 +2696,8 @@ class ConfigGUI:
                     "然後重新嘗試。"
                 ),
             )
+            # Resume after the message, so the connector window does not cover it.
+            self._resume_connector_after_abandoned_flash(resume)
             return
 
         seconds_left = max(1, (60 - self.flash_detect_attempts + 1) // 2)

@@ -107,8 +107,8 @@ class GuiOperationSerializationTests(unittest.TestCase):
         self.assertIsNone(gui._flash_detection_job)
         self.assertEqual(gui.root.active_job_count, 0)
 
-    def _wait_for_flash_port_then_cancel(self, connector_running):
-        """Run the real flash flow up to the port wait, then press Cancel."""
+    def _wait_for_flash_port_then_cancel(self, connector_running, time_out=False):
+        """Run the real flash flow up to the port wait, then cancel or time out."""
         gui = self.make_gui()
         gui.main_process = _AliveProcess() if connector_running else None
         # A cached version check reports resume=False with the connector still up.
@@ -132,8 +132,20 @@ class GuiOperationSerializationTests(unittest.TestCase):
         self.assertTrue(gui._flash_operation_active)
         gui.stop_main_process.assert_called_once_with()
         gui._resume_connector_after_firmware_check.assert_not_called()
-        cancel = gui._set_flash_progress.call_args.kwargs["cancel"]
-        cancel()
+        if time_out:
+            events = Mock()
+            gui._resume_connector_after_firmware_check = events.resume
+            with patch.object(config_gui.messagebox, "showerror", events.showerror):
+                gui.root.run_all()
+            self.assertEqual(gui.flash_detect_attempts, 60)
+            # The connector comes back only after the timeout message closes.
+            self.assertEqual(
+                [name for name, _args, _kwargs in events.mock_calls],
+                ["showerror", "resume"] if connector_running else ["showerror"],
+            )
+        else:
+            cancel = gui._set_flash_progress.call_args.kwargs["cancel"]
+            cancel()
         self.assertFalse(gui._flash_operation_active)
         self.assertEqual(gui.root.active_job_count, 0)
         return gui
@@ -146,6 +158,12 @@ class GuiOperationSerializationTests(unittest.TestCase):
     def test_cancelling_the_port_wait_leaves_a_stopped_connector_stopped(self):
         gui = self._wait_for_flash_port_then_cancel(connector_running=False)
         gui._resume_connector_after_firmware_check.assert_not_called()
+
+    def test_flash_port_timeout_resumes_a_connector_the_flash_stopped(self):
+        self._wait_for_flash_port_then_cancel(connector_running=True, time_out=True)
+
+    def test_flash_port_timeout_leaves_a_stopped_connector_stopped(self):
+        self._wait_for_flash_port_then_cancel(connector_running=False, time_out=True)
 
     def test_flash_steps_after_the_port_wait_cannot_be_cancelled(self):
         gui = self.make_gui()
