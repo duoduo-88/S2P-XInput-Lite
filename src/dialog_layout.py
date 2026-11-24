@@ -314,7 +314,9 @@ def focus_new_window(
         window.lift()
         _remembered_focus(window).focus_force()
         return True
-    except (tk.TclError, AttributeError):
+    # KeyError: grab_current() names a Tk-internal window with no Python
+    # widget, such as an open combobox list.
+    except (tk.TclError, AttributeError, KeyError):
         return False
 
 

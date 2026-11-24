@@ -77,6 +77,23 @@ class NewWindowFocusTests(unittest.TestCase):
                 ))
                 force.assert_not_called()
 
+    def test_a_grab_held_by_a_tk_internal_window_is_left_alone(self):
+        # An open combobox list holds the grab from a window that has no
+        # Python widget, so grab_current() cannot name it.
+        self.root.tk.call("toplevel", ".tk_internal_list")
+        self.addCleanup(lambda: self.root.tk.call("destroy", ".tk_internal_list"))
+        self.root.update()
+        self.root.tk.call("grab", "set", ".tk_internal_list")
+        self.addCleanup(lambda: self.root.tk.call("grab", "release", ".tk_internal_list"))
+        window = self.dialog()
+        with self.assertRaises(KeyError):
+            window.grab_current()
+        with patch.object(window, "focus_force") as force:
+            self.assertFalse(dialog_layout.focus_new_window(
+                window, owns_foreground=lambda: True, is_foreground=lambda _window: False,
+            ))
+        force.assert_not_called()
+
     def test_each_window_is_focused_once_when_first_shown(self):
         focused = []
         with patch.object(
