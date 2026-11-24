@@ -1707,6 +1707,9 @@ EN_TEXT = {
         "If the bridge device does not appear after a few seconds, press RESET / EN, "
         "or unplug and reconnect the ESP32-S3.",
     "韌體刷寫失敗": "Firmware flashing failed",
+    "韌體刷寫已取消": "Firmware flashing cancelled",
+    "是": "Yes",
+    "否": "No",
     "esptool 刷寫失敗，結束代碼：":
         "esptool flashing failed. Exit code: ",
     "偵測到尚未儲存的設定變更。\n\n是否先儲存設定，再重新啟動連接程式？\n\n是：儲存後重新啟動\n否：不儲存，直接重新啟動\n取消：返回設定畫面":
