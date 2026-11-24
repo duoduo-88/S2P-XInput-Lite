@@ -1022,8 +1022,8 @@ EN_TEXT = {
     "HF 頻率": "HF Frequency",
     "最大振幅": "Max Amp",
     "馬達模擬": "Motor Emulation",
-    "模擬 Xbox 傳統震動馬達的特性：震動越強，頻率越高。只影響遊戲震動。\n\n0.00 = 關閉（固定使用 LF／HF 頻率）\n1.00 = 最弱與最強的震動相差約半個八度\n中等強度的震動維持原本的頻率；頻率會限制在安全範圍內（LF 約 160 ～ 260，HF 約 280 ～ 350）。\n建議：想要接近 Xbox 手把的手感時試 0.50 ～ 1.00；競技與節奏用途建議關閉。\n獨立模式不支援此功能。":
-        "Emulates classic Xbox rumble motors: the stronger the rumble, the higher the frequency. Affects game rumble only.\n\n0.00 = off (fixed LF/HF frequencies)\n1.00 = the weakest and strongest rumble differ by about half an octave\nMedium rumble keeps the configured frequency; frequencies stay within a safe range (LF about 160–260, HF about 280–350).\nSuggested: try 0.50–1.00 for a feel closer to an Xbox controller; keep it off for competitive and rhythm use.\nNot supported in standalone mode.",
+    "模擬 Xbox 傳統震動馬達的特性：震動越強，頻率越高。只影響遊戲震動。\n\n0.00 = 關閉（固定使用 LF／HF 頻率）\n1.00 = 最弱與最強的震動相差約半個八度\n中等強度的震動維持原本的頻率；頻率會限制在安全範圍內（LF 約 160 ～ 260，HF 約 280 ～ 350）。\n頻率越低顆粒感越明顯：輕震動較粗糙，強震動較滑順飽滿。\n建議：一般用途 0.50 ～ 0.75；想要更多路感與顆粒感時可到 1.00。\n獨立模式不支援此功能。":
+        "Emulates classic Xbox rumble motors: the stronger the rumble, the higher the frequency. Affects game rumble only.\n\n0.00 = off (fixed LF/HF frequencies)\n1.00 = the weakest and strongest rumble differ by about half an octave\nMedium rumble keeps the configured frequency; frequencies stay within a safe range (LF about 160–260, HF about 280–350).\nLower frequencies feel grainier: light rumble turns rougher and strong rumble smoother and fuller.\nSuggested: 0.50–0.75 for general use; up to 1.00 for more road feel and grain.\nNot supported in standalone mode.",
     " 按鍵映射 ": " Buttons ",
     " 搖桿方向映射 ": " Stick Map ",
     "按鍵映射": "Button Mapping",
@@ -1964,8 +1964,8 @@ EN_TEXT = {
         "Game-to-audio mix ratio. 0.00 = game only; 1.00 = audio only.",
     "只在「混合」模式生效。\n\n0.00 = 只保留遊戲原生震動\n數值越高，音訊震動所占比例越多\n1.00 = 只保留音訊震動\n\n這個項目控制兩種來源的比例；音訊本身的靈敏度請用「音訊強度」調整。":
         "Used only in Mix mode.\n\n0.00 = native game rumble only\nHigher values give audio rumble a larger share\n1.00 = audio rumble only\n\nThis controls source balance. Use Audio Strength to adjust audio sensitivity.",
-    "讓 HD Rumble 的頻率跟著聲音的音色移動，只影響音訊震動。\n\n0.00 = 關閉（固定使用進階震動的 LF／HF 頻率）\n提高：低沉的聲音讓頻率往下，明亮的聲音讓頻率往上\n頻率會限制在安全範圍內（LF 約 160 ～ 260，HF 約 280 ～ 350）。\n建議：想要更有質感的變化時試 0.50 ～ 1.00。":
-        "Lets the HD Rumble frequencies follow the tone of the sound. Affects audio rumble only.\n\n0.00 = off (uses the fixed LF/HF frequencies from Advanced Rumble)\nHigher: deeper sounds lower the frequency, brighter sounds raise it\nFrequencies stay within a safe range (LF about 160–260, HF about 280–350).\nSuggested: try 0.50–1.00 for more textured variation.",
+    "讓 HD Rumble 的頻率跟著聲音的音色移動，只影響音訊震動。\n\n0.00 = 關閉（固定使用進階震動的 LF／HF 頻率）\n提高：低沉的聲音讓頻率往下（顆粒感更明顯），明亮的聲音讓頻率往上（較滑順）\n頻率會限制在安全範圍內（LF 約 160 ～ 260，HF 約 280 ～ 350）。\n建議：想要更有質感的變化時試 0.50 ～ 1.00。":
+        "Lets the HD Rumble frequencies follow the tone of the sound. Affects audio rumble only.\n\n0.00 = off (uses the fixed LF/HF frequencies from Advanced Rumble)\nHigher: deeper sounds lower the frequency (grainier), brighter sounds raise it (smoother)\nFrequencies stay within a safe range (LF about 160–260, HF about 280–350).\nSuggested: try 0.50–1.00 for more textured variation.",
     "讓中小音量的聲音震得更明顯，只影響音訊震動。\n\n0.00 = 不增強（原本的手感）\n提高：細小的聲音更容易感覺到；最大強度不變，噪音閘附近的背景聲也不會被放大\n建議：從 0.10 開始，覺得太雜就調低。":
         "Makes quieter sounds easier to feel. Affects audio rumble only.\n\n0.00 = no boost (the original feel)\nHigher: small sounds become easier to feel; maximum strength is unchanged, and background sound near the noise gate is not amplified\nSuggested: start at 0.10 and lower it if rumble feels busy.",
     "只在「混合」模式生效。\n\n0.00 = 只保留遊戲原生震動\n0.00 ～ 0.50：遊戲震動維持完整強度，音訊震動依比例加入\n0.50 ～ 1.00：音訊比例繼續增加，遊戲震動逐步減弱\n1.00 = 只保留音訊震動":
