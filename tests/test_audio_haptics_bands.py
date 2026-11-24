@@ -16,7 +16,6 @@ from audio_haptics import (
     AUDIO_BANDS_HZ,
     AudioHaptics,
     _dsp_v2_targets,
-    _dynamic_audio_targets,
     _empty_feature_state,
     _extract_audio_features,
     _route_band_levels,
@@ -119,6 +118,42 @@ class AudioHapticsBandTests(unittest.TestCase):
             5,
         )
 
+    def test_packaged_default_audio_curve_is_linear(self):
+        audio = self._default_audio()
+        self.assertEqual(audio.audio_curve, 1.0)
+        for level in (0.0, 0.05, 0.3, 1.0):
+            self.assertEqual(audio._shape_level(level), level)
+
+    def test_audio_curve_lifts_quiet_levels_but_keeps_full_scale(self):
+        audio = self._default_audio()
+        audio.audio_curve = 0.6
+        self.assertEqual(audio._shape_level(0.0), 0.0)
+        self.assertAlmostEqual(audio._shape_level(1.0), 1.0)
+        self.assertAlmostEqual(audio._shape_level(0.1), 0.1 ** 0.6)
+        self.assertGreater(audio._shape_level(0.1), 0.2)
+        levels = [audio._shape_level(value / 10) for value in range(11)]
+        self.assertEqual(levels, sorted(levels))
+
+    def test_audio_curve_is_bounded_when_loaded(self):
+        config = configparser.ConfigParser()
+        config.read(
+            ROOT / "src" / "profiles" / "System Default.ini", encoding="utf-8"
+        )
+        config.set("audio_haptics", "audio_curve", "0.05")
+        self.assertEqual(AudioHaptics(config, lambda *_: None).audio_curve, 0.30)
+
+    def test_loud_bass_does_not_leak_into_upper_bands(self):
+        sample_rate = 48000
+        time_axis = np.arange(sample_rate // 50) / sample_rate
+        expected = 0.5 / np.sqrt(2.0)
+        for frequency in (40.0, 60.0, 100.0):
+            for phase in np.linspace(0.0, np.pi, 8, endpoint=False):
+                tone = 0.5 * np.sin(2 * np.pi * frequency * time_axis + phase)
+                levels = _spectral_band_rms(tone, sample_rate)
+                self.assertGreater(levels[0], expected * 0.7)
+                # The former open-edge window leaked ~0.15 of the level here.
+                self.assertLess(max(levels[2:]), expected * 0.06)
+
     def test_balance_moves_middle_band_without_moving_anchors(self):
         middle = (0.0, 0.0, 1.0, 0.0, 0.0, 0.0)
         lf_bias = _route_band_levels(middle, -1.0)
@@ -181,88 +216,14 @@ class AudioHapticsBandTests(unittest.TestCase):
 
         for field in (
             "overall_level", "low_ratio", "mid_ratio", "high_ratio",
-            "positive_flux", "negative_flux", "crest", "energy_stability",
+            "positive_flux", "crest", "energy_stability",
             "sustain_evidence",
         ):
             self.assertAlmostEqual(getattr(low[2], field), getattr(high[2], field))
-        for field in ("punch", "weight", "sharpness", "sustain", "texture"):
+        for field in ("punch", "weight", "sharpness", "sustain"):
             self.assertAlmostEqual(getattr(low[3], field), getattr(high[3], field))
         self.assertGreater(high[1], low[1])
 
-
-    def test_dynamic_targets_emphasize_new_bass_attack(self):
-        bands = (0.60, 0.10, 0.0, 0.0, 0.0, 0.0)
-        base_lf, base_hf = _route_band_levels(bands)
-
-        lf, hf, _fast, _slow, transient = _dynamic_audio_targets(
-            bands,
-            (0.0,) * 6,
-            0.0,
-            0.0,
-            0.0,
-            0.005,
-            0.020,
-        )
-
-        self.assertGreater(transient, 0.5)
-        self.assertGreater(lf, base_lf)
-        self.assertGreaterEqual(hf, base_hf)
-        self.assertGreater(lf - base_lf, hf - base_hf)
-
-    def test_dynamic_targets_emphasize_new_high_frequency_attack(self):
-        bands = (0.0, 0.0, 0.0, 0.10, 0.40, 0.60)
-        base_lf, base_hf = _route_band_levels(bands)
-
-        lf, hf, _fast, _slow, transient = _dynamic_audio_targets(
-            bands,
-            (0.0,) * 6,
-            0.0,
-            0.0,
-            0.0,
-            0.005,
-            0.020,
-        )
-
-        self.assertGreater(transient, 0.5)
-        self.assertGreaterEqual(lf, base_lf)
-        self.assertGreater(hf, base_hf)
-        self.assertGreater(hf - base_hf, lf - base_lf)
-
-    def test_dynamic_targets_converge_back_to_sustained_body(self):
-        bands = (0.60, 0.10, 0.0, 0.0, 0.0, 0.0)
-        base_lf, base_hf = _route_band_levels(bands)
-        previous = (0.0,) * 6
-        fast = slow = 0.0
-
-        for _ in range(100):
-            lf, hf, fast, slow, transient = _dynamic_audio_targets(
-                bands,
-                previous,
-                0.0,
-                fast,
-                slow,
-                0.005,
-                0.020,
-            )
-            previous = bands
-
-        self.assertLess(transient, 0.01)
-        self.assertAlmostEqual(lf, base_lf, places=6)
-        self.assertAlmostEqual(hf, base_hf, places=6)
-
-    def test_dynamic_targets_keep_silence_at_zero(self):
-        result = _dynamic_audio_targets(
-            (0.0,) * 6,
-            (0.0,) * 6,
-            0.0,
-            0.0,
-            0.0,
-            0.005,
-            0.020,
-        )
-
-        self.assertEqual(result[0:2], (0.0, 0.0))
-        self.assertEqual(result[-1], 0.0)
 
     def test_sustained_bass_builds_weight_and_sustain_after_its_onset(self):
         records = self._run_synthetic(self._sine(80.0, 0.45))
@@ -561,6 +522,128 @@ class AudioHapticsBandTests(unittest.TestCase):
 
         self.assertGreater(max(callbacks[0]), 0.0)
         self.assertEqual(callbacks[-1], (0.0, 0.0))
+
+    @staticmethod
+    def _chunked_stream(waveform, channels, hop_frames=240):
+        """A loopback stand-in that stops delivering after ``waveform``."""
+        frames = np.asarray(waveform, dtype=np.float32)
+        if frames.ndim == 1:
+            # Mono test signals are duplicated onto every channel.
+            frames = np.repeat(frames[:, np.newaxis], channels, axis=1)
+        chunks = [
+            frames[start:start + hop_frames].tobytes()
+            for start in range(0, len(frames) - hop_frames + 1, hop_frames)
+        ]
+
+        class ChunkStream:
+            @staticmethod
+            def get_read_available():
+                return hop_frames if chunks else 0
+
+            @staticmethod
+            def read(*_args, **_kwargs):
+                return chunks.pop(0)
+
+        return ChunkStream(), chunks
+
+    def _run_stream(self, stream, channels, until, timeout=3.0):
+        callbacks = []
+        audio = self._default_audio(
+            lambda lf, hf: callbacks.append((lf, hf))
+        )
+        audio.mode = "AUDIO"
+        audio._running = True
+        capture = threading.Thread(
+            target=audio._process_stream,
+            args=(48000, channels, 240, 960),
+            kwargs={"stream": stream, "stop_event": audio._stop_event},
+            daemon=True,
+        )
+        capture.start()
+        deadline = time.perf_counter() + timeout
+        while time.perf_counter() < deadline and not until(callbacks):
+            time.sleep(0.005)
+        return audio, capture, callbacks
+
+    def test_loopback_stall_releases_rumble_instead_of_holding_it(self):
+        sample_rate = 48000
+        t = np.arange(sample_rate // 5) / sample_rate
+        bass = 0.4 * np.sin(2 * np.pi * 60 * t)
+        stream, chunks = self._chunked_stream(bass, 2)
+        real_hops = len(chunks)
+        audio, capture, callbacks = self._run_stream(
+            stream, 2, lambda seen: bool(seen) and seen[-1] == (0.0, 0.0)
+        )
+        settled_count = len(callbacks)
+        time.sleep(0.08)
+        audio._stop_event.set()
+        capture.join(1.0)
+
+        self.assertEqual(callbacks[-1], (0.0, 0.0))
+        self.assertGreater(max(lf for lf, _hf in callbacks[:real_hops]), 0.2)
+        tail = [lf for lf, _hf in callbacks[real_hops:]]
+        self.assertTrue(tail)
+        self.assertTrue(all(b <= a for a, b in zip(tail, tail[1:])))
+        # Once released, a silent stream stops producing callback traffic.
+        self.assertEqual(len(callbacks), settled_count)
+
+    def test_stream_that_never_delivers_audio_emits_nothing(self):
+        stream, _chunks = self._chunked_stream(np.zeros(0), 2)
+        audio, capture, callbacks = self._run_stream(
+            stream, 2, lambda _seen: False, timeout=0.15
+        )
+        audio._stop_event.set()
+        capture.join(1.0)
+        self.assertEqual(callbacks, [])
+
+    def test_identical_stereo_matches_mono_band_levels(self):
+        sample_rate = 48000
+        t = np.arange(960) / sample_rate
+        mono = (0.5 * np.sin(2 * np.pi * 60 * t)).astype(np.float32)
+        stereo = np.stack((mono, mono), axis=1)
+        np.testing.assert_allclose(
+            _spectral_band_rms(stereo, sample_rate),
+            _spectral_band_rms(mono, sample_rate),
+            rtol=1e-5,
+        )
+
+    def test_surround_endpoint_does_not_dilute_stereo_content(self):
+        sample_rate = 48000
+        t = np.arange(960) / sample_rate
+        mono = (0.5 * np.sin(2 * np.pi * 60 * t)).astype(np.float32)
+        stereo = np.stack((mono, mono), axis=1)
+        surround = np.zeros((960, 8), dtype=np.float32)
+        surround[:, :2] = stereo
+        np.testing.assert_allclose(
+            _spectral_band_rms(surround, sample_rate),
+            _spectral_band_rms(stereo, sample_rate),
+            rtol=1e-5,
+        )
+        # LFE-only content keeps most of its level instead of 1/6 of it.
+        lfe_only = np.zeros((960, 6), dtype=np.float32)
+        lfe_only[:, 3] = mono
+        lfe_low = _spectral_band_rms(lfe_only, sample_rate)[0]
+        stereo_low = _spectral_band_rms(stereo, sample_rate)[0]
+        self.assertGreater(lfe_low, stereo_low * 0.7)
+
+    def test_surround_capture_matches_stereo_capture(self):
+        sample_rate = 48000
+        t = np.arange(sample_rate // 10) / sample_rate
+        bass = (0.4 * np.sin(2 * np.pi * 60 * t)).astype(np.float32)
+        stereo = np.stack((bass, bass), axis=1)
+        surround = np.zeros((len(bass), 8), dtype=np.float32)
+        surround[:, :2] = stereo
+        results = []
+        for frames, channels in ((stereo, 2), (surround, 8)):
+            stream, chunks = self._chunked_stream(frames, channels)
+            hops = len(chunks)
+            audio, capture, callbacks = self._run_stream(
+                stream, channels, lambda seen, n=hops: len(seen) >= n
+            )
+            audio._stop_event.set()
+            capture.join(1.0)
+            results.append(callbacks[:hops])
+        np.testing.assert_allclose(results[0], results[1], rtol=1e-4, atol=1e-6)
 
 
 if __name__ == "__main__":

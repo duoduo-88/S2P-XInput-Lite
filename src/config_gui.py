@@ -3213,6 +3213,11 @@ class ConfigGUI:
         self.audio_haptics_strength_var = tk.StringVar(
             value=self.config.get("audio_haptics", "strength", fallback="0.32")
         )
+        self.audio_haptics_curve_var = tk.StringVar(
+            value=self.config.get(
+                "audio_haptics", "audio_curve", fallback="1.00"
+            )
+        )
         self.audio_haptics_lf_hf_balance_var = tk.StringVar(
             value=self.config.get(
                 "audio_haptics", "lf_hf_balance", fallback="0.00"
@@ -11265,6 +11270,7 @@ class ConfigGUI:
         return {
             "mix_ratio": defaults.get("audio_haptics", "mix_ratio"),
             "strength": defaults.get("audio_haptics", "strength"),
+            "audio_curve": defaults.get("audio_haptics", "audio_curve"),
             "lf_hf_balance": defaults.get(
                 "audio_haptics", "lf_hf_balance"
             ),
@@ -11295,6 +11301,7 @@ class ConfigGUI:
                 self.audio_haptics_mode_var.set(normalized)
             self.audio_haptics_mix_ratio_var.set(defaults["mix_ratio"])
             self.audio_haptics_strength_var.set(defaults["strength"])
+            self.audio_haptics_curve_var.set(defaults["audio_curve"])
             self.audio_haptics_lf_hf_balance_var.set(
                 defaults["lf_hf_balance"]
             )
@@ -11324,6 +11331,9 @@ class ConfigGUI:
             ),
             str(self.audio_haptics_strength_var): (
                 self.audio_haptics_strength_var, defaults["strength"]
+            ),
+            str(self.audio_haptics_curve_var): (
+                self.audio_haptics_curve_var, defaults["audio_curve"]
             ),
             str(self.audio_haptics_lf_hf_balance_var): (
                 self.audio_haptics_lf_hf_balance_var,

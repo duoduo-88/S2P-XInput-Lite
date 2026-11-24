@@ -86,6 +86,7 @@ def _audio_values(gui) -> dict[str, Any]:
         "mode": _value(gui.audio_haptics_mode_var),
         "mix_ratio": _value(gui.audio_haptics_mix_ratio_var),
         "strength": _value(gui.audio_haptics_strength_var),
+        "audio_curve": _value(gui.audio_haptics_curve_var),
         "lf_hf_balance": _value(gui.audio_haptics_lf_hf_balance_var),
         "noise_gate": _value(gui.audio_haptics_noise_gate_var),
         "attack_ms": _value(gui.audio_haptics_attack_var),

@@ -41,6 +41,38 @@ class XInputRumbleDispatchTests(unittest.TestCase):
         controller._rumble_timer_period = False
         return controller
 
+    def _mix_output(self, ratio, game, audio):
+        controller = self.make_controller()
+        controller._rumble_condition = threading.Condition()
+        controller.audio_haptics_mode = "MIX"
+        controller.audio_haptics_mix_ratio = ratio
+        controller.max_amplitude = 1000
+        controller._game_rumble = game
+        controller._audio_rumble = audio
+        queued = []
+        controller._queue_rumble = (
+            lambda lf, hf, **_kwargs: queued.append((lf, hf))
+        )
+        controller._publish_rumble_mix(priority=True)
+        return queued[-1]
+
+    def assertMix(self, ratio, game, audio, expected):
+        # _soft_mix truncates to int, so allow one amplitude step.
+        actual = self._mix_output(ratio, game, audio)
+        for got, want in zip(actual, expected):
+            self.assertLessEqual(abs(got - want), 1, (ratio, actual, expected))
+
+    def test_mix_keeps_full_game_rumble_until_half_ratio(self):
+        for ratio in (0.0, 0.2, 0.5):
+            self.assertMix(ratio, (600, 400), (0, 0), (600, 400))
+        self.assertMix(0.75, (600, 400), (0, 0), (300, 200))
+        self.assertMix(1.0, (600, 400), (0, 0), (0, 0))
+
+    def test_mix_audio_share_follows_ratio(self):
+        self.assertMix(0.0, (0, 0), (500, 500), (0, 0))
+        self.assertMix(0.2, (0, 0), (500, 500), (100, 100))
+        self.assertMix(1.0, (0, 0), (500, 500), (500, 500))
+
     def test_active_refresh_uses_positive_one_ms_slices_and_deadline(self):
         controller = self.make_controller()
         clock = [10.0]

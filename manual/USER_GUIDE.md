@@ -732,7 +732,9 @@ feedback while reducing the chance of noise.
 - **Game**: native game rumble only. Audio Response and 6-Band EQ are disabled.
 - **Audio**: converts sound from the Windows default output device into rumble.
 - **Mix**: blends game and audio rumble with soft saturation instead of adding
-  them directly, to avoid clipping.
+  them directly, to avoid clipping. Up to a **Mix** value of 0.50, game rumble
+  keeps its full strength and audio is added in proportion; above 0.50, game
+  rumble fades out until 1.00 leaves audio only.
 
 Under **Final Output**, **Tail** and **Decay ms** control the rumble's tail
 and fade. **Reset Defaults** restores this tab.
@@ -746,6 +748,7 @@ and fade. **Reset Defaults** restores this tab.
 | Field | Description | Adjusting |
 |---|---|---|
 | **Lvl** | Overall sensitivity of audio-to-rumble. | Raise it if rumble is weak; lower it if sounds start too strong. |
+| **Curve** | Loudness-to-strength curve for audio rumble only. `1.00` is linear. | Lower it (try 0.60–0.75) to feel more quiet detail; maximum strength stays the same. |
 | **Gate** | Noise threshold. | Raise it if quiet scenes still rumble; lower it if only loud sounds react. |
 | **Atk** | Attack speed. | Lower values respond faster. |
 | **Rel.** | Release time after a sound ends. | Higher values give a longer tail. |

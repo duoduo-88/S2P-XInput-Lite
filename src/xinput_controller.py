@@ -1212,8 +1212,13 @@ class XInputController:
         if self.audio_haptics_mode == "AUDIO":
             lf_amp, hf_amp = audio_lf, audio_hf
         elif self.audio_haptics_mode == "MIX":
-            game_weight = 1.0 - self.audio_haptics_mix_ratio
-            audio_weight = self.audio_haptics_mix_ratio
+            # Audio keeps its proportional share, but game rumble stays at
+            # full strength until the ratio passes 0.5 and only then fades
+            # to the audio-only endpoint.  A crossfade weakened native game
+            # feedback even at small ratios (0.20 left only 80%).
+            ratio = max(0.0, min(1.0, float(self.audio_haptics_mix_ratio)))
+            game_weight = min(1.0, 2.0 * (1.0 - ratio))
+            audio_weight = ratio
             lf_amp = _soft_mix(
                 int(game_lf * game_weight),
                 int(audio_lf * audio_weight),

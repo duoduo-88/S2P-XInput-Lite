@@ -1,6 +1,7 @@
 """Convert Windows system-output audio into LF/HF rumble levels."""
 
 import math
+import time
 import threading
 from collections import namedtuple
 from functools import lru_cache
@@ -35,13 +36,13 @@ AudioFeatures = namedtuple(
     "AudioFeatures",
     (
         "overall_level max_band_level low_energy mid_energy high_energy "
-        "low_ratio mid_ratio high_ratio positive_flux negative_flux "
+        "low_ratio mid_ratio high_ratio positive_flux "
         "fast_envelope slow_envelope envelope_contrast peak_level rms_level "
         "crest energy_stability sustain_evidence valid"
     ),
 )
 TactileFeatures = namedtuple(
-    "TactileFeatures", "punch weight sharpness sustain texture"
+    "TactileFeatures", "punch weight sharpness sustain"
 )
 FeatureState = namedtuple(
     "FeatureState", "fast_envelope slow_envelope stability previous_overall"
@@ -129,7 +130,7 @@ def _extract_audio_features(
         zeros = (0.0,) * 3
         return (
             AudioFeatures(
-                0.0, 0.0, *zeros, *zeros, 0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, *zeros, *zeros, 0.0, 0.0, 0.0, 0.0,
                 0.0, 0.0, 0.0, 0.0, 0.0, False,
             ),
             _empty_feature_state(),
@@ -149,9 +150,6 @@ def _extract_audio_features(
     positive_delta = tuple(
         max(0.0, level - old) for level, old in zip(current, previous)
     )
-    negative_delta = tuple(
-        max(0.0, old - level) for level, old in zip(current, previous)
-    )
     # The 0.06 denominator floor prevents a tiny gated-near signal from
     # becoming a full-scale onset purely through division.  A 0.60 band rise
     # is still near full-scale, as verified by the synthetic attack tests.
@@ -159,11 +157,6 @@ def _extract_audio_features(
     positive_flux = min(
         1.0,
         math.sqrt(sum(delta * delta for delta in positive_delta) / len(current))
-        / flux_denominator,
-    )
-    negative_flux = min(
-        1.0,
-        math.sqrt(sum(delta * delta for delta in negative_delta) / len(current))
         / flux_denominator,
     )
 
@@ -207,7 +200,7 @@ def _extract_audio_features(
     return (
         AudioFeatures(
             overall, max_band, low_energy, mid_energy, high_energy,
-            low_ratio, mid_ratio, high_ratio, positive_flux, negative_flux,
+            low_ratio, mid_ratio, high_ratio, positive_flux,
             fast, slow, envelope_contrast, peak, rms_level, crest, stability,
             sustain_evidence, True,
         ),
@@ -218,7 +211,7 @@ def _extract_audio_features(
 def _derive_tactile_features(features):
     """Layer B: turn audio structure into bounded tactile responsibilities."""
     if not features.valid:
-        return TactileFeatures(0.0, 0.0, 0.0, 0.0, 0.0)
+        return TactileFeatures(0.0, 0.0, 0.0, 0.0)
 
     level_presence = _clamp01(features.overall_level / 0.08)
     onset = _soft_union(features.positive_flux, features.envelope_contrast)
@@ -237,15 +230,7 @@ def _derive_tactile_features(features):
 
     high_presence = _clamp01(features.high_energy / 0.12)
     sharpness = high_presence * features.high_ratio * onset
-    # Texture is diagnostic only: rapid bidirectional high-band variation.
-    texture = _clamp01(
-        (features.positive_flux + features.negative_flux)
-        * features.high_ratio
-        * level_presence
-    )
-    return TactileFeatures(
-        punch, weight, sharpness, features.sustain_evidence, texture
-    )
+    return TactileFeatures(punch, weight, sharpness, features.sustain_evidence)
 
 
 def _dsp_v2_targets(
@@ -306,112 +291,27 @@ def _dsp_v2_targets(
     return lf_target, hf_target, next_state, features, tactile
 
 
-def _dynamic_audio_targets(
-    band_levels,
-    previous_band_levels,
-    lf_hf_balance,
-    fast_envelope,
-    slow_envelope,
-    block_seconds,
-    analysis_seconds,
-):
-    """Add transient-aware contrast without changing the six-band controls.
-
-    The normal routed level remains the sustained body. Positive six-band
-    spectral flux and a fast-vs-slow energy envelope identify new attacks and
-    use only the remaining 0..1 headroom for a short pre-emphasis. Once the
-    sound becomes steady, the result naturally converges back to the original
-    six-band routing.
-    """
-    current = tuple(
-        max(0.0, min(1.0, float(level))) for level in band_levels
-    )
-    if len(previous_band_levels) != len(current):
-        previous = (0.0,) * len(current)
-    else:
-        previous = tuple(
-            max(0.0, min(1.0, float(level)))
-            for level in previous_band_levels
-        )
-
-    positive_delta = tuple(
-        max(0.0, level - old)
-        for level, old in zip(current, previous)
-    )
-    overall_level = max(current, default=0.0)
-
-    # The fast follower tracks roughly one audio hop.  The slow follower spans
-    # several rolling FFT windows, so it represents the sustained body without
-    # adding another user-facing timing control.
-    fast_envelope = _follow_feature_envelope(
-        fast_envelope,
-        overall_level,
-        block_seconds,
-        block_seconds,
-    )
-    slow_envelope = _follow_feature_envelope(
-        slow_envelope,
-        overall_level,
-        block_seconds,
-        max(block_seconds, analysis_seconds * 4.0),
-    )
-
-    if overall_level <= 1e-9 or not current:
-        transient_score = 0.0
-    else:
-        flux_rms = math.sqrt(
-            sum(delta * delta for delta in positive_delta) / len(current)
-        )
-        spectral_flux = min(1.0, flux_rms / overall_level)
-        envelope_contrast = min(
-            1.0,
-            max(0.0, fast_envelope - slow_envelope)
-            / max(1e-6, fast_envelope),
-        )
-        # Soft union: either a new spectral component or a sudden broadband
-        # rise may identify an onset, while two agreeing cues reinforce it.
-        transient_score = 1.0 - (
-            (1.0 - spectral_flux) * (1.0 - envelope_contrast)
-        )
-
-    base_lf, base_hf = _route_band_levels(current, lf_hf_balance)
-    transient_lf, transient_hf = _route_band_levels(
-        positive_delta, lf_hf_balance
-    )
-
-    # Preserve the existing output as the floor and spend only unused headroom
-    # on short attacks.  This avoids lowering steady music or requiring a new
-    # GUI strength parameter.
-    lf_target = min(
-        1.0,
-        base_lf
-        + (1.0 - base_lf) * transient_lf * transient_score,
-    )
-    hf_target = min(
-        1.0,
-        base_hf
-        + (1.0 - base_hf) * transient_hf * transient_score,
-    )
-    return (
-        lf_target,
-        hf_target,
-        fast_envelope,
-        slow_envelope,
-        transient_score,
-    )
-
-
 def _spectral_band_rms(samples, sample_rate):
-    """Return low-latency, window-corrected RMS for the six bands."""
-    mono = np.asarray(samples, dtype=np.float32)
-    sample_count = int(mono.size)
-    if sample_count < 8 or sample_rate <= 0:
+    """Return low-latency, window-corrected RMS for the six bands.
+
+    ``samples`` is either mono ``(frames,)`` or interleaved-decoded
+    ``(frames, channels)``.  Multichannel power is summed per channel and
+    referenced to stereo: identical L/R content reads like the same mono
+    signal, while a 5.1/7.1 endpoint carrying stereo (or LFE-only) content is
+    no longer diluted by the silent channels of an amplitude average.
+    """
+    data = np.asarray(samples, dtype=np.float32)
+    if data.ndim == 1:
+        data = data[:, np.newaxis]
+    sample_count = int(data.shape[0])
+    channel_count = int(data.shape[1]) if data.ndim == 2 else 0
+    if sample_count < 8 or channel_count <= 0 or sample_rate <= 0:
         return (0.0,) * len(AUDIO_BANDS_HZ)
     window, denominator, band_bins = _spectral_plan(
         sample_count, float(sample_rate)
     )
-    spectrum = np.fft.rfft(mono * window)
-    power = np.abs(spectrum) ** 2
+    spectrum = np.fft.rfft(data * window[:, np.newaxis], axis=0)
+    power = np.sum(np.abs(spectrum) ** 2, axis=1) / min(channel_count, 2)
     levels = []
     for start, stop in band_bins:
         band_power = float(np.sum(power[start:stop]))
@@ -422,13 +322,21 @@ def _spectral_band_rms(samples, sample_rate):
 @lru_cache(maxsize=8)
 def _spectral_plan(sample_count, sample_rate):
     """Cache the immutable FFT window and band bins used on every audio hop."""
-    # A symmetric Hann window suppresses the newest samples at its right
-    # edge, adding perceptible onset lag in a causal real-time stream. This
-    # rising half-sine keeps leakage controlled while giving the newest audio
-    # full weight and older overlapping samples progressively less weight.
-    window = np.sin(
-        np.linspace(0.0, math.pi / 2.0, sample_count, dtype=np.float32)
-    )
+    # A symmetric Hann window suppresses the newest samples over half the
+    # window, adding perceptible onset lag in a causal real-time stream. This
+    # asymmetric window rises as a half-Hann across the older samples and
+    # only closes over the newest 1/5 (4 ms at 20 ms).  Closing the right
+    # edge matters: an open edge leaked a loud bass tone into the 300 Hz+
+    # bands at about -16 dB, while this short taper keeps it near -33 dB.
+    # A new tone reaches ~56% after 5 ms (was ~68%) and ~92% after 10 ms
+    # (was ~90%); shorter tapers leaked more and broke steady-bass stability.
+    fall = max(1, sample_count // 5)
+    rise = max(1, sample_count - fall)
+    window = np.empty(sample_count, dtype=np.float32)
+    window[:rise] = np.sin(0.5 * math.pi * np.arange(rise) / rise) ** 2
+    window[rise:] = np.cos(
+        0.5 * math.pi * (np.arange(sample_count - rise) + 0.5) / fall
+    ) ** 2
     window_power = float(np.mean(window * window))
     frequencies = np.fft.rfftfreq(sample_count, 1.0 / float(sample_rate))
     denominator = max(1e-12, sample_count * sample_count * window_power)
@@ -444,6 +352,12 @@ def _spectral_plan(sample_count, sample_rate):
 
 class AudioHaptics:
     """Capture the default WASAPI loopback device on a background thread."""
+
+    # Longer than one WASAPI shared-mode period plus scheduling jitter, so a
+    # normally flowing stream never receives synthetic silence.
+    LOOPBACK_STALL_SECONDS = 0.040
+    # Below this envelope level every amplitude rounds to zero.
+    IDLE_LEVEL = 1e-3
 
     def __init__(self, config, level_callback):
         self._level_callback = level_callback
@@ -464,6 +378,9 @@ class AudioHaptics:
         if self.mode not in ("GAME", "AUDIO", "MIX"):
             self.mode = "GAME"
         self.strength = _bounded_float(config, section, "strength", 0.32, 0, 1)
+        self.audio_curve = _bounded_float(
+            config, section, "audio_curve", 1.0, 0.30, 1.0
+        )
         legacy_low_gain = _bounded_float(
             config, section, "low_gain", 1.0, 0, 2
         )
@@ -686,30 +603,73 @@ class AudioHaptics:
         analysis_frames = max(hop_frames, int(analysis_frames))
         # Starting with silence lets a new transient affect the first 5 ms
         # update instead of waiting for an entire 20 ms window to fill.
-        rolling_audio = np.zeros(analysis_frames, dtype=np.float32)
+        rolling_audio = np.zeros(
+            (analysis_frames, max(1, int(channels))), dtype=np.float32
+        )
+
+        hop_seconds = hop_frames / sample_rate
+        silent_audio = np.zeros(
+            (analysis_frames, max(1, int(channels))), dtype=np.float32
+        )
+        # Nothing has been emitted yet, so a stream that starts silent needs
+        # no synthetic decay and must not generate callback traffic.
+        output_idle = True
+        stall_deadline = time.perf_counter() + self.LOOPBACK_STALL_SECONDS
+        last_synthetic_time = None
 
         while self._running and not stop_event.is_set():
+            samples = None
             get_read_available = getattr(
                 stream, "get_read_available", None
             )
             if get_read_available is not None:
                 available = max(0, int(get_read_available()))
                 if available < hop_frames:
-                    missing_seconds = (hop_frames - available) / sample_rate
-                    stop_event.wait(
-                        timeout=max(0.0005, min(0.002, missing_seconds))
+                    now = time.perf_counter()
+                    if output_idle or now < stall_deadline:
+                        missing_seconds = (
+                            (hop_frames - available) / sample_rate
+                        )
+                        stop_event.wait(
+                            timeout=max(0.0005, min(0.002, missing_seconds))
+                        )
+                        continue
+                    # WASAPI loopback stops delivering packets when no
+                    # application renders audio (e.g. a paused player).  The
+                    # last level would otherwise be held and refreshed as
+                    # continuous rumble, so feed silence until the release
+                    # envelope has finished.  Windows may round the short
+                    # waits up to its timer period, so each silent block
+                    # covers the real elapsed time instead of one nominal hop.
+                    if last_synthetic_time is None:
+                        silent_frames = hop_frames
+                    else:
+                        silent_frames = int(round(
+                            (now - last_synthetic_time) * sample_rate
+                        ))
+                    silent_frames = max(
+                        hop_frames, min(analysis_frames, silent_frames)
                     )
+                    samples = silent_audio[:silent_frames]
+                    last_synthetic_time = now
+                    stall_deadline = now + hop_seconds
+            synthetic = samples is not None
+            if not synthetic:
+                last_synthetic_time = None
+                data = stream.read(
+                    hop_frames, exception_on_overflow=False
+                )
+                stall_deadline = (
+                    time.perf_counter() + self.LOOPBACK_STALL_SECONDS
+                )
+                samples = np.frombuffer(data, dtype=np.float32)
+                frame_count = len(samples) // channels
+                if frame_count <= 0:
                     continue
-            data = stream.read(
-                hop_frames, exception_on_overflow=False
-            )
-            samples = np.frombuffer(data, dtype=np.float32)
-            frame_count = len(samples) // channels
-            if frame_count <= 0:
-                continue
-            samples = samples[:frame_count * channels].reshape(
-                frame_count, channels
-            )
+                samples = samples[:frame_count * channels].reshape(
+                    frame_count, channels
+                )
+            frame_count = len(samples)
             if self.mode == "GAME":
                 # Keep draining the live stream so switching back to AUDIO/MIX
                 # cannot replay stale buffered sound, but skip all DSP and
@@ -720,14 +680,19 @@ class AudioHaptics:
                 feature_state = _empty_feature_state()
                 previous_band_levels = (0.0,) * len(AUDIO_BANDS_HZ)
                 previous_feature_levels = (0.0,) * len(AUDIO_BANDS_HZ)
+                output_idle = True
                 continue
-            mono = np.mean(samples, axis=1)
             if frame_count >= analysis_frames:
-                rolling_audio[:] = mono[-analysis_frames:]
+                rolling_audio[:] = samples[-analysis_frames:]
             else:
                 rolling_audio[:-frame_count] = rolling_audio[frame_count:]
-                rolling_audio[-frame_count:] = mono
+                rolling_audio[-frame_count:] = samples
             band_rms = _spectral_band_rms(rolling_audio, sample_rate)
+            # Crest uses the loudest channel so a hard-panned or single
+            # channel sound keeps the same peak/RMS ratio as its mono form.
+            channel_power = np.mean(samples * samples, axis=0)
+            hop_rms = math.sqrt(float(np.max(channel_power)))
+            hop_peak = float(np.max(np.abs(samples)))
             feature_energies = tuple(
                 self._feature_energy_from_rms(rms, gain)
                 for rms, gain in zip(band_rms, self.band_gains)
@@ -756,17 +721,27 @@ class AudioHaptics:
                 feature_levels=feature_levels,
                 previous_feature_levels=previous_feature_levels,
                 band_energies=feature_energies,
-                hop_rms=math.sqrt(float(np.mean(mono * mono))),
-                peak_level=float(np.max(np.abs(mono))),
+                hop_rms=hop_rms,
+                peak_level=hop_peak,
             )
             previous_band_levels = band_levels
             previous_feature_levels = feature_levels
+            lf_target = self._shape_level(lf_target)
+            hf_target = self._shape_level(hf_target)
             lf_envelope = self._smooth_envelope(
                 lf_envelope, lf_target, block_seconds
             )
             hf_envelope = self._smooth_envelope(
                 hf_envelope, hf_target, block_seconds
             )
+            if synthetic and max(lf_envelope, hf_envelope) < self.IDLE_LEVEL:
+                # Finish the synthetic release with one exact zero, then stop
+                # producing silence until the stream delivers audio again.
+                lf_envelope = 0.0
+                hf_envelope = 0.0
+                output_idle = True
+            elif not synthetic:
+                output_idle = lf_envelope <= 0.0 and hf_envelope <= 0.0
             self._emit_capture_levels(lf_envelope, hf_envelope, stop_event)
 
         # A capture stream can end without close() having been called.
@@ -796,6 +771,20 @@ class AudioHaptics:
         """
         usable = self._usable_rms(rms)
         return usable * math.sqrt(max(0.0, float(gain)))
+
+    def _shape_level(self, level):
+        """Audio-only power curve applied after transient detection.
+
+        The six-band levels stay linear so spectral flux and onset analysis
+        are unchanged.  Shaping the routed target keeps 0 and full scale
+        fixed while an exponent below 1.0 lifts quiet detail, so it widens the
+        felt dynamic range without changing the maximum rumble.  Attack and
+        release then operate on the shaped (felt) level.
+        """
+        level = _clamp01(level)
+        if self.audio_curve >= 1.0 or level <= 0.0:
+            return level
+        return level ** self.audio_curve
 
     def _smooth_envelope(self, current, target, block_seconds):
         duration_ms = self.attack_ms if target > current else self.release_ms
