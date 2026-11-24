@@ -85,6 +85,68 @@ def _route_band_levels(band_levels, lf_hf_balance=0.0):
     )
 
 
+# Frequency-follow pivots, as band indices.  The six bands are roughly
+# log-spaced, so the contribution-weighted mean band index is a usable
+# pitch axis.  LF pivots between Low and L-Mid (sub-bass lowers, low-mid
+# punch raises); HF pivots between H-Mid and High.
+LF_TILT_PIVOT = 0.5
+LF_TILT_SPAN = 0.5
+HF_TILT_PIVOT = 3.5
+HF_TILT_SPAN = 1.5
+# Contribution below this slows the tilt follower proportionally, so
+# gate-level noise cannot swing the frequency and a release tail keeps the
+# pitch of the sound that produced it.
+TILT_PRESENCE = 0.05
+# Slower than the amplitude attack so the pitch moves as texture, not jitter.
+TILT_FOLLOW_SECONDS = 0.060
+
+
+def _channel_tilts(band_energies, lf_hf_balance=0.0):
+    """Return ``(lf_tilt, lf_presence, hf_tilt, hf_presence)``.
+
+    Tilts are -1..1 spectral positions of the bands feeding LF and HF;
+    presence is 0..1 evidence that a channel has enough energy to trust it.
+    Each band contributes with the same strength and LF/HF share that
+    ``_route_band_levels`` uses for amplitudes, so the tilt describes the
+    sound actually driving each actuator rather than the whole spectrum.
+    """
+    balance = max(-1.0, min(1.0, float(lf_hf_balance)))
+    lf_total = lf_moment = hf_total = hf_moment = 0.0
+    for index, (energy, strength, base_hf, influence) in enumerate(zip(
+        band_energies,
+        AUDIO_ROUTE_STRENGTH,
+        AUDIO_BASE_HF_SHARE,
+        AUDIO_BALANCE_INFLUENCE,
+    )):
+        hf_share = max(0.0, min(1.0, base_hf + balance * influence))
+        weighted = max(0.0, float(energy)) * strength
+        lf_part = weighted * (1.0 - hf_share)
+        hf_part = weighted * hf_share
+        lf_total += lf_part
+        lf_moment += lf_part * index
+        hf_total += hf_part
+        hf_moment += hf_part * index
+
+    def tilt(total, moment, pivot, span):
+        if total <= 1e-9:
+            return 0.0, 0.0
+        centred = (moment / total - pivot) / span
+        return max(-1.0, min(1.0, centred)), _clamp01(total / TILT_PRESENCE)
+
+    return (
+        *tilt(lf_total, lf_moment, LF_TILT_PIVOT, LF_TILT_SPAN),
+        *tilt(hf_total, hf_moment, HF_TILT_PIVOT, HF_TILT_SPAN),
+    )
+
+
+def _follow_tilt(current, target, presence, block_seconds):
+    """Move toward ``target`` at a rate scaled by channel presence."""
+    coefficient = 1.0 - math.exp(
+        -float(block_seconds) / TILT_FOLLOW_SECONDS
+    )
+    return current + (target - current) * coefficient * _clamp01(presence)
+
+
 def _follow_feature_envelope(current, target, block_seconds, time_constant):
     """One-pole follower used only by the audio feature detector."""
     duration = max(1e-6, float(time_constant), float(block_seconds))
@@ -471,12 +533,18 @@ class AudioHaptics:
                     self._thread = None
         return stopped
 
-    def _emit_capture_levels(self, lf, hf, stop_event):
-        """Serialize native-capture output with shutdown, even after late reads."""
+    def _emit_capture_levels(
+        self, lf, hf, stop_event, lf_tilt=0.0, hf_tilt=0.0,
+    ):
+        """Serialize native-capture output with shutdown, even after late reads.
+
+        Tilts are the -1..1 frequency-follow positions; the receiver decides
+        how far, if at all, they move the HD Rumble frequencies.
+        """
         with self._lifecycle_lock:
             if not self._running or stop_event.is_set() or self.mode == "GAME":
                 return False
-            self._level_callback(lf, hf)
+            self._level_callback(lf, hf, lf_tilt, hf_tilt)
             return True
 
     def _capture_loop(self, generation, stop_event):
@@ -595,6 +663,8 @@ class AudioHaptics:
         stop_event = self._stop_event if stop_event is None else stop_event
         lf_envelope = 0.0
         hf_envelope = 0.0
+        lf_tilt = 0.0
+        hf_tilt = 0.0
         feature_state = _empty_feature_state()
         previous_band_levels = (0.0,) * len(AUDIO_BANDS_HZ)
         previous_feature_levels = (0.0,) * len(AUDIO_BANDS_HZ)
@@ -677,6 +747,8 @@ class AudioHaptics:
                 rolling_audio.fill(0.0)
                 lf_envelope = 0.0
                 hf_envelope = 0.0
+                lf_tilt = 0.0
+                hf_tilt = 0.0
                 feature_state = _empty_feature_state()
                 previous_band_levels = (0.0,) * len(AUDIO_BANDS_HZ)
                 previous_feature_levels = (0.0,) * len(AUDIO_BANDS_HZ)
@@ -728,6 +800,15 @@ class AudioHaptics:
             previous_feature_levels = feature_levels
             lf_target = self._shape_level(lf_target)
             hf_target = self._shape_level(hf_target)
+            (
+                lf_tilt_target, lf_presence, hf_tilt_target, hf_presence,
+            ) = _channel_tilts(feature_energies, self.lf_hf_balance)
+            lf_tilt = _follow_tilt(
+                lf_tilt, lf_tilt_target, lf_presence, block_seconds
+            )
+            hf_tilt = _follow_tilt(
+                hf_tilt, hf_tilt_target, hf_presence, block_seconds
+            )
             lf_envelope = self._smooth_envelope(
                 lf_envelope, lf_target, block_seconds
             )
@@ -739,10 +820,14 @@ class AudioHaptics:
                 # producing silence until the stream delivers audio again.
                 lf_envelope = 0.0
                 hf_envelope = 0.0
+                lf_tilt = 0.0
+                hf_tilt = 0.0
                 output_idle = True
             elif not synthetic:
                 output_idle = lf_envelope <= 0.0 and hf_envelope <= 0.0
-            self._emit_capture_levels(lf_envelope, hf_envelope, stop_event)
+            self._emit_capture_levels(
+                lf_envelope, hf_envelope, stop_event, lf_tilt, hf_tilt
+            )
 
         # A capture stream can end without close() having been called.
         # Clear the final envelope once, but never emit after close() sets

@@ -8,7 +8,13 @@ from unittest.mock import patch
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC_DIR))
 
-from xinput_controller import XInputController
+from xinput_controller import (
+    HF_FOLLOW_RANGE,
+    LF_FOLLOW_RANGE,
+    XInputController,
+    _blend_frequency,
+    _followed_frequency,
+)
 
 
 class _AdvancingCondition:
@@ -47,6 +53,8 @@ class XInputRumbleDispatchTests(unittest.TestCase):
         controller.audio_haptics_mode = "MIX"
         controller.audio_haptics_mix_ratio = ratio
         controller.max_amplitude = 1000
+        controller.lf_frequency = 215
+        controller.hf_frequency = 320
         controller._game_rumble = game
         controller._audio_rumble = audio
         queued = []
@@ -72,6 +80,85 @@ class XInputRumbleDispatchTests(unittest.TestCase):
         self.assertMix(0.0, (0, 0), (500, 500), (0, 0))
         self.assertMix(0.2, (0, 0), (500, 500), (100, 100))
         self.assertMix(1.0, (0, 0), (500, 500), (500, 500))
+
+    def test_followed_frequency_is_off_at_zero_and_octave_scaled(self):
+        self.assertEqual(_followed_frequency(215, 1.0, 0.0, LF_FOLLOW_RANGE), 215)
+        self.assertEqual(_followed_frequency(215, 0.0, 1.0, LF_FOLLOW_RANGE), 215)
+        self.assertEqual(
+            _followed_frequency(215, 1.0, 1.0, LF_FOLLOW_RANGE),
+            round(215 * 2 ** 0.25),
+        )
+        self.assertEqual(
+            _followed_frequency(215, -1.0, 1.0, LF_FOLLOW_RANGE),
+            round(215 * 2 ** -0.25),
+        )
+        self.assertEqual(
+            _followed_frequency(215, 1.0, 0.5, LF_FOLLOW_RANGE),
+            round(215 * 2 ** 0.125),
+        )
+
+    def test_followed_frequency_stays_in_the_safe_range(self):
+        self.assertEqual(_followed_frequency(320, 1.0, 1.0, HF_FOLLOW_RANGE), 350)
+        self.assertEqual(_followed_frequency(170, -1.0, 1.0, LF_FOLLOW_RANGE), 160)
+        # A user base outside the range is kept, never pulled into it.
+        self.assertEqual(_followed_frequency(400, 1.0, 1.0, HF_FOLLOW_RANGE), 400)
+        self.assertEqual(_followed_frequency(400, -1.0, 1.0, HF_FOLLOW_RANGE), 336)
+
+    def test_blend_frequency_follows_the_stronger_source(self):
+        self.assertEqual(_blend_frequency(215, 255, 0, 0), 215)
+        self.assertEqual(_blend_frequency(215, 255, 500, 0), 215)
+        self.assertEqual(_blend_frequency(215, 255, 0, 500), 255)
+        middle = _blend_frequency(215, 255, 300, 300)
+        self.assertGreater(middle, 215)
+        self.assertLess(middle, 255)
+
+    def _audio_controller(self, mode, follow):
+        controller = self.make_controller()
+        controller._rumble_condition = threading.Condition()
+        controller.audio_haptics_mode = mode
+        controller.audio_haptics_mix_ratio = 0.5
+        controller.audio_freq_follow = follow
+        controller.max_amplitude = 1000
+        controller.lf_curve = controller.hf_curve = 1.0
+        controller.lf_strength = controller.hf_strength = 1.0
+        controller.lf_to_hf_compensation = 0.0
+        controller.hf_to_lf_compensation = 0.0
+        controller.lf_frequency = 215
+        controller.hf_frequency = 320
+        controller._game_rumble = (0, 0)
+        controller._audio_rumble = (0, 0)
+        controller._audio_frequency = (215, 320)
+        queued = []
+        controller._queue_rumble = (
+            lambda lf, hf, **kwargs: queued.append(
+                (lf, hf, kwargs.get("frequencies"))
+            )
+        )
+        return controller, queued
+
+    def test_audio_mode_sends_followed_frequencies(self):
+        controller, queued = self._audio_controller("AUDIO", 1.0)
+        controller.set_audio_rumble(0.5, 0.5, -1.0, 1.0)
+        self.assertEqual(queued[-1][2], (round(215 * 2 ** -0.25), 350))
+
+    def test_follow_off_keeps_configured_frequencies(self):
+        controller, queued = self._audio_controller("AUDIO", 0.0)
+        controller.set_audio_rumble(0.5, 0.5, -1.0, 1.0)
+        self.assertEqual(queued[-1][2], (215, 320))
+
+    def test_frequency_change_alone_is_published(self):
+        controller, queued = self._audio_controller("AUDIO", 1.0)
+        controller.set_audio_rumble(0.5, 0.5, 0.0, 0.0)
+        controller.set_audio_rumble(0.5, 0.5, 1.0, 0.0)
+        self.assertEqual(len(queued), 2)
+        self.assertNotEqual(queued[0][2], queued[1][2])
+
+    def test_mix_frequency_is_led_by_game_when_audio_is_silent(self):
+        controller, queued = self._audio_controller("MIX", 1.0)
+        controller._audio_frequency = (255, 350)
+        controller._game_rumble = (600, 600)
+        controller._publish_rumble_mix(priority=True)
+        self.assertEqual(queued[-1][2], (215, 320))
 
     def test_active_refresh_uses_positive_one_ms_slices_and_deadline(self):
         controller = self.make_controller()

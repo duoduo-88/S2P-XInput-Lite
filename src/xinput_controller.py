@@ -136,6 +136,41 @@ def _soft_mix(first, second, maximum):
     return int(maximum * (1.0 - (1.0 - first) * (1.0 - second)))
 
 
+# At Frequency Follow 1.00 a full -1..1 tilt moves the configured frequency
+# by a quarter octave either way.  Results are then held inside ranges the
+# actuators render cleanly: below ~160 differences are hard to feel on some
+# controllers, and above ~350 HF turns buzzy or audibly resonant.  A
+# configured base frequency outside a range widens it rather than moving.
+FREQUENCY_FOLLOW_OCTAVES = 0.25
+LF_FOLLOW_RANGE = (160, 260)
+HF_FOLLOW_RANGE = (280, 350)
+
+
+def _followed_frequency(base, tilt, follow, safe_range):
+    """Shift ``base`` by a -1..1 spectral tilt on a log (octave) scale."""
+    base = int(base)
+    follow = max(0.0, min(1.0, float(follow)))
+    tilt = max(-1.0, min(1.0, float(tilt)))
+    if follow <= 0.0 or tilt == 0.0 or base <= 0:
+        return base
+    low = min(safe_range[0], base)
+    high = max(safe_range[1], base)
+    shifted = base * 2.0 ** (follow * FREQUENCY_FOLLOW_OCTAVES * tilt)
+    return int(round(max(low, min(high, shifted))))
+
+
+def _blend_frequency(game_frequency, audio_frequency, game_amp, audio_amp):
+    """Pick a Mix frequency led by whichever source rumbles harder."""
+    game_amp = max(0.0, float(game_amp))
+    audio_amp = max(0.0, float(audio_amp))
+    total = game_amp + audio_amp
+    if total <= 0.0 or audio_frequency == game_frequency or game_frequency <= 0:
+        return int(game_frequency)
+    weight = audio_amp / total
+    ratio = float(audio_frequency) / float(game_frequency)
+    return int(round(game_frequency * ratio ** weight))
+
+
 def _update_rumble_tail(
     current, target, strength, decay_factor, target_changed=False,
 ):
@@ -649,10 +684,12 @@ class XInputController:
         self.max_amplitude = rumble_settings["max_amplitude"]
         self.audio_haptics_mode = audio_settings["mode"]
         self.audio_haptics_mix_ratio = audio_settings["mix_ratio"]
+        self.audio_freq_follow = audio_settings["freq_follow"]
         self.final_tail_strength = audio_settings["final_tail_strength"]
         self.final_tail_decay_ms = audio_settings["final_tail_decay_ms"]
         self._game_rumble = (0, 0)
         self._audio_rumble = (0, 0)
+        self._audio_frequency = (self.lf_frequency, self.hf_frequency)
         self._rumble_input = (0, 0)
         self._rumble_input_count = 0
         self._rumble_peak_input = (0, 0)
@@ -1182,12 +1219,25 @@ class XInputController:
                 "max_amplitude": int(self.max_amplitude),
             }
 
-    def set_audio_rumble(self, lf_level, hf_level):
-        """Receive normalized audio levels and publish the selected mix."""
+    def set_audio_rumble(self, lf_level, hf_level, lf_tilt=0.0, hf_tilt=0.0):
+        """Receive normalized audio levels and publish the selected mix.
+
+        ``lf_tilt``/``hf_tilt`` are -1..1 spectral positions from the audio
+        DSP; Frequency Follow decides how far they move each frequency.
+        """
         with self._rumble_condition:
             if self.audio_haptics_mode == "GAME":
                 self._audio_rumble = (0, 0)
                 return
+        follow = getattr(self, "audio_freq_follow", 0.0)
+        frequencies = (
+            _followed_frequency(
+                self.lf_frequency, lf_tilt, follow, LF_FOLLOW_RANGE
+            ),
+            _followed_frequency(
+                self.hf_frequency, hf_tilt, follow, HF_FOLLOW_RANGE
+            ),
+        )
         lf_input = max(0.0, min(1.0, lf_level))
         hf_input = max(0.0, min(1.0, hf_level))
         raw_lf_amp = int(self.max_amplitude * (lf_input ** self.lf_curve))
@@ -1199,18 +1249,28 @@ class XInputController:
         lf_amp = max(0, min(self.max_amplitude, lf_amp))
         hf_amp = max(0, min(self.max_amplitude, hf_amp))
         with self._rumble_condition:
-            if self._audio_rumble == (lf_amp, hf_amp):
+            if (
+                self._audio_rumble == (lf_amp, hf_amp)
+                and getattr(self, "_audio_frequency", None) == frequencies
+            ):
                 return
             self._audio_rumble = (lf_amp, hf_amp)
+            self._audio_frequency = frequencies
         self._publish_rumble_mix(priority=False)
 
     def _publish_rumble_mix(self, priority=False, force_zero=False):
+        base_frequencies = (self.lf_frequency, self.hf_frequency)
         with self._rumble_condition:
             game_lf, game_hf = self._game_rumble
             audio_lf, audio_hf = self._audio_rumble
+            audio_frequencies = getattr(
+                self, "_audio_frequency", base_frequencies
+            )
 
+        frequencies = base_frequencies
         if self.audio_haptics_mode == "AUDIO":
             lf_amp, hf_amp = audio_lf, audio_hf
+            frequencies = audio_frequencies
         elif self.audio_haptics_mode == "MIX":
             # Audio keeps its proportional share, but game rumble stays at
             # full strength until the ratio passes 0.5 and only then fades
@@ -1219,15 +1279,17 @@ class XInputController:
             ratio = max(0.0, min(1.0, float(self.audio_haptics_mix_ratio)))
             game_weight = min(1.0, 2.0 * (1.0 - ratio))
             audio_weight = ratio
-            lf_amp = _soft_mix(
-                int(game_lf * game_weight),
-                int(audio_lf * audio_weight),
-                self.max_amplitude,
+            game_part = (int(game_lf * game_weight), int(game_hf * game_weight))
+            audio_part = (
+                int(audio_lf * audio_weight), int(audio_hf * audio_weight)
             )
-            hf_amp = _soft_mix(
-                int(game_hf * game_weight),
-                int(audio_hf * audio_weight),
-                self.max_amplitude,
+            lf_amp = _soft_mix(game_part[0], audio_part[0], self.max_amplitude)
+            hf_amp = _soft_mix(game_part[1], audio_part[1], self.max_amplitude)
+            frequencies = tuple(
+                _blend_frequency(base, audio, game_amp, audio_amp)
+                for base, audio, game_amp, audio_amp in zip(
+                    base_frequencies, audio_frequencies, game_part, audio_part
+                )
             )
         else:
             lf_amp, hf_amp = game_lf, game_hf
@@ -1239,6 +1301,7 @@ class XInputController:
             hf_amp,
             force_zero=effective_force_zero,
             priority=bool(priority or effective_force_zero),
+            frequencies=frequencies,
         )
 
     def set_calibration(self, calibration):
@@ -1259,12 +1322,17 @@ class XInputController:
 
     def _queue_rumble(
         self, lf_amp, hf_amp, force_zero=False, priority=False,
+        frequencies=None,
     ):
+        lf_frequency, hf_frequency = (
+            (self.lf_frequency, self.hf_frequency)
+            if frequencies is None else frequencies
+        )
         with self._rumble_condition:
             self._rumble_state = (
-                self.lf_frequency,
+                int(lf_frequency),
                 int(lf_amp),
-                self.hf_frequency,
+                int(hf_frequency),
                 int(hf_amp),
             )
             self._rumble_peak_output = (

@@ -124,6 +124,7 @@ AUDIO_HAPTICS_SCHEMA = {
     "mix_ratio": _float("混合比例", "mix ratio", 0.0, 1.0, 2),
     "strength": _float("音訊強度", "audio strength", 0.0, 1.0, 2),
     "audio_curve": _float("音訊曲線", "audio curve", 0.30, 1.00, 2),
+    "freq_follow": _float("頻率跟隨", "frequency follow", 0.0, 1.0, 2),
     "lf_hf_balance": _float(
         "LF／HF 分配重心", "LF/HF routing balance", -1.0, 1.0, 2
     ),

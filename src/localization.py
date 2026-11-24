@@ -1111,6 +1111,7 @@ EN_TEXT = {
     "音訊反應": "Audio Response",
     "強度": "Lvl",
     "曲線": "Curve",
+    "頻率跟隨": "Freq",
     "低頻": "LF",
     "高頻": "HF",
     "噪閘": "Gate",
@@ -1960,6 +1961,8 @@ EN_TEXT = {
         "Game-to-audio mix ratio. 0.00 = game only; 1.00 = audio only.",
     "只在「混合」模式生效。\n\n0.00 = 只保留遊戲原生震動\n數值越高，音訊震動所占比例越多\n1.00 = 只保留音訊震動\n\n這個項目控制兩種來源的比例；音訊本身的靈敏度請用「音訊強度」調整。":
         "Used only in Mix mode.\n\n0.00 = native game rumble only\nHigher values give audio rumble a larger share\n1.00 = audio rumble only\n\nThis controls source balance. Use Audio Strength to adjust audio sensitivity.",
+    "讓 HD Rumble 的頻率跟著聲音的音色移動，只影響音訊震動。\n\n0.00 = 關閉（固定使用進階震動的 LF／HF 頻率）\n提高：低沉的聲音讓頻率往下，明亮的聲音讓頻率往上\n頻率會限制在安全範圍內（LF 約 160 ～ 260，HF 約 280 ～ 350）。\n建議：想要更有質感的變化時試 0.50 ～ 1.00。":
+        "Lets the HD Rumble frequencies follow the tone of the sound. Affects audio rumble only.\n\n0.00 = off (uses the fixed LF/HF frequencies from Advanced Rumble)\nHigher: deeper sounds lower the frequency, brighter sounds raise it\nFrequencies stay within a safe range (LF about 160–260, HF about 280–350).\nSuggested: try 0.50–1.00 for more textured variation.",
     "調整音訊震動的強弱對應曲線，只影響音訊震動，不影響遊戲震動。\n\n1.00 = 線性（原本的手感）\n降低：小聲的細節更明顯，最大強度不變\n建議：想感受更多細節時試 0.60 ～ 0.75。":
         "Shapes how audio loudness maps to rumble strength. Affects audio rumble only, not game rumble.\n\n1.00 = linear (the original feel)\nLower: quiet detail becomes more noticeable; maximum strength is unchanged\nSuggested: try 0.60–0.75 for more detail.",
     "只在「混合」模式生效。\n\n0.00 = 只保留遊戲原生震動\n0.00 ～ 0.50：遊戲震動維持完整強度，音訊震動依比例加入\n0.50 ～ 1.00：音訊比例繼續增加，遊戲震動逐步減弱\n1.00 = 只保留音訊震動":

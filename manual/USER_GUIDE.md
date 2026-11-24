@@ -749,6 +749,7 @@ and fade. **Reset Defaults** restores this tab.
 |---|---|---|
 | **Lvl** | Overall sensitivity of audio-to-rumble. | Raise it if rumble is weak; lower it if sounds start too strong. |
 | **Curve** | Loudness-to-strength curve for audio rumble only. `1.00` is linear. | Lower it (try 0.60–0.75) to feel more quiet detail; maximum strength stays the same. |
+| **Freq** | Lets the HD Rumble frequencies follow the tone of the sound (audio rumble only). `0.00` is off. | Raise it (try 0.50–1.00) for more textured variation. Deeper sounds lower the frequency and brighter sounds raise it, within about LF 160–260 and HF 280–350. |
 | **Gate** | Noise threshold. | Raise it if quiet scenes still rumble; lower it if only loud sounds react. |
 | **Atk** | Attack speed. | Lower values respond faster. |
 | **Rel.** | Release time after a sound ends. | Higher values give a longer tail. |

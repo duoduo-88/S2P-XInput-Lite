@@ -19,6 +19,8 @@ from audio_haptics import (
     _empty_feature_state,
     _extract_audio_features,
     _route_band_levels,
+    _channel_tilts,
+    _follow_tilt,
     _spectral_band_rms,
 )
 
@@ -355,7 +357,7 @@ class AudioHapticsBandTests(unittest.TestCase):
 
     def test_capture_callback_is_suppressed_after_close(self):
         events = []
-        audio = self._default_audio(lambda lf, hf: events.append((lf, hf)))
+        audio = self._default_audio(lambda lf, hf, *_tilts: events.append((lf, hf)))
         audio.mode = "AUDIO"
         audio._running = True
         self.assertTrue(audio._emit_capture_levels(0.7, 0.3, audio._stop_event))
@@ -370,7 +372,7 @@ class AudioHapticsBandTests(unittest.TestCase):
         reconfigure_done = threading.Event()
         events = []
 
-        def callback(lf, hf):
+        def callback(lf, hf, *_tilts):
             if lf or hf:
                 callback_entered.set()
                 self.assertTrue(callback_resume.wait(1.0))
@@ -471,7 +473,7 @@ class AudioHapticsBandTests(unittest.TestCase):
     def test_game_mode_drains_without_dsp_callbacks(self):
         callbacks = []
         audio = self._default_audio(
-            lambda lf, hf: callbacks.append((lf, hf))
+            lambda lf, hf, *_tilts: callbacks.append((lf, hf))
         )
 
         class OneHopStream:
@@ -493,7 +495,7 @@ class AudioHapticsBandTests(unittest.TestCase):
     def test_game_mode_clears_fft_history_before_audio_resumes(self):
         callbacks = []
         audio = self._default_audio(
-            lambda lf, hf: callbacks.append((lf, hf))
+            lambda lf, hf, *_tilts: callbacks.append((lf, hf))
         )
 
         class SwitchingStream:
@@ -546,10 +548,14 @@ class AudioHapticsBandTests(unittest.TestCase):
 
         return ChunkStream(), chunks
 
-    def _run_stream(self, stream, channels, until, timeout=3.0):
+    def _run_stream(
+        self, stream, channels, until, timeout=3.0, with_tilts=False,
+    ):
         callbacks = []
         audio = self._default_audio(
-            lambda lf, hf: callbacks.append((lf, hf))
+            lambda lf, hf, *tilts: callbacks.append(
+                (lf, hf, *tilts) if with_tilts else (lf, hf)
+            )
         )
         audio.mode = "AUDIO"
         audio._running = True
@@ -644,6 +650,45 @@ class AudioHapticsBandTests(unittest.TestCase):
             capture.join(1.0)
             results.append(callbacks[:hops])
         np.testing.assert_allclose(results[0], results[1], rtol=1e-4, atol=1e-6)
+
+    def test_channel_tilts_follow_the_bands_driving_each_actuator(self):
+        sub_bass = _channel_tilts((1.0, 0, 0, 0, 0, 0))
+        low_mid = _channel_tilts((0, 1.0, 0, 0, 0, 0))
+        self.assertAlmostEqual(sub_bass[0], -1.0)
+        self.assertAlmostEqual(low_mid[0], 1.0)
+        self.assertEqual(sub_bass[1], 1.0)
+        bright = _channel_tilts((0, 0, 0, 0, 0, 1.0))
+        dull = _channel_tilts((0, 0, 1.0, 0, 0, 0))
+        self.assertAlmostEqual(bright[2], 1.0)
+        self.assertAlmostEqual(dull[2], -1.0)
+        self.assertEqual(_channel_tilts((0.0,) * 6), (0.0, 0.0, 0.0, 0.0))
+        quiet = _channel_tilts((0.01, 0, 0, 0, 0, 0))
+        self.assertLess(quiet[1], 1.0)
+
+    def test_tilt_holds_without_presence_and_moves_with_it(self):
+        self.assertEqual(_follow_tilt(0.5, -1.0, 0.0, 0.005), 0.5)
+        moved = _follow_tilt(0.5, -1.0, 1.0, 0.005)
+        self.assertLess(moved, 0.5)
+        self.assertGreater(moved, -1.0)
+
+    def test_capture_emits_tilts_that_follow_bass_pitch(self):
+        sample_rate = 48000
+        t = np.arange(sample_rate // 5) / sample_rate
+        results = {}
+        for frequency in (45.0, 220.0):
+            tone = (0.4 * np.sin(2 * np.pi * frequency * t)).astype(np.float32)
+            stream, chunks = self._chunked_stream(tone, 2)
+            hops = len(chunks)
+            audio, capture, callbacks = self._run_stream(
+                stream, 2, lambda seen, n=hops: len(seen) >= n,
+                with_tilts=True,
+            )
+            audio._stop_event.set()
+            capture.join(1.0)
+            self.assertEqual(len(callbacks[0]), 4)
+            results[frequency] = callbacks[hops - 1][2]
+        self.assertLess(results[45.0], -0.3)
+        self.assertGreater(results[220.0], 0.3)
 
 
 if __name__ == "__main__":
