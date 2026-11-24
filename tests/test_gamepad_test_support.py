@@ -2081,8 +2081,8 @@ class GamepadMathTests(unittest.TestCase):
 
     def test_extra_rumble_templates_end_at_silence(self):
         for name in (
-            "heartbeat", "footsteps", "terrain", "low_rumble", "burst",
-            "machine_gun", "shotgun", "turbo", "rotor", "countdown",
+            "heartbeat", "footsteps", "terrain", "machine_gun", "rotor",
+            "countdown",
         ):
             pattern = GamepadTestWindow._rumble_pattern(None, name)
             self.assertIsNotNone(pattern)

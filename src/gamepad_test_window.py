@@ -2352,6 +2352,9 @@ class GamepadTestWindow:
         self.manual_lf_text = tk.StringVar(value="0%")
         self.manual_hf_text = tk.StringVar(value="0%")
         self.repeat_rumble_var = tk.BooleanVar(value=False)
+        # Overlap stacks a newly clicked template on the ones already
+        # playing; without it a new template replaces them.
+        self.overlap_rumble_var = tk.BooleanVar(value=False)
         self.rumble_repeat_hz_var = tk.DoubleVar(value=1.0)
         self.rumble_repeat_hz_text = tk.StringVar(value="1.0 Hz")
         self.rumble_strength_var = tk.DoubleVar(value=100.0)
@@ -5838,26 +5841,23 @@ class GamepadTestWindow:
         ttk.Label(
             group, textvariable=self.rumble_notice_var
         ).grid(row=0, column=0, columnspan=5, sticky="w", pady=(0, 8))
+        # Fifteen distinct templates fill a 5 x 3 grid, one row per kind:
+        # band checks and swells, hits, then ambience and cues.
         buttons = (
             ("LF 脈衝", "lf"),
             ("HF 脈衝", "hf"),
             ("交替", "alternate"),
-            ("撞擊", "impact"),
             ("漸強", "ramp"),
-            ("雙擊", "double_tap"),
-            ("連射", "rapid_fire"),
-            ("引擎", "engine"),
             ("波浪", "wave"),
-            ("警示", "alert"),
+            ("撞擊", "impact"),
+            ("雙擊", "double_tap"),
             ("心跳", "heartbeat"),
             ("節拍", "footsteps"),
-            ("路感", "terrain"),
-            ("低鳴", "low_rumble"),
-            ("爆裂", "burst"),
             ("機槍", "machine_gun"),
-            ("散彈", "shotgun"),
-            ("加速", "turbo"),
+            ("引擎", "engine"),
+            ("路感", "terrain"),
             ("旋翼", "rotor"),
+            ("警示", "alert"),
             ("倒數", "countdown"),
         )
         self.rumble_buttons = []
@@ -5897,18 +5897,25 @@ class GamepadTestWindow:
             command=self._on_repeat_rumble_changed,
         )
         repeat.grid(row=options_row, column=0, sticky="w", pady=(10, 0))
+        overlap = ttk.Checkbutton(
+            group,
+            text=self.gui.tr("重疊播放"),
+            variable=self.overlap_rumble_var,
+            command=self._on_overlap_rumble_changed,
+        )
+        overlap.grid(row=options_row, column=1, sticky="w", pady=(10, 0))
         template_lf = ttk.Checkbutton(
             group,
             text=self.gui.tr("模板 LF（左馬達）"),
             variable=self.template_lf_enabled_var,
         )
-        template_lf.grid(row=options_row, column=1, sticky="w", pady=(10, 0))
+        template_lf.grid(row=options_row, column=2, sticky="w", pady=(10, 0))
         template_hf = ttk.Checkbutton(
             group,
             text=self.gui.tr("模板 HF（右馬達）"),
             variable=self.template_hf_enabled_var,
         )
-        template_hf.grid(row=options_row, column=2, sticky="w", pady=(10, 0))
+        template_hf.grid(row=options_row, column=3, sticky="w", pady=(10, 0))
         controls = ttk.Frame(group)
         controls.grid(
             row=options_row + 1, column=0, columnspan=5,
@@ -5980,7 +5987,7 @@ class GamepadTestWindow:
             default=DEFAULT_RUMBLE_STRENGTH,
         )
         self.rumble_option_widgets.extend(
-            (repeat, template_lf, template_hf, repeat_rate, strength)
+            (repeat, overlap, template_lf, template_hf, repeat_rate, strength)
         )
 
         stop_footer = ttk.Frame(parent)
@@ -6029,12 +6036,25 @@ class GamepadTestWindow:
         self.manual_lf_text.set("0%")
         self.manual_hf_text.set("0%")
         self.repeat_rumble_var.set(False)
+        self.overlap_rumble_var.set(False)
         self.rumble_repeat_hz_var.set(DEFAULT_RUMBLE_REPEAT_HZ)
         self.rumble_repeat_hz_text.set(f"{DEFAULT_RUMBLE_REPEAT_HZ:.1f} Hz")
         self.rumble_strength_var.set(DEFAULT_RUMBLE_STRENGTH)
         self.rumble_strength_text.set(f"{DEFAULT_RUMBLE_STRENGTH:.0f}%")
         self.template_lf_enabled_var.set(True)
         self.template_hf_enabled_var.set(True)
+
+    def _template_layer_ids(self):
+        """Layer ids owned by template buttons, oldest first."""
+        return tuple(sorted(self._rumble_layer_templates))
+
+    def _on_overlap_rumble_changed(self):
+        if self.overlap_rumble_var.get():
+            return
+        # Leaving Overlap keeps only the most recently started template.
+        for layer_id in self._template_layer_ids()[:-1]:
+            self._cancel_rumble_layer(layer_id)
+        self._refresh_rumble_template_styles()
 
     def _on_repeat_rumble_changed(self):
         if self.repeat_rumble_var.get():
@@ -7492,7 +7512,13 @@ class GamepadTestWindow:
             self._active_rumble_slot = None
 
     def play_rumble(self, name):
-        """Play once, or toggle one repeating template layer on/off."""
+        """Play a template once, or toggle its loop with Repeat.
+
+        Repeat loops the clicked template until it is clicked again or
+        everything is stopped.  Overlap decides what a newly clicked
+        template does to the ones already playing: it stacks on top of
+        them, or, without Overlap, replaces them.
+        """
         if self._rumble_pattern(name) is None:
             return
         repeating = self.repeat_rumble_var.get()
@@ -7502,6 +7528,9 @@ class GamepadTestWindow:
                 for layer_id in active_layers:
                     self._cancel_rumble_layer(layer_id)
                 return
+        if not self.overlap_rumble_var.get():
+            for layer_id in self._template_layer_ids():
+                self._cancel_rumble_layer(layer_id)
         self._next_rumble_layer_id += 1
         layer_id = self._next_rumble_layer_id
         self._rumble_layers[layer_id] = (0.0, 0.0)
@@ -7533,11 +7562,6 @@ class GamepadTestWindow:
                 (0, 0.90, 0.35), (95, 0.0, 0.0),
                 (190, 0.90, 0.35), (310, 0.0, 0.0),
             ),
-            "rapid_fire": tuple(
-                (index * 70, 0.42, 0.78) if index % 2 == 0
-                else (index * 70, 0.0, 0.0)
-                for index in range(10)
-            ) + ((700, 0.0, 0.0),),
             "engine": (
                 (0, 0.20, 0.04), (120, 0.35, 0.07),
                 (240, 0.52, 0.10), (360, 0.68, 0.14),
@@ -7570,32 +7594,11 @@ class GamepadTestWindow:
                 (260, 0.14, 0.46), (325, 0.28, 0.20),
                 (390, 0.0, 0.0),
             ),
-            "low_rumble": (
-                (0, 0.18, 0.02), (180, 0.36, 0.03),
-                (360, 0.58, 0.05), (540, 0.76, 0.06),
-                (720, 0.48, 0.04), (900, 0.20, 0.02),
-                (1080, 0.0, 0.0),
-            ),
-            "burst": (
-                (0, 1.0, 0.86), (55, 0.78, 0.54),
-                (125, 0.42, 0.20), (260, 0.12, 0.04),
-                (420, 0.0, 0.0),
-            ),
             "machine_gun": tuple(
                 (index * 55, 0.18, 0.90) if index % 2 == 0
                 else (index * 55, 0.05, 0.08)
                 for index in range(18)
             ) + ((990, 0.0, 0.0),),
-            "shotgun": (
-                (0, 0.96, 0.82), (70, 0.44, 0.28),
-                (155, 0.16, 0.06), (320, 0.0, 0.0),
-            ),
-            "turbo": (
-                (0, 0.22, 0.30), (170, 0.32, 0.42),
-                (310, 0.44, 0.56), (420, 0.58, 0.68),
-                (500, 0.72, 0.80), (555, 0.86, 0.92),
-                (610, 0.0, 0.0),
-            ),
             "rotor": tuple(
                 (index * 95, 0.34 + (index % 3) * 0.10, 0.18)
                 for index in range(8)

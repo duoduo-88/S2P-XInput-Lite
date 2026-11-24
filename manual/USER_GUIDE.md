@@ -1129,8 +1129,10 @@ removes saved rounds.
    that supports rumble, then open **Rumble Test**.
 2. **Manual Output**: start low and move **LF Motor** and **HF Motor**.
 3. **Patterns**: select any pattern, such as Impact, Engine, or Machine Gun.
-   **Repeat** loops it, **LF / HF** choose the bands, and **Rate** and
-   **Strength** set its pace and strength.
+   **Repeat** loops the selected pattern until you select it again or stop
+   all rumble. **Overlap** plays a newly selected pattern on top of the ones
+   already playing; without it, the new pattern replaces them. **LF / HF**
+   choose the bands, and **Rate** and **Strength** set its pace and strength.
 4. Select **Stop All Rumble** when finished. **Reset** restores this tab.
 
 A Bridge test uses the current profile's LF/HF settings. With **Source** set
