@@ -219,7 +219,7 @@ def analyze_standalone_v2_compatibility(
         )
     try:
         motor_emulation = float(
-            sections.get("rumble", {}).get("motor_emulation", 0.0)
+            sections.get("audio_haptics", {}).get("motor_emulation", 0.0)
         )
     except (TypeError, ValueError):
         motor_emulation = 0.0

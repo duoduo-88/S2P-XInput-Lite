@@ -117,7 +117,6 @@ RUMBLE_SCHEMA = {
     "lf_frequency": _int("LF 頻率", "LF frequency", 0, 511),
     "hf_frequency": _int("HF 頻率", "HF frequency", 0, 511),
     "max_amplitude": _int("最大振幅", "maximum amplitude", 0, 1023),
-    "motor_emulation": _float("馬達模擬", "motor emulation", 0.0, 1.0, 2),
 }
 
 AUDIO_HAPTICS_SCHEMA = {
@@ -134,6 +133,7 @@ AUDIO_HAPTICS_SCHEMA = {
     "release_ms": _float("音訊釋放 ms", "release ms", 5.0, 2000.0),
     "final_tail_strength": _float("餘震強度", "tail strength", 0.0, 1.0, 2),
     "final_tail_decay_ms": _float("餘震衰減 ms", "tail decay ms", 50.0, 2000.0),
+    "motor_emulation": _float("馬達模擬", "motor emulation", 0.0, 1.0, 2),
     **{
         f"band_{index}_gain": _float(
             f"頻段 {index} 增益", f"band {index} gain", 0.0, 2.0, 2

@@ -571,7 +571,6 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
 | **LF Curve／HF Curve**（低頻／高頻輸出曲線） | 調整小訊號到大訊號的反應曲線。 |
 | **HF → LF Mix**（低頻補償） | 將部分高頻路徑混入低頻。 |
 | **LF → HF Mix**（高頻補償） | 將部分低頻路徑混入高頻。 |
-| **Motor Emulation**（馬達模擬） | 模擬 Xbox 傳統馬達：震動越強頻率越高，中等強度維持原本頻率。只影響遊戲震動；`0.00` 為關閉，獨立模式不支援。 |
 | **LF Frequency／HF Frequency**（LF／HF 頻率） | 兩個震動頻率命令。 |
 | **Max Amp**（最大振幅） | 限制最終振幅。範圍 `0–1023`，預設 `500`。 |
 
@@ -594,7 +593,8 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
 - **Mix**（混合）：以柔和飽和的方式合併遊戲震動與音訊震動，避免直接相加造成削波。
   **Mix** 比例在 0.50 以內時，遊戲震動維持完整強度，音訊依比例加入；超過 0.50 後遊戲震動逐步減弱，1.00 時只剩音訊震動。
 
-**Final Output**（最終輸出）的 **Tail**（餘震強度）與 **Decay ms**（衰減）控制震動尾端與衰減，
+**Final Output**（最終輸出）的 **Tail**（餘震強度）與 **Decay ms**（衰減）控制震動尾端與衰減；
+**Motor Emulation**（馬達模擬）模擬 Xbox 傳統馬達，遊戲震動越強頻率越高，中等強度維持原本頻率。它只影響遊戲震動，`0.00` 為關閉，獨立模式不支援。
 **Reset Defaults**（還原預設）還原本頁。
 
 ### 7.3 Audio（音訊）與 Mix（混合）模式

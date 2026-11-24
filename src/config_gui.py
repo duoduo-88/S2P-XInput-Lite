@@ -3196,11 +3196,6 @@ class ConfigGUI:
                 fallback="500"
             )
         )
-        self.motor_emulation_var = tk.StringVar(
-            value=self.config.get(
-                "rumble", "motor_emulation", fallback="0.00"
-            )
-        )
 
         # Windows 系統音訊轉震動
         self.audio_haptics_mode_var = tk.StringVar(
@@ -3284,6 +3279,11 @@ class ConfigGUI:
         self.audio_haptics_final_tail_decay_var = tk.StringVar(
             value=self.config.get(
                 "audio_haptics", "final_tail_decay_ms", fallback="160"
+            )
+        )
+        self.audio_haptics_motor_emulation_var = tk.StringVar(
+            value=self.config.get(
+                "audio_haptics", "motor_emulation", fallback="0.00"
             )
         )
 
@@ -11298,6 +11298,9 @@ class ConfigGUI:
             "final_tail_decay_ms": defaults.get(
                 "audio_haptics", "final_tail_decay_ms"
             ),
+            "motor_emulation": defaults.get(
+                "audio_haptics", "motor_emulation"
+            ),
         }
 
     def apply_audio_haptics_defaults(self, mode=None, set_mode=True):
@@ -11329,6 +11332,9 @@ class ConfigGUI:
             )
             self.audio_haptics_final_tail_decay_var.set(
                 defaults["final_tail_decay_ms"]
+            )
+            self.audio_haptics_motor_emulation_var.set(
+                defaults["motor_emulation"]
             )
         finally:
             self._applying_audio_haptics_defaults = False
@@ -11370,6 +11376,10 @@ class ConfigGUI:
             str(self.audio_haptics_final_tail_decay_var): (
                 self.audio_haptics_final_tail_decay_var,
                 defaults["final_tail_decay_ms"],
+            ),
+            str(self.audio_haptics_motor_emulation_var): (
+                self.audio_haptics_motor_emulation_var,
+                defaults["motor_emulation"],
             ),
         }
         for index, variable in enumerate(self.audio_haptics_band_gain_vars):

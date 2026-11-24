@@ -23,7 +23,7 @@ def build_rumble_section(gui, left_frame):
     rumble_content.grid(row=0, column=0, sticky="ns")
     rumble_frame.columnconfigure(0, weight=1)
     rumble_frame.rowconfigure(0, weight=1)
-    for row_index in range(10):
+    for row_index in range(9):
         rumble_content.rowconfigure(
             row_index,
             weight=1,
@@ -114,15 +114,4 @@ def build_rumble_section(gui, left_frame):
         "目前內建方案以 500 為上限；需要更強回饋時可逐步提高。\n"
         "數值越高，最強震動越大；接近 1023 時可能增加異音、共振與硬體負擔。",
         minimum=0, maximum=1023, step=10, number_format=".0f",
-    )
-    gui.add_entry(
-        rumble_content, 9, "馬達模擬", gui.motor_emulation_var,
-        "模擬 Xbox 傳統震動馬達的特性：震動越強，頻率越高。只影響遊戲震動。\n\n"
-        "設定範圍：0.00 ～ 1.00\n"
-        "0.00 = 關閉（固定使用 LF／HF 頻率）\n"
-        "1.00 = 最弱與最強的震動相差約半個八度\n"
-        "中等強度的震動維持原本的頻率；頻率會限制在安全範圍內（LF 約 160 ～ 260，HF 約 280 ～ 350）。\n"
-        "建議：想要接近 Xbox 手把的手感時試 0.50 ～ 1.00；競技與節奏用途建議關閉。\n"
-        "獨立模式不支援此功能。",
-        minimum=0.0, maximum=1.0, step=0.05,
     )

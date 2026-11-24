@@ -103,6 +103,18 @@ class GUIUserWorkflowTests(unittest.TestCase):
         self.assertEqual(self.callback_errors, [])
         self.assertEqual(self.errors, [])
 
+    def test_motor_emulation_is_disabled_only_for_audio_only_rumble(self):
+        gui = self.gui
+        scale = next(
+            widget for widget in gui.audio_motor_emulation_widgets
+            if isinstance(widget, ttk.Scale)
+        )
+        for mode, disabled in (("AUDIO", True), ("MIX", False), ("GAME", False)):
+            gui.audio_haptics_mode_var.set(mode)
+            gui._update_audio_response_state()
+            self.root.update_idletasks()
+            self.assertEqual(scale.instate(["disabled"]), disabled, mode)
+
     def test_footer_buttons(self):
         gui = self.gui
         calibration = gui.calibration_button

@@ -697,12 +697,12 @@ class XInputController:
         self.lf_frequency = rumble_settings["lf_frequency"]
         self.hf_frequency = rumble_settings["hf_frequency"]
         self.max_amplitude = rumble_settings["max_amplitude"]
-        self.motor_emulation = rumble_settings["motor_emulation"]
         self.audio_haptics_mode = audio_settings["mode"]
         self.audio_haptics_mix_ratio = audio_settings["mix_ratio"]
         self.audio_freq_follow = audio_settings["freq_follow"]
         self.final_tail_strength = audio_settings["final_tail_strength"]
         self.final_tail_decay_ms = audio_settings["final_tail_decay_ms"]
+        self.motor_emulation = audio_settings["motor_emulation"]
         self._game_rumble = (0, 0)
         self._audio_rumble = (0, 0)
         self._audio_frequency = (self.lf_frequency, self.hf_frequency)

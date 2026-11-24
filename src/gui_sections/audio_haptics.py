@@ -462,6 +462,18 @@ def build_audio_haptics_section(gui, mapping_notebook):
         "建議：100 ～ 225 ms；拉桿在常用區較密，之後逐步加大間距。",
         AUDIO_TAIL_DECAY_VALUES,
     )
+    # Motor Emulation only shapes game rumble, so AUDIO mode greys it out.
+    gui.audio_motor_emulation_widgets = add_audio_scale_row(
+        final_content, 2, "馬達模擬",
+        gui.audio_haptics_motor_emulation_var,
+        0.0, 1.0, 0.05, ".2f",
+        "模擬 Xbox 傳統震動馬達的特性：震動越強，頻率越高。只影響遊戲震動。\n\n"
+        "0.00 = 關閉（固定使用 LF／HF 頻率）\n"
+        "1.00 = 最弱與最強的震動相差約半個八度\n"
+        "中等強度的震動維持原本的頻率；頻率會限制在安全範圍內（LF 約 160 ～ 260，HF 約 280 ～ 350）。\n"
+        "建議：想要接近 Xbox 手把的手感時試 0.50 ～ 1.00；競技與節奏用途建議關閉。\n"
+        "獨立模式不支援此功能。",
+    )
 
     footer = ttk.Frame(audio_haptics_frame)
     footer.grid(row=4, column=0, sticky="ew")
@@ -504,6 +516,17 @@ def build_audio_haptics_section(gui, mapping_notebook):
                 try:
                     widget.configure(
                         state="normal" if enabled else "disabled"
+                    )
+                except tk.TclError:
+                    pass
+        game_enabled = mode in ("GAME", "MIX")
+        for widget in gui.audio_motor_emulation_widgets:
+            try:
+                widget.state(["!disabled"] if game_enabled else ["disabled"])
+            except (AttributeError, tk.TclError):
+                try:
+                    widget.configure(
+                        state="normal" if game_enabled else "disabled"
                     )
                 except tk.TclError:
                     pass

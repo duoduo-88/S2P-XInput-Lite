@@ -1022,8 +1022,8 @@ EN_TEXT = {
     "HF 頻率": "HF Frequency",
     "最大振幅": "Max Amp",
     "馬達模擬": "Motor Emulation",
-    "模擬 Xbox 傳統震動馬達的特性：震動越強，頻率越高。只影響遊戲震動。\n\n設定範圍：0.00 ～ 1.00\n0.00 = 關閉（固定使用 LF／HF 頻率）\n1.00 = 最弱與最強的震動相差約半個八度\n中等強度的震動維持原本的頻率；頻率會限制在安全範圍內（LF 約 160 ～ 260，HF 約 280 ～ 350）。\n建議：想要接近 Xbox 手把的手感時試 0.50 ～ 1.00；競技與節奏用途建議關閉。\n獨立模式不支援此功能。":
-        "Emulates classic Xbox rumble motors: the stronger the rumble, the higher the frequency. Affects game rumble only.\n\nRange: 0.00–1.00\n0.00 = off (fixed LF/HF frequencies)\n1.00 = the weakest and strongest rumble differ by about half an octave\nMedium rumble keeps the configured frequency; frequencies stay within a safe range (LF about 160–260, HF about 280–350).\nSuggested: try 0.50–1.00 for a feel closer to an Xbox controller; keep it off for competitive and rhythm use.\nNot supported in standalone mode.",
+    "模擬 Xbox 傳統震動馬達的特性：震動越強，頻率越高。只影響遊戲震動。\n\n0.00 = 關閉（固定使用 LF／HF 頻率）\n1.00 = 最弱與最強的震動相差約半個八度\n中等強度的震動維持原本的頻率；頻率會限制在安全範圍內（LF 約 160 ～ 260，HF 約 280 ～ 350）。\n建議：想要接近 Xbox 手把的手感時試 0.50 ～ 1.00；競技與節奏用途建議關閉。\n獨立模式不支援此功能。":
+        "Emulates classic Xbox rumble motors: the stronger the rumble, the higher the frequency. Affects game rumble only.\n\n0.00 = off (fixed LF/HF frequencies)\n1.00 = the weakest and strongest rumble differ by about half an octave\nMedium rumble keeps the configured frequency; frequencies stay within a safe range (LF about 160–260, HF about 280–350).\nSuggested: try 0.50–1.00 for a feel closer to an Xbox controller; keep it off for competitive and rhythm use.\nNot supported in standalone mode.",
     " 按鍵映射 ": " Buttons ",
     " 搖桿方向映射 ": " Stick Map ",
     "按鍵映射": "Button Mapping",

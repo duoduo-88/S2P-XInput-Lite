@@ -265,7 +265,7 @@ class StandaloneProfileTests(unittest.TestCase):
             "馬達模擬",
             {issue.feature for issue in analyze_standalone_v2_compatibility(settings)},
         )
-        settings["sections"].setdefault("rumble", {})["motor_emulation"] = 0.5
+        settings["sections"].setdefault("audio_haptics", {})["motor_emulation"] = 0.5
         issues = [
             issue for issue in analyze_standalone_v2_compatibility(settings)
             if issue.feature == "馬達模擬"

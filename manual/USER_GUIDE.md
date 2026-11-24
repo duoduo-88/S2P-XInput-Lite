@@ -708,7 +708,6 @@ The **Rumble** section at the lower left of the main window:
 | **LF Curve / HF Curve** | Response curve from small to large signals. |
 | **HF → LF Mix** | Blends part of the high-frequency path into low frequency. |
 | **LF → HF Mix** | Blends part of the low-frequency path into high frequency. |
-| **Motor Emulation** | Emulates classic Xbox motors: stronger rumble gets a higher frequency, while medium rumble keeps the configured frequency. Game rumble only; `0.00` is off and standalone mode ignores it. |
 | **LF Frequency / HF Frequency** | The two vibration frequency commands. |
 | **Max Amp** | Caps the final amplitude. Range `0–1023`, default `500`. |
 
@@ -738,7 +737,10 @@ feedback while reducing the chance of noise.
   rumble fades out until 1.00 leaves audio only.
 
 Under **Final Output**, **Tail** and **Decay ms** control the rumble's tail
-and fade. **Reset Defaults** restores this tab.
+and fade. **Motor Emulation** emulates classic Xbox motors: stronger game
+rumble gets a higher frequency, while medium rumble keeps the configured
+frequency. It affects game rumble only; `0.00` is off and standalone mode
+ignores it. **Reset Defaults** restores this tab.
 
 ### 7.3 Audio and Mix
 
