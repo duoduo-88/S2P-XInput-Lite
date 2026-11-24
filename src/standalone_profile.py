@@ -217,6 +217,17 @@ def analyze_standalone_v2_compatibility(
             issues, "ignored", "音訊震動",
             f"{audio_mode} 需要 Windows 音訊來源；獨立模式將使用 GAME。",
         )
+    try:
+        motor_emulation = float(
+            sections.get("rumble", {}).get("motor_emulation", 0.0)
+        )
+    except (TypeError, ValueError):
+        motor_emulation = 0.0
+    if motor_emulation > 0.0:
+        _issue(
+            issues, "ignored", "馬達模擬",
+            "獨立模式由韌體處理震動，將使用固定的 LF／HF 頻率。",
+        )
     gyro = sections.get("gyro_mapping", {})
     gyro_enabled = str(gyro.get("activation_mode", "OFF")).upper() != "OFF"
     if gyro_enabled and str(gyro.get("target", "RIGHT_STICK")).upper() == "MOUSE":

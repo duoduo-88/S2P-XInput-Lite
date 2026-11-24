@@ -117,13 +117,14 @@ RUMBLE_SCHEMA = {
     "lf_frequency": _int("LF 頻率", "LF frequency", 0, 511),
     "hf_frequency": _int("HF 頻率", "HF frequency", 0, 511),
     "max_amplitude": _int("最大振幅", "maximum amplitude", 0, 1023),
+    "motor_emulation": _float("馬達模擬", "motor emulation", 0.0, 1.0, 2),
 }
 
 AUDIO_HAPTICS_SCHEMA = {
     "mode": _enum("音訊震動模式", "audio haptics mode", "GAME", "AUDIO", "MIX"),
     "mix_ratio": _float("混合比例", "mix ratio", 0.0, 1.0, 2),
     "strength": _float("音訊強度", "audio strength", 0.0, 1.0, 2),
-    "audio_curve": _float("音訊曲線", "audio curve", 0.30, 1.00, 2),
+    "detail_boost": _float("細節增強", "detail boost", 0.0, 0.70, 2),
     "freq_follow": _float("頻率跟隨", "frequency follow", 0.0, 1.0, 2),
     "lf_hf_balance": _float(
         "LF／HF 分配重心", "LF/HF routing balance", -1.0, 1.0, 2

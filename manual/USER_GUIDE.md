@@ -708,6 +708,7 @@ The **Rumble** section at the lower left of the main window:
 | **LF Curve / HF Curve** | Response curve from small to large signals. |
 | **HF → LF Mix** | Blends part of the high-frequency path into low frequency. |
 | **LF → HF Mix** | Blends part of the low-frequency path into high frequency. |
+| **Motor Emulation** | Emulates classic Xbox motors: stronger rumble gets a higher frequency, while medium rumble keeps the configured frequency. Game rumble only; `0.00` is off and standalone mode ignores it. |
 | **LF Frequency / HF Frequency** | The two vibration frequency commands. |
 | **Max Amp** | Caps the final amplitude. Range `0–1023`, default `500`. |
 
@@ -748,7 +749,7 @@ and fade. **Reset Defaults** restores this tab.
 | Field | Description | Adjusting |
 |---|---|---|
 | **Lvl** | Overall sensitivity of audio-to-rumble. | Raise it if rumble is weak; lower it if sounds start too strong. |
-| **Curve** | Loudness-to-strength curve for audio rumble only. `1.00` is linear. | Lower it (try 0.60–0.75) to feel more quiet detail; maximum strength stays the same. |
+| **Detail** | Makes quieter sounds easier to feel (audio rumble only). `0.00` is off. | Raise it (start around 0.10) to feel more small detail; maximum strength stays the same and background sound near the gate is not amplified. Lower it if rumble feels busy. |
 | **Freq** | Lets the HD Rumble frequencies follow the tone of the sound (audio rumble only). `0.00` is off. | Raise it (try 0.50–1.00) for more textured variation. Deeper sounds lower the frequency and brighter sounds raise it, within about LF 160–260 and HF 280–350. |
 | **Gate** | Noise threshold. | Raise it if quiet scenes still rumble; lower it if only loud sounds react. |
 | **Atk** | Attack speed. | Lower values respond faster. |

@@ -78,6 +78,7 @@ def _rumble_values(gui) -> dict[str, Any]:
         "lf_frequency": _value(gui.lf_frequency_var),
         "hf_frequency": _value(gui.hf_frequency_var),
         "max_amplitude": _value(gui.max_amplitude_var),
+        "motor_emulation": _value(gui.motor_emulation_var),
     }
 
 
@@ -86,7 +87,7 @@ def _audio_values(gui) -> dict[str, Any]:
         "mode": _value(gui.audio_haptics_mode_var),
         "mix_ratio": _value(gui.audio_haptics_mix_ratio_var),
         "strength": _value(gui.audio_haptics_strength_var),
-        "audio_curve": _value(gui.audio_haptics_curve_var),
+        "detail_boost": _value(gui.audio_haptics_detail_var),
         "freq_follow": _value(gui.audio_haptics_freq_follow_var),
         "lf_hf_balance": _value(gui.audio_haptics_lf_hf_balance_var),
         "noise_gate": _value(gui.audio_haptics_noise_gate_var),

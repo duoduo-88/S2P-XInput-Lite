@@ -14,6 +14,7 @@ from xinput_controller import (
     XInputController,
     _blend_frequency,
     _followed_frequency,
+    _motor_frequency,
 )
 
 
@@ -152,6 +153,54 @@ class XInputRumbleDispatchTests(unittest.TestCase):
         controller.set_audio_rumble(0.5, 0.5, 1.0, 0.0)
         self.assertEqual(len(queued), 2)
         self.assertNotEqual(queued[0][2], queued[1][2])
+
+    def test_motor_frequency_rises_with_drive_and_keeps_half_drive(self):
+        self.assertEqual(_motor_frequency(215, 0.5, 1.0, LF_FOLLOW_RANGE), 215)
+        self.assertEqual(
+            _motor_frequency(215, 1.0, 1.0, LF_FOLLOW_RANGE),
+            round(215 * 2 ** 0.25),
+        )
+        self.assertEqual(
+            _motor_frequency(215, 0.1, 1.0, LF_FOLLOW_RANGE),
+            round(215 * 2 ** (0.25 * -0.8)),
+        )
+        self.assertEqual(_motor_frequency(215, 1.0, 0.0, LF_FOLLOW_RANGE), 215)
+        self.assertEqual(_motor_frequency(215, 0.0, 1.0, LF_FOLLOW_RANGE), 215)
+        self.assertEqual(_motor_frequency(320, 1.0, 1.0, HF_FOLLOW_RANGE), 350)
+        frequencies = [
+            _motor_frequency(215, value / 20, 1.0, LF_FOLLOW_RANGE)
+            for value in range(1, 21)
+        ]
+        self.assertEqual(frequencies, sorted(frequencies))
+
+    def _game_callback(self, controller, large, small):
+        controller._rumble_sender = object()
+        controller._rumble_input = (0, 0)
+        controller._rumble_input_count = 0
+        controller._rumble_peak_input = (0, 0)
+        controller._vibration_callback(None, None, large, small, 0, None)
+
+    def test_game_rumble_uses_motor_emulation_frequencies(self):
+        controller, queued = self._audio_controller("GAME", 0.0)
+        controller.motor_emulation = 1.0
+        self._game_callback(controller, 255, 255)
+        self.assertEqual(queued[-1][2], (round(215 * 2 ** 0.25), 350))
+        self._game_callback(controller, 128, 128)
+        lf_half = round(215 * 2 ** (0.25 * (2 * 128 / 255 - 1)))
+        self.assertEqual(queued[-1][2][0], lf_half)
+
+    def test_motor_emulation_off_keeps_game_frequencies_fixed(self):
+        controller, queued = self._audio_controller("GAME", 0.0)
+        controller.motor_emulation = 0.0
+        self._game_callback(controller, 255, 40)
+        self.assertEqual(queued[-1][2], (215, 320))
+
+    def test_mix_blends_emulated_game_and_audio_frequencies(self):
+        controller, queued = self._audio_controller("MIX", 1.0)
+        controller.motor_emulation = 1.0
+        controller._audio_rumble = (0, 0)
+        self._game_callback(controller, 255, 0)
+        self.assertEqual(queued[-1][2][0], round(215 * 2 ** 0.25))
 
     def test_mix_frequency_is_led_by_game_when_audio_is_silent(self):
         controller, queued = self._audio_controller("MIX", 1.0)

@@ -136,8 +136,9 @@ def _soft_mix(first, second, maximum):
     return int(maximum * (1.0 - (1.0 - first) * (1.0 - second)))
 
 
-# At Frequency Follow 1.00 a full -1..1 tilt moves the configured frequency
-# by a quarter octave either way.  Results are then held inside ranges the
+# At Frequency Follow (audio) or Motor Emulation (game) 1.00, a full -1..1
+# tilt moves the configured frequency by a quarter octave either way.
+# Results are then held inside ranges the
 # actuators render cleanly: below ~160 differences are hard to feel on some
 # controllers, and above ~350 HF turns buzzy or audibly resonant.  A
 # configured base frequency outside a range widens it rather than moving.
@@ -157,6 +158,20 @@ def _followed_frequency(base, tilt, follow, safe_range):
     high = max(safe_range[1], base)
     shifted = base * 2.0 ** (follow * FREQUENCY_FOLLOW_OCTAVES * tilt)
     return int(round(max(low, min(high, shifted))))
+
+
+def _motor_frequency(base, intensity, emulation, safe_range):
+    """Emulate an ERM motor: a harder drive spins faster and buzzes higher.
+
+    ``intensity`` is the raw 0..1 XInput motor value, which stands in for
+    motor voltage.  Half drive keeps the configured frequency, so tuned
+    medium rumble feels unchanged; weaker drive lowers it and stronger
+    drive raises it by up to a quarter octave at Motor Emulation 1.00.
+    """
+    intensity = max(0.0, min(1.0, float(intensity)))
+    if intensity <= 0.0:
+        return int(base)
+    return _followed_frequency(base, 2.0 * intensity - 1.0, emulation, safe_range)
 
 
 def _blend_frequency(game_frequency, audio_frequency, game_amp, audio_amp):
@@ -682,6 +697,7 @@ class XInputController:
         self.lf_frequency = rumble_settings["lf_frequency"]
         self.hf_frequency = rumble_settings["hf_frequency"]
         self.max_amplitude = rumble_settings["max_amplitude"]
+        self.motor_emulation = rumble_settings["motor_emulation"]
         self.audio_haptics_mode = audio_settings["mode"]
         self.audio_haptics_mix_ratio = audio_settings["mix_ratio"]
         self.audio_freq_follow = audio_settings["freq_follow"]
@@ -690,6 +706,7 @@ class XInputController:
         self._game_rumble = (0, 0)
         self._audio_rumble = (0, 0)
         self._audio_frequency = (self.lf_frequency, self.hf_frequency)
+        self._game_frequency = (self.lf_frequency, self.hf_frequency)
         self._rumble_input = (0, 0)
         self._rumble_input_count = 0
         self._rumble_peak_input = (0, 0)
@@ -1266,8 +1283,11 @@ class XInputController:
             audio_frequencies = getattr(
                 self, "_audio_frequency", base_frequencies
             )
+            game_frequencies = getattr(
+                self, "_game_frequency", base_frequencies
+            )
 
-        frequencies = base_frequencies
+        frequencies = game_frequencies
         if self.audio_haptics_mode == "AUDIO":
             lf_amp, hf_amp = audio_lf, audio_hf
             frequencies = audio_frequencies
@@ -1286,9 +1306,9 @@ class XInputController:
             lf_amp = _soft_mix(game_part[0], audio_part[0], self.max_amplitude)
             hf_amp = _soft_mix(game_part[1], audio_part[1], self.max_amplitude)
             frequencies = tuple(
-                _blend_frequency(base, audio, game_amp, audio_amp)
-                for base, audio, game_amp, audio_amp in zip(
-                    base_frequencies, audio_frequencies, game_part, audio_part
+                _blend_frequency(game, audio, game_amp, audio_amp)
+                for game, audio, game_amp, audio_amp in zip(
+                    game_frequencies, audio_frequencies, game_part, audio_part
                 )
             )
         else:
@@ -1613,8 +1633,18 @@ class XInputController:
             )
         )
 
+        emulation = getattr(self, "motor_emulation", 0.0)
+        game_frequencies = (
+            _motor_frequency(
+                self.lf_frequency, lf_input, emulation, LF_FOLLOW_RANGE
+            ),
+            _motor_frequency(
+                self.hf_frequency, hf_input, emulation, HF_FOLLOW_RANGE
+            ),
+        )
         with self._rumble_condition:
             self._game_rumble = (lf_amp, hf_amp)
+            self._game_frequency = game_frequencies
         self._publish_rumble_mix(priority=True)
 
     def _axis_pair(

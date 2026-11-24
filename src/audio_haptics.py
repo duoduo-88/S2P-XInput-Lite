@@ -353,27 +353,37 @@ def _dsp_v2_targets(
     return lf_target, hf_target, next_state, features, tactile
 
 
-def _spectral_band_rms(samples, sample_rate):
-    """Return low-latency, window-corrected RMS for the six bands.
+def _downmix(samples):
+    """Sum channels in amplitude and reference the result to stereo.
 
-    ``samples`` is either mono ``(frames,)`` or interleaved-decoded
-    ``(frames, channels)``.  Multichannel power is summed per channel and
-    referenced to stereo: identical L/R content reads like the same mono
-    signal, while a 5.1/7.1 endpoint carrying stereo (or LFE-only) content is
-    no longer diluted by the silent channels of an amplitude average.
+    Stereo keeps the original ``(L + R) / 2`` downmix exactly, so wide or
+    uncorrelated stereo sound does not read louder than before.  A 5.1/7.1
+    endpoint carrying stereo content matches a stereo endpoint instead of
+    being divided by its silent channels, and LFE-only content reads like
+    a single stereo channel.
     """
     data = np.asarray(samples, dtype=np.float32)
     if data.ndim == 1:
-        data = data[:, np.newaxis]
-    sample_count = int(data.shape[0])
-    channel_count = int(data.shape[1]) if data.ndim == 2 else 0
-    if sample_count < 8 or channel_count <= 0 or sample_rate <= 0:
+        return data
+    channel_count = max(1, int(data.shape[1]))
+    return np.sum(data, axis=1) / float(min(channel_count, 2))
+
+
+def _spectral_band_rms(samples, sample_rate):
+    """Return low-latency, window-corrected RMS for the six bands.
+
+    ``samples`` is either mono ``(frames,)`` or ``(frames, channels)``,
+    which is downmixed by ``_downmix``.
+    """
+    mono = _downmix(samples)
+    sample_count = int(mono.size)
+    if sample_count < 8 or sample_rate <= 0:
         return (0.0,) * len(AUDIO_BANDS_HZ)
     window, denominator, band_bins = _spectral_plan(
         sample_count, float(sample_rate)
     )
-    spectrum = np.fft.rfft(data * window[:, np.newaxis], axis=0)
-    power = np.sum(np.abs(spectrum) ** 2, axis=1) / min(channel_count, 2)
+    spectrum = np.fft.rfft(mono * window)
+    power = np.abs(spectrum) ** 2
     levels = []
     for start, stop in band_bins:
         band_power = float(np.sum(power[start:stop]))
@@ -420,6 +430,8 @@ class AudioHaptics:
     LOOPBACK_STALL_SECONDS = 0.040
     # Below this envelope level every amplitude rounds to zero.
     IDLE_LEVEL = 1e-3
+    # Detail Boost reaches its full lift at this routed level.
+    CURVE_KNEE = 0.15
 
     def __init__(self, config, level_callback):
         self._level_callback = level_callback
@@ -440,8 +452,10 @@ class AudioHaptics:
         if self.mode not in ("GAME", "AUDIO", "MIX"):
             self.mode = "GAME"
         self.strength = _bounded_float(config, section, "strength", 0.32, 0, 1)
-        self.audio_curve = _bounded_float(
-            config, section, "audio_curve", 1.0, 0.30, 1.0
+        # Detail Boost is the user-facing form of the audio power curve:
+        # 0.00 keeps the linear response; the exponent is 1 - boost.
+        self.detail_boost = _bounded_float(
+            config, section, "detail_boost", 0.0, 0.0, 0.70
         )
         legacy_low_gain = _bounded_float(
             config, section, "low_gain", 1.0, 0, 2
@@ -673,9 +687,7 @@ class AudioHaptics:
         analysis_frames = max(hop_frames, int(analysis_frames))
         # Starting with silence lets a new transient affect the first 5 ms
         # update instead of waiting for an entire 20 ms window to fill.
-        rolling_audio = np.zeros(
-            (analysis_frames, max(1, int(channels))), dtype=np.float32
-        )
+        rolling_audio = np.zeros(analysis_frames, dtype=np.float32)
 
         hop_seconds = hop_frames / sample_rate
         silent_audio = np.zeros(
@@ -754,17 +766,15 @@ class AudioHaptics:
                 previous_feature_levels = (0.0,) * len(AUDIO_BANDS_HZ)
                 output_idle = True
                 continue
+            mono = _downmix(samples)
             if frame_count >= analysis_frames:
-                rolling_audio[:] = samples[-analysis_frames:]
+                rolling_audio[:] = mono[-analysis_frames:]
             else:
                 rolling_audio[:-frame_count] = rolling_audio[frame_count:]
-                rolling_audio[-frame_count:] = samples
+                rolling_audio[-frame_count:] = mono
             band_rms = _spectral_band_rms(rolling_audio, sample_rate)
-            # Crest uses the loudest channel so a hard-panned or single
-            # channel sound keeps the same peak/RMS ratio as its mono form.
-            channel_power = np.mean(samples * samples, axis=0)
-            hop_rms = math.sqrt(float(np.max(channel_power)))
-            hop_peak = float(np.max(np.abs(samples)))
+            hop_rms = math.sqrt(float(np.mean(mono * mono)))
+            hop_peak = float(np.max(np.abs(mono)))
             feature_energies = tuple(
                 self._feature_energy_from_rms(rms, gain)
                 for rms, gain in zip(band_rms, self.band_gains)
@@ -865,11 +875,20 @@ class AudioHaptics:
         fixed while an exponent below 1.0 lifts quiet detail, so it widens the
         felt dynamic range without changing the maximum rumble.  Attack and
         release then operate on the shaped (felt) level.
+
+        A plain power curve lifts most where the level is smallest, turning
+        background sound just above the noise gate into constant buzz (an
+        exponent of 0.75 multiplied a 0.01 level by about 3).  The lift therefore fades in
+        with a smoothstep up to ``CURVE_KNEE``: near-gate levels stay linear
+        and the curve shapes the mid range where detail is meaningful.
         """
         level = _clamp01(level)
-        if self.audio_curve >= 1.0 or level <= 0.0:
+        if self.detail_boost <= 0.0 or level <= 0.0:
             return level
-        return level ** self.audio_curve
+        lifted = level ** (1.0 - self.detail_boost)
+        blend = min(1.0, level / self.CURVE_KNEE)
+        blend = blend * blend * (3.0 - 2.0 * blend)
+        return level + (lifted - level) * blend
 
     def _smooth_envelope(self, current, target, block_seconds):
         duration_ms = self.attack_ms if target > current else self.release_ms

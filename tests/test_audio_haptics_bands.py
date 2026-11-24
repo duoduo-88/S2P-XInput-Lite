@@ -120,29 +120,42 @@ class AudioHapticsBandTests(unittest.TestCase):
             5,
         )
 
-    def test_packaged_default_audio_curve_is_linear(self):
+    def test_packaged_default_detail_boost_is_off(self):
         audio = self._default_audio()
-        self.assertEqual(audio.audio_curve, 1.0)
+        self.assertEqual(audio.detail_boost, 0.0)
         for level in (0.0, 0.05, 0.3, 1.0):
             self.assertEqual(audio._shape_level(level), level)
 
-    def test_audio_curve_lifts_quiet_levels_but_keeps_full_scale(self):
+    def test_detail_boost_lifts_quiet_levels_but_keeps_full_scale(self):
         audio = self._default_audio()
-        audio.audio_curve = 0.6
+        audio.detail_boost = 0.4
         self.assertEqual(audio._shape_level(0.0), 0.0)
         self.assertAlmostEqual(audio._shape_level(1.0), 1.0)
-        self.assertAlmostEqual(audio._shape_level(0.1), 0.1 ** 0.6)
+        # Above the knee the full power curve applies.
+        knee = audio.CURVE_KNEE
+        for level in (knee, 0.3, 0.6):
+            self.assertAlmostEqual(audio._shape_level(level), level ** 0.6)
         self.assertGreater(audio._shape_level(0.1), 0.2)
-        levels = [audio._shape_level(value / 10) for value in range(11)]
+        levels = [audio._shape_level(value / 1000) for value in range(1001)]
         self.assertEqual(levels, sorted(levels))
 
-    def test_audio_curve_is_bounded_when_loaded(self):
+    def test_detail_boost_does_not_amplify_near_gate_background(self):
+        audio = self._default_audio()
+        audio.detail_boost = 0.4
+        # A bare power curve would lift 0.01 to ~0.063 (6x) and turn
+        # background sound into constant buzz.
+        self.assertLess(audio._shape_level(0.01), 0.01 * 1.3)
+        self.assertLess(audio._shape_level(0.02), 0.02 * 1.8)
+
+    def test_detail_boost_is_bounded_when_loaded(self):
         config = configparser.ConfigParser()
         config.read(
             ROOT / "src" / "profiles" / "System Default.ini", encoding="utf-8"
         )
-        config.set("audio_haptics", "audio_curve", "0.05")
-        self.assertEqual(AudioHaptics(config, lambda *_: None).audio_curve, 0.30)
+        config.set("audio_haptics", "detail_boost", "0.95")
+        self.assertEqual(AudioHaptics(config, lambda *_: None).detail_boost, 0.70)
+        config.set("audio_haptics", "detail_boost", "-0.2")
+        self.assertEqual(AudioHaptics(config, lambda *_: None).detail_boost, 0.0)
 
     def test_loud_bass_does_not_leak_into_upper_bands(self):
         sample_rate = 48000
@@ -625,12 +638,28 @@ class AudioHapticsBandTests(unittest.TestCase):
             _spectral_band_rms(stereo, sample_rate),
             rtol=1e-5,
         )
-        # LFE-only content keeps most of its level instead of 1/6 of it.
+        # LFE-only content reads like one stereo channel (half), not the
+        # 1/6 that averaging all six channels used to leave.
         lfe_only = np.zeros((960, 6), dtype=np.float32)
         lfe_only[:, 3] = mono
-        lfe_low = _spectral_band_rms(lfe_only, sample_rate)[0]
-        stereo_low = _spectral_band_rms(stereo, sample_rate)[0]
-        self.assertGreater(lfe_low, stereo_low * 0.7)
+        left_only = np.zeros((960, 2), dtype=np.float32)
+        left_only[:, 0] = mono
+        np.testing.assert_allclose(
+            _spectral_band_rms(lfe_only, sample_rate),
+            _spectral_band_rms(left_only, sample_rate),
+            rtol=1e-5,
+        )
+
+    def test_wide_stereo_keeps_the_original_downmix_level(self):
+        # Uncorrelated L/R must not read louder than the original
+        # (L + R) / 2 downmix; summing power did, by about 3 dB.
+        rng = np.random.default_rng(7)
+        stereo = (0.1 * rng.standard_normal((960, 2))).astype(np.float32)
+        np.testing.assert_allclose(
+            _spectral_band_rms(stereo, 48000),
+            _spectral_band_rms(stereo.mean(axis=1), 48000),
+            rtol=1e-5,
+        )
 
     def test_surround_capture_matches_stereo_capture(self):
         sample_rate = 48000
