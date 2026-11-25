@@ -858,11 +858,11 @@ EN_TEXT = {
     "持續按壓": "Held",
     "已放開": "Released",
     "心跳": "Heartbeat",
-    "節拍": "Footsteps",
+    "腳步": "Footsteps",
     "路感": "Terrain",
     "機槍": "Machine Gun",
     "旋翼": "Rotor",
-    "倒數": "Countdown",
+    "起跑倒數": "Start Countdown",
     "繪製 — FPS": "Render — FPS",
     "繪製 {fps:.0f} FPS": "Render {fps:.0f} FPS",
     "選擇支援震動的 XInput 手把":

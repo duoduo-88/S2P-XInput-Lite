@@ -130,6 +130,122 @@ class RumbleTemplateSetTests(unittest.TestCase):
             self.assertIsNotNone(pattern, name)
             self.assertEqual(pattern[-1][1:], (0.0, 0.0), name)
 
+    @staticmethod
+    def pulses(pattern):
+        """Return (on, off, peak) for each non-silent run of a pattern."""
+        found = []
+        start = None
+        peak = 0.0
+        for delay, left, right in pattern:
+            level = max(left, right)
+            if level > 0.0 and start is None:
+                start, peak = delay, level
+            elif level > 0.0:
+                peak = max(peak, level)
+            elif start is not None:
+                found.append((start, delay, peak))
+                start = None
+        return found
+
+    def test_short_effects_keep_their_own_timing_at_one_hz(self):
+        # Stretching to the 1000 ms cycle used to slow these down 2-3x.
+        for name in (
+            "impact", "double_tap", "alert", "heartbeat", "machine_gun",
+            "footsteps", "engine", "rotor", "countdown",
+        ):
+            pattern = GamepadTestWindow._rumble_pattern(None, name)
+            self.assertEqual(max(delay for delay, _, _ in pattern), 1000, name)
+
+    def test_double_tap_matches_the_pin_cue(self):
+        # rumble_protocol.PIN_FEEDBACK_PATTERN: 80 ms on, 100 ms off, 80 ms on.
+        taps = self.pulses(GamepadTestWindow._rumble_pattern(None, "double_tap"))
+        self.assertEqual([(on, off) for on, off, _ in taps], [(0, 80), (180, 260)])
+        pattern = GamepadTestWindow._rumble_pattern(None, "double_tap")
+        self.assertEqual(
+            {(left, right) for _, left, right in pattern if left or right},
+            {(1.0, 1.0)},
+        )
+
+    def test_footsteps_are_two_short_heel_strikes_per_second(self):
+        steps = self.pulses(GamepadTestWindow._rumble_pattern(None, "footsteps"))
+        self.assertEqual([on for on, _, _ in steps], [0, 500])
+        self.assertTrue(all(off - on <= 90 for on, off, _ in steps))
+        self.assertNotEqual(steps[0][2], steps[1][2])
+
+    def test_engine_idles_with_fast_lf_pulsation(self):
+        pattern = GamepadTestWindow._rumble_pattern(None, "engine")
+        body = [step for step in pattern if step[0] < 1000]
+        self.assertEqual(len(self.pulses(pattern)), 1)  # continuous
+        self.assertEqual({b[0] - a[0] for a, b in zip(body, body[1:])}, {40})
+        levels = [left for _, left, _ in body]
+        self.assertTrue(all(a != b for a, b in zip(levels, levels[1:])))
+        self.assertTrue(all(left > right for _, left, right in body))
+
+    def test_rotor_thumps_five_times_per_second_over_a_hum(self):
+        pattern = GamepadTestWindow._rumble_pattern(None, "rotor")
+        thumps = [delay for delay, left, _ in pattern if left >= 0.7]
+        self.assertEqual(thumps, [0, 200, 400, 600, 800])
+        hum = [left for delay, left, _ in pattern if 0 < delay < 1000 and left < 0.2]
+        self.assertTrue(hum and all(level > 0.0 for level in hum))
+
+    def test_terrain_grain_fills_the_cycle_at_its_own_size(self):
+        pattern = GamepadTestWindow._rumble_pattern(None, "terrain")
+        delays = [delay for delay, _, _ in pattern]
+        self.assertGreaterEqual(max(delays), 950)
+        self.assertEqual({b - a for a, b in zip(delays, delays[1:])}, {65})
+
+    def test_machine_gun_fires_short_separated_shots(self):
+        pattern = GamepadTestWindow._rumble_pattern(None, "machine_gun")
+        shots = self.pulses(pattern)
+        self.assertEqual(len(shots), 10)
+        for on, off, peak in shots:
+            self.assertLessEqual(off - on, 60)
+            self.assertGreaterEqual(peak, 0.8)
+        self.assertEqual({b[0] - a[0] for a, b in zip(shots, shots[1:])}, {100})
+        # Every shot carries a recoil kick, not only a high-frequency buzz.
+        firsts = [step for step in pattern if step[0] % 100 == 0 and step[1] > 0]
+        self.assertTrue(all(left >= 0.5 for _, left, _ in firsts))
+        # Between shots the motors are fully released.
+        self.assertTrue(all(
+            (left, right) == (0.0, 0.0)
+            for delay, left, right in pattern if delay % 100 == 60
+        ))
+
+    def test_countdown_is_three_ticks_then_a_strong_go(self):
+        pattern = GamepadTestWindow._rumble_pattern(None, "countdown")
+        pulses = self.pulses(pattern)
+        self.assertEqual(len(pulses), 4)
+        ticks, go = pulses[:3], pulses[3]
+        # Three identical short ticks at an even pace ...
+        self.assertEqual({off - on for on, off, _ in ticks}, {60})
+        self.assertEqual({peak for _, _, peak in ticks}, {0.70})
+        self.assertEqual({b[0] - a[0] for a, b in zip(ticks, ticks[1:])}, {200})
+        # ... then a longer, stronger GO that also carries LF.
+        self.assertGreater(go[1] - go[0], 200)
+        self.assertGreater(go[2], 0.70)
+        self.assertTrue(any(
+            left > 0.5 for delay, left, _ in pattern if delay >= go[0]
+        ))
+        self.assertTrue(all(
+            left == 0.0 for delay, left, _ in pattern if delay < go[0]
+        ))
+
+    def test_heartbeat_is_lub_dub_then_a_long_rest(self):
+        pattern = GamepadTestWindow._rumble_pattern(None, "heartbeat")
+        cycle = max(delay for delay, _, _ in pattern)
+        beats = self.pulses(pattern)
+        self.assertEqual(len(beats), 2)
+        (first_on, first_off, first_peak), (second_on, second_off, second_peak) = beats
+        # Two short thumps, the first stronger, close together ...
+        self.assertLessEqual(first_off - first_on, cycle * 0.15)
+        self.assertLessEqual(second_off - second_on, cycle * 0.15)
+        self.assertGreater(first_peak, second_peak)
+        self.assertLess(second_on - first_off, cycle * 0.2)
+        # ... then a rest longer than the lub-dub itself.
+        self.assertGreater(cycle - second_off, second_off)
+        # LF carries the thump.
+        self.assertTrue(all(left >= right for _, left, right in pattern))
+
     def test_near_duplicate_templates_are_gone(self):
         for name in ("rapid_fire", "low_rumble", "burst", "shotgun", "turbo"):
             self.assertIsNone(GamepadTestWindow._rumble_pattern(None, name))

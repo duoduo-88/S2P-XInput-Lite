@@ -5852,13 +5852,13 @@ class GamepadTestWindow:
             ("撞擊", "impact"),
             ("雙擊", "double_tap"),
             ("心跳", "heartbeat"),
-            ("節拍", "footsteps"),
+            ("腳步", "footsteps"),
             ("機槍", "machine_gun"),
             ("引擎", "engine"),
             ("路感", "terrain"),
             ("旋翼", "rotor"),
             ("警示", "alert"),
-            ("倒數", "countdown"),
+            ("起跑倒數", "countdown"),
         )
         self.rumble_buttons = []
         self.rumble_buttons_by_template = {}
@@ -7550,24 +7550,33 @@ class GamepadTestWindow:
                 (440, 0.80, 0.0), (660, 0.0, 0.80),
                 (880, 0.0, 0.0),
             ),
+            # Patterns are stretched to fill one cycle (1000 ms at 1.0 Hz).
+            # Short effects end with a written-out rest at 1000 so their
+            # own timing is kept instead of being slowed down.
             "impact": (
                 (0, 0.90, 0.70), (90, 0.60, 0.25),
                 (220, 0.30, 0.08), (450, 0.0, 0.0),
+                (1000, 0.0, 0.0),
             ),
             "ramp": tuple(
                 (index * 80, index / 10.0, index / 12.0)
                 for index in range(1, 11)
             ) + ((920, 0.0, 0.0),),
+            # The PIN / connection cue: two equal full-strength LF + HF
+            # pulses of 80 ms with a 100 ms gap (rumble_protocol).
             "double_tap": (
-                (0, 0.90, 0.35), (95, 0.0, 0.0),
-                (190, 0.90, 0.35), (310, 0.0, 0.0),
+                (0, 1.0, 1.0), (80, 0.0, 0.0),
+                (180, 1.0, 1.0), (260, 0.0, 0.0),
+                (1000, 0.0, 0.0),
             ),
-            "engine": (
-                (0, 0.20, 0.04), (120, 0.35, 0.07),
-                (240, 0.52, 0.10), (360, 0.68, 0.14),
-                (480, 0.52, 0.10), (600, 0.35, 0.07),
-                (720, 0.20, 0.04), (840, 0.0, 0.0),
-            ),
+            # Idle engine: continuous LF that rises and falls every 40 ms,
+            # like rough combustion, instead of one slow swell.
+            "engine": tuple(
+                (index * 40,) + (
+                    (0.42, 0.06) if index % 2 == 0 else (0.24, 0.03)
+                )
+                for index in range(25)
+            ) + ((1000, 0.0, 0.0),),
             "wave": (
                 (0, 0.15, 0.10), (130, 0.35, 0.28),
                 (260, 0.60, 0.55), (390, 0.82, 0.78),
@@ -7578,36 +7587,73 @@ class GamepadTestWindow:
                 (0, 0.0, 0.95), (70, 0.0, 0.0),
                 (150, 0.0, 0.95), (220, 0.0, 0.0),
                 (300, 0.0, 0.95), (390, 0.0, 0.0),
+                (1000, 0.0, 0.0),
             ),
+            # Lub-dub, then rest.  Patterns are stretched to fill one cycle,
+            # so the rest is written out: ending at 1000 makes 1.0 Hz a
+            # 60 bpm heart with ~100 ms decaying thumps, a stronger first
+            # beat, and a long pause before the next pair.
             "heartbeat": (
-                (0, 0.76, 0.14), (110, 0.0, 0.0),
-                (235, 0.48, 0.08), (360, 0.0, 0.0),
+                (0, 0.90, 0.10), (45, 0.60, 0.05),
+                (95, 0.25, 0.0), (130, 0.0, 0.0),
+                (250, 0.65, 0.06), (290, 0.38, 0.03),
+                (335, 0.12, 0.0), (365, 0.0, 0.0),
+                (1000, 0.0, 0.0),
             ),
+            # Walking: two steps per second, each a short LF heel strike
+            # that decays within 90 ms; left and right feet differ slightly.
             "footsteps": (
-                (0, 0.38, 0.20), (90, 0.0, 0.0),
-                (310, 0.46, 0.24), (410, 0.0, 0.0),
-                (650, 0.38, 0.20), (740, 0.0, 0.0),
+                (0, 0.60, 0.12), (40, 0.32, 0.05),
+                (90, 0.0, 0.0),
+                (500, 0.50, 0.10), (540, 0.26, 0.04),
+                (590, 0.0, 0.0),
+                (1000, 0.0, 0.0),
             ),
-            "terrain": (
-                (0, 0.12, 0.42), (65, 0.26, 0.18),
-                (130, 0.10, 0.56), (195, 0.32, 0.16),
-                (260, 0.14, 0.46), (325, 0.28, 0.20),
-                (390, 0.0, 0.0),
-            ),
+            # Road grain repeats across the whole cycle so each 65 ms grain
+            # keeps its size instead of being stretched apart.
+            "terrain": tuple(
+                (index * 65,) + (
+                    (0.12, 0.42), (0.26, 0.18), (0.10, 0.56),
+                    (0.32, 0.16), (0.14, 0.46), (0.28, 0.20),
+                )[index % 6]
+                for index in range(15)
+            ) + ((975, 0.0, 0.0),),
+            # 600 rounds/min: each shot is a recoil kick (LF) with a crack
+            # (HF) that decays within 60 ms, then full silence until the
+            # next round.  Slight per-shot variation avoids a buzzer feel.
             "machine_gun": tuple(
-                (index * 55, 0.18, 0.90) if index % 2 == 0
-                else (index * 55, 0.05, 0.08)
-                for index in range(18)
-            ) + ((990, 0.0, 0.0),),
+                step
+                for index in range(10)
+                for lf, hf in (
+                    (0.72 - 0.07 * (index % 3), 0.90 - 0.06 * (index % 2)),
+                )
+                for step in (
+                    (index * 100, lf, hf),
+                    (index * 100 + 20, lf * 0.6, hf * 0.45),
+                    (index * 100 + 40, lf * 0.25, hf * 0.15),
+                    (index * 100 + 60, 0.0, 0.0),
+                )
+            ) + ((1000, 0.0, 0.0),),
+            # Helicopter "whop-whop": five LF blade thumps per second over a
+            # faint continuous hum.
             "rotor": tuple(
-                (index * 95, 0.34 + (index % 3) * 0.10, 0.18)
-                for index in range(8)
-            ) + ((760, 0.0, 0.0),),
+                step
+                for index in range(5)
+                for step in (
+                    (index * 200, 0.75, 0.10),
+                    (index * 200 + 40, 0.40, 0.05),
+                    (index * 200 + 80, 0.14, 0.03),
+                )
+            ) + ((1000, 0.0, 0.0),),
+            # Race start: three equal HF ticks ("3, 2, 1"), then a strong,
+            # longer LF + HF "GO" that fades out before a short rest.
             "countdown": (
-                (0, 0.0, 0.62), (90, 0.0, 0.0),
-                (300, 0.0, 0.70), (380, 0.0, 0.0),
-                (520, 0.0, 0.80), (580, 0.0, 0.0),
-                (670, 0.0, 0.92), (720, 0.0, 0.0),
+                (0, 0.0, 0.70), (60, 0.0, 0.0),
+                (200, 0.0, 0.70), (260, 0.0, 0.0),
+                (400, 0.0, 0.70), (460, 0.0, 0.0),
+                (600, 0.90, 0.95), (700, 0.75, 0.70),
+                (800, 0.45, 0.30), (880, 0.15, 0.05),
+                (900, 0.0, 0.0), (1000, 0.0, 0.0),
             ),
         }
         return patterns.get(name)
