@@ -776,6 +776,17 @@ ignores it. **Reset Defaults** restores this tab.
 change the six band gains. `-1.00` favors LF, `0.00` is balanced, and `+1.00`
 favors HF. Start between `-0.15` and `+0.15`.
 
+**Voice Cut**, below LF/HF Balance, is for films and shows: while speech is
+recognised it lowers rumble from the bands the voice occupies, so dialogue no
+longer rumbles constantly. Explosions, gunshots, punches, blades and other
+impacts are not cut, even when they land over dialogue. `0.00` is off; use
+`0.80–1.00` for films. Sung vocals are treated as speech too, so leave it off
+for music. While it is on, rumble is delayed by about 15 ms so each sentence is
+recognised from its first syllable; the delay is not noticeable with video.
+
+The **Movie** profile turns Voice Cut on and raises the H-Mid, High and Ultra
+bands so gunshots and metal hits such as blades are clearly felt.
+
 ### 7.5 High-frequency noise
 
 If Audio or Mix produces a constant high-pitched sound:

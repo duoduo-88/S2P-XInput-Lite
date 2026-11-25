@@ -187,8 +187,8 @@ switching, gyro mouse, or BLE HID.
   `app/src/profiles/System Default.ini`, and keys missing from an older file
   are added without overwriting existing values. Keep `System Default.ini` in
   every release package.
-- The first launch provides General, Audio, FPS-COMP, FPS-IMM, Racing, Action,
-  and Rhythm profiles. **System Default** is a read-only baseline, and
+- The first launch provides General, Audio, Movie, FPS-COMP, FPS-IMM, Racing,
+  Action, and Rhythm profiles. **System Default** is a read-only baseline, and
   **Defaults** resets the current controls without deleting saved profiles or calibration.
 - Mapping layer files are global and stored in `app/src/layers`. Each profile
   stores which layers are enabled and their order. Only the highest-priority

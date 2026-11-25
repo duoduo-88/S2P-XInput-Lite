@@ -147,7 +147,7 @@ Windows 鍵盤／滑鼠輸出、音訊震動、依程式自動切換方案、陀
 - 設定與每支手把的搖桿校正儲存在 `app/src/config.ini`。檔案不存在時會以
   `app/src/profiles/System Default.ini` 建立；舊設定缺少的欄位會自動補齊，不會覆寫既有值。
   每個發佈包都必須保留 `System Default.ini`。
-- 首次啟動提供 General、Audio、FPS-COMP、FPS-IMM、Racing、Action 與 Rhythm 方案。
+- 首次啟動提供 General、Audio、Movie、FPS-COMP、FPS-IMM、Racing、Action 與 Rhythm 方案。
   **System Default** 是唯讀基準；**還原預設** 只重設目前畫面，不會刪除已儲存的方案或校正資料。
 - 映射層檔案是全域資源，存放在 `app/src/layers`；各方案會保存啟用哪些映射層與其順序。
   同一時間只套用優先權最高的符合映射層：按住優先於切換，其餘依清單順序決定。

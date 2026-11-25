@@ -128,6 +128,9 @@ AUDIO_HAPTICS_SCHEMA = {
     "lf_hf_balance": _float(
         "LF／HF 分配重心", "LF/HF routing balance", -1.0, 1.0, 2
     ),
+    "voice_suppression": _float(
+        "人聲抑制", "voice suppression", 0.0, 1.0, 2
+    ),
     "noise_gate": _float("噪音閘", "noise gate", 0.0, 0.25, 3),
     "attack_ms": _float("啟動 ms", "attack ms", 1.0, 500.0),
     "release_ms": _float("音訊釋放 ms", "release ms", 5.0, 2000.0),

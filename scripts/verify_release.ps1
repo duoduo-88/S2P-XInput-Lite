@@ -262,6 +262,7 @@ $expectedProfiles = @(
     "FPS-COMP.ini",
     "FPS-IMM.ini",
     "General.ini",
+    "Movie.ini",
     "Racing.ini",
     "Rhythm.ini",
     "System Default.ini"

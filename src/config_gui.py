@@ -3228,6 +3228,11 @@ class ConfigGUI:
                 "audio_haptics", "lf_hf_balance", fallback="0.00"
             )
         )
+        self.audio_haptics_voice_suppression_var = tk.StringVar(
+            value=self.config.get(
+                "audio_haptics", "voice_suppression", fallback="0.00"
+            )
+        )
         try:
             legacy_audio_low_gain = self.config.getfloat(
                 "audio_haptics", "low_gain", fallback=1.00
@@ -11282,6 +11287,9 @@ class ConfigGUI:
             "strength": defaults.get("audio_haptics", "strength"),
             "detail_boost": defaults.get("audio_haptics", "detail_boost"),
             "freq_follow": defaults.get("audio_haptics", "freq_follow"),
+            "voice_suppression": defaults.get(
+                "audio_haptics", "voice_suppression"
+            ),
             "lf_hf_balance": defaults.get(
                 "audio_haptics", "lf_hf_balance"
             ),
@@ -11317,6 +11325,9 @@ class ConfigGUI:
             self.audio_haptics_strength_var.set(defaults["strength"])
             self.audio_haptics_detail_var.set(defaults["detail_boost"])
             self.audio_haptics_freq_follow_var.set(defaults["freq_follow"])
+            self.audio_haptics_voice_suppression_var.set(
+                defaults["voice_suppression"]
+            )
             self.audio_haptics_lf_hf_balance_var.set(
                 defaults["lf_hf_balance"]
             )
@@ -11355,6 +11366,10 @@ class ConfigGUI:
             ),
             str(self.audio_haptics_freq_follow_var): (
                 self.audio_haptics_freq_follow_var, defaults["freq_follow"]
+            ),
+            str(self.audio_haptics_voice_suppression_var): (
+                self.audio_haptics_voice_suppression_var,
+                defaults["voice_suppression"],
             ),
             str(self.audio_haptics_lf_hf_balance_var): (
                 self.audio_haptics_lf_hf_balance_var,

@@ -398,14 +398,33 @@ def build_audio_haptics_section(gui, mapping_notebook):
         show_help=False,
     )
     gui.audio_haptics_response_widgets.extend(routing_widgets)
+    # Voice Suppression decides which sounds become rumble, like the bands
+    # above it.  It takes the row the description used to fill, so the
+    # tallest tab (this one) does not grow.
+    voice_widgets = add_audio_scale_row(
+        routing_content,
+        1,
+        "人聲抑制",
+        gui.audio_haptics_voice_suppression_var,
+        0.0,
+        1.0,
+        0.05,
+        ".2f",
+        "看電影、影集時，讓講話不再一直震動，只影響音訊震動。\n\n"
+        "0.00 = 關閉（原本的手感，聽音樂建議維持關閉）\n"
+        "提高：辨識到人聲時，壓低人聲所在頻段的震動\n"
+        "爆炸、槍聲、拳腳、刀劍等撞擊聲不會被壓低，"
+        "疊在對白上時也會照常震動。\n"
+        "歌曲的人聲也會被當成講話。\n"
+        "建議：看電影 0.80 ～ 1.00。",
+        length=170,
+        label_width=11,
+    )
+    gui.audio_haptics_response_widgets.extend(voice_widgets)
 
     eq_description = ttk.Label(
         eq_frame,
-        text=(
-            "六頻段：調整不同聲音範圍轉成震動的強弱。\n"
-            "LF／HF 重心：調整中間頻段偏向低頻或高頻輸出。\n"
-            "將游標移到這段文字，可查看完整對照與操作說明。"
-        ),
+        text="將游標移到這裡，可查看六頻段與 LF／HF 重心的說明。",
         justify="left",
         wraplength=310,
         cursor="question_arrow",
@@ -428,6 +447,8 @@ def build_audio_haptics_section(gui, mapping_notebook):
         "LF／HF 重心只改變中間頻段的輸出分配，不改變六段增益：\n"
         "-1.00 偏向 LF；0.00 平衡；+1.00 偏向 HF。\n"
         "建議先在 -0.15 ～ +0.15 內調整。\n\n"
+        "人聲抑制：辨識到講話時壓低人聲頻段，撞擊聲照常保留；"
+        "看電影時使用，聽音樂建議關閉。\n\n"
         "本區只影響音訊與混合模式，不影響純遊戲震動。"
     )
     gui.bind_help_tooltip(eq_description, eq_region_help)

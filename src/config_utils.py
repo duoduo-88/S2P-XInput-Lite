@@ -58,6 +58,7 @@ BUNDLED_PROFILE_NAMES = (
     "Racing",
     "Rhythm",
     "Audio",
+    "Movie",
 )
 
 PROTECTED_PROFILE_NAMES = frozenset(("System Default",))
@@ -69,6 +70,7 @@ PROFILE_DISPLAY_ORDER = (
     "Racing",
     "Rhythm",
     "Audio",
+    "Movie",
 )
 
 _REMOVED_BUNDLED_PROFILES = (

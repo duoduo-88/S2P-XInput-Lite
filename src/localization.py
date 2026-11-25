@@ -1111,6 +1111,7 @@ EN_TEXT = {
     "強度": "Lvl",
     "細節增強": "Detail",
     "頻率跟隨": "Freq",
+    "人聲抑制": "Voice Cut",
     "低頻": "LF",
     "高頻": "HF",
     "噪閘": "Gate",
@@ -2003,10 +2004,12 @@ EN_TEXT = {
 
     "六個控制點的實際頻率範圍：\n\n低：20 ～ 120 Hz\n低中：120 ～ 300 Hz\n中：300 ～ 700 Hz\n中高：700 ～ 2000 Hz\n高：2000 ～ 4000 Hz\n極高：4000 ～ 8000 Hz\n\n拖曳控制點調整增益；雙擊控制點可還原該頻段預設。":
         "Frequency ranges for the six control points:\n\nLow: 20–120 Hz\nLow-mid: 120–300 Hz\nMid: 300–700 Hz\nHigh-mid: 700–2000 Hz\nHigh: 2000–4000 Hz\nUltra-high: 4000–8000 Hz\n\nDrag a point to adjust gain; double-click it to restore that band's default.",
-    "六頻段：調整不同聲音範圍轉成震動的強弱。\nLF／HF 重心：調整中間頻段偏向低頻或高頻輸出。\n將游標移到這段文字，可查看完整對照與操作說明。":
-        "6-band EQ adjusts how strongly different audio ranges become rumble.\nLF/HF Balance routes the middle bands more toward low- or high-frequency output.\nHover over this text for the full mapping and controls.",
-    "六頻段與 LF／HF 重心完整說明\n\n圖表標籤與頻率對照：\nLow：20 ～ 120 Hz（低沉衝擊與重低音）\nL-Mid：120 ～ 300 Hz（低頻厚度）\nMid：300 ～ 700 Hz（中低頻細節）\nH-Mid：700 ～ 2000 Hz（中高頻細節）\nHigh：2000 ～ 4000 Hz（高頻摩擦與人聲邊緣）\nUltra：4000 ～ 8000 Hz（尖銳提示音與極高頻細節）\n\n拖曳控制點調整增益；雙擊控制點還原該頻段預設。\n1.00 代表原始增益。\n\nLF／HF 重心只改變中間頻段的輸出分配，不改變六段增益：\n-1.00 偏向 LF；0.00 平衡；+1.00 偏向 HF。\n建議先在 -0.15 ～ +0.15 內調整。\n\n本區只影響音訊與混合模式，不影響純遊戲震動。":
-        "Complete 6-band and LF/HF balance guide\n\nChart labels and frequency ranges:\nLow: 20–120 Hz (deep impacts and sub-bass)\nL-Mid: 120–300 Hz (low-frequency body)\nMid: 300–700 Hz (low-mid detail)\nH-Mid: 700–2000 Hz (high-mid detail)\nHigh: 2000–4000 Hz (friction and vocal edges)\nUltra: 4000–8000 Hz (sharp alerts and ultra-high detail)\n\nDrag a point to adjust gain; double-click it to reset that band. 1.00 is neutral gain.\n\nLF/HF Balance changes only the routing of middle bands, not the six gains:\n-1.00 favors LF; 0.00 is balanced; +1.00 favors HF.\nStart within -0.15 to +0.15.\n\nThis section affects only Audio and Mix modes, not game-only rumble.",
+    "將游標移到這裡，可查看六頻段與 LF／HF 重心的說明。":
+        "Hover here for the 6-band EQ and LF/HF Balance guide.",
+    "看電影、影集時，讓講話不再一直震動，只影響音訊震動。\n\n0.00 = 關閉（原本的手感，聽音樂建議維持關閉）\n提高：辨識到人聲時，壓低人聲所在頻段的震動\n爆炸、槍聲、拳腳、刀劍等撞擊聲不會被壓低，疊在對白上時也會照常震動。\n歌曲的人聲也會被當成講話。\n建議：看電影 0.80 ～ 1.00。":
+        "Stops dialogue from rumbling constantly in films and shows. Affects audio rumble only.\n\n0.00 = off (the original feel; keep it off for music)\nHigher: when a voice is recognised, rumble from the bands it occupies is cut\nExplosions, gunshots, punches, blades and other impacts are not cut, even when they land over dialogue.\nSung vocals are treated as speech too.\nSuggested: 0.80–1.00 for films.",
+    "六頻段與 LF／HF 重心完整說明\n\n圖表標籤與頻率對照：\nLow：20 ～ 120 Hz（低沉衝擊與重低音）\nL-Mid：120 ～ 300 Hz（低頻厚度）\nMid：300 ～ 700 Hz（中低頻細節）\nH-Mid：700 ～ 2000 Hz（中高頻細節）\nHigh：2000 ～ 4000 Hz（高頻摩擦與人聲邊緣）\nUltra：4000 ～ 8000 Hz（尖銳提示音與極高頻細節）\n\n拖曳控制點調整增益；雙擊控制點還原該頻段預設。\n1.00 代表原始增益。\n\nLF／HF 重心只改變中間頻段的輸出分配，不改變六段增益：\n-1.00 偏向 LF；0.00 平衡；+1.00 偏向 HF。\n建議先在 -0.15 ～ +0.15 內調整。\n\n人聲抑制：辨識到講話時壓低人聲頻段，撞擊聲照常保留；看電影時使用，聽音樂建議關閉。\n\n本區只影響音訊與混合模式，不影響純遊戲震動。":
+        "Complete 6-band and LF/HF balance guide\n\nChart labels and frequency ranges:\nLow: 20–120 Hz (deep impacts and sub-bass)\nL-Mid: 120–300 Hz (low-frequency body)\nMid: 300–700 Hz (low-mid detail)\nH-Mid: 700–2000 Hz (high-mid detail)\nHigh: 2000–4000 Hz (friction and vocal edges)\nUltra: 4000–8000 Hz (sharp alerts and ultra-high detail)\n\nDrag a point to adjust gain; double-click it to reset that band. 1.00 is neutral gain.\n\nLF/HF Balance changes only the routing of middle bands, not the six gains:\n-1.00 favors LF; 0.00 is balanced; +1.00 favors HF.\nStart within -0.15 to +0.15.\n\nVoice Cut lowers the voice bands while speech is recognised and keeps impacts; use it for films and leave it off for music.\n\nThis section affects only Audio and Mix modes, not game-only rumble.",
     "調整中間音訊頻段分配到 LF 或 HF 震動的重心。\n\n-1.00：中間頻段較偏向 LF\n0.00：平衡分配\n+1.00：中間頻段較偏向 HF\n\n建議先在 -0.15 ～ +0.15 內調整。此設定不改變六個頻段的增益。":
         "Adjusts whether the middle audio bands are routed more toward LF or HF rumble.\n\n-1.00: middle bands favor LF\n0.00: balanced routing\n+1.00: middle bands favor HF\n\nStart within -0.15 to +0.15. This does not change the gain of the six bands.",
     "餘震是震動訊號減弱或停止時，暫時保留一部分剛才的震動，再依「衰減 ms」逐漸降到 0，讓停止感較柔和。\n\n0.00 = 關閉，立即跟隨原始訊號\n0.50 = 保留約一半的下降落差\n1.00 = 完整保留後再逐漸衰減\n\n套用於遊戲與音訊混合後的最終輸出；不會產生新的重複震動。":
