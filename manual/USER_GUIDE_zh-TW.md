@@ -889,7 +889,7 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
 1. 在 **Device** 選擇 **S2P-XInput-Lite (Bridge)** 或支援震動的 XInput 裝置，開啟 **Rumble Test**。
 2. **Manual Output**（手動震動輸出）：以低強度開始，分別拉動 **LF Motor** 與 **HF Motor**。
 3. **Patterns**（震動模板）：按任一模板播放，例如 Impact、Engine、Machine Gun。
-   **Repeat**（重複播放）讓點選的模板持續循環，直到再點一次或停止所有震動；**Overlap**（重疊播放）讓新點選的模板疊加在正在播放的模板上，關閉時新模板會取代原本的播放。**LF／HF** 選擇頻段，**Rate**（播放頻率）與 **Strength**（模板強度）調整節奏與強度。
+   **Repeat**（重複播放）讓點選的模板持續循環，直到再點一次或停止所有震動；**Overlap**（重疊播放）讓新點選的模板疊加在正在播放的模板上，關閉時新模板會取代原本的播放。**LF／HF** 選擇頻段，**Strength**（模板強度）調整強度。**Rate**（播放頻率）決定重複播放時多久重新開始一次：心跳、機槍這類效果會維持自己的節奏，調快只會縮短休息（或提早重新開始），不會把效果本身加快。第一列的 LF 脈衝、HF 脈衝、交替、漸強、波浪是單純的形狀，播放頻率會直接改變它們的速度。
 4. 結束時按 **Stop All Rumble**（停止所有震動）。**Reset**（重設）還原本頁設定。
 
 Bridge 測試會套用目前方案的 LF／HF 設定；Source 為純 Audio 時，遊戲震動模板不會輸出。

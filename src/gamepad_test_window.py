@@ -466,6 +466,11 @@ RAW_HID_DURATION_CHOICES = ("5", "10", "30", "60")
 DIAGNOSTIC_DURATION_CHOICES = ("30", "60", "120")
 DEFAULT_SAMPLE_PERCENT = 100.0
 DEFAULT_RUMBLE_REPEAT_HZ = 1.0
+# Band-check templates are abstract shapes, so Rate stretches them.  Every
+# other template is an effect with its own timing that Rate only repeats.
+TIME_SCALED_RUMBLE_TEMPLATES = frozenset(
+    ("lf", "hf", "alternate", "ramp", "wave")
+)
 DEFAULT_RUMBLE_STRENGTH = 100.0
 
 
@@ -7550,9 +7555,9 @@ class GamepadTestWindow:
                 (440, 0.80, 0.0), (660, 0.0, 0.80),
                 (880, 0.0, 0.0),
             ),
-            # Patterns are stretched to fill one cycle (1000 ms at 1.0 Hz).
-            # Short effects end with a written-out rest at 1000 so their
-            # own timing is kept instead of being slowed down.
+            # Effect templates play in real milliseconds and end at 1000:
+            # one play lasts a second, and Rate only changes how often it
+            # restarts (see TIME_SCALED_RUMBLE_TEMPLATES).
             "impact": (
                 (0, 0.90, 0.70), (90, 0.60, 0.25),
                 (220, 0.30, 0.08), (450, 0.0, 0.0),
@@ -7589,10 +7594,9 @@ class GamepadTestWindow:
                 (300, 0.0, 0.95), (390, 0.0, 0.0),
                 (1000, 0.0, 0.0),
             ),
-            # Lub-dub, then rest.  Patterns are stretched to fill one cycle,
-            # so the rest is written out: ending at 1000 makes 1.0 Hz a
-            # 60 bpm heart with ~100 ms decaying thumps, a stronger first
-            # beat, and a long pause before the next pair.
+            # Lub-dub, then rest: ~100 ms decaying thumps, a stronger first
+            # beat, and a long pause.  Repeating at 1.0 Hz is 60 bpm; Rate
+            # changes the rest, never the thumps.
             "heartbeat": (
                 (0, 0.90, 0.10), (45, 0.60, 0.05),
                 (95, 0.25, 0.0), (130, 0.0, 0.0),
@@ -7609,8 +7613,7 @@ class GamepadTestWindow:
                 (590, 0.0, 0.0),
                 (1000, 0.0, 0.0),
             ),
-            # Road grain repeats across the whole cycle so each 65 ms grain
-            # keeps its size instead of being stretched apart.
+            # Road grain: 65 ms grains repeated across the whole second.
             "terrain": tuple(
                 (index * 65,) + (
                     (0.12, 0.42), (0.26, 0.18), (0.10, 0.56),
@@ -7762,9 +7765,20 @@ class GamepadTestWindow:
             0.1, min(100.0, round(self.rumble_repeat_hz_var.get(), 1))
         )
         cycle_duration_ms = max(1, int(round(1000.0 / frequency_hz)))
-        time_scale = cycle_duration_ms / pattern_duration_ms
+        repeating = self.repeat_rumble_var.get()
+        # Band-check shapes follow Rate as a tempo.  Effects keep their own
+        # timing: Rate only sets how often they restart, so a heartbeat
+        # changes its rest rather than squeezing its thumps.
+        scaled = name in TIME_SCALED_RUMBLE_TEMPLATES
+        time_scale = (
+            cycle_duration_ms / pattern_duration_ms if scaled else 1.0
+        )
         strength = max(0.0, min(1.0, self.rumble_strength_var.get() / 100.0))
         for delay, left, right in pattern:
+            at_ms = max(0, int(round(delay * time_scale)))
+            if repeating and not scaled and at_ms >= cycle_duration_ms:
+                # A faster restart cuts the effect short at the next cycle.
+                break
             if not self.template_lf_enabled_var.get():
                 left = 0.0
             if not self.template_hf_enabled_var.get():
@@ -7772,20 +7786,21 @@ class GamepadTestWindow:
             left *= strength
             right *= strength
             job = self.window.after(
-                max(0, int(round(delay * time_scale))),
+                at_ms,
                 lambda lf=left, hf=right, key=layer_id:
                 self._set_rumble_layer(key, lf, hf),
             )
             self._rumble_jobs.setdefault(layer_id, []).append(job)
-        if self.repeat_rumble_var.get():
+        if repeating:
             self._repeat_rumble_jobs[layer_id] = self.window.after(
                 cycle_duration_ms,
                 lambda key=layer_id, pattern_name=name:
                 self._repeat_rumble_pattern(pattern_name, key),
             )
         else:
+            play_ms = cycle_duration_ms if scaled else pattern_duration_ms
             cleanup = self.window.after(
-                cycle_duration_ms + 1,
+                play_ms + 1,
                 lambda key=layer_id: self._clear_rumble_layer(key),
             )
             self._rumble_jobs.setdefault(layer_id, []).append(cleanup)
@@ -7793,8 +7808,14 @@ class GamepadTestWindow:
     def _repeat_rumble_pattern(self, name, layer_id):
         self._repeat_rumble_jobs.pop(layer_id, None)
         if self.repeat_rumble_var.get() and layer_id in self._rumble_layers:
-            # All callbacks in the previous cycle have run by this point.
-            # Retain only the next cycle's cancellable callbacks.
+            # Steps of the previous cycle that are due at the same instant
+            # may still be pending; cancel them so only this cycle remains.
+            if self.window is not None:
+                for job in self._rumble_jobs.get(layer_id, ()):
+                    try:
+                        self.window.after_cancel(job)
+                    except tk.TclError:
+                        pass
             self._rumble_jobs[layer_id] = []
             self._play_rumble_pattern(name, layer_id)
 

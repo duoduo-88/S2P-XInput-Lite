@@ -26,9 +26,11 @@ class FakeWindow:
     def __init__(self):
         self.next_id = 0
         self.cancelled = set()
+        self.delays = []
 
-    def after(self, _delay, _callback):
+    def after(self, delay, _callback):
         self.next_id += 1
+        self.delays.append(delay)
         return f"job{self.next_id}"
 
     def after_cancel(self, job):
@@ -106,6 +108,61 @@ class RumbleTemplateOverlapTests(unittest.TestCase):
         tester._on_overlap_rumble_changed()
         self.assertEqual(self.playing(tester), ["wave"])
 
+    def scheduled(self, name, rate, repeat):
+        tester = self.make_tester(repeat=repeat)
+        tester.rumble_repeat_hz_var.set(rate)
+        tester.play_rumble(name)
+        return tester, tester.window.delays
+
+    def test_rate_repeats_an_effect_without_changing_its_timing(self):
+        native = [
+            delay for delay, _, _ in
+            GamepadTestWindow._rumble_pattern(None, "heartbeat")
+        ]
+        # 1.2 Hz: same thumps, shorter rest, restart at 833 ms (72 bpm).
+        tester, delays = self.scheduled("heartbeat", 1.2, repeat=True)
+        self.assertEqual(delays[:-1], [d for d in native if d < 833])
+        self.assertEqual(delays[-1], 833)
+        # 0.5 Hz: same thumps, then a two-second cycle (30 bpm).
+        tester, delays = self.scheduled("heartbeat", 0.5, repeat=True)
+        self.assertEqual(delays[:-1], native)
+        self.assertEqual(delays[-1], 2000)
+
+    def test_faster_rate_restarts_an_effect_early(self):
+        tester, delays = self.scheduled("machine_gun", 2.0, repeat=True)
+        self.assertTrue(all(delay < 500 for delay in delays[:-1]))
+        self.assertEqual(delays[-1], 500)
+        # Shots keep their 100 ms spacing.
+        self.assertIn(100, delays)
+        self.assertIn(400, delays)
+
+    def test_single_play_ignores_rate_for_effects(self):
+        native = [
+            delay for delay, _, _ in
+            GamepadTestWindow._rumble_pattern(None, "double_tap")
+        ]
+        for rate in (0.5, 1.0, 5.0):
+            tester, delays = self.scheduled("double_tap", rate, repeat=False)
+            self.assertEqual(delays[:-1], native, rate)
+            self.assertEqual(delays[-1], 1001, rate)
+
+    def test_band_check_shapes_still_follow_rate_as_tempo(self):
+        tester, delays = self.scheduled("wave", 2.0, repeat=True)
+        native = [
+            delay for delay, _, _ in GamepadTestWindow._rumble_pattern(None, "wave")
+        ]
+        self.assertEqual(delays[:-1], [round(d * 500 / 900) for d in native])
+        self.assertEqual(delays[-1], 500)
+
+    def test_restarting_cancels_the_previous_cycle(self):
+        tester = self.make_tester(repeat=True)
+        tester.rumble_repeat_hz_var.set(2.0)
+        tester.play_rumble("machine_gun")
+        first_cycle = list(tester._rumble_jobs[1])
+        tester._repeat_rumble_pattern("machine_gun", 1)
+        self.assertTrue(set(first_cycle) <= tester.window.cancelled)
+        self.assertNotEqual(tester._rumble_jobs[1], first_cycle)
+
     def test_replacing_templates_keeps_manual_output_and_aim_layer(self):
         tester = self.make_tester()
         tester._manual_rumble = (0.2, 0.1)
@@ -148,7 +205,7 @@ class RumbleTemplateSetTests(unittest.TestCase):
         return found
 
     def test_short_effects_keep_their_own_timing_at_one_hz(self):
-        # Stretching to the 1000 ms cycle used to slow these down 2-3x.
+        # Each effect lasts one second at its own timing.
         for name in (
             "impact", "double_tap", "alert", "heartbeat", "machine_gun",
             "footsteps", "engine", "rotor", "countdown",

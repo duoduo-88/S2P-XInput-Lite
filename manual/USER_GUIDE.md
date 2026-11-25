@@ -1132,7 +1132,12 @@ removes saved rounds.
    **Repeat** loops the selected pattern until you select it again or stop
    all rumble. **Overlap** plays a newly selected pattern on top of the ones
    already playing; without it, the new pattern replaces them. **LF / HF**
-   choose the bands, and **Rate** and **Strength** set its pace and strength.
+   choose the bands, and **Strength** sets its strength. **Rate** sets how
+   often a repeating pattern restarts; effects such as Heartbeat or Machine
+   Gun keep their own timing, so a faster rate shortens the rest (or restarts
+   the effect early) instead of speeding it up. The first row (LF Pulse,
+   HF Pulse, Alternate, Ramp, Wave) is made of shapes, and Rate sets their
+   tempo.
 4. Select **Stop All Rumble** when finished. **Reset** restores this tab.
 
 A Bridge test uses the current profile's LF/HF settings. With **Source** set
