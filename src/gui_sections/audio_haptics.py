@@ -463,6 +463,9 @@ def build_audio_haptics_section(gui, mapping_notebook):
     final_frame.columnconfigure(0, weight=1)
     final_content = ttk.Frame(final_frame)
     final_content.grid(row=0, column=0, sticky="ns")
+    # English "Decay ms" and "Motor Emulation" need a wider label column than
+    # the audio rows; shorter sliders keep the block the same width.
+    final_row_layout = {"label_width": 15, "length": 150}
     add_audio_scale_row(
         final_content, 0, "餘震強度",
         gui.audio_haptics_final_tail_strength_var,
@@ -473,6 +476,7 @@ def build_audio_haptics_section(gui, mapping_notebook):
         "0.50 = 保留約一半的下降落差\n"
         "1.00 = 完整保留後再逐漸衰減\n\n"
         "套用於遊戲與音訊混合後的最終輸出；不會產生新的重複震動。",
+        **final_row_layout,
     )
     add_audio_scale_row(
         final_content, 1, "衰減 ms",
@@ -482,6 +486,7 @@ def build_audio_haptics_section(gui, mapping_notebook):
         "只在餘震強度大於 0 時生效；數值越高，震動消失得越慢。\n"
         "建議：100 ～ 225 ms；拉桿在常用區較密，之後逐步加大間距。",
         AUDIO_TAIL_DECAY_VALUES,
+        **final_row_layout,
     )
     # Motor Emulation only shapes game rumble, so AUDIO mode greys it out.
     gui.audio_motor_emulation_widgets = add_audio_scale_row(
@@ -495,6 +500,7 @@ def build_audio_haptics_section(gui, mapping_notebook):
         "頻率越低顆粒感越明顯：輕震動較粗糙，強震動較滑順飽滿。\n"
         "建議：一般用途 0.50 ～ 0.75；想要更多路感與顆粒感時可到 1.00。\n"
         "獨立模式不支援此功能。",
+        **final_row_layout,
     )
 
     footer = ttk.Frame(audio_haptics_frame)
