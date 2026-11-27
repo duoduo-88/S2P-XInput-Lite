@@ -498,8 +498,12 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
 - **Sens. Curve**（感度曲線）：只在回中模式、啟用陀螺儀且輸出到搖桿時可用。
 - **Compensation Settings**（補償設定）：分軸調整陀螺儀輸出倍率；輸出為滑鼠時不顯示。
 
+<a name="sensor-calibration"></a>
+
 感測器校正位於主視窗底部 **Calibrate ▼**（校正）→ **Sensor Calibration**（感測器校正）。
 請先將手把平放在穩定的平面上再執行，校正期間按鈕會顯示目前進度。
+如果手把還沒連線，S2P 會詢問是否自動啟動連線；依連接程式視窗的提示喚醒或配對手把，連線後就會自動繼續校正。
+最多等待 2 分鐘，連接程式停止時也會結束等待。
 
 #### 感度曲線
 
@@ -582,6 +586,8 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
 > `0–1023` 是協議欄位範圍，不代表所有手把都適合長時間使用最高值。若出現明顯撞擊聲、尖銳聲或
 > 不自然的震感，請降低 **Max Amp**、**LF/HF Strength** 或相關頻段增益。
 
+<a name="rumble-game"></a>
+
 ### 7.2 Advanced Rumble：Game（遊戲）模式
 
 ![Advanced Rumble 的 Game 模式](assets/v0.8.2/main-rumble-game.png)
@@ -596,6 +602,8 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
 **Final Output**（最終輸出）的 **Tail**（餘震強度）與 **Decay ms**（衰減）控制震動尾端與衰減；
 **Motor Emulation**（馬達模擬）模擬 Xbox 傳統馬達，遊戲震動越強頻率越高，中等強度維持原本頻率。它只影響遊戲震動，`0.00` 為關閉，獨立模式不支援。
 **Reset Defaults**（還原預設）還原本頁。
+
+<a name="audio-rumble"></a>
 
 ### 7.3 Audio（音訊）與 Mix（混合）模式
 
@@ -629,6 +637,8 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
 
 **LF/HF Balance**（LF／HF 重心）只改變中間頻段的路由，不修改六個頻段本身的增益：`-1.00`
 偏向 LF，`0.00` 平衡，`+1.00` 偏向 HF。建議先在 `-0.15～+0.15` 之間測試。
+
+<a name="voice-cut"></a>
 
 **Voice Cut**（人聲抑制）在 LF/HF Balance 下方，用於看電影、影集：辨識到講話時，壓低人聲所在頻段的震動，讓對白不再一直震動。爆炸、槍聲、拳腳、刀劍等撞擊聲不會被壓低，疊在對白上時也照常震動。`0.00` 為關閉；看電影建議 `0.80～1.00`。歌曲的人聲也會被當成講話，所以聽音樂建議維持關閉。開啟時震動會延後約 15 ms，讓每句話一開口就能被辨識出來；看影片時感覺不到這段延遲。
 
@@ -885,6 +895,8 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
 
 箭頭表示數值上升或下降，綠色代表刷新最佳紀錄，紅色代表不及最佳紀錄；命中率與跟靶率的差異以百分點顯示。
 **Clear History**（清除紀錄）可移除已儲存的回合。
+
+<a name="rumble-test"></a>
 
 ### 8.6 Rumble Test（震動測試）
 

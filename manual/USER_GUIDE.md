@@ -624,9 +624,15 @@ Buttons below the fields:
   and stick output.
 - **Compensation Settings**: per-axis gyro output multipliers. Hidden for mouse output.
 
+<a name="sensor-calibration"></a>
+
 Sensor calibration is at the bottom of the main window: **Calibrate ▼** >
 **Sensor Calibration**. Place the controller flat on a steady surface first;
 the button shows the progress while it runs.
+If no controller is connected yet, S2P offers to start the connection.
+Wake or pair the controller as the connector window shows, and calibration
+continues by itself once it connects. The wait ends after 2 minutes, or as
+soon as the connector stops.
 
 #### Sensitivity curve
 
@@ -723,6 +729,8 @@ feedback while reducing the chance of noise.
 > noise, or unnatural vibration, lower **Max Amp**, **LF/HF Strength**, or the
 > related band gains.
 
+<a name="rumble-game"></a>
+
 ### 7.2 Advanced Rumble: Game
 
 ![Advanced Rumble in Game mode](assets/v0.8.2/main-rumble-game.png)
@@ -741,6 +749,8 @@ and fade. **Motor Emulation** emulates classic Xbox motors: stronger game
 rumble gets a higher frequency, while medium rumble keeps the configured
 frequency. It affects game rumble only; `0.00` is off and standalone mode
 ignores it. **Reset Defaults** restores this tab.
+
+<a name="audio-rumble"></a>
 
 ### 7.3 Audio and Mix
 
@@ -775,6 +785,8 @@ ignores it. **Reset Defaults** restores this tab.
 **LF/HF Balance** only changes how the middle bands are routed and does not
 change the six band gains. `-1.00` favors LF, `0.00` is balanced, and `+1.00`
 favors HF. Start between `-0.15` and `+0.15`.
+
+<a name="voice-cut"></a>
 
 **Voice Cut**, below LF/HF Balance, is for films and shows: while speech is
 recognised it lowers rumble from the bands the voice occupies, so dialogue no
@@ -1131,6 +1143,8 @@ Arrows show the direction of change. Green marks a new best and red marks a
 result short of the best.
 Accuracy and On Target changes are in percentage points. **Clear History**
 removes saved rounds.
+
+<a name="rumble-test"></a>
 
 ### 8.6 Rumble Test
 

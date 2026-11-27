@@ -1,4 +1,4 @@
-# v0.8.2
+# v0.8.3
 
 **[Download the latest Windows release](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)** · **[Support the project on Ko-fi](https://ko-fi.com/duoduo88)**
 
@@ -19,21 +19,23 @@ To upgrade, extract the new version to a new folder and use **Import Settings**
 to bring over your profiles, layers, and calibration. The
 [User Guide](manual/USER_GUIDE.md) covers every setting step by step.
 
+v0.8.3 bundles the same ESP32-S3 firmware as v0.8.2, S2P-FW `1.0.9`. If you
+already flashed it with v0.8.2, nothing needs to be flashed again.
+
 ### What's new
 
-- **Extensions**: independent tools can send input through S2P or read its controller output, only with the permissions you allow. Add a tool in the **Extensions** window and it is enabled in the list right away. Enabled tools start with S2P and close with it. S2P stays the only virtual controller: buttons are combined, each stick belongs to one tool, and the physical stick always has priority. The conflict check lists stick conflicts, missing permissions, second copies, and unknown programs, and **Check for Updates** shows which tools have a newer version. The first tool is [S2P-Joystick-Macro](https://github.com/duoduo-88/S2P-Extensions), which records and plays back controller macros.
-- Gyro X and Y ratios now range from `0.10` to `2.00`. **Compensation Settings** accepts a separate multiplier for each axis. It scales gyro stick output after smoothing and the response curve. In Center mode, **Keep the original speed cap** keeps the turn-speed ceiling you had before compensating.
-- The 3D compensation preview compares the default turn speed with your adjusted speed, then saves the suggested multiplier to S2P and applies it to the current connection. The adjacent calculator estimates compensation from in-game turn times. Tracking supports adjustable target speed and reverses at the ends of the configured arc.
-- Center gyro uses a radial deadzone and offers button spike suppression. The default button stabilization mode is Freeze Output. Gyro stick anti-deadzone now defaults to `0`. The bundled FPS-COMP preset uses `10 ms` smoothing.
-- Bundled S2P-FW `1.0.9` brings the radial deadzone, spike suppression, independent gyro compensation with the original speed cap option, and gamepad combos to Android USB HID standalone mode. Use **Flash FW** in the main app, then write your profile to the ESP32. A progress window now shows each flashing step.
-- Gamepad Tester: **S2P Mobile Gamepad (Raw HID)** now shows every button and the D-pad, and works in the Aim Test. Aim Test history compares rounds with the same target settings, and the tester has a new icon.
-- **Gamepad Combo** lets one button or stick direction press 2 to 4 XInput buttons together, such as X + Y. The buttons press and release in the same report with no delay, order, or repeat. Combos also work in mapping layers and in ESP32 standalone mode.
-- Gamepad Tester parameters, the Aim Test settings, and the compensation windows now work like the main app: drag a parameter's name to change it, and right-click for **Restore Saved** or **Restore Default**.
-- Dialogs open centered on their window instead of the screen.
-- Closing the settings window with **X** keeps S2P running in the notification area. Choose **Exit** in the notification area menu to quit.
-- The virtual controller is called XInput throughout the app. Reset buttons and mapping layer rows are aligned, and tooltips list every key when a summary is shortened.
-- If the ESP32 disconnects, the connector window stays open and shows why.
-- Improved stability for connection, sensor calibration, and live settings apply.
+- **Voice Cut** and a new **Movie** profile for audio rumble: while speech is recognised, rumble from the bands the voice occupies is lowered, so film dialogue no longer rumbles constantly. Explosions, gunshots, punches, and blade hits still come through over dialogue. The Movie profile turns it on and raises the H-Mid, High, and Ultra bands so gunshots and metal hits are clearly felt. Sung vocals count as speech, so other profiles leave it off.
+- **Motor Emulation** under **Final Output** makes game rumble behave like a classic motor: light rumble moves to a lower, grainier frequency and strong rumble to a higher, smoother one. It is on in every bundled profile (Racing `1.00`, Action `0.75`, others `0.60`) and is greyed out when **Source** is Audio.
+- Audio rumble adds **Detail**, which lifts quiet detail without amplifying background sound near the gate, and **Freq**, which moves the HD Rumble frequencies with the tone of the sound.
+- Audio rumble now fades out when a player pauses instead of stopping on its last level. 5.1 and 7.1 outputs no longer feel weaker than stereo, and loud bass leaks much less into the high bands. **Mix** keeps game rumble at full strength up to `0.50`. Several bundled rumble profiles are retuned to match.
+- Rumble Test patterns are redesigned so each one feels like its name, such as Heartbeat, Double, Machine Gun, and Engine. **Rate** now sets how often a pattern restarts instead of stretching it. **Repeat** loops a pattern, and the new **Overlap** decides whether a newly selected pattern plays on top of the others or replaces them. Duplicate patterns were removed, and Countdown is now Start Countdown.
+- **Flash FW** is now a menu. **Flash bundled firmware** works as before, and **Flash custom firmware…** flashes an ESP32-S3 image you built yourself. The file is checked before any device is touched, and checked again right before flashing. The User Guide has a new section on building your own firmware, and the release package now includes the firmware source.
+- The wait for the ESP32-S3 flash port can be cancelled. Cancelling it, or letting it time out, brings back the connection the flash stopped.
+- **Sensor Calibration** without a connected controller now offers to start the connection, then continues by itself once the controller connects.
+- Newly opened windows take the keyboard focus while S2P is the active application, so typing and Enter no longer go to the window behind them.
+- Aim Test results compare each value with its own best among rounds with the same settings. The User Guide explains how screen resolution and aspect ratio affect the Aim Test.
+- Gamepad Tester's Raw HID source now shows the buttons, D-pad, and triggers of XInput controllers, not only their sticks.
+- The ESP32 menu item **Write and enable Android USB HID standalone** is shortened to **Write and enable standalone**. The startup banner uses the same font on every PC, English gyro and Final Output labels are no longer cut off, and a few untranslated texts in English mode are fixed.
 
 ## 繁體中文
 
@@ -51,18 +53,19 @@ to bring over your profiles, layers, and calibration. The
 更新時請將新版解壓縮到新資料夾，再用 **匯入設定** 帶入舊版的方案、映射層與校正資料。
 [使用手冊](manual/USER_GUIDE_zh-TW.md) 附截圖逐步說明每項設定。
 
+v0.8.3 隨附的 ESP32-S3 韌體與 v0.8.2 相同，都是 S2P-FW `1.0.9`。已用 v0.8.2 刷過韌體的話不必重刷。
+
 ### 更新內容
 
-- **擴充工具**：獨立工具可透過 S2P 送出輸入或讀取控制器輸出，只能使用你允許的權限。在「擴充工具」視窗新增工具後即在清單中啟用，啟用的工具會隨 S2P 啟動與關閉。S2P 仍是唯一的虛擬手把：按鍵會合併，每支搖桿只由一個工具控制，實體搖桿永遠優先。衝突檢查會列出搖桿衝突、缺少的權限、重複開啟的工具與不明程式，「檢查更新」可查看哪些工具有新版本。第一個工具是可錄製與播放手把巨集的 [S2P-Joystick-Macro](https://github.com/duoduo-88/S2P-Extensions)。
-- 陀螺儀 X／Y 比例放寬到 `0.10–2.00`。「補償設定」可分軸輸入補償倍率，在平滑和感度曲線之後調整陀螺儀搖桿輸出。回中模式可勾選「保留原本的速度上限」，補償後仍維持原本的轉向速度上限。
-- 3D 補償預覽比較預設視角速度與調整後的速度，量測後會將建議倍率存入 S2P 設定，並套用到目前連線。旁邊的「補償計算」可用遊戲錄影的轉向耗時試算倍率。跟槍可調整靶速，靶會在指定角度範圍內往返。
-- 回中模式改用圓形死區，按鍵防晃可選「抑制突波」，預設為「暫停輸出」。陀螺儀搖桿反死區預設改為 `0`。內建 FPS-COMP 方案的平滑值調為 `10 ms`。
-- 隨附 S2P-FW `1.0.9`，Android USB HID 獨立模式支援圓形死區、抑制突波、獨立的陀螺儀輸出補償（含保留原本的速度上限）及手把組合鍵。在主視窗刷入新韌體後，再將設定檔寫入 ESP32。刷寫時會以進度視窗顯示目前步驟。
-- 手把測試：「S2P Mobile Gamepad（Raw HID）」現在會顯示所有按鍵與十字鍵，也能用於瞄準測試。瞄準測試紀錄改為比較相同目標設定的回合，手把測試也換上新圖示。
-- 新增「自訂手把組合」：一個按鍵或搖桿方向可同時按下 2 到 4 個 XInput 按鍵，例如 X + Y。組合內的按鍵在同一幀一起按下、一起放開，不含延遲、順序或連發。映射層與 ESP32 獨立模式也能使用。
-- 手把測試、瞄準測試設定與補償視窗的參數改成和主程式一樣：在參數名稱上拖曳可調整數值，按右鍵可選「還原上次儲存」或「還原系統預設」。
-- 提示視窗改為顯示在所屬視窗中央，不再出現在螢幕中央。
-- 按設定視窗的 **X** 會讓 S2P 縮到系統匣繼續執行；要結束請在系統匣選單選「結束程式」。
-- 程式內的虛擬手把統一稱為 XInput。重設按鈕與映射層各列已對齊，按鍵摘要被截短時，提示會列出所有按鍵。
-- ESP32 中斷時，連接程式視窗會保留並顯示原因。
-- 改善連線、感測器校正與即時套用設定的穩定性。
+- 音訊震動新增「人聲抑制」與「Movie」方案：辨識到講話時，會壓低人聲所在頻段的震動，電影對白不再一直震動；爆炸、槍聲、拳腳與刀劍等撞擊疊在對白上時照常震動。Movie 方案會開啟人聲抑制，並提高 H-Mid、High 與 Ultra 頻段，讓槍聲與金屬撞擊更明顯。歌曲的人聲也會被當成講話，所以其他方案預設關閉。
+- 「最終輸出」新增「馬達模擬」，讓遊戲震動像傳統馬達：輕震動的頻率往下、更有顆粒感，強震動的頻率往上、維持滑順。所有內建方案都已開啟（Racing `1.00`、Action `0.75`，其他為 `0.60`）；Source 為純音訊時會停用。
+- 音訊震動新增「細節增強」，可放大細小的聲音，噪音閘附近的背景聲不會被放大；以及「頻率跟隨」，讓 HD Rumble 頻率隨聲音的音色變化。
+- 播放器暫停時，音訊震動會自然淡出，不再停在最後的強度。5.1 與 7.1 聲道輸出不再比立體聲弱，強烈低音也大幅減少滲入高頻段。「混合」比例在 `0.50` 以下時，遊戲震動維持完整強度。多個內建震動方案也已配合重新調整。
+- 震動測試的模板重新設計，每個模板都符合名稱的手感，例如心跳、雙擊、機槍與引擎。「播放頻率」改為決定模板多久重新開始一次，不再拉長效果本身。「重複播放」讓模板循環播放，新增的「重疊播放」決定新點選的模板要疊加在播放中的模板上，還是取代它們。重複的模板已移除，「節拍」改名為「腳步」，「倒數」改名為「起跑倒數」。
+- 「刷入韌體」改為選單：「刷入內建韌體」與原本相同，「刷入自訂韌體…」可刷入自己編譯的 ESP32-S3 韌體。接觸裝置前會先檢查檔案，刷寫前也會再確認一次。使用手冊新增自行編譯韌體的說明，發佈套件也附上韌體原始碼。
+- 等待 ESP32-S3 刷機連接埠時可以取消。取消或等待逾時後，會恢復刷機前停止的連線。
+- 手把未連線時執行「感測器校正」，會詢問是否自動啟動連線，手把連線後自動繼續校正。
+- S2P 是目前使用中的程式時，新開啟的視窗會取得鍵盤焦點，輸入文字與按 Enter 不會再跑到後面的視窗。
+- 瞄準測試的每項成績改為和相同設定回合中的各自最佳值比較。使用手冊說明了螢幕解析度與長寬比對瞄準測試的影響。
+- 手把測試的 Raw HID 來源現在也會顯示 XInput 手把的按鍵、十字鍵與扳機，不再只有搖桿。
+- ESP32 選單的「寫入並啟用 Android USB HID 獨立模式」縮短為「寫入並啟用獨立模式」。啟動畫面在每台電腦都使用相同字型，英文版的陀螺儀與「最終輸出」欄位名稱不再被截斷，也修正了英文模式下幾處未翻譯的文字。
