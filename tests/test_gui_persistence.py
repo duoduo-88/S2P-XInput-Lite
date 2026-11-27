@@ -172,10 +172,14 @@ class GuiPersistenceTests(unittest.TestCase):
         image.height.return_value = 340
         canvas = Mock()
         canvas.create_text.return_value = "loading-text"
+        canvas.tk.call.return_value = 96 / 72
+        banner_font = Mock()
+        banner_font.measure.side_effect = len
         config = Mock()
         config.get.return_value = "en"
 
         with (
+            patch("dialog_layout.tkfont.Font", return_value=banner_font),
             patch.object(config_gui, "load_config", return_value=config),
             patch.object(config_gui.tk, "Toplevel", return_value=window),
             patch.object(config_gui.tk, "PhotoImage", return_value=image) as photo,

@@ -466,6 +466,11 @@ RAW_HID_DURATION_CHOICES = ("5", "10", "30", "60")
 DIAGNOSTIC_DURATION_CHOICES = ("30", "60", "120")
 DEFAULT_SAMPLE_PERCENT = 100.0
 DEFAULT_RUMBLE_REPEAT_HZ = 1.0
+# Band-check templates are abstract shapes, so Rate stretches them.  Every
+# other template is an effect with its own timing that Rate only repeats.
+TIME_SCALED_RUMBLE_TEMPLATES = frozenset(
+    ("lf", "hf", "alternate", "ramp", "wave")
+)
 DEFAULT_RUMBLE_STRENGTH = 100.0
 
 
@@ -2352,6 +2357,9 @@ class GamepadTestWindow:
         self.manual_lf_text = tk.StringVar(value="0%")
         self.manual_hf_text = tk.StringVar(value="0%")
         self.repeat_rumble_var = tk.BooleanVar(value=False)
+        # Overlap stacks a newly clicked template on the ones already
+        # playing; without it a new template replaces them.
+        self.overlap_rumble_var = tk.BooleanVar(value=False)
         self.rumble_repeat_hz_var = tk.DoubleVar(value=1.0)
         self.rumble_repeat_hz_text = tk.StringVar(value="1.0 Hz")
         self.rumble_strength_var = tk.DoubleVar(value=100.0)
@@ -5838,27 +5846,24 @@ class GamepadTestWindow:
         ttk.Label(
             group, textvariable=self.rumble_notice_var
         ).grid(row=0, column=0, columnspan=5, sticky="w", pady=(0, 8))
+        # Fifteen distinct templates fill a 5 x 3 grid, one row per kind:
+        # band checks and swells, hits, then ambience and cues.
         buttons = (
             ("LF 脈衝", "lf"),
             ("HF 脈衝", "hf"),
             ("交替", "alternate"),
-            ("撞擊", "impact"),
             ("漸強", "ramp"),
-            ("雙擊", "double_tap"),
-            ("連射", "rapid_fire"),
-            ("引擎", "engine"),
             ("波浪", "wave"),
-            ("警示", "alert"),
+            ("撞擊", "impact"),
+            ("雙擊", "double_tap"),
             ("心跳", "heartbeat"),
-            ("節拍", "footsteps"),
-            ("路感", "terrain"),
-            ("低鳴", "low_rumble"),
-            ("爆裂", "burst"),
+            ("腳步", "footsteps"),
             ("機槍", "machine_gun"),
-            ("散彈", "shotgun"),
-            ("加速", "turbo"),
+            ("引擎", "engine"),
+            ("路感", "terrain"),
             ("旋翼", "rotor"),
-            ("倒數", "countdown"),
+            ("警示", "alert"),
+            ("起跑倒數", "countdown"),
         )
         self.rumble_buttons = []
         self.rumble_buttons_by_template = {}
@@ -5897,18 +5902,25 @@ class GamepadTestWindow:
             command=self._on_repeat_rumble_changed,
         )
         repeat.grid(row=options_row, column=0, sticky="w", pady=(10, 0))
+        overlap = ttk.Checkbutton(
+            group,
+            text=self.gui.tr("重疊播放"),
+            variable=self.overlap_rumble_var,
+            command=self._on_overlap_rumble_changed,
+        )
+        overlap.grid(row=options_row, column=1, sticky="w", pady=(10, 0))
         template_lf = ttk.Checkbutton(
             group,
             text=self.gui.tr("模板 LF（左馬達）"),
             variable=self.template_lf_enabled_var,
         )
-        template_lf.grid(row=options_row, column=1, sticky="w", pady=(10, 0))
+        template_lf.grid(row=options_row, column=2, sticky="w", pady=(10, 0))
         template_hf = ttk.Checkbutton(
             group,
             text=self.gui.tr("模板 HF（右馬達）"),
             variable=self.template_hf_enabled_var,
         )
-        template_hf.grid(row=options_row, column=2, sticky="w", pady=(10, 0))
+        template_hf.grid(row=options_row, column=3, sticky="w", pady=(10, 0))
         controls = ttk.Frame(group)
         controls.grid(
             row=options_row + 1, column=0, columnspan=5,
@@ -5980,7 +5992,7 @@ class GamepadTestWindow:
             default=DEFAULT_RUMBLE_STRENGTH,
         )
         self.rumble_option_widgets.extend(
-            (repeat, template_lf, template_hf, repeat_rate, strength)
+            (repeat, overlap, template_lf, template_hf, repeat_rate, strength)
         )
 
         stop_footer = ttk.Frame(parent)
@@ -6029,12 +6041,25 @@ class GamepadTestWindow:
         self.manual_lf_text.set("0%")
         self.manual_hf_text.set("0%")
         self.repeat_rumble_var.set(False)
+        self.overlap_rumble_var.set(False)
         self.rumble_repeat_hz_var.set(DEFAULT_RUMBLE_REPEAT_HZ)
         self.rumble_repeat_hz_text.set(f"{DEFAULT_RUMBLE_REPEAT_HZ:.1f} Hz")
         self.rumble_strength_var.set(DEFAULT_RUMBLE_STRENGTH)
         self.rumble_strength_text.set(f"{DEFAULT_RUMBLE_STRENGTH:.0f}%")
         self.template_lf_enabled_var.set(True)
         self.template_hf_enabled_var.set(True)
+
+    def _template_layer_ids(self):
+        """Layer ids owned by template buttons, oldest first."""
+        return tuple(sorted(self._rumble_layer_templates))
+
+    def _on_overlap_rumble_changed(self):
+        if self.overlap_rumble_var.get():
+            return
+        # Leaving Overlap keeps only the most recently started template.
+        for layer_id in self._template_layer_ids()[:-1]:
+            self._cancel_rumble_layer(layer_id)
+        self._refresh_rumble_template_styles()
 
     def _on_repeat_rumble_changed(self):
         if self.repeat_rumble_var.get():
@@ -7492,7 +7517,13 @@ class GamepadTestWindow:
             self._active_rumble_slot = None
 
     def play_rumble(self, name):
-        """Play once, or toggle one repeating template layer on/off."""
+        """Play a template once, or toggle its loop with Repeat.
+
+        Repeat loops the clicked template until it is clicked again or
+        everything is stopped.  Overlap decides what a newly clicked
+        template does to the ones already playing: it stacks on top of
+        them, or, without Overlap, replaces them.
+        """
         if self._rumble_pattern(name) is None:
             return
         repeating = self.repeat_rumble_var.get()
@@ -7502,6 +7533,9 @@ class GamepadTestWindow:
                 for layer_id in active_layers:
                     self._cancel_rumble_layer(layer_id)
                 return
+        if not self.overlap_rumble_var.get():
+            for layer_id in self._template_layer_ids():
+                self._cancel_rumble_layer(layer_id)
         self._next_rumble_layer_id += 1
         layer_id = self._next_rumble_layer_id
         self._rumble_layers[layer_id] = (0.0, 0.0)
@@ -7521,29 +7555,33 @@ class GamepadTestWindow:
                 (440, 0.80, 0.0), (660, 0.0, 0.80),
                 (880, 0.0, 0.0),
             ),
+            # Effect templates play in real milliseconds and end at 1000:
+            # one play lasts a second, and Rate only changes how often it
+            # restarts (see TIME_SCALED_RUMBLE_TEMPLATES).
             "impact": (
                 (0, 0.90, 0.70), (90, 0.60, 0.25),
                 (220, 0.30, 0.08), (450, 0.0, 0.0),
+                (1000, 0.0, 0.0),
             ),
             "ramp": tuple(
                 (index * 80, index / 10.0, index / 12.0)
                 for index in range(1, 11)
             ) + ((920, 0.0, 0.0),),
+            # The PIN / connection cue: two equal full-strength LF + HF
+            # pulses of 80 ms with a 100 ms gap (rumble_protocol).
             "double_tap": (
-                (0, 0.90, 0.35), (95, 0.0, 0.0),
-                (190, 0.90, 0.35), (310, 0.0, 0.0),
+                (0, 1.0, 1.0), (80, 0.0, 0.0),
+                (180, 1.0, 1.0), (260, 0.0, 0.0),
+                (1000, 0.0, 0.0),
             ),
-            "rapid_fire": tuple(
-                (index * 70, 0.42, 0.78) if index % 2 == 0
-                else (index * 70, 0.0, 0.0)
-                for index in range(10)
-            ) + ((700, 0.0, 0.0),),
-            "engine": (
-                (0, 0.20, 0.04), (120, 0.35, 0.07),
-                (240, 0.52, 0.10), (360, 0.68, 0.14),
-                (480, 0.52, 0.10), (600, 0.35, 0.07),
-                (720, 0.20, 0.04), (840, 0.0, 0.0),
-            ),
+            # Idle engine: continuous LF that rises and falls every 40 ms,
+            # like rough combustion, instead of one slow swell.
+            "engine": tuple(
+                (index * 40,) + (
+                    (0.42, 0.06) if index % 2 == 0 else (0.24, 0.03)
+                )
+                for index in range(25)
+            ) + ((1000, 0.0, 0.0),),
             "wave": (
                 (0, 0.15, 0.10), (130, 0.35, 0.28),
                 (260, 0.60, 0.55), (390, 0.82, 0.78),
@@ -7554,57 +7592,71 @@ class GamepadTestWindow:
                 (0, 0.0, 0.95), (70, 0.0, 0.0),
                 (150, 0.0, 0.95), (220, 0.0, 0.0),
                 (300, 0.0, 0.95), (390, 0.0, 0.0),
+                (1000, 0.0, 0.0),
             ),
+            # Lub-dub, then rest: ~100 ms decaying thumps, a stronger first
+            # beat, and a long pause.  Repeating at 1.0 Hz is 60 bpm; Rate
+            # changes the rest, never the thumps.
             "heartbeat": (
-                (0, 0.76, 0.14), (110, 0.0, 0.0),
-                (235, 0.48, 0.08), (360, 0.0, 0.0),
+                (0, 0.90, 0.10), (45, 0.60, 0.05),
+                (95, 0.25, 0.0), (130, 0.0, 0.0),
+                (250, 0.65, 0.06), (290, 0.38, 0.03),
+                (335, 0.12, 0.0), (365, 0.0, 0.0),
+                (1000, 0.0, 0.0),
             ),
+            # Walking: two steps per second, each a short LF heel strike
+            # that decays within 90 ms; left and right feet differ slightly.
             "footsteps": (
-                (0, 0.38, 0.20), (90, 0.0, 0.0),
-                (310, 0.46, 0.24), (410, 0.0, 0.0),
-                (650, 0.38, 0.20), (740, 0.0, 0.0),
+                (0, 0.60, 0.12), (40, 0.32, 0.05),
+                (90, 0.0, 0.0),
+                (500, 0.50, 0.10), (540, 0.26, 0.04),
+                (590, 0.0, 0.0),
+                (1000, 0.0, 0.0),
             ),
-            "terrain": (
-                (0, 0.12, 0.42), (65, 0.26, 0.18),
-                (130, 0.10, 0.56), (195, 0.32, 0.16),
-                (260, 0.14, 0.46), (325, 0.28, 0.20),
-                (390, 0.0, 0.0),
-            ),
-            "low_rumble": (
-                (0, 0.18, 0.02), (180, 0.36, 0.03),
-                (360, 0.58, 0.05), (540, 0.76, 0.06),
-                (720, 0.48, 0.04), (900, 0.20, 0.02),
-                (1080, 0.0, 0.0),
-            ),
-            "burst": (
-                (0, 1.0, 0.86), (55, 0.78, 0.54),
-                (125, 0.42, 0.20), (260, 0.12, 0.04),
-                (420, 0.0, 0.0),
-            ),
+            # Road grain: 65 ms grains repeated across the whole second.
+            "terrain": tuple(
+                (index * 65,) + (
+                    (0.12, 0.42), (0.26, 0.18), (0.10, 0.56),
+                    (0.32, 0.16), (0.14, 0.46), (0.28, 0.20),
+                )[index % 6]
+                for index in range(15)
+            ) + ((975, 0.0, 0.0),),
+            # 600 rounds/min: each shot is a recoil kick (LF) with a crack
+            # (HF) that decays within 60 ms, then full silence until the
+            # next round.  Slight per-shot variation avoids a buzzer feel.
             "machine_gun": tuple(
-                (index * 55, 0.18, 0.90) if index % 2 == 0
-                else (index * 55, 0.05, 0.08)
-                for index in range(18)
-            ) + ((990, 0.0, 0.0),),
-            "shotgun": (
-                (0, 0.96, 0.82), (70, 0.44, 0.28),
-                (155, 0.16, 0.06), (320, 0.0, 0.0),
-            ),
-            "turbo": (
-                (0, 0.22, 0.30), (170, 0.32, 0.42),
-                (310, 0.44, 0.56), (420, 0.58, 0.68),
-                (500, 0.72, 0.80), (555, 0.86, 0.92),
-                (610, 0.0, 0.0),
-            ),
+                step
+                for index in range(10)
+                for lf, hf in (
+                    (0.72 - 0.07 * (index % 3), 0.90 - 0.06 * (index % 2)),
+                )
+                for step in (
+                    (index * 100, lf, hf),
+                    (index * 100 + 20, lf * 0.6, hf * 0.45),
+                    (index * 100 + 40, lf * 0.25, hf * 0.15),
+                    (index * 100 + 60, 0.0, 0.0),
+                )
+            ) + ((1000, 0.0, 0.0),),
+            # Helicopter "whop-whop": five LF blade thumps per second over a
+            # faint continuous hum.
             "rotor": tuple(
-                (index * 95, 0.34 + (index % 3) * 0.10, 0.18)
-                for index in range(8)
-            ) + ((760, 0.0, 0.0),),
+                step
+                for index in range(5)
+                for step in (
+                    (index * 200, 0.75, 0.10),
+                    (index * 200 + 40, 0.40, 0.05),
+                    (index * 200 + 80, 0.14, 0.03),
+                )
+            ) + ((1000, 0.0, 0.0),),
+            # Race start: three equal HF ticks ("3, 2, 1"), then a strong,
+            # longer LF + HF "GO" that fades out before a short rest.
             "countdown": (
-                (0, 0.0, 0.62), (90, 0.0, 0.0),
-                (300, 0.0, 0.70), (380, 0.0, 0.0),
-                (520, 0.0, 0.80), (580, 0.0, 0.0),
-                (670, 0.0, 0.92), (720, 0.0, 0.0),
+                (0, 0.0, 0.70), (60, 0.0, 0.0),
+                (200, 0.0, 0.70), (260, 0.0, 0.0),
+                (400, 0.0, 0.70), (460, 0.0, 0.0),
+                (600, 0.90, 0.95), (700, 0.75, 0.70),
+                (800, 0.45, 0.30), (880, 0.15, 0.05),
+                (900, 0.0, 0.0), (1000, 0.0, 0.0),
             ),
         }
         return patterns.get(name)
@@ -7713,9 +7765,20 @@ class GamepadTestWindow:
             0.1, min(100.0, round(self.rumble_repeat_hz_var.get(), 1))
         )
         cycle_duration_ms = max(1, int(round(1000.0 / frequency_hz)))
-        time_scale = cycle_duration_ms / pattern_duration_ms
+        repeating = self.repeat_rumble_var.get()
+        # Band-check shapes follow Rate as a tempo.  Effects keep their own
+        # timing: Rate only sets how often they restart, so a heartbeat
+        # changes its rest rather than squeezing its thumps.
+        scaled = name in TIME_SCALED_RUMBLE_TEMPLATES
+        time_scale = (
+            cycle_duration_ms / pattern_duration_ms if scaled else 1.0
+        )
         strength = max(0.0, min(1.0, self.rumble_strength_var.get() / 100.0))
         for delay, left, right in pattern:
+            at_ms = max(0, int(round(delay * time_scale)))
+            if repeating and not scaled and at_ms >= cycle_duration_ms:
+                # A faster restart cuts the effect short at the next cycle.
+                break
             if not self.template_lf_enabled_var.get():
                 left = 0.0
             if not self.template_hf_enabled_var.get():
@@ -7723,20 +7786,21 @@ class GamepadTestWindow:
             left *= strength
             right *= strength
             job = self.window.after(
-                max(0, int(round(delay * time_scale))),
+                at_ms,
                 lambda lf=left, hf=right, key=layer_id:
                 self._set_rumble_layer(key, lf, hf),
             )
             self._rumble_jobs.setdefault(layer_id, []).append(job)
-        if self.repeat_rumble_var.get():
+        if repeating:
             self._repeat_rumble_jobs[layer_id] = self.window.after(
                 cycle_duration_ms,
                 lambda key=layer_id, pattern_name=name:
                 self._repeat_rumble_pattern(pattern_name, key),
             )
         else:
+            play_ms = cycle_duration_ms if scaled else pattern_duration_ms
             cleanup = self.window.after(
-                cycle_duration_ms + 1,
+                play_ms + 1,
                 lambda key=layer_id: self._clear_rumble_layer(key),
             )
             self._rumble_jobs.setdefault(layer_id, []).append(cleanup)
@@ -7744,8 +7808,14 @@ class GamepadTestWindow:
     def _repeat_rumble_pattern(self, name, layer_id):
         self._repeat_rumble_jobs.pop(layer_id, None)
         if self.repeat_rumble_var.get() and layer_id in self._rumble_layers:
-            # All callbacks in the previous cycle have run by this point.
-            # Retain only the next cycle's cancellable callbacks.
+            # Steps of the previous cycle that are due at the same instant
+            # may still be pending; cancel them so only this cycle remains.
+            if self.window is not None:
+                for job in self._rumble_jobs.get(layer_id, ()):
+                    try:
+                        self.window.after_cancel(job)
+                    except tk.TclError:
+                        pass
             self._rumble_jobs[layer_id] = []
             self._play_rumble_pattern(name, layer_id)
 

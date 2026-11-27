@@ -47,9 +47,21 @@ from esp32_detection import (
     find_esp32_firmware,
     find_esp32_port,
 )
-from dialog_layout import centered_message_box, install_centered_dialogs, startup_banner_geometry
+from dialog_layout import (
+    StartupBannerText,
+    centered_message_box,
+    focus_new_window,
+    install_centered_dialogs,
+    install_focus_new_windows,
+    startup_banner_geometry,
+)
 from direction_deadzones import CUSTOM_DEADZONE_KEY
 from firmware_flash_guard import FlashProbeError, probe_esp32_flash_size
+from custom_firmware import (
+    CustomFirmwareError,
+    file_sha256,
+    inspect_custom_firmware,
+)
 from gamepad_aim_display import DISPLAY_RESTORE_RETRY_MS
 from standalone_profile import (
     StandaloneTransferError,
@@ -445,6 +457,9 @@ def configure_tk_dpi(root):
     return dpi / 96.0
 
 STATUS_PATH = Path(__file__).with_name("controller_status.json")
+# Sensor calibration started without a controller waits this long for one.
+GYRO_CALIBRATION_CONNECT_TIMEOUT_SECONDS = 120
+GYRO_CALIBRATION_CONNECT_POLL_MS = 500
 
 PYTHON_EXE = Path(sys.executable)
 
@@ -1828,13 +1843,8 @@ class StartupOverlay:
             anchor="nw",
             image=self.image,
         )
-        self._text_item = self.canvas.create_text(
-            width - 12,
-            height - 8,
-            anchor="se",
-            text=self._loading_text(),
-            font=("Segoe UI", 9),
-            fill="#4a4a4a",
+        self.text = StartupBannerText(
+            self.canvas, width, height, self._loading_text, dots=self._dot_count,
         )
 
         self.window.geometry(startup_banner_geometry(root, width, height))
@@ -1847,9 +1857,9 @@ class StartupOverlay:
             # its synchronous widget construction.
             root.update()
 
-    def _loading_text(self):
+    def _loading_text(self, dots):
         label = translate_text("啟動中", self.language)
-        return f"v{VERSION} {label}{'.' * self._dot_count}"
+        return f"v{VERSION} {label}{'.' * dots}"
 
     def _schedule_animation(self):
         try:
@@ -1871,10 +1881,7 @@ class StartupOverlay:
             if not self.window.winfo_exists():
                 return
             self._dot_count = (self._dot_count % 3) + 1
-            self.canvas.itemconfigure(
-                self._text_item,
-                text=self._loading_text(),
-            )
+            self.text.show(self._dot_count)
             self.window.update_idletasks()
         except (tk.TclError, AttributeError):
             pass
@@ -1905,6 +1912,8 @@ class ConfigGUI:
         global _GUI_ROOT
         _GUI_ROOT = root
         self.root = root
+        # New dialogs take the keyboard focus from the window that opened them.
+        install_focus_new_windows(root)
         self.ui_scale = configure_tk_dpi(root)
         
         self.vigembus_installed = (
@@ -2270,6 +2279,9 @@ class ConfigGUI:
     def confirm_firmware_flash(self, firmware_info):
         """Show detected and bundled versions, then return the user's choice."""
 
+        custom = getattr(self, "_flash_custom_firmware", None)
+        if custom is not None:
+            return self._confirm_custom_firmware_flash(firmware_info, custom)
         target = f"{S2P_FIRMWARE_PRODUCT} v{S2P_FIRMWARE_VERSION}"
         if firmware_info:
             product = str(
@@ -2302,6 +2314,67 @@ class ConfigGUI:
             message,
         )
 
+    def _confirm_custom_firmware_flash(self, firmware_info, custom):
+        """Confirm the selected image, naming exactly which file is written."""
+        if firmware_info:
+            product = str(firmware_info.get("product") or S2P_FIRMWARE_PRODUCT)
+            version = firmware_info.get("version")
+            current = (
+                f"{product} v{version}" if version
+                else f"{product} ({self.tr('版本未知')})"
+            )
+        else:
+            current = self.tr("未偵測到可讀取版本的相容韌體。")
+        details = [
+            self.tr("目前韌體：") + current,
+            self.tr("自訂韌體：") + custom.path.name,
+        ]
+        if custom.version:
+            details.append(self.tr("韌體版本：") + custom.version)
+        details.append(self.tr("檔案大小：") + f"{custom.size:,} bytes")
+        details.append("SHA-256: " + custom.sha256)
+        message = (
+            "\n".join(details) + "\n\n"
+            + self.tr("只會替換韌體本體，bootloader 與分割表使用內建版本。")
+            + "\n\n" + self.tr("是否刷入自訂韌體？")
+        )
+        return messagebox.askyesno(self.tr("確認自訂韌體"), message)
+
+    def flash_custom_firmware(self):
+        """Ask for an ESP32-S3 application image, then run the normal flash flow."""
+        return self.flash_firmware(custom=True)
+
+    def _select_custom_firmware(self):
+        """Return validated image details, or None when the user cancels."""
+        selected_path = filedialog.askopenfilename(
+            parent=self.root,
+            title=self.tr("選擇自訂韌體"),
+            filetypes=(
+                (self.tr("ESP32 韌體"), "*.bin"),
+                (self.tr("所有檔案"), "*.*"),
+            ),
+        )
+        if not selected_path:
+            return None
+        try:
+            info = inspect_custom_firmware(selected_path, PARTITION_PATH)
+        except CustomFirmwareError as exc:
+            messagebox.showerror(
+                self.tr("無法使用這個韌體"),
+                exc.message(getattr(self, "language", "zh")),
+            )
+            return None
+        if not info.s2p_identity and not messagebox.askyesno(
+            self.tr("確認自訂韌體"),
+            self.tr(
+                "這個韌體沒有 S2P 韌體識別資訊。刷入後 S2P 可能無法連線或寫入設定，"
+                "之後可以用「刷入內建韌體」還原。\n\n是否仍要使用？"
+            ),
+            icon="warning",
+        ):
+            return None
+        return info
+
     def _firmware_operation_is_active(self):
         process = getattr(self, "flash_process", None)
         return bool(
@@ -2309,8 +2382,8 @@ class ConfigGUI:
             or (process is not None and process.poll() is None)
         )
 
-    def flash_firmware(self):
-        """自動偵測 ESP32-S3 刷機連接埠並刷入相容韌體。"""
+    def flash_firmware(self, custom=False):
+        """自動偵測 ESP32-S3 刷機連接埠並刷入內建或自訂韌體。"""
 
         if getattr(self, "_close_in_progress", False):
             return
@@ -2339,8 +2412,9 @@ class ConfigGUI:
             ESPTOOL_PATH,
             BOOTLOADER_PATH,
             PARTITION_PATH,
-            APP_FIRMWARE_PATH,
         ]
+        if not custom:
+            required_files.append(APP_FIRMWARE_PATH)
 
         missing_files = [
             path.name
@@ -2355,6 +2429,13 @@ class ConfigGUI:
                 + "\n".join(missing_files)
             )
             return
+
+        custom_firmware = None
+        if custom:
+            custom_firmware = self._select_custom_firmware()
+            if custom_firmware is None:
+                return
+        self._flash_custom_firmware = custom_firmware
 
         restart_pending = self._cancel_scheduled_job("_main_start_job")
         self._flash_operation_active = True
@@ -2382,6 +2463,13 @@ class ConfigGUI:
                 return
 
             # 查詢版本時可能已關閉主連接程式；若使用快取則在此釋放 COM Port。
+            connector_alive = (
+                self.main_process is not None
+                and self.main_process.poll() is None
+            )
+            self._flash_resume_connector_on_cancel = bool(
+                resume_connector or restart_pending or connector_alive
+            )
             self.stop_main_process()
 
             # 記錄目前存在的 COM Port
@@ -2395,8 +2483,8 @@ class ConfigGUI:
                 "3. 按一下 RESET / EN 按鈕\n"
                 "4. 放開 RESET / EN\n"
                 "5. 再放開 BOOT\n\n"
-                "完成後不需要做其他操作。\n"
-                "程式會自動偵測刷機連接埠。"
+                "按「確定」後程式才開始偵測刷機連接埠（最多 30 秒），\n"
+                "可以先按「確定」再操作。"
             )
 
             self.flash_detect_attempts = 0
@@ -2426,10 +2514,18 @@ class ConfigGUI:
         self._flash_preflight_verified_port = None
         self._flash_preflight_verified_generation = None
         self._flash_operation_active = False
+        self._flash_custom_firmware = None
+        self._flash_resume_connector_on_cancel = False
         self._close_flash_progress()
 
-    def _set_flash_progress(self, message, detail=""):
-        """Show which firmware step is running so silent waits do not look hung."""
+    def _set_flash_progress(self, message, detail="", cancel=None):
+        """Show which firmware step is running so silent waits do not look hung.
+
+        Pass cancel only for a step that can stop safely (waiting for the
+        flash port); it then backs the Cancel button and the close button.
+        Without it, closing does nothing: esptool would not stop with the
+        window, so those steps end on their own.
+        """
         window = getattr(self, "_flash_progress_window", None)
         try:
             if window is None or not window.winfo_exists():
@@ -2438,8 +2534,6 @@ class ConfigGUI:
                 window.title(self.tr("ESP32-S3 韌體刷寫"))
                 window.resizable(False, False)
                 window.transient(self.root)
-                # Closing would not stop esptool; the step ends on its own.
-                window.protocol("WM_DELETE_WINDOW", lambda: None)
                 content = ttk.Frame(window, padding=(18, 16))
                 content.pack(fill="both", expand=True)
                 wrap = window.winfo_pixels("240p")
@@ -2455,20 +2549,55 @@ class ConfigGUI:
                     content, anchor="w", justify="left", wraplength=wrap,
                 )
                 self._flash_progress_detail.pack(fill="x")
+                self._flash_progress_cancel_button = ttk.Button(
+                    content, text=self.tr("取消"),
+                )
                 self._flash_progress_window = window
                 self._flash_progress_message.configure(text=message)
                 self._flash_progress_detail.configure(text=detail)
+                self._configure_flash_progress_cancel(window, cancel)
                 self._center_child_window(window)
                 window.deiconify()
             else:
                 self._flash_progress_message.configure(text=message)
                 self._flash_progress_detail.configure(text=detail)
+                self._configure_flash_progress_cancel(window, cancel)
                 # Drop the fixed size so a longer step message is not clipped.
                 window.geometry("")
             # Paint now: the version check runs on the Tk thread right after.
             window.update_idletasks()
         except tk.TclError:
             self._flash_progress_window = None
+
+    def _configure_flash_progress_cancel(self, window, cancel):
+        button = self._flash_progress_cancel_button
+        if cancel is None:
+            window.protocol("WM_DELETE_WINDOW", lambda: None)
+            button.pack_forget()
+            return
+        window.protocol("WM_DELETE_WINDOW", cancel)
+        button.configure(command=cancel)
+        if not button.winfo_manager():
+            button.pack(anchor="e", pady=(10, 0))
+
+    def _cancel_flash_port_wait(self):
+        """Stop waiting for flash mode; nothing has been written yet."""
+        if getattr(self, "_flash_detection_job", None) is None:
+            return  # Detection already moved on to a step that cannot stop.
+        self._resume_connector_after_abandoned_flash(
+            self._finish_flash_operation_before_resume()
+        )
+
+    def _finish_flash_operation_before_resume(self):
+        """End a flash that wrote nothing; return whether it stopped the connector."""
+        resume = getattr(self, "_flash_resume_connector_on_cancel", False)
+        self._finish_flash_operation()
+        return resume
+
+    def _resume_connector_after_abandoned_flash(self, resume):
+        # Like declining the flash, bring back a connector this flash stopped.
+        if resume and not getattr(self, "_close_in_progress", False):
+            self._resume_connector_after_firmware_check()
 
     def _run_while_flash_progress_animates(self, work):
         """Run blocking serial work off the Tk thread and keep the progress window live.
@@ -2558,7 +2687,7 @@ class ConfigGUI:
         self.flash_detect_attempts += 1
 
         if self.flash_detect_attempts >= 60:
-            self._finish_flash_operation()
+            resume = self._finish_flash_operation_before_resume()
             messagebox.showerror(
                 self.tr("未偵測到刷機連接埠"),
                 self.tr(
@@ -2567,6 +2696,8 @@ class ConfigGUI:
                     "然後重新嘗試。"
                 ),
             )
+            # Resume after the message, so the connector window does not cover it.
+            self._resume_connector_after_abandoned_flash(resume)
             return
 
         seconds_left = max(1, (60 - self.flash_detect_attempts + 1) // 2)
@@ -2575,6 +2706,7 @@ class ConfigGUI:
             self.tr("按住 BOOT 再按一下 RESET / EN。剩餘約 {seconds} 秒。").format(
                 seconds=seconds_left
             ),
+            cancel=self._cancel_flash_port_wait,
         )
 
         def poll_again():
@@ -2688,6 +2820,21 @@ class ConfigGUI:
             return
         self._flash_preflight_verified_port = None
         self._flash_preflight_verified_generation = None
+        custom = getattr(self, "_flash_custom_firmware", None)
+        app_firmware_path = APP_FIRMWARE_PATH
+        if custom is not None:
+            app_firmware_path = custom.path
+            try:
+                unchanged = file_sha256(custom.path) == custom.sha256
+            except OSError:
+                unchanged = False
+            if not unchanged:
+                self._finish_flash_operation()
+                messagebox.showerror(
+                    self.tr("韌體刷寫已取消"),
+                    self.tr("選擇的自訂韌體檔案在確認後已變更或無法讀取，已取消刷寫。"),
+                )
+                return
         try:
             command = [
                 str(ESPTOOL_PATH),
@@ -2719,7 +2866,7 @@ class ConfigGUI:
                 str(PARTITION_PATH),
 
                 "0x10000",
-                str(APP_FIRMWARE_PATH),
+                str(app_firmware_path),
             ]
 
             self.flash_process = subprocess.Popen(
@@ -3066,9 +3213,24 @@ class ConfigGUI:
         self.audio_haptics_strength_var = tk.StringVar(
             value=self.config.get("audio_haptics", "strength", fallback="0.32")
         )
+        self.audio_haptics_detail_var = tk.StringVar(
+            value=self.config.get(
+                "audio_haptics", "detail_boost", fallback="0.00"
+            )
+        )
+        self.audio_haptics_freq_follow_var = tk.StringVar(
+            value=self.config.get(
+                "audio_haptics", "freq_follow", fallback="0.00"
+            )
+        )
         self.audio_haptics_lf_hf_balance_var = tk.StringVar(
             value=self.config.get(
                 "audio_haptics", "lf_hf_balance", fallback="0.00"
+            )
+        )
+        self.audio_haptics_voice_suppression_var = tk.StringVar(
+            value=self.config.get(
+                "audio_haptics", "voice_suppression", fallback="0.00"
             )
         )
         try:
@@ -3122,6 +3284,11 @@ class ConfigGUI:
         self.audio_haptics_final_tail_decay_var = tk.StringVar(
             value=self.config.get(
                 "audio_haptics", "final_tail_decay_ms", fallback="160"
+            )
+        )
+        self.audio_haptics_motor_emulation_var = tk.StringVar(
+            value=self.config.get(
+                "audio_haptics", "motor_emulation", fallback="0.00"
             )
         )
 
@@ -5400,19 +5567,138 @@ class ConfigGUI:
                 f"無法呼叫手把：\n{exc}"
             )
 
-    def calibrate_gyro(self):
-        """Run gyro, six-position accelerometer, then 3D magnetic calibration."""
+    @staticmethod
+    def _connected_controller_status():
+        """Return the connector status while a controller is connected, else None."""
         try:
             status = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
             age = time.time() - float(status.get("updated_at", 0.0))
             if age > 3.0 or status.get("state") != "connected":
-                raise RuntimeError("controller_not_connected")
+                return None
         # AttributeError: a valid JSON list or value is not a status object.
-        except (OSError, ValueError, TypeError, AttributeError, RuntimeError):
-            messagebox.showerror(
-                "無法校正感測器",
-                "請先啟動連接程式並確認手把已連線。",
+        except (OSError, ValueError, TypeError, AttributeError):
+            return None
+        return status
+
+    @staticmethod
+    def _connector_stopped_at():
+        """Return when the connector reported it stopped, or None.
+
+        After an error the connector writes ``stopped`` and keeps its window
+        open until the user presses a key, so its process is still running.
+        """
+        try:
+            status = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
+            if status.get("state") != "stopped":
+                return None
+            return float(status.get("updated_at", 0.0))
+        except (OSError, ValueError, TypeError, AttributeError):
+            return None
+
+    def _connector_running_or_starting(self):
+        main_process = getattr(self, "main_process", None)
+        return (
+            getattr(self, "_main_start_job", None) is not None
+            or (main_process is not None and main_process.poll() is None)
+        )
+
+    def _connect_then_calibrate_gyro(self):
+        """Start the connection, then reopen sensor calibration once connected."""
+        if getattr(self, "_gyro_calibration_wait_job", None) is not None:
+            return
+        # A connector that stopped on an error is restarted like a closed one.
+        running = (
+            self._connector_running_or_starting()
+            and self._connector_stopped_at() is None
+        )
+        if running:
+            message = (
+                "感測器校正需要先連線手把。\n\n"
+                "連接程式已在執行。請依連接程式視窗的提示喚醒或配對手把，"
+                "手把連線後會自動繼續感測器校正。"
             )
+        else:
+            message = (
+                "感測器校正需要先連線手把。\n\n"
+                "按下「確定」後會自動啟動連線並開啟連接程式視窗。"
+                "請依視窗中的提示喚醒或配對手把，手把連線後會自動繼續感測器校正。"
+            )
+        if not messagebox.askokcancel("手把尚未連線", message):
+            return
+        if not running:
+            self.restart_main()
+            if not self._connector_running_or_starting():
+                return  # restart_main explained why it could not start
+        # restart_main() has already let an old connector write its final
+        # "stopped"; only a stop reported after this point ends the wait.
+        waiting_since = time.time()
+
+        deadline = time.monotonic() + GYRO_CALIBRATION_CONNECT_TIMEOUT_SECONDS
+        try:
+            self.gyro_calibration_button.state(["disabled"])
+            self.gyro_calibration_button.configure(text=self.tr("等待手把連線..."))
+        except (AttributeError, tk.TclError):
+            pass
+
+        def stop_waiting():
+            self._gyro_calibration_wait_job = None
+            try:
+                self.gyro_calibration_button.state(["!disabled"])
+                self.gyro_calibration_button.configure(text=self.tr("校正"))
+            except (AttributeError, tk.TclError):
+                pass
+
+        def poll():
+            self._gyro_calibration_wait_job = None
+            if getattr(self, "_close_in_progress", False):
+                stop_waiting()
+                return
+            if self._connected_controller_status() is not None:
+                stop_waiting()
+                # The connector window is in front; bring the settings back
+                # so the first calibration step opens over them. Settings
+                # hidden in the notification area are restored the normal
+                # way so the tray icon and its state stay in step.
+                if not self.restore_from_system_tray():
+                    activate_tk_window(self.root)
+                self.calibrate_gyro()
+                return
+            if not self._connector_running_or_starting():
+                stop_waiting()
+                messagebox.showwarning(
+                    "無法校正感測器",
+                    "連接程式已結束，手把未連線。請重新開始感測器校正。",
+                )
+                return
+            stopped_at = self._connector_stopped_at()
+            if stopped_at is not None and stopped_at >= waiting_since:
+                stop_waiting()
+                messagebox.showwarning(
+                    "無法校正感測器",
+                    "連接程式已停止，手把未連線。請查看連接程式視窗中的訊息，"
+                    "排除問題後再重新開始感測器校正。",
+                )
+                return
+            if time.monotonic() >= deadline:
+                stop_waiting()
+                messagebox.showwarning(
+                    "無法校正感測器",
+                    "等待手把連線逾時。手把連線後請再選擇「感測器校正」。",
+                )
+                return
+            self._gyro_calibration_wait_job = self.root.after(
+                GYRO_CALIBRATION_CONNECT_POLL_MS, poll
+            )
+
+        self._gyro_calibration_wait_job = self.root.after(
+            GYRO_CALIBRATION_CONNECT_POLL_MS, poll
+        )
+
+    def calibrate_gyro(self):
+        """Run gyro, six-position accelerometer, then 3D magnetic calibration."""
+        status = self._connected_controller_status()
+        if status is None:
+            self._connect_then_calibrate_gyro()
             return
 
         controller_id = status.get("controller_id")
@@ -9673,6 +9959,9 @@ class ConfigGUI:
             self._clamp_child_to_work_area(window)
             window.grab_set()
             (focus_widget or window).focus_set()
+            # focus_set() alone can leave Windows on the window behind it,
+            # also when an already open dialog is brought back.
+            focus_new_window(window)
         except (tk.TclError, AttributeError):
             pass
 
@@ -10996,6 +11285,11 @@ class ConfigGUI:
         return {
             "mix_ratio": defaults.get("audio_haptics", "mix_ratio"),
             "strength": defaults.get("audio_haptics", "strength"),
+            "detail_boost": defaults.get("audio_haptics", "detail_boost"),
+            "freq_follow": defaults.get("audio_haptics", "freq_follow"),
+            "voice_suppression": defaults.get(
+                "audio_haptics", "voice_suppression"
+            ),
             "lf_hf_balance": defaults.get(
                 "audio_haptics", "lf_hf_balance"
             ),
@@ -11012,6 +11306,9 @@ class ConfigGUI:
             "final_tail_decay_ms": defaults.get(
                 "audio_haptics", "final_tail_decay_ms"
             ),
+            "motor_emulation": defaults.get(
+                "audio_haptics", "motor_emulation"
+            ),
         }
 
     def apply_audio_haptics_defaults(self, mode=None, set_mode=True):
@@ -11026,6 +11323,11 @@ class ConfigGUI:
                 self.audio_haptics_mode_var.set(normalized)
             self.audio_haptics_mix_ratio_var.set(defaults["mix_ratio"])
             self.audio_haptics_strength_var.set(defaults["strength"])
+            self.audio_haptics_detail_var.set(defaults["detail_boost"])
+            self.audio_haptics_freq_follow_var.set(defaults["freq_follow"])
+            self.audio_haptics_voice_suppression_var.set(
+                defaults["voice_suppression"]
+            )
             self.audio_haptics_lf_hf_balance_var.set(
                 defaults["lf_hf_balance"]
             )
@@ -11042,6 +11344,9 @@ class ConfigGUI:
             self.audio_haptics_final_tail_decay_var.set(
                 defaults["final_tail_decay_ms"]
             )
+            self.audio_haptics_motor_emulation_var.set(
+                defaults["motor_emulation"]
+            )
         finally:
             self._applying_audio_haptics_defaults = False
         self._audio_haptics_last_mode = normalized
@@ -11055,6 +11360,16 @@ class ConfigGUI:
             ),
             str(self.audio_haptics_strength_var): (
                 self.audio_haptics_strength_var, defaults["strength"]
+            ),
+            str(self.audio_haptics_detail_var): (
+                self.audio_haptics_detail_var, defaults["detail_boost"]
+            ),
+            str(self.audio_haptics_freq_follow_var): (
+                self.audio_haptics_freq_follow_var, defaults["freq_follow"]
+            ),
+            str(self.audio_haptics_voice_suppression_var): (
+                self.audio_haptics_voice_suppression_var,
+                defaults["voice_suppression"],
             ),
             str(self.audio_haptics_lf_hf_balance_var): (
                 self.audio_haptics_lf_hf_balance_var,
@@ -11076,6 +11391,10 @@ class ConfigGUI:
             str(self.audio_haptics_final_tail_decay_var): (
                 self.audio_haptics_final_tail_decay_var,
                 defaults["final_tail_decay_ms"],
+            ),
+            str(self.audio_haptics_motor_emulation_var): (
+                self.audio_haptics_motor_emulation_var,
+                defaults["motor_emulation"],
             ),
         }
         for index, variable in enumerate(self.audio_haptics_band_gain_vars):

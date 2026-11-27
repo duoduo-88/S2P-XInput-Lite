@@ -1855,8 +1855,12 @@ class GamepadMathTests(unittest.TestCase):
         image.height.return_value = 340
         canvas = Mock()
         canvas.create_text.return_value = "loading-text"
+        canvas.tk.call.return_value = 96 / 72
+        banner_font = Mock()
+        banner_font.measure.side_effect = len
 
         with (
+            patch("dialog_layout.tkfont.Font", return_value=banner_font) as font_factory,
             patch(
                 "gamepad_test_app.tk.Toplevel",
                 return_value=window,
@@ -1881,6 +1885,7 @@ class GamepadMathTests(unittest.TestCase):
             canvas.create_text.call_args.kwargs["text"],
             f"v{VERSION} Starting Gamepad Tester...",
         )
+        font_factory.assert_called_once_with(root=canvas, family="Microsoft JhengHei UI", size=-12)
         window.geometry.assert_called_once_with("600x340+660+-710")
         root.update.assert_called_once_with()
         overlay.destroy()
@@ -2076,8 +2081,8 @@ class GamepadMathTests(unittest.TestCase):
 
     def test_extra_rumble_templates_end_at_silence(self):
         for name in (
-            "heartbeat", "footsteps", "terrain", "low_rumble", "burst",
-            "machine_gun", "shotgun", "turbo", "rotor", "countdown",
+            "heartbeat", "footsteps", "terrain", "machine_gun", "rotor",
+            "countdown",
         ):
             pattern = GamepadTestWindow._rumble_pattern(None, name)
             self.assertIsNotNone(pattern)

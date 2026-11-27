@@ -402,6 +402,16 @@ def compile_standalone_profile(
     for side in ("left", "right"):
         stick = typed_sections[f"stick_direction_{side}"]
         _compile_direction_deadzone(stick, stick["mode"])
+    # Motor Emulation lives with the audio settings on the desktop, but it
+    # shapes game rumble, so firmware that plays XInput rumble needs it too.
+    # Only that one value is taken: the rest of [audio_haptics] needs Windows
+    # audio capture, so a stray value there must not block the export.
+    rumble = dict(typed_sections["rumble"])
+    rumble["motor_emulation"] = normalize_section_values(
+        "audio_haptics",
+        sections.get("audio_haptics", {}),
+        strict=False,
+    )["motor_emulation"]
     document = {
         "schema": STANDALONE_PROFILE_SCHEMA,
         "profile_name": str(profile_name).strip() or "Unnamed",
@@ -410,7 +420,7 @@ def compile_standalone_profile(
         ),
         "stick_curve_left": typed_sections["stick_curve_left"],
         "stick_curve_right": typed_sections["stick_curve_right"],
-        "rumble": typed_sections["rumble"],
+        "rumble": rumble,
         "stick_direction_left": typed_sections["stick_direction_left"],
         "stick_direction_right": typed_sections["stick_direction_right"],
         "direction_mappings": {

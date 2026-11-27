@@ -48,6 +48,19 @@ def make_config(marker, calibration="calibration", language="zh"):
 
 
 class ProfileTests(unittest.TestCase):
+    def test_only_the_movie_profile_suppresses_voice(self):
+        profile_dir = ROOT / "src" / "profiles"
+        for name in ("System Default", *BUNDLED_PROFILE_NAMES):
+            profile = read_profile(name, profile_dir)
+            suppression = profile.getfloat(
+                "audio_haptics", "voice_suppression"
+            )
+            if name == "Movie":
+                self.assertGreaterEqual(suppression, 0.80, name)
+            else:
+                # Music and game presets keep sung vocals and the original feel.
+                self.assertEqual(suppression, 0.0, name)
+
     def test_release_profile_designs_are_distinct_and_safe(self):
         profile_dir = ROOT / "src" / "profiles"
         expected_modes = {
@@ -59,6 +72,7 @@ class ProfileTests(unittest.TestCase):
             "FPS-IMM": ("MIX", "HOLD"),
             "Racing": ("GAME", "OFF"),
             "Rhythm": ("AUDIO", "OFF"),
+            "Movie": ("AUDIO", "OFF"),
         }
         expected_amplitudes = {
             "System Default": 500,
@@ -69,6 +83,7 @@ class ProfileTests(unittest.TestCase):
             "FPS-IMM": 500,
             "Racing": 500,
             "Rhythm": 500,
+            "Movie": 500,
         }
         expected_audio_routing = {
             "System Default": (0.00, 0.15),
@@ -79,6 +94,7 @@ class ProfileTests(unittest.TestCase):
             "FPS-IMM": (0.05, 0.10),
             "Racing": (-0.15, 0.10),
             "Rhythm": (0.05, 0.08),
+            "Movie": (0.00, 1.40),
         }
         defaults = read_profile("System Default", profile_dir)
         fingerprints = {}

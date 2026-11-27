@@ -1,6 +1,6 @@
 # S2P-XInput-Lite
 
-[English](README.md) · [使用手冊](manual/USER_GUIDE_zh-TW.md) · [English Guide](manual/USER_GUIDE.md) · [v0.8.2 更新說明](RELEASE_NOTES_v0.8.2.md)
+[English](README.md) · [使用手冊](manual/USER_GUIDE_zh-TW.md) · [English Guide](manual/USER_GUIDE.md) · [v0.8.3 更新說明](RELEASE_NOTES_v0.8.3.md)
 
 **[下載最新 Windows 版本](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)** · **[在 Ko-fi 贊助本專案](https://ko-fi.com/duoduo88)**
 
@@ -10,8 +10,8 @@ S2P-XInput-Lite 讓 Windows 遊戲把 Switch 2 Pro Controller 當成 XInput 相�
 瞄準測試。
 
 > [!IMPORTANT]
-> **v0.8.2 隨附 ESP32-S3 韌體 S2P-FW 1.0.9。** Android USB HID 獨立模式新增圓形陀螺儀死區、
-> 按鍵突波抑制、分軸陀螺儀補償與手把組合鍵。使用 ESP32-S3 橋接器時，請在主視窗按 **刷入相容韌體（Flash FW）**
+> **v0.8.3 隨附 ESP32-S3 韌體 S2P-FW 1.0.9，與 v0.8.2 相同。** 已用 v0.8.2 刷過韌體的話不必重刷。
+> 從更早的版本升級且使用 ESP32-S3 橋接器時，請在主視窗按 **刷入韌體 ▼ → 刷入內建韌體**
 > 確認並更新韌體。[刷寫步驟](manual/USER_GUIDE_zh-TW.md#flash-esp32-s3)
 
 ![S2P-XInput-Lite 橫幅](image/S2P-XInput-Lite-banner.jpg)
@@ -76,7 +76,10 @@ S2P-XInput-Lite 讓 Windows 遊戲把 Switch 2 Pro Controller 當成 XInput 相�
 
 **震動**
 - USB、ESP32 與 BLE 共用同一套 XInput 至 HD Rumble 2 轉換，只送出最新的震動並優先送出停止訊框。
-- 音訊震動以六頻段分析聲音，可選遊戲、音訊或混合來源。
+- 音訊震動以六頻段分析聲音，可選遊戲、音訊或混合來源。「細節增強」可放大細小聲音，「頻率跟隨」讓 HD Rumble
+  頻率隨聲音的音色變化，「人聲抑制」讓電影對白不再一直震動，爆炸、槍聲等撞擊照常震動。
+- 「馬達模擬」讓遊戲震動像傳統馬達：輕震動更有顆粒感，強震動維持滑順。
+  [震動手冊](manual/USER_GUIDE_zh-TW.md#rumble-game)
 
 **方案**
 - 遊戲方案可一起切換搖桿、陀螺儀、震動、音訊與映射設定，執行中的連線不必重連即可套用。
@@ -86,7 +89,8 @@ S2P-XInput-Lite 讓 Windows 遊戲把 Switch 2 Pro Controller 當成 XInput 相�
 **ESP32-S3**
 - 將方案寫入 ESP32，不需 Windows 程式即可當成 Android USB HID 手把使用；手把組合鍵與 CDC 主控台
   可用於救援。
-- 內建韌體刷寫，刷寫前會先檢查已安裝的版本。
+- 內建韌體刷寫，刷寫前會先檢查已安裝的版本；也能刷入自己編譯的韌體，刷寫前會先確認檔案符合規格。
+  [自行編譯韌體](manual/USER_GUIDE_zh-TW.md#build-firmware)
 
 **擴充工具**
 - [S2P-Joystick-Macro](https://github.com/duoduo-88/S2P-Extensions) 等獨立工具可透過 S2P 送出輸入或讀取控制器輸出，
@@ -147,7 +151,7 @@ Windows 鍵盤／滑鼠輸出、音訊震動、依程式自動切換方案、陀
 - 設定與每支手把的搖桿校正儲存在 `app/src/config.ini`。檔案不存在時會以
   `app/src/profiles/System Default.ini` 建立；舊設定缺少的欄位會自動補齊，不會覆寫既有值。
   每個發佈包都必須保留 `System Default.ini`。
-- 首次啟動提供 General、Audio、FPS-COMP、FPS-IMM、Racing、Action 與 Rhythm 方案。
+- 首次啟動提供 General、Audio、Movie、FPS-COMP、FPS-IMM、Racing、Action 與 Rhythm 方案。
   **System Default** 是唯讀基準；**還原預設** 只重設目前畫面，不會刪除已儲存的方案或校正資料。
 - 映射層檔案是全域資源，存放在 `app/src/layers`；各方案會保存啟用哪些映射層與其順序。
   同一時間只套用優先權最高的符合映射層：按住優先於切換，其餘依清單順序決定。

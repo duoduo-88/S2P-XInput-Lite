@@ -51,8 +51,8 @@ notice. Unknown values/read errors use Bridge. Legacy boolean mode keys are
 migration inputs only. Migration does not itself reboot; storage failures retain
 a safe in-memory mode for retry, and old data is cleared only after durable commit.
 
-The sole profile activation action is **Write and enable Android USB HID
-standalone** / **寫入並啟用 Android USB HID 獨立模式**. The desktop also offers
+The sole profile activation action is **Write and enable standalone** /
+**寫入並啟用獨立模式**. The desktop also offers
 **Return to ESP32 bridge mode** / **切回 ESP32 橋接模式**. Profile reconnect verifies
 the expected device identity before checking length and CRC.
 

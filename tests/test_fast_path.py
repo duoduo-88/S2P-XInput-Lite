@@ -509,7 +509,7 @@ class LiveReconfigureTests(unittest.TestCase):
         # whichever audio mode the General release preset currently chooses.
         mix.set("audio_haptics", "mode", "MIX")
         levels = []
-        audio = AudioHaptics(game, lambda lf, hf: levels.append((lf, hf)))
+        audio = AudioHaptics(game, lambda lf, hf, *_tilts: levels.append((lf, hf)))
         native_stream = object()
         audio._stream = native_stream
         audio._running = True

@@ -1,8 +1,9 @@
 """Convert Windows system-output audio into LF/HF rumble levels."""
 
 import math
+import time
 import threading
-from collections import namedtuple
+from collections import deque, namedtuple
 from functools import lru_cache
 
 import numpy as np
@@ -35,13 +36,13 @@ AudioFeatures = namedtuple(
     "AudioFeatures",
     (
         "overall_level max_band_level low_energy mid_energy high_energy "
-        "low_ratio mid_ratio high_ratio positive_flux negative_flux "
+        "low_ratio mid_ratio high_ratio positive_flux "
         "fast_envelope slow_envelope envelope_contrast peak_level rms_level "
         "crest energy_stability sustain_evidence valid"
     ),
 )
 TactileFeatures = namedtuple(
-    "TactileFeatures", "punch weight sharpness sustain texture"
+    "TactileFeatures", "punch weight sharpness sustain"
 )
 FeatureState = namedtuple(
     "FeatureState", "fast_envelope slow_envelope stability previous_overall"
@@ -82,6 +83,68 @@ def _route_band_levels(band_levels, lf_hf_balance=0.0):
         min(1.0, max(lf_values, default=0.0)),
         min(1.0, max(hf_values, default=0.0)),
     )
+
+
+# Frequency-follow pivots, as band indices.  The six bands are roughly
+# log-spaced, so the contribution-weighted mean band index is a usable
+# pitch axis.  LF pivots between Low and L-Mid (sub-bass lowers, low-mid
+# punch raises); HF pivots between H-Mid and High.
+LF_TILT_PIVOT = 0.5
+LF_TILT_SPAN = 0.5
+HF_TILT_PIVOT = 3.5
+HF_TILT_SPAN = 1.5
+# Contribution below this slows the tilt follower proportionally, so
+# gate-level noise cannot swing the frequency and a release tail keeps the
+# pitch of the sound that produced it.
+TILT_PRESENCE = 0.05
+# Slower than the amplitude attack so the pitch moves as texture, not jitter.
+TILT_FOLLOW_SECONDS = 0.060
+
+
+def _channel_tilts(band_energies, lf_hf_balance=0.0):
+    """Return ``(lf_tilt, lf_presence, hf_tilt, hf_presence)``.
+
+    Tilts are -1..1 spectral positions of the bands feeding LF and HF;
+    presence is 0..1 evidence that a channel has enough energy to trust it.
+    Each band contributes with the same strength and LF/HF share that
+    ``_route_band_levels`` uses for amplitudes, so the tilt describes the
+    sound actually driving each actuator rather than the whole spectrum.
+    """
+    balance = max(-1.0, min(1.0, float(lf_hf_balance)))
+    lf_total = lf_moment = hf_total = hf_moment = 0.0
+    for index, (energy, strength, base_hf, influence) in enumerate(zip(
+        band_energies,
+        AUDIO_ROUTE_STRENGTH,
+        AUDIO_BASE_HF_SHARE,
+        AUDIO_BALANCE_INFLUENCE,
+    )):
+        hf_share = max(0.0, min(1.0, base_hf + balance * influence))
+        weighted = max(0.0, float(energy)) * strength
+        lf_part = weighted * (1.0 - hf_share)
+        hf_part = weighted * hf_share
+        lf_total += lf_part
+        lf_moment += lf_part * index
+        hf_total += hf_part
+        hf_moment += hf_part * index
+
+    def tilt(total, moment, pivot, span):
+        if total <= 1e-9:
+            return 0.0, 0.0
+        centred = (moment / total - pivot) / span
+        return max(-1.0, min(1.0, centred)), _clamp01(total / TILT_PRESENCE)
+
+    return (
+        *tilt(lf_total, lf_moment, LF_TILT_PIVOT, LF_TILT_SPAN),
+        *tilt(hf_total, hf_moment, HF_TILT_PIVOT, HF_TILT_SPAN),
+    )
+
+
+def _follow_tilt(current, target, presence, block_seconds):
+    """Move toward ``target`` at a rate scaled by channel presence."""
+    coefficient = 1.0 - math.exp(
+        -float(block_seconds) / TILT_FOLLOW_SECONDS
+    )
+    return current + (target - current) * coefficient * _clamp01(presence)
 
 
 def _follow_feature_envelope(current, target, block_seconds, time_constant):
@@ -129,7 +192,7 @@ def _extract_audio_features(
         zeros = (0.0,) * 3
         return (
             AudioFeatures(
-                0.0, 0.0, *zeros, *zeros, 0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, *zeros, *zeros, 0.0, 0.0, 0.0, 0.0,
                 0.0, 0.0, 0.0, 0.0, 0.0, False,
             ),
             _empty_feature_state(),
@@ -149,9 +212,6 @@ def _extract_audio_features(
     positive_delta = tuple(
         max(0.0, level - old) for level, old in zip(current, previous)
     )
-    negative_delta = tuple(
-        max(0.0, old - level) for level, old in zip(current, previous)
-    )
     # The 0.06 denominator floor prevents a tiny gated-near signal from
     # becoming a full-scale onset purely through division.  A 0.60 band rise
     # is still near full-scale, as verified by the synthetic attack tests.
@@ -159,11 +219,6 @@ def _extract_audio_features(
     positive_flux = min(
         1.0,
         math.sqrt(sum(delta * delta for delta in positive_delta) / len(current))
-        / flux_denominator,
-    )
-    negative_flux = min(
-        1.0,
-        math.sqrt(sum(delta * delta for delta in negative_delta) / len(current))
         / flux_denominator,
     )
 
@@ -207,7 +262,7 @@ def _extract_audio_features(
     return (
         AudioFeatures(
             overall, max_band, low_energy, mid_energy, high_energy,
-            low_ratio, mid_ratio, high_ratio, positive_flux, negative_flux,
+            low_ratio, mid_ratio, high_ratio, positive_flux,
             fast, slow, envelope_contrast, peak, rms_level, crest, stability,
             sustain_evidence, True,
         ),
@@ -218,7 +273,7 @@ def _extract_audio_features(
 def _derive_tactile_features(features):
     """Layer B: turn audio structure into bounded tactile responsibilities."""
     if not features.valid:
-        return TactileFeatures(0.0, 0.0, 0.0, 0.0, 0.0)
+        return TactileFeatures(0.0, 0.0, 0.0, 0.0)
 
     level_presence = _clamp01(features.overall_level / 0.08)
     onset = _soft_union(features.positive_flux, features.envelope_contrast)
@@ -237,15 +292,7 @@ def _derive_tactile_features(features):
 
     high_presence = _clamp01(features.high_energy / 0.12)
     sharpness = high_presence * features.high_ratio * onset
-    # Texture is diagnostic only: rapid bidirectional high-band variation.
-    texture = _clamp01(
-        (features.positive_flux + features.negative_flux)
-        * features.high_ratio
-        * level_presence
-    )
-    return TactileFeatures(
-        punch, weight, sharpness, features.sustain_evidence, texture
-    )
+    return TactileFeatures(punch, weight, sharpness, features.sustain_evidence)
 
 
 def _dsp_v2_targets(
@@ -306,104 +353,209 @@ def _dsp_v2_targets(
     return lf_target, hf_target, next_state, features, tactile
 
 
-def _dynamic_audio_targets(
-    band_levels,
-    previous_band_levels,
-    lf_hf_balance,
-    fast_envelope,
-    slow_envelope,
-    block_seconds,
-    analysis_seconds,
-):
-    """Add transient-aware contrast without changing the six-band controls.
+# Voice Suppression.  Dialogue sits on the same bands as tactile body: voice
+# fundamentals (~85-255 Hz) fall in L-Mid, which routes almost entirely to LF,
+# so speech becomes a constant hum and leaves no headroom for the impacts that
+# follow it.  Band gains cannot separate the two, because punches and hits
+# share those frequencies.  Voice is instead recognised by structure: voiced
+# speech is a harmonic series (a strong autocorrelation peak at its pitch
+# period) with almost no sub-bass, while explosions and hits are noise-like
+# and carry their energy below 70 Hz.
+VOICE_WINDOW_SECONDS = 0.040
+VOICE_PITCH_HZ = (75.0, 400.0)
+# Harmonics above the fundamental still repeat at the pitch period, so the
+# autocorrelation is taken over this band.  Leaving out the sub-bass keeps a
+# narrow-band rumble (which looks periodic on its own) from reading as voice.
+VOICE_HARMONIC_HZ = (150.0, 1500.0)
+# Voiced speech keeps nearly all of its energy in this band (a low male
+# fundamental reaches down to ~85 Hz).  Explosions spread into the sub-bass
+# and metal clangs, blades and gunshots sit far above or below it, so a low
+# share means the sound is not dialogue even when it is pitched, as a ringing
+# sword is.  A higher top edge catches more of a bright voice but starts to
+# count a sword's lowest partials as speech.
+VOICE_FOCUS_HZ = (80.0, 1200.0)
+VOICE_TOTAL_HZ = (20.0, 8000.0)
+VOICE_FOCUS_FLOOR = 0.50
+VOICE_FOCUS_FULL = 0.85
+VOICE_HARMONIC_FLOOR = 0.40
+VOICE_HARMONIC_FULL = 0.70
+# Harmonicity rises at once and holds across the short unvoiced consonants
+# and gaps between syllables.
+VOICE_RELEASE_SECONDS = 0.150
+# Focus holds only across a plosive or sibilant, whose energy briefly leaves
+# the voice band.  A sword or blade that rings for longer moves the energy
+# out for good, so the cut lifts within this time.
+VOICE_FOCUS_RELEASE_SECONDS = 0.040
+# The 40 ms voice window recognises a syllable 5-15 ms after its energy
+# reaches the 20 ms band analysis, so every sentence onset would thump
+# before the cut lands.  While suppression is on, the levels are delayed
+# by this much so the cut is decided with the syllable already in view.
+VOICE_LOOKAHEAD_SECONDS = 0.015
+# An unpitched jump this far above the recent level is an impact, not a
+# consonant, so the held voice evidence is dropped at once instead of
+# cutting the punch that interrupts a sentence.
+VOICE_IMPACT_RATIO = 2.5
+VOICE_IMPACT_HARMONICITY = 0.30
+VOICE_ENERGY_SECONDS = 0.200
+# How much each band is cut at full voice evidence and full suppression.
+# High bands keep most of their level: sibilance is quiet in rumble, and
+# gunshots and debris live there.
+VOICE_BAND_WEIGHTS = (1.00, 1.00, 1.00, 0.90, 0.85, 0.60)
+# A sound louder than this multiple of the tracked voice level keeps the
+# excess, so impacts under dialogue still come through.  Speech level varies
+# from syllable to syllable; the margin keeps a stressed syllable from
+# poking out as rumble.
+VOICE_HEADROOM = 1.5
+# Instant voice evidence above this counts as a voiced frame for tracking.
+VOICE_PROFILE_VOICED = 0.5
+VOICE_PROFILE_ATTACK_SECONDS = 0.010
+VOICE_PROFILE_RELEASE_SECONDS = 0.300
 
-    The normal routed level remains the sustained body. Positive six-band
-    spectral flux and a fast-vs-slow energy envelope identify new attacks and
-    use only the remaining 0..1 headroom for a short pre-emphasis. Once the
-    sound becomes steady, the result naturally converges back to the original
-    six-band routing.
-    """
-    current = tuple(
-        max(0.0, min(1.0, float(level))) for level in band_levels
-    )
-    if len(previous_band_levels) != len(current):
-        previous = (0.0,) * len(current)
-    else:
-        previous = tuple(
-            max(0.0, min(1.0, float(level)))
-            for level in previous_band_levels
-        )
 
-    positive_delta = tuple(
-        max(0.0, level - old)
-        for level, old in zip(current, previous)
-    )
-    overall_level = max(current, default=0.0)
+@lru_cache(maxsize=8)
+def _voice_plan(sample_count, sample_rate):
+    """Cache the window, masks and lag range used by ``_voice_cues``."""
+    window = np.hanning(sample_count).astype(np.float32)
+    nfft = 1 << int(math.ceil(math.log2(max(2, 2 * sample_count))))
+    frequencies = np.fft.rfftfreq(nfft, 1.0 / float(sample_rate))
 
-    # The fast follower tracks roughly one audio hop.  The slow follower spans
-    # several rolling FFT windows, so it represents the sustained body without
-    # adding another user-facing timing control.
-    fast_envelope = _follow_feature_envelope(
-        fast_envelope,
-        overall_level,
-        block_seconds,
-        block_seconds,
-    )
-    slow_envelope = _follow_feature_envelope(
-        slow_envelope,
-        overall_level,
-        block_seconds,
-        max(block_seconds, analysis_seconds * 4.0),
-    )
+    def band(low_hz, high_hz):
+        mask = (frequencies >= low_hz) & (frequencies < high_hz)
+        mask.setflags(write=False)
+        return mask
 
-    if overall_level <= 1e-9 or not current:
-        transient_score = 0.0
-    else:
-        flux_rms = math.sqrt(
-            sum(delta * delta for delta in positive_delta) / len(current)
-        )
-        spectral_flux = min(1.0, flux_rms / overall_level)
-        envelope_contrast = min(
-            1.0,
-            max(0.0, fast_envelope - slow_envelope)
-            / max(1e-6, fast_envelope),
-        )
-        # Soft union: either a new spectral component or a sudden broadband
-        # rise may identify an onset, while two agreeing cues reinforce it.
-        transient_score = 1.0 - (
-            (1.0 - spectral_flux) * (1.0 - envelope_contrast)
-        )
-
-    base_lf, base_hf = _route_band_levels(current, lf_hf_balance)
-    transient_lf, transient_hf = _route_band_levels(
-        positive_delta, lf_hf_balance
+    # Dividing by the window's own autocorrelation removes the taper's
+    # bias toward short lags (Boersma's normalisation).
+    window_spectrum = np.fft.rfft(window, nfft)
+    window_autocorr = np.fft.irfft(np.abs(window_spectrum) ** 2, nfft)
+    window_autocorr = window_autocorr[:sample_count] / window_autocorr[0]
+    lag_low = max(1, int(sample_rate / VOICE_PITCH_HZ[1]))
+    lag_high = min(
+        sample_count // 2, int(math.ceil(sample_rate / VOICE_PITCH_HZ[0]))
     )
-
-    # Preserve the existing output as the floor and spend only unused headroom
-    # on short attacks.  This avoids lowering steady music or requiring a new
-    # GUI strength parameter.
-    lf_target = min(
-        1.0,
-        base_lf
-        + (1.0 - base_lf) * transient_lf * transient_score,
-    )
-    hf_target = min(
-        1.0,
-        base_hf
-        + (1.0 - base_hf) * transient_hf * transient_score,
-    )
+    lag_correction = np.maximum(
+        window_autocorr[lag_low:lag_high + 1], 0.05
+    ).astype(np.float64)
+    window.setflags(write=False)
+    lag_correction.setflags(write=False)
     return (
-        lf_target,
-        hf_target,
-        fast_envelope,
-        slow_envelope,
-        transient_score,
+        window, nfft,
+        band(*VOICE_HARMONIC_HZ), band(*VOICE_FOCUS_HZ), band(*VOICE_TOTAL_HZ),
+        lag_low, lag_high, lag_correction,
     )
+
+
+def _voice_cues(samples, sample_rate):
+    """Return ``(harmonicity, focus, energy)`` for one mono window.
+
+    ``harmonicity`` is 0..1 evidence of a pitched harmonic series in the voice
+    range; ``focus`` is 0..1 evidence that the energy sits where voiced speech
+    keeps it; ``energy`` is the window's 20 Hz-8 kHz power, used only as a
+    relative loudness reference.
+    """
+    data = np.asarray(samples, dtype=np.float32)
+    sample_count = int(data.size)
+    if sample_count < 64 or sample_rate <= 0:
+        return 0.0, 0.0, 0.0
+    (
+        window, nfft, harmonic_mask, focus_mask, total_mask,
+        lag_low, lag_high, lag_correction,
+    ) = _voice_plan(sample_count, float(sample_rate))
+    if lag_high <= lag_low:
+        return 0.0, 0.0, 0.0
+    spectrum = np.fft.rfft((data - float(np.mean(data))) * window, nfft)
+    power = spectrum.real * spectrum.real + spectrum.imag * spectrum.imag
+    total = float(np.sum(power[total_mask]))
+    if total <= 1e-12:
+        return 0.0, 0.0, 0.0
+    share = float(np.sum(power[focus_mask])) / total
+    focus = _clamp01(
+        (share - VOICE_FOCUS_FLOOR) / (VOICE_FOCUS_FULL - VOICE_FOCUS_FLOOR)
+    )
+    autocorr = np.fft.irfft(np.where(harmonic_mask, power, 0.0), nfft)
+    if autocorr[0] <= 1e-12:
+        return 0.0, focus, total
+    normalized = autocorr[lag_low:lag_high + 1] / autocorr[0] / lag_correction
+    peak = float(np.max(normalized))
+    harmonicity = _clamp01(
+        (peak - VOICE_HARMONIC_FLOOR)
+        / (VOICE_HARMONIC_FULL - VOICE_HARMONIC_FLOOR)
+    )
+    return harmonicity, focus, total
+
+
+def _hold_voice_cue(held, cue, block_seconds, release_seconds):
+    """Rise to a voice cue at once and release it over ``release_seconds``."""
+    if cue >= held:
+        return cue
+    return _follow_feature_envelope(held, cue, block_seconds, release_seconds)
+
+
+def _voice_band_gains(voice, amount):
+    """Per-band multipliers for 0..1 voice evidence and suppression amount."""
+    cut = _clamp01(voice) * _clamp01(amount)
+    return tuple(1.0 - cut * weight for weight in VOICE_BAND_WEIGHTS)
+
+
+def _follow_voice_profile(profile, levels, voiced, block_seconds):
+    """Track each band's level while voice is present.
+
+    The profile rises quickly to a voiced level and falls slowly, so it
+    bridges the gaps between syllables and still describes the speaker.
+    """
+    target_scale = 1.0 if voiced >= VOICE_PROFILE_VOICED else 0.0
+    result = []
+    for current, level in zip(profile, levels):
+        target = float(level) * target_scale
+        result.append(_follow_feature_envelope(
+            current,
+            target,
+            block_seconds,
+            VOICE_PROFILE_ATTACK_SECONDS
+            if target > current
+            else VOICE_PROFILE_RELEASE_SECONDS,
+        ))
+    return tuple(result)
+
+
+def _suppress_voice(levels, gains, profile):
+    """Cut voice while keeping whatever rises above the speaker's level.
+
+    A punch or explosion under dialogue is louder than the voice, so the
+    part above ``VOICE_HEADROOM`` times the tracked voice level passes even
+    while the voice cut is active.
+    """
+    return tuple(
+        max(0.0, level * gain, level - VOICE_HEADROOM * voice * weight)
+        for level, gain, voice, weight in zip(
+            levels, gains, profile, VOICE_BAND_WEIGHTS
+        )
+    )
+
+
+def _downmix(samples):
+    """Sum channels in amplitude and reference the result to stereo.
+
+    Stereo keeps the original ``(L + R) / 2`` downmix exactly, so wide or
+    uncorrelated stereo sound does not read louder than before.  A 5.1/7.1
+    endpoint carrying stereo content matches a stereo endpoint instead of
+    being divided by its silent channels, and LFE-only content reads like
+    a single stereo channel.
+    """
+    data = np.asarray(samples, dtype=np.float32)
+    if data.ndim == 1:
+        return data
+    channel_count = max(1, int(data.shape[1]))
+    return np.sum(data, axis=1) / float(min(channel_count, 2))
 
 
 def _spectral_band_rms(samples, sample_rate):
-    """Return low-latency, window-corrected RMS for the six bands."""
-    mono = np.asarray(samples, dtype=np.float32)
+    """Return low-latency, window-corrected RMS for the six bands.
+
+    ``samples`` is either mono ``(frames,)`` or ``(frames, channels)``,
+    which is downmixed by ``_downmix``.
+    """
+    mono = _downmix(samples)
     sample_count = int(mono.size)
     if sample_count < 8 or sample_rate <= 0:
         return (0.0,) * len(AUDIO_BANDS_HZ)
@@ -422,13 +574,21 @@ def _spectral_band_rms(samples, sample_rate):
 @lru_cache(maxsize=8)
 def _spectral_plan(sample_count, sample_rate):
     """Cache the immutable FFT window and band bins used on every audio hop."""
-    # A symmetric Hann window suppresses the newest samples at its right
-    # edge, adding perceptible onset lag in a causal real-time stream. This
-    # rising half-sine keeps leakage controlled while giving the newest audio
-    # full weight and older overlapping samples progressively less weight.
-    window = np.sin(
-        np.linspace(0.0, math.pi / 2.0, sample_count, dtype=np.float32)
-    )
+    # A symmetric Hann window suppresses the newest samples over half the
+    # window, adding perceptible onset lag in a causal real-time stream. This
+    # asymmetric window rises as a half-Hann across the older samples and
+    # only closes over the newest 1/5 (4 ms at 20 ms).  Closing the right
+    # edge matters: an open edge leaked a loud bass tone into the 300 Hz+
+    # bands at about -16 dB, while this short taper keeps it near -33 dB.
+    # A new tone reaches ~56% after 5 ms (was ~68%) and ~92% after 10 ms
+    # (was ~90%); shorter tapers leaked more and broke steady-bass stability.
+    fall = max(1, sample_count // 5)
+    rise = max(1, sample_count - fall)
+    window = np.empty(sample_count, dtype=np.float32)
+    window[:rise] = np.sin(0.5 * math.pi * np.arange(rise) / rise) ** 2
+    window[rise:] = np.cos(
+        0.5 * math.pi * (np.arange(sample_count - rise) + 0.5) / fall
+    ) ** 2
     window_power = float(np.mean(window * window))
     frequencies = np.fft.rfftfreq(sample_count, 1.0 / float(sample_rate))
     denominator = max(1e-12, sample_count * sample_count * window_power)
@@ -444,6 +604,14 @@ def _spectral_plan(sample_count, sample_rate):
 
 class AudioHaptics:
     """Capture the default WASAPI loopback device on a background thread."""
+
+    # Longer than one WASAPI shared-mode period plus scheduling jitter, so a
+    # normally flowing stream never receives synthetic silence.
+    LOOPBACK_STALL_SECONDS = 0.040
+    # Below this envelope level every amplitude rounds to zero.
+    IDLE_LEVEL = 1e-3
+    # Detail Boost reaches its full lift at this routed level.
+    CURVE_KNEE = 0.15
 
     def __init__(self, config, level_callback):
         self._level_callback = level_callback
@@ -464,6 +632,11 @@ class AudioHaptics:
         if self.mode not in ("GAME", "AUDIO", "MIX"):
             self.mode = "GAME"
         self.strength = _bounded_float(config, section, "strength", 0.32, 0, 1)
+        # Detail Boost is the user-facing form of the audio power curve:
+        # 0.00 keeps the linear response; the exponent is 1 - boost.
+        self.detail_boost = _bounded_float(
+            config, section, "detail_boost", 0.0, 0.0, 0.70
+        )
         legacy_low_gain = _bounded_float(
             config, section, "low_gain", 1.0, 0, 2
         )
@@ -486,6 +659,9 @@ class AudioHaptics:
         )
         self.noise_gate = _bounded_float(
             config, section, "noise_gate", 0.040, 0, 0.25
+        )
+        self.voice_suppression = _bounded_float(
+            config, section, "voice_suppression", 0.0, 0.0, 1.0
         )
         self.attack_ms = _bounded_float(config, section, "attack_ms", 6, 1, 500)
         self.release_ms = _bounded_float(
@@ -554,12 +730,18 @@ class AudioHaptics:
                     self._thread = None
         return stopped
 
-    def _emit_capture_levels(self, lf, hf, stop_event):
-        """Serialize native-capture output with shutdown, even after late reads."""
+    def _emit_capture_levels(
+        self, lf, hf, stop_event, lf_tilt=0.0, hf_tilt=0.0,
+    ):
+        """Serialize native-capture output with shutdown, even after late reads.
+
+        Tilts are the -1..1 frequency-follow positions; the receiver decides
+        how far, if at all, they move the HD Rumble frequencies.
+        """
         with self._lifecycle_lock:
             if not self._running or stop_event.is_set() or self.mode == "GAME":
                 return False
-            self._level_callback(lf, hf)
+            self._level_callback(lf, hf, lf_tilt, hf_tilt)
             return True
 
     def _capture_loop(self, generation, stop_event):
@@ -678,6 +860,8 @@ class AudioHaptics:
         stop_event = self._stop_event if stop_event is None else stop_event
         lf_envelope = 0.0
         hf_envelope = 0.0
+        lf_tilt = 0.0
+        hf_tilt = 0.0
         feature_state = _empty_feature_state()
         previous_band_levels = (0.0,) * len(AUDIO_BANDS_HZ)
         previous_feature_levels = (0.0,) * len(AUDIO_BANDS_HZ)
@@ -687,47 +871,119 @@ class AudioHaptics:
         # Starting with silence lets a new transient affect the first 5 ms
         # update instead of waiting for an entire 20 ms window to fill.
         rolling_audio = np.zeros(analysis_frames, dtype=np.float32)
+        # Voice detection needs two periods of a low voice, so it keeps its
+        # own longer window; the 20 ms band analysis is unchanged.
+        voice_frames = max(
+            analysis_frames, int(round(sample_rate * VOICE_WINDOW_SECONDS))
+        )
+        voice_audio = np.zeros(voice_frames, dtype=np.float32)
+        voice_evidence = 0.0
+        voice_focus = 0.0
+        voice_energy_ref = 0.0
+        silent_bands = (0.0,) * len(AUDIO_BANDS_HZ)
+        voice_level_profile = voice_energy_profile = silent_bands
+        voice_delay_hops = max(1, int(round(
+            VOICE_LOOKAHEAD_SECONDS * sample_rate / max(1, hop_frames)
+        )))
+        voice_delay = deque()
+
+        hop_seconds = hop_frames / sample_rate
+        silent_audio = np.zeros(
+            (analysis_frames, max(1, int(channels))), dtype=np.float32
+        )
+        # Nothing has been emitted yet, so a stream that starts silent needs
+        # no synthetic decay and must not generate callback traffic.
+        output_idle = True
+        stall_deadline = time.perf_counter() + self.LOOPBACK_STALL_SECONDS
+        last_synthetic_time = None
 
         while self._running and not stop_event.is_set():
+            samples = None
             get_read_available = getattr(
                 stream, "get_read_available", None
             )
             if get_read_available is not None:
                 available = max(0, int(get_read_available()))
                 if available < hop_frames:
-                    missing_seconds = (hop_frames - available) / sample_rate
-                    stop_event.wait(
-                        timeout=max(0.0005, min(0.002, missing_seconds))
+                    now = time.perf_counter()
+                    if output_idle or now < stall_deadline:
+                        missing_seconds = (
+                            (hop_frames - available) / sample_rate
+                        )
+                        stop_event.wait(
+                            timeout=max(0.0005, min(0.002, missing_seconds))
+                        )
+                        continue
+                    # WASAPI loopback stops delivering packets when no
+                    # application renders audio (e.g. a paused player).  The
+                    # last level would otherwise be held and refreshed as
+                    # continuous rumble, so feed silence until the release
+                    # envelope has finished.  Windows may round the short
+                    # waits up to its timer period, so each silent block
+                    # covers the real elapsed time instead of one nominal hop.
+                    if last_synthetic_time is None:
+                        silent_frames = hop_frames
+                    else:
+                        silent_frames = int(round(
+                            (now - last_synthetic_time) * sample_rate
+                        ))
+                    silent_frames = max(
+                        hop_frames, min(analysis_frames, silent_frames)
                     )
+                    samples = silent_audio[:silent_frames]
+                    last_synthetic_time = now
+                    stall_deadline = now + hop_seconds
+            synthetic = samples is not None
+            if not synthetic:
+                last_synthetic_time = None
+                data = stream.read(
+                    hop_frames, exception_on_overflow=False
+                )
+                stall_deadline = (
+                    time.perf_counter() + self.LOOPBACK_STALL_SECONDS
+                )
+                samples = np.frombuffer(data, dtype=np.float32)
+                frame_count = len(samples) // channels
+                if frame_count <= 0:
                     continue
-            data = stream.read(
-                hop_frames, exception_on_overflow=False
-            )
-            samples = np.frombuffer(data, dtype=np.float32)
-            frame_count = len(samples) // channels
-            if frame_count <= 0:
-                continue
-            samples = samples[:frame_count * channels].reshape(
-                frame_count, channels
-            )
+                samples = samples[:frame_count * channels].reshape(
+                    frame_count, channels
+                )
+            frame_count = len(samples)
             if self.mode == "GAME":
                 # Keep draining the live stream so switching back to AUDIO/MIX
                 # cannot replay stale buffered sound, but skip all DSP and
                 # callback traffic while game rumble owns the output.
                 rolling_audio.fill(0.0)
+                voice_audio.fill(0.0)
+                voice_evidence = 0.0
+                voice_focus = 0.0
+                voice_energy_ref = 0.0
+                voice_level_profile = voice_energy_profile = silent_bands
+                voice_delay.clear()
                 lf_envelope = 0.0
                 hf_envelope = 0.0
+                lf_tilt = 0.0
+                hf_tilt = 0.0
                 feature_state = _empty_feature_state()
                 previous_band_levels = (0.0,) * len(AUDIO_BANDS_HZ)
                 previous_feature_levels = (0.0,) * len(AUDIO_BANDS_HZ)
+                output_idle = True
                 continue
-            mono = np.mean(samples, axis=1)
+            mono = _downmix(samples)
             if frame_count >= analysis_frames:
                 rolling_audio[:] = mono[-analysis_frames:]
             else:
                 rolling_audio[:-frame_count] = rolling_audio[frame_count:]
                 rolling_audio[-frame_count:] = mono
+            if frame_count >= voice_frames:
+                voice_audio[:] = mono[-voice_frames:]
+            else:
+                voice_audio[:-frame_count] = voice_audio[frame_count:]
+                voice_audio[-frame_count:] = mono
             band_rms = _spectral_band_rms(rolling_audio, sample_rate)
+            hop_rms = math.sqrt(float(np.mean(mono * mono)))
+            hop_peak = float(np.max(np.abs(mono)))
             feature_energies = tuple(
                 self._feature_energy_from_rms(rms, gain)
                 for rms, gain in zip(band_rms, self.band_gains)
@@ -736,10 +992,71 @@ class AudioHaptics:
                 self._level_from_rms(rms, gain)
                 for rms, gain in zip(band_rms, self.band_gains)
             )
+            block_seconds = frame_count / sample_rate
+            if self.voice_suppression > 0.0:
+                harmonicity, focus, voice_energy = _voice_cues(
+                    voice_audio, sample_rate
+                )
+                voiced = harmonicity * focus
+                if (
+                    harmonicity < VOICE_IMPACT_HARMONICITY
+                    and voice_energy > VOICE_IMPACT_RATIO * voice_energy_ref
+                ):
+                    # An explosion or a punch under dialogue lifts the held
+                    # cut at once.
+                    voice_evidence = harmonicity
+                else:
+                    # A syllable is cut from its first voiced hop; any
+                    # attack time lets the onset through as a thump.
+                    voice_evidence = _hold_voice_cue(
+                        voice_evidence, harmonicity, block_seconds,
+                        VOICE_RELEASE_SECONDS,
+                    )
+                voice_focus = _hold_voice_cue(
+                    voice_focus, focus, block_seconds,
+                    VOICE_FOCUS_RELEASE_SECONDS,
+                )
+                voice_energy_ref = _follow_feature_envelope(
+                    voice_energy_ref, voice_energy, block_seconds,
+                    VOICE_ENERGY_SECONDS,
+                )
+                voice_gains = _voice_band_gains(
+                    voice_evidence * voice_focus, self.voice_suppression
+                )
+                voice_delay.append(
+                    (band_levels, feature_energies, hop_rms, hop_peak)
+                )
+                if len(voice_delay) > voice_delay_hops:
+                    (
+                        band_levels, feature_energies, hop_rms, hop_peak,
+                    ) = voice_delay.popleft()
+                else:
+                    band_levels = feature_energies = silent_bands
+                    hop_rms = hop_peak = 0.0
+                voice_level_profile = _follow_voice_profile(
+                    voice_level_profile, band_levels, voiced, block_seconds
+                )
+                voice_energy_profile = _follow_voice_profile(
+                    voice_energy_profile, feature_energies, voiced,
+                    block_seconds,
+                )
+                # Both paths are cut, so syllable onsets do not register as
+                # impacts and the routed baseline leaves impact headroom.
+                band_levels = _suppress_voice(
+                    band_levels, voice_gains, voice_level_profile
+                )
+                feature_energies = _suppress_voice(
+                    feature_energies, voice_gains, voice_energy_profile
+                )
+            else:
+                voice_evidence = 0.0
+                voice_focus = 0.0
+                voice_energy_ref = 0.0
+                voice_level_profile = voice_energy_profile = silent_bands
+                voice_delay.clear()
             feature_levels = tuple(
                 min(1.0, energy) for energy in feature_energies
             )
-            block_seconds = frame_count / sample_rate
             (
                 lf_target,
                 hf_target,
@@ -756,18 +1073,41 @@ class AudioHaptics:
                 feature_levels=feature_levels,
                 previous_feature_levels=previous_feature_levels,
                 band_energies=feature_energies,
-                hop_rms=math.sqrt(float(np.mean(mono * mono))),
-                peak_level=float(np.max(np.abs(mono))),
+                hop_rms=hop_rms,
+                peak_level=hop_peak,
             )
             previous_band_levels = band_levels
             previous_feature_levels = feature_levels
+            lf_target = self._shape_level(lf_target)
+            hf_target = self._shape_level(hf_target)
+            (
+                lf_tilt_target, lf_presence, hf_tilt_target, hf_presence,
+            ) = _channel_tilts(feature_energies, self.lf_hf_balance)
+            lf_tilt = _follow_tilt(
+                lf_tilt, lf_tilt_target, lf_presence, block_seconds
+            )
+            hf_tilt = _follow_tilt(
+                hf_tilt, hf_tilt_target, hf_presence, block_seconds
+            )
             lf_envelope = self._smooth_envelope(
                 lf_envelope, lf_target, block_seconds
             )
             hf_envelope = self._smooth_envelope(
                 hf_envelope, hf_target, block_seconds
             )
-            self._emit_capture_levels(lf_envelope, hf_envelope, stop_event)
+            if synthetic and max(lf_envelope, hf_envelope) < self.IDLE_LEVEL:
+                # Finish the synthetic release with one exact zero, then stop
+                # producing silence until the stream delivers audio again.
+                lf_envelope = 0.0
+                hf_envelope = 0.0
+                lf_tilt = 0.0
+                hf_tilt = 0.0
+                output_idle = True
+            elif not synthetic:
+                output_idle = lf_envelope <= 0.0 and hf_envelope <= 0.0
+            self._emit_capture_levels(
+                lf_envelope, hf_envelope, stop_event, lf_tilt, hf_tilt
+            )
 
         # A capture stream can end without close() having been called.
         # Clear the final envelope once, but never emit after close() sets
@@ -796,6 +1136,29 @@ class AudioHaptics:
         """
         usable = self._usable_rms(rms)
         return usable * math.sqrt(max(0.0, float(gain)))
+
+    def _shape_level(self, level):
+        """Audio-only power curve applied after transient detection.
+
+        The six-band levels stay linear so spectral flux and onset analysis
+        are unchanged.  Shaping the routed target keeps 0 and full scale
+        fixed while an exponent below 1.0 lifts quiet detail, so it widens the
+        felt dynamic range without changing the maximum rumble.  Attack and
+        release then operate on the shaped (felt) level.
+
+        A plain power curve lifts most where the level is smallest, turning
+        background sound just above the noise gate into constant buzz (an
+        exponent of 0.75 multiplied a 0.01 level by about 3).  The lift therefore fades in
+        with a smoothstep up to ``CURVE_KNEE``: near-gate levels stay linear
+        and the curve shapes the mid range where detail is meaningful.
+        """
+        level = _clamp01(level)
+        if self.detail_boost <= 0.0 or level <= 0.0:
+            return level
+        lifted = level ** (1.0 - self.detail_boost)
+        blend = min(1.0, level / self.CURVE_KNEE)
+        blend = blend * blend * (3.0 - 2.0 * blend)
+        return level + (lifted - level) * blend
 
     def _smooth_envelope(self, current, target, block_seconds):
         duration_ms = self.attack_ms if target > current else self.release_ms

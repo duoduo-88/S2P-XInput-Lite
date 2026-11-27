@@ -32,6 +32,7 @@ S2P-XInput-Lite 把 Switch 2 Pro Controller 轉成 Windows 遊戲可直接使用
   - [8.5 瞄準測試](#aim-test-guide)
 - [9. ESP32-S3](#9-esp32-s3)
   - [9.2 刷入韌體](#flash-esp32-s3)
+  - [9.8 自行編譯韌體](#build-firmware)
 - [10. 快速操作技巧](#10-快速操作技巧)
 - [11. 疑難排解](#11-疑難排解)
 - [附錄：建議調整順序](#附錄建議調整順序)
@@ -77,6 +78,8 @@ ESP32-S3 有兩種運作方式：**Bridge**（橋接）需要保持 Windows 程�
 輸出 XInput 並處理震動與音訊震動；**Android USB HID 獨立模式** 不需要 Windows 程式，ESP32-S3
 本身就是一支 USB HID 手把。實體 USB XInput 有授權問題，請勿加入。
 
+<a name="connector-window"></a>
+
 ### 1.4 連接程式視窗與通知區
 
 連線時會另外開啟一個黑色的連接程式（CMD）視窗，即時顯示配對、連線、輸入與傳輸狀態。遊玩期間
@@ -93,7 +96,7 @@ ESP32-S3 有兩種運作方式：**Bridge**（橋接）需要保持 Windows 程�
 1. 將新版 ZIP 解壓縮到**新的資料夾**。
 2. 開啟新版主程式，按 **Import Settings**（匯入設定），選擇舊版含 EXE 的程式根目錄。
    詳見 [2.4 匯入設定](#24-import-settings匯入設定)。
-3. 使用 ESP32-S3 時，再用 **Flash FW**（刷入相容韌體）確認韌體版本，見 [9.2 刷入韌體](#flash-esp32-s3)。
+3. 使用 ESP32-S3 時，再用 **刷入韌體 ▼ → 刷入內建韌體**（Flash FW）確認韌體版本，見 [9.2 刷入韌體](#flash-esp32-s3)。
 
 若只想手動轉移 `config.ini`，請在程式關閉時複製到新版的 `app\src\config.ini`。
 
@@ -140,7 +143,7 @@ ESP32-S3 有兩種運作方式：**Bridge**（橋接）需要保持 Windows 程�
 | **Pin**（指定優先裝置） | 將目前偵測到的手把設為優先裝置，成功時手把會震動提示。 |
 | **Defaults**（還原預設） | 將目前畫面全部還原為預設值，見 [11. 疑難排解](#回復穩定設定)。 |
 | **Calibrate ▼**（校正） | 選單：**Stick Calibration**（校正搖桿）見 [3.4 搖桿校正](#34-搖桿校正)；**Sensor Calibration**（感測器校正）校正陀螺儀、加速度計與磁力計，見 [6.4](#64-gyro-response陀螺儀反應)。 |
-| **Flash FW**（刷入相容韌體） | 檢查並刷入 ESP32-S3 韌體，見 [9.2](#flash-esp32-s3)。 |
+| **刷入韌體 ▼**（Flash FW） | 檢查並刷入內建或自訂的 ESP32-S3 韌體，見 [9.2](#flash-esp32-s3)。 |
 | **ESP32 ▼** | 寫入方案並切換 Android USB HID 獨立模式，或切回橋接模式，見 [9.5](#95-寫入設定並啟用-android-usb-hid)。 |
 | **Restart**（重啟連線） | 重新啟動桌面連線並載入已儲存的設定，不會寫入 ESP32。 |
 | **Idle Disc.**（閒置自動斷線） | 設定無線連線閒置多久後自動斷線，見 [2.6](#26-idle-disc閒置自動斷線)。 |
@@ -183,6 +186,8 @@ ESP32-S3 有兩種運作方式：**Bridge**（橋接）需要保持 Windows 程�
 預設 15 分鐘。這是全域設定，不隨方案切換。斷線後狀態列顯示
 `ESP32 · Idle; press any button to wake`，按手把任一鍵即可喚醒重連。
 
+<a name="extensions"></a>
+
 ### 2.7 Extensions（擴充工具）
 
 ![擴充工具視窗：內建的手把測試，以及一個已連線且有更新的工具](assets/v0.8.2/extensions.png)
@@ -202,6 +207,7 @@ S2P 可以加入另外安裝、獨立執行的擴充工具。工具只能依你�
 > - 擴充工具由其各自的開發者提供，S2P-XInput-Lite 不負責第三方工具的內容、品質或安全性。請只安裝信任來源的工具。
 > - 使用擴充工具所產生的操作與結果，由使用者自行負責。
 > - 部分遊戲或線上服務可能禁止外部輸入或自動化操作，使用前請先確認相關規範。
+> - 部分擴充工具不一定適用於 ESP32 獨立模式：獨立模式下手把直接連接主機或手機，不經過電腦上的 S2P。各工具是否支援獨立模式，請以該工具或其開發套件的說明為準。
 > - 「允許讀取控制器狀態」會讓工具讀到你的按鍵與搖桿輸出，只對需要的工具開啟。
 > - 工具關閉、逾時或當機時，S2P 會立即清除其輸入；遇到異常時，在清單停用該工具即恢復原本操作。
 
@@ -331,6 +337,8 @@ Buttons 頁籤（見 [2. 主視窗](#2-主視窗與方案) 的截圖）將手把
 在下拉選單選擇 **Shortcut**（自訂按鍵），會開啟上圖的錄製視窗。按下要映射的按鍵或組合鍵，
 例如 F12、Ctrl+S、Ctrl+Shift+S。欄位會以 `KB:1`、`KB:Ctrl+S`、`M:Wheel↓` 等簡寫顯示，
 游標移上去可查看完整映射。
+
+<a name="gamepad-combo"></a>
 
 #### 同時按下多個 XInput 按鍵
 
@@ -467,6 +475,8 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
   **Recenter**（重設中立）與 **Shortcut**（自訂按鍵）用來重設中立角度。指定的重設按鍵會專門用於
   重設中立，不再送出原本的遊戲映射。
 
+<a name="gyro-response"></a>
+
 ### 6.4 Gyro Response（陀螺儀反應）
 
 依目前的輸出目標與控制模式，只會顯示適用的欄位。
@@ -488,8 +498,12 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
 - **Sens. Curve**（感度曲線）：只在回中模式、啟用陀螺儀且輸出到搖桿時可用。
 - **Compensation Settings**（補償設定）：分軸調整陀螺儀輸出倍率；輸出為滑鼠時不顯示。
 
+<a name="sensor-calibration"></a>
+
 感測器校正位於主視窗底部 **Calibrate ▼**（校正）→ **Sensor Calibration**（感測器校正）。
 請先將手把平放在穩定的平面上再執行，校正期間按鈕會顯示目前進度。
+如果手把還沒連線，S2P 會詢問是否自動啟動連線；依連接程式視窗的提示喚醒或配對手把，連線後就會自動繼續校正。
+最多等待 2 分鐘，連接程式停止時也會結束等待。
 
 #### 感度曲線
 
@@ -498,6 +512,8 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
 橫軸是陀螺儀的基本輸出，縱軸是曲線處理後的輸出。**Mode** 可選 **Lin.**（線性）、**Late**
 （後段加速）或 **Early**（前段加速），**Lvl**（強度）調整曲線彎曲的程度。按 **OK** 後回主視窗
 按 **Save/Apply**。
+
+<a name="gyro-compensation"></a>
 
 #### 補償設定
 
@@ -513,6 +529,8 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
 讓陀螺儀在原本的速度封頂。這個選項只在回中模式顯示，預設關閉。
 
 要算出合適的倍率，可用手把測試的 [補償預覽與補償計算](#陀螺儀補償預覽與補償計算)。
+
+<a name="gyro-stability"></a>
 
 ### 6.5 Stability（穩定控制）
 
@@ -568,6 +586,8 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
 > `0–1023` 是協議欄位範圍，不代表所有手把都適合長時間使用最高值。若出現明顯撞擊聲、尖銳聲或
 > 不自然的震感，請降低 **Max Amp**、**LF/HF Strength** 或相關頻段增益。
 
+<a name="rumble-game"></a>
+
 ### 7.2 Advanced Rumble：Game（遊戲）模式
 
 ![Advanced Rumble 的 Game 模式](assets/v0.8.2/main-rumble-game.png)
@@ -577,9 +597,13 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
 - **Game**（遊戲）：只輸出遊戲原生震動。此時 Audio Response 與 6-Band EQ 會停用。
 - **Audio**（音訊）：將 Windows 預設輸出裝置的聲音轉成震動。
 - **Mix**（混合）：以柔和飽和的方式合併遊戲震動與音訊震動，避免直接相加造成削波。
+  **Mix** 比例在 0.50 以內時，遊戲震動維持完整強度，音訊依比例加入；超過 0.50 後遊戲震動逐步減弱，1.00 時只剩音訊震動。
 
-**Final Output**（最終輸出）的 **Tail**（餘震強度）與 **Decay ms**（衰減）控制震動尾端與衰減，
+**Final Output**（最終輸出）的 **Tail**（餘震強度）與 **Decay ms**（衰減）控制震動尾端與衰減；
+**Motor Emulation**（馬達模擬）模擬 Xbox 傳統馬達，遊戲震動越強頻率越高，中等強度維持原本頻率。它只影響遊戲震動，`0.00` 為關閉，獨立模式不支援。
 **Reset Defaults**（還原預設）還原本頁。
+
+<a name="audio-rumble"></a>
 
 ### 7.3 Audio（音訊）與 Mix（混合）模式
 
@@ -590,6 +614,8 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
 | 欄位 | 說明 | 調整方向 |
 |---|---|---|
 | **Lvl**（強度） | 音訊轉震動的整體敏感度。 | 整體太弱就提高；聲音一開始就過強就降低。 |
+| **Detail**（細節增強） | 讓中小音量的聲音震得更明顯（只影響音訊震動），`0.00` 為關閉。 | 想感受更多細小的聲音就提高（建議從 0.10 開始）；最大強度不變，噪音閘附近的背景聲也不會被放大。覺得太雜就調低。 |
+| **Freq**（頻率跟隨） | 讓 HD Rumble 的頻率跟著聲音的音色移動（只影響音訊震動），`0.00` 為關閉。 | 想要更有質感的變化就提高（可試 0.50 ～ 1.00）。低沉的聲音讓頻率往下、明亮的聲音讓頻率往上，範圍約 LF 160 ～ 260、HF 280 ～ 350。 |
 | **Gate**（噪閘） | 噪音門檻。 | 安靜處仍持續震動就提高；只有很大聲才有反應就降低。 |
 | **Atk**（啟動） | 起振速度。 | 數值越小反應越快。 |
 | **Rel.**（釋放） | 聲音結束後的釋放時間。 | 數值越高，震動尾端越長。 |
@@ -611,6 +637,12 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
 
 **LF/HF Balance**（LF／HF 重心）只改變中間頻段的路由，不修改六個頻段本身的增益：`-1.00`
 偏向 LF，`0.00` 平衡，`+1.00` 偏向 HF。建議先在 `-0.15～+0.15` 之間測試。
+
+<a name="voice-cut"></a>
+
+**Voice Cut**（人聲抑制）在 LF/HF Balance 下方，用於看電影、影集：辨識到講話時，壓低人聲所在頻段的震動，讓對白不再一直震動。爆炸、槍聲、拳腳、刀劍等撞擊聲不會被壓低，疊在對白上時也照常震動。`0.00` 為關閉；看電影建議 `0.80～1.00`。歌曲的人聲也會被當成講話，所以聽音樂建議維持關閉。開啟時震動會延後約 15 ms，讓每句話一開口就能被辨識出來；看影片時感覺不到這段延遲。
+
+**Movie**（電影）方案已開啟人聲抑制，並提高 H-Mid、High、Ultra 頻段，讓槍聲與刀劍等金屬敲擊也有明顯的震動。
 
 ### 7.5 高頻噪音排查
 
@@ -643,6 +675,8 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
 3. 在 **Input Monitor**（輸入監看）移動兩支搖桿、按下按鍵與扳機，確認圖上的圓點與事件表有變化。
 4. 依需要切換 **Aim Test**（瞄準測試）、**Rumble Test**（震動測試）、**Report Rate Test**（回報率量測）
    或 **Diagnostics**（診斷模式）。
+
+<a name="test-source"></a>
 
 ### 8.1 選擇測試來源
 
@@ -692,8 +726,8 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
   **Timed Targets**（限時點靶）。**?** 可查看操作與比對規則。
 - **右上**：**Gyro Preview**（補償預覽）、**Calculator**（補償計算）、**Clear History**（清除紀錄）、
   **Test Settings**（測試設定）與 **Start**（開始）。
-- **中間**：已儲存的回合紀錄。選取一筆可在下方查看和最佳成績的比較。
-- **下方**：目前的測試條件，以及與相同靶設定最佳成績的差異。
+- **中間**：已儲存的回合紀錄。選取一筆可在下方查看各項成績和最佳紀錄的比較。
+- **下方**：目前的測試條件，以及各項成績與相同靶設定最佳紀錄的差異。
 
 #### 測試陀螺儀映射的右搖桿輸出
 
@@ -767,6 +801,8 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
 右下角的 **FPS** 依成功的 Direct2D 提交或 Tk 繪圖更新計算，**99% Low** 則把 P99 繪圖間隔換算為 FPS，
 可看出平均 FPS 高時是否仍有較長的間隔。繪圖目標跟隨螢幕目前的更新率，實際呈現也受 Windows 與顯示卡影響。
 
+<a name="aim-display-size"></a>
+
 #### 螢幕解析度、尺寸與長寬比
 
 解析度與螢幕實體尺寸不會改變瞄準測試的操控換算，換螢幕時不需要依解析度另外調整視角速度或陀螺儀參數：
@@ -796,6 +832,8 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
 螢幕較大或坐得較近時，同樣的 °/秒看起來會比較快、靶也顯得比較大，但手把轉動角度與遊戲視角轉動角度的
 對應不變。比起螢幕，更值得對準的是 **3D 水平／垂直視角速度**：設成接近實際遊戲的轉向速度，測試結果
 才接近實際遊戲的手感。
+
+<a name="gyro-preview"></a>
 
 #### 陀螺儀補償預覽與補償計算
 
@@ -834,6 +872,8 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
 5. 按 **Open S2P Compensation Settings**（開啟 S2P 補償設定），或從主視窗 **Gyro Map** 開啟
    **Compensation Settings**，填入 X／Y 倍率並按 **OK**，再按 **Save/Apply**。
 
+<a name="aim-results"></a>
+
 #### 判讀與比較成績
 
 ![3D 點靶的結束畫面](assets/v0.8.2/aim-test-result.png)
@@ -843,17 +883,20 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
 跟槍的平均偏差按時間加權，**On Target**（跟靶率）是準心落在靶內的時間比例。3D 跟槍收到右搖桿輸入時，
 結果也會顯示水平輸出峰值與最長連續滿桿時間（毫秒）；水平輸出離開滿值或反向就會中斷計時。
 
-結束畫面的中央顯示成績，以及和相同靶設定下歷史最佳成績的差異。比對只看測試設定中
+結束畫面的中央顯示成績，以及每項成績和相同靶設定下歷史最佳紀錄的差異。比對只看測試設定中
 **Drills and targets (compared)**（回合與靶，列入成績比對）區塊的設定：模式、解析度、種子，以及適用的靶數、秒數、2D 靶心大小、
 遠近差異與出靶範圍；3D 跟槍另外比對環繞範圍與靶速。手把視角速度、滑鼠感度、顏色、準心、震動與
 音效不同的成績仍可互相比較。
 
-- **Targets** 依序比較命中數、命中率、完成耗時與平均偏差，兩回合都打完所有靶才比較完成耗時。
-- **Timed Targets** 依序比較命中數、命中率與平均偏差。
-- **Tracking** 先比較跟靶率，再比較平均偏差。
+每項成績各自和自己的最佳紀錄比較，不會綁在同一個回合上：
 
-箭頭表示數值上升或下降，綠色代表進步，紅色代表退步；命中率與跟靶率的差異以百分點顯示。
+- 命中數、命中率與跟靶率和歷史最高值比較。
+- 完成耗時與平均偏差和歷史最低值比較。完成耗時只在 **Targets** 打完所有靶時比較，**Timed Targets** 不比較耗時。
+
+箭頭表示數值上升或下降，綠色代表刷新最佳紀錄，紅色代表不及最佳紀錄；命中率與跟靶率的差異以百分點顯示。
 **Clear History**（清除紀錄）可移除已儲存的回合。
+
+<a name="rumble-test"></a>
 
 ### 8.6 Rumble Test（震動測試）
 
@@ -862,7 +905,7 @@ Activation、Target、Control Mode、Gyro Response 與 Stability 五區，欄位
 1. 在 **Device** 選擇 **S2P-XInput-Lite (Bridge)** 或支援震動的 XInput 裝置，開啟 **Rumble Test**。
 2. **Manual Output**（手動震動輸出）：以低強度開始，分別拉動 **LF Motor** 與 **HF Motor**。
 3. **Patterns**（震動模板）：按任一模板播放，例如 Impact、Engine、Machine Gun。
-   **Repeat**（重複播放）連續播放，**LF／HF** 選擇頻段，**Rate**（播放頻率）與 **Strength**（模板強度）調整節奏與強度。
+   **Repeat**（重複播放）讓點選的模板持續循環，直到再點一次或停止所有震動；**Overlap**（重疊播放）讓新點選的模板疊加在正在播放的模板上，關閉時新模板會取代原本的播放。**LF／HF** 選擇頻段，**Strength**（模板強度）調整強度。**Rate**（播放頻率）決定重複播放時多久重新開始一次：心跳、機槍這類效果會維持自己的節奏，調快只會縮短休息（或提早重新開始），不會把效果本身加快。第一列的 LF 脈衝、HF 脈衝、交替、漸強、波浪是單純的形狀，播放頻率會直接改變它們的速度。
 4. 結束時按 **Stop All Rumble**（停止所有震動）。**Reset**（重設）還原本頁設定。
 
 Bridge 測試會套用目前方案的 LF／HF 設定；Source 為純 Audio 時，遊戲震動模板不會輸出。
@@ -942,13 +985,15 @@ Bridge 測試會套用目前方案的 LF／HF 設定；Source 為純 Audio 時�
 
 **1. 確認版本**
 
-按主視窗底部的 **Flash FW**（刷入相容韌體）。程式會先讀取目前的韌體版本，期間會顯示
+按主視窗底部的 **刷入韌體 ▼**（Flash FW），選擇 **刷入內建韌體**。程式會先讀取目前的韌體版本，期間會顯示
 「正在讀取 ESP32-S3 目前的韌體版本…」，約需數秒。
 
 ![確認韌體版本](assets/v0.8.2/flash-confirm.png)
 
 確認畫面會列出目前版本與隨附的 **S2P-FW 1.0.9**。按 **是** 繼續，按 **否** 取消；
 若版本檢查曾暫停連接程式，取消後會自動恢復。版本相同時也能選擇重新刷入。
+
+選擇 **刷入自訂韌體…** 時，會先跳出視窗讓你選擇 `.bin` 檔。程式只替換韌體本體，bootloader 與分割表一律使用內建版本；不是 ESP32-S3 韌體或超過 app 分割區大小的檔案會直接拒絕，缺少 S2P 韌體識別資訊時會先警告。確認畫面會列出檔名、版本、大小與 SHA-256，之後的刷寫步驟相同。要還原時，再選 **刷入內建韌體** 即可。
 
 **2. 讓 ESP32-S3 進入刷機模式**
 
@@ -965,6 +1010,7 @@ Bridge 測試會套用目前方案的 LF／HF 設定；Source 為純 Audio 時�
 
 程式會顯示倒數，最多等待 30 秒。它會依 USB 身分辨識 ESP32-S3 的 ROM 刷機連接埠，
 即使該 COM 已存在也能使用。逾時會顯示「未偵測到刷機連接埠」，請重新按一次 **Flash FW**。
+等待期間可按 **取消** 或關閉視窗停止，此時尚未寫入任何資料。
 
 **3. 檢查晶片與 Flash 容量**
 
@@ -1006,7 +1052,7 @@ Bridge 測試會套用目前方案的 LF／HF 設定；Source 為純 Audio 時�
 
 1. 選擇要寫入的方案，完成設定後按 **Save/Apply**。修改 `System Default` 後需先用 **Save New** 另存。
 2. 確認 ESP32 已連線，並已刷入隨附的 S2P-FW 1.0.9。
-3. 按 **ESP32 ▼**，選擇 **寫入並啟用 Android USB HID 獨立模式**。
+3. 按 **ESP32 ▼**，選擇 **寫入並啟用獨立模式**。
 4. 檢查相容性提示。方案包含 Windows 專用輸出時，取消修改或確認略過不支援的項目。
 5. 等待寫入、長度／CRC 驗證、套用與受控重新啟動，期間保持 USB 供電。桌面程式會在重新啟動後核對
    裝置、USB 模式與方案。
@@ -1031,6 +1077,8 @@ ESP32 以 A/B 儲存槽保留上一份有效設定，新資料驗證成功才切
 
 切回 Bridge 不會刪除最後保存的獨立設定。**Restart** 只重啟桌面連線。
 
+<a name="standalone-scope"></a>
+
 ### 9.7 獨立模式的支援範圍
 
 **支援**：搖桿校正、曲線、中心／外圍死區、輸出形狀、防抖與平滑、按鍵與方向映射（含左右搖桿與
@@ -1043,6 +1091,97 @@ output report，不提供 Android 遊戲震動，也不提供 BLE HID。Windows 
 
 Android 相容性依裝置、系統與遊戲而異，Apple 裝置不在支援範圍內。實機驗證狀態請見
 [驗證與官方參考](../docs/usb-hid-standardization.md)。
+
+<a name="build-firmware"></a>
+
+### 9.8 自行編譯韌體
+
+隨附的 S2P-FW 1.0.9 附有完整原始碼，可依自己的需求修改後重新編譯，再用 **刷入自訂韌體…** 刷入。
+原始碼位置：
+
+- 發行包：`app\esp32s3\source\esp32s3_usb_bridge_bluedroid`
+- GitHub：同一版本標籤下的 `esp32s3/source/esp32s3_usb_bridge_bluedroid`
+
+> [!WARNING]
+> 自行修改的韌體不在支援範圍內，使用風險請自行承擔。刷入前請先確認會用 [9.6](#96-切回-bridge-與救援)
+> 的 ROM Download Mode 救援，刷壞時才能刷回內建韌體。
+
+**1. 準備編譯環境**
+
+- 安裝 Espressif 官方的 **ESP-IDF 5.5.4**。請使用這個版本，其他版本可能無法編譯，或產生不同的結果。
+- `esp_tinyusb 1.7.6~2` 與 `tinyusb 0.19.0~3` 已鎖定在 `dependencies.lock`，第一次編譯時
+  Component Manager 會自動下載，不需要手動安裝。
+- 16 MB Flash 的 ESP32-S3 開發板。
+
+**2. 編譯**
+
+開啟 ESP-IDF 5.5.4 的命令列環境（安裝程式建立的 ESP-IDF PowerShell 或 CMD 捷徑），執行：
+
+```text
+cd esp32s3\source\esp32s3_usb_bridge_bluedroid
+idf.py set-target esp32s3
+idf.py build
+```
+
+完成後的韌體本體在 `build\esp32s3_bluedroid_bridge.bin`。`build`、`managed_components`、`sdkconfig`
+都是編譯時產生的檔案，修改設定請改 `sdkconfig.defaults`。
+
+原始碼倉庫裡的 `scripts\build_firmware.ps1` 是用來核對隨附映像是否一致的；原始碼改過後雜湊必然不同，
+該腳本報錯屬正常現象，直接用 `idf.py build` 即可。
+
+**3. 刷入**
+
+1. 按 **刷入韌體 ▼ → 刷入自訂韌體…**，選擇 `build\esp32s3_bluedroid_bridge.bin`。
+2. 依 [9.2](#flash-esp32-s3) 的步驟進入刷機模式並完成刷寫。
+
+程式只替換 `0x10000` 的韌體本體，bootloader 與分割表固定使用內建版本，因此：
+
+- 不要修改分割表或 Flash 大小設定。
+- 韌體大小必須小於 app 分割區，否則會直接拒絕。
+
+**4. 保持與桌面程式相容**
+
+- 桌面程式依韌體回報的產品、通訊協定與身分辨識 S2P 韌體。請保留 `S2P-FW` 與 `s2p_bridge` 這兩個
+  識別字串；缺少時刷入前會警告，連線後也不會啟用寫入方案、切換模式等 S2P 功能。
+- 修改 CDC 命令或方案資料格式後，目前的桌面程式可能無法寫入設定，請同時調整桌面端。
+- 想刷回原版時，選擇 **刷入內建韌體** 即可。
+
+**Android USB HID 基本資料**
+
+| 項目 | 內容 |
+|---|---|
+| VID:PID | `303A:4005`（Espressif／TinyUSB 共用預設值） |
+| 字串 | 製造商 `S2P-XInput-Lite`、產品 `S2P Mobile Gamepad`、序號 `S2P-<12 位 MAC>` |
+| 介面 | CDC control `0`、CDC data `1`、HID `2` |
+| 端點 | CDC 通知 `0x81`、CDC OUT/IN `0x02`／`0x82`、HID interrupt IN `0x83`（32 bytes，輪詢間隔 1 ms） |
+| 輸出報告 | 無，因此不支援 Android 遊戲震動 |
+
+HID input report 共 13 bytes，沒有 Report ID：
+
+| Byte | 內容 |
+|---|---|
+| 0–1 | 16 個按鍵位元，little-endian。bit 0–15 依序為 A、B、X、Y、L1、R1、Select、Start、LS、RS、Mode（HOME）、保留、保留、L2、R2、保留 |
+| 2 | 低 4 bits 為十字鍵：`0`＝上，順時針每 45° 加 1，`8`＝放開；高 4 bits 補零 |
+| 3–10 | 四軸 int16（−32768～32767，little-endian）：左 X、左 Y、右 X（Usage Z）、右 Y（Usage Rz），Y 軸向下為正 |
+| 11 | 左扳機 0–255（Simulation Brake） |
+| 12 | 右扳機 0–255（Simulation Accelerator） |
+
+按鍵位元使用 Android 的標準 HID 按鍵 usage，而不是 1～16 的連號。扳機達到 32 以上時，也會同時送出
+L2／R2 數位按鍵，供只讀按鍵事件的 Android 遊戲使用。完整描述符請見原始碼 `main/standalone_xinput.c`
+的 `s_hid_report_descriptor`、編譯後的描述符紀錄
+[`esp32s3/firmware/usb-descriptors.json`](../esp32s3/firmware/usb-descriptors.json)，以及
+[韌體原始碼說明](../esp32s3/source/esp32s3_usb_bridge_bluedroid/README.md)。
+
+**授權與注意事項**
+
+- 韌體源自 [Switch2Connect](https://github.com/TommyWabg/Switch2Connect)，以 **GPL-3.0** 授權。
+  自己使用的修改沒有限制。
+- 若把修改後的韌體（`.bin`）提供給別人，必須同時以 GPL-3.0 提供對應的完整原始碼，並標示為修改版、
+  註明修改內容與日期，也要保留 `LICENSE`、`THIRD_PARTY_NOTICES.md` 與 `third_party/licenses` 的授權聲明。
+- `303A:4005` 是 Espressif 開放給開發與測試共用的識別碼。要對外發行或做成產品，請依
+  [Espressif 的 PID 規定](https://github.com/espressif/usb-pids/blob/main/README.md)申請自己的 PID。
+  不要使用其他廠商的 VID/PID、產品名稱或商標，讓裝置冒充他們的產品。
+- 不要加入沒有權利散布的程式碼、韌體或描述符，例如從市售裝置傾印出來的韌體。
 
 ---
 

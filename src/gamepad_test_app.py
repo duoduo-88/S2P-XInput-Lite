@@ -11,7 +11,12 @@ import tkinter as tk
 from pathlib import Path
 
 from config_utils import CONFIG_PATH, atomic_write_config, config_file_lock, load_config
-from dialog_layout import install_centered_dialogs, startup_banner_geometry
+from dialog_layout import (
+    StartupBannerText,
+    install_centered_dialogs,
+    install_focus_new_windows,
+    startup_banner_geometry,
+)
 from gamepad_test_window import GamepadTestWindow, TEST_ICON_PATH, load_tester_icons
 from localization import translate_text
 from single_instance import GYRO_SETTINGS_ACTION, SETTINGS_INSTANCE_NAME, SingleInstance, activate_tk_window
@@ -95,13 +100,8 @@ class GamepadTestStartupOverlay:
         self.canvas.create_image(
             0, 0, anchor="nw", image=self.image
         )
-        self._text_item = self.canvas.create_text(
-            width - 12,
-            height - 8,
-            anchor="se",
-            text=self._loading_text(),
-            font=("Segoe UI", 9),
-            fill="#4a4a4a",
+        self.text = StartupBannerText(
+            self.canvas, width, height, self._loading_text, dots=self._dot_count,
         )
         self.window.geometry(startup_banner_geometry(root, width, height))
         self.window.update_idletasks()
@@ -110,11 +110,11 @@ class GamepadTestStartupOverlay:
         self._schedule_animation()
         root.update()
 
-    def _loading_text(self):
+    def _loading_text(self, dots):
         label = translate_text(
             "手把測試程式啟動中", self.language
         )
-        return f"v{VERSION} {label}{'.' * self._dot_count}"
+        return f"v{VERSION} {label}{'.' * dots}"
 
     def _schedule_animation(self):
         try:
@@ -131,10 +131,7 @@ class GamepadTestStartupOverlay:
             if not self.window.winfo_exists():
                 return
             self._dot_count = (self._dot_count % 3) + 1
-            self.canvas.itemconfigure(
-                self._text_item,
-                text=self._loading_text(),
-            )
+            self.text.show(self._dot_count)
             self.window.update_idletasks()
         except (AttributeError, tk.TclError):
             return
@@ -281,6 +278,8 @@ def main(instance=None):
         # Keep the PhotoImage alive for the complete Tk interpreter lifetime.
         root._gamepad_test_icon = root_icon
         root.withdraw()
+        # New dialogs take the keyboard focus from the window that opened them.
+        install_focus_new_windows(root)
         host = GamepadTestHost(
             root,
             language=command_line_language(sys.argv[1:]),

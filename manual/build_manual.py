@@ -574,7 +574,7 @@ def build():
     add_note(doc, "設定失敗", "先關閉 HidHide Configuration Client，再回到 S2P-XInput-Lite 重試。其他已在 HidHide 清單中的裝置也可能受到全域隱藏影響，請先確認清單。", "warn")
     add_heading(doc, "8.2　刷入 ESP32-S3 韌體", 2)
     add_steps(doc, [
-        "按主視窗底部「刷入相容韌體（Flash FW）」。",
+        "按主視窗底部「刷入韌體 ▼」→「刷入內建韌體」。",
         "將 ESP32-S3 的 OTG 接口接到電腦。",
         "按住 BOOT，按一下 RESET／EN，先放開 RESET／EN，再放開 BOOT。",
         "程式會自動偵測新的 COM Port 並刷入韌體；過程中不要拔除裝置。",

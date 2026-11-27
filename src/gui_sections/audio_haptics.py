@@ -171,12 +171,24 @@ def build_audio_haptics_section(gui, mapping_notebook):
         ("混合", gui.audio_haptics_mix_ratio_var, 0.0, 1.0, 0.05, ".2f",
          "只在「混合」模式生效。\n\n"
          "0.00 = 只保留遊戲原生震動\n"
-         "數值越高，音訊震動所占比例越多\n"
+         "0.00 ～ 0.50：遊戲震動維持完整強度，音訊震動依比例加入\n"
+         "0.50 ～ 1.00：音訊比例繼續增加，遊戲震動逐步減弱\n"
          "1.00 = 只保留音訊震動"),
         ("強度", gui.audio_haptics_strength_var, 0.0, 1.0, 0.05, ".2f",
          "控制音訊轉換成震動前的總靈敏度。\n\n"
          "降低：整體音訊震動較弱\n"
          "提高：較小的聲音也會產生明顯震動"),
+        ("細節增強", gui.audio_haptics_detail_var, 0.0, 0.70, 0.05, ".2f",
+         "讓中小音量的聲音震得更明顯，只影響音訊震動。\n\n"
+         "0.00 = 不增強（原本的手感）\n"
+         "提高：細小的聲音更容易感覺到；最大強度不變，噪音閘附近的背景聲也不會被放大\n"
+         "建議：從 0.10 開始，覺得太雜就調低。"),
+        ("頻率跟隨", gui.audio_haptics_freq_follow_var, 0.0, 1.0, 0.05, ".2f",
+         "讓 HD Rumble 的頻率跟著聲音的音色移動，只影響音訊震動。\n\n"
+         "0.00 = 關閉（固定使用進階震動的 LF／HF 頻率）\n"
+         "提高：低沉的聲音讓頻率往下（顆粒感更明顯），明亮的聲音讓頻率往上（較滑順）\n"
+         "頻率會限制在安全範圍內（LF 約 160 ～ 260，HF 約 280 ～ 350）。\n"
+         "建議：想要更有質感的變化時試 0.50 ～ 1.00。"),
         ("噪閘", gui.audio_haptics_noise_gate_var, 0.0, 0.25, 0.005, ".3f",
          "低於此音量的背景聲不會產生震動。\n\n"
          "提高：過濾更多背景聲\n"
@@ -386,14 +398,33 @@ def build_audio_haptics_section(gui, mapping_notebook):
         show_help=False,
     )
     gui.audio_haptics_response_widgets.extend(routing_widgets)
+    # Voice Suppression decides which sounds become rumble, like the bands
+    # above it.  It takes the row the description used to fill, so the
+    # tallest tab (this one) does not grow.
+    voice_widgets = add_audio_scale_row(
+        routing_content,
+        1,
+        "人聲抑制",
+        gui.audio_haptics_voice_suppression_var,
+        0.0,
+        1.0,
+        0.05,
+        ".2f",
+        "看電影、影集時，讓講話不再一直震動，只影響音訊震動。\n\n"
+        "0.00 = 關閉（原本的手感，聽音樂建議維持關閉）\n"
+        "提高：辨識到人聲時，壓低人聲所在頻段的震動\n"
+        "爆炸、槍聲、拳腳、刀劍等撞擊聲不會被壓低，"
+        "疊在對白上時也會照常震動。\n"
+        "歌曲的人聲也會被當成講話。\n"
+        "建議：看電影 0.80 ～ 1.00。",
+        length=170,
+        label_width=11,
+    )
+    gui.audio_haptics_response_widgets.extend(voice_widgets)
 
     eq_description = ttk.Label(
         eq_frame,
-        text=(
-            "六頻段：調整不同聲音範圍轉成震動的強弱。\n"
-            "LF／HF 重心：調整中間頻段偏向低頻或高頻輸出。\n"
-            "將游標移到這段文字，可查看完整對照與操作說明。"
-        ),
+        text="將游標移到這裡，可查看六頻段與 LF／HF 重心的說明。",
         justify="left",
         wraplength=310,
         cursor="question_arrow",
@@ -416,6 +447,8 @@ def build_audio_haptics_section(gui, mapping_notebook):
         "LF／HF 重心只改變中間頻段的輸出分配，不改變六段增益：\n"
         "-1.00 偏向 LF；0.00 平衡；+1.00 偏向 HF。\n"
         "建議先在 -0.15 ～ +0.15 內調整。\n\n"
+        "人聲抑制：辨識到講話時壓低人聲頻段，撞擊聲照常保留；"
+        "看電影時使用，聽音樂建議關閉。\n\n"
         "本區只影響音訊與混合模式，不影響純遊戲震動。"
     )
     gui.bind_help_tooltip(eq_description, eq_region_help)
@@ -430,6 +463,9 @@ def build_audio_haptics_section(gui, mapping_notebook):
     final_frame.columnconfigure(0, weight=1)
     final_content = ttk.Frame(final_frame)
     final_content.grid(row=0, column=0, sticky="ns")
+    # English "Decay ms" and "Motor Emulation" need a wider label column than
+    # the audio rows; shorter sliders keep the block the same width.
+    final_row_layout = {"label_width": 15, "length": 150}
     add_audio_scale_row(
         final_content, 0, "餘震強度",
         gui.audio_haptics_final_tail_strength_var,
@@ -440,6 +476,7 @@ def build_audio_haptics_section(gui, mapping_notebook):
         "0.50 = 保留約一半的下降落差\n"
         "1.00 = 完整保留後再逐漸衰減\n\n"
         "套用於遊戲與音訊混合後的最終輸出；不會產生新的重複震動。",
+        **final_row_layout,
     )
     add_audio_scale_row(
         final_content, 1, "衰減 ms",
@@ -449,6 +486,21 @@ def build_audio_haptics_section(gui, mapping_notebook):
         "只在餘震強度大於 0 時生效；數值越高，震動消失得越慢。\n"
         "建議：100 ～ 225 ms；拉桿在常用區較密，之後逐步加大間距。",
         AUDIO_TAIL_DECAY_VALUES,
+        **final_row_layout,
+    )
+    # Motor Emulation only shapes game rumble, so AUDIO mode greys it out.
+    gui.audio_motor_emulation_widgets = add_audio_scale_row(
+        final_content, 2, "馬達模擬",
+        gui.audio_haptics_motor_emulation_var,
+        0.0, 1.0, 0.05, ".2f",
+        "模擬 Xbox 傳統震動馬達的特性：震動越強，頻率越高。只影響遊戲震動。\n\n"
+        "0.00 = 關閉（固定使用 LF／HF 頻率）\n"
+        "1.00 = 最弱與最強的震動相差約半個八度\n"
+        "中等強度的震動維持原本的頻率；頻率會限制在安全範圍內（LF 約 160 ～ 260，HF 約 280 ～ 350）。\n"
+        "頻率越低顆粒感越明顯：輕震動較粗糙，強震動較滑順飽滿。\n"
+        "建議：一般用途 0.50 ～ 0.75；想要更多路感與顆粒感時可到 1.00。\n"
+        "獨立模式不支援此功能。",
+        **final_row_layout,
     )
 
     footer = ttk.Frame(audio_haptics_frame)
@@ -492,6 +544,17 @@ def build_audio_haptics_section(gui, mapping_notebook):
                 try:
                     widget.configure(
                         state="normal" if enabled else "disabled"
+                    )
+                except tk.TclError:
+                    pass
+        game_enabled = mode in ("GAME", "MIX")
+        for widget in gui.audio_motor_emulation_widgets:
+            try:
+                widget.state(["!disabled"] if game_enabled else ["disabled"])
+            except (AttributeError, tk.TclError):
+                try:
+                    widget.configure(
+                        state="normal" if game_enabled else "disabled"
                     )
                 except tk.TclError:
                     pass

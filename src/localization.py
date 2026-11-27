@@ -178,19 +178,18 @@ EN_TEXT = {
         "History matches only the Drills and targets settings: the mode, resolution, layout seed, "
         "and any target count, duration, target size, depth, spread, arc, and target speed that apply. "
         "Controller turn speed, mouse sensitivity, colors, reticle, vibration, and sound are ignored.",
-    "成績與同設定的歷史最佳回合比較。點靶依序比命中數、命中率、完成耗時與平均偏差。"
-    "跟槍依序比跟靶率與平均偏差。":
-        "Results are compared with the best earlier round using the same settings. "
-        "Targets ranks by hits, accuracy, completion time, then mean error. "
-        "Tracking ranks by time on target, then mean error.",
-    "↑ 和 ↓ 表示數值上升或下降，綠色代表進步，紅色代表退步。"
+    "每項成績各自與同設定的歷史最佳值比較：命中數、命中率與跟靶率比最高值，"
+    "完成耗時與平均偏差比最低值。":
+        "Each result is compared with its own best from earlier rounds using the same settings: "
+        "the highest hits, accuracy, and time on target, and the lowest completion time and mean error.",
+    "↑ 和 ↓ 表示數值上升或下降，綠色代表刷新最佳紀錄，紅色代表不及最佳紀錄。"
     "命中率和跟靶率的差異以百分點（pp）表示，例如從 80% 降到 65.6% 顯示 −14.4 pp。":
-        "↑ and ↓ show whether a value rose or fell. Green marks improvement and red marks a decline. "
+        "↑ and ↓ show whether a value rose or fell. Green marks a new best and red marks a result short of the best. "
         "Accuracy and on-target changes use percentage points (pp). A drop from 80% to 65.6% is shown as −14.4 pp.",
-    "命中率是命中數除以射擊次數。兩次都打完所有靶才比較耗時。"
+    "命中率是命中數除以射擊次數。打完所有靶的回合才比較耗時。"
     "平均偏差是準心與靶心的平均距離，2D 用像素（px），3D 用角度（°）。"
     "耗時和平均偏差越小越好。":
-        "Accuracy is hits divided by shots. Completion times are compared when both rounds hit every target. "
+        "Accuracy is hits divided by shots. Completion time is compared only across rounds that hit every target. "
         "Mean error is the average distance from the reticle to the target center, in pixels for 2D and degrees for 3D. "
         "Lower time and mean error are better.",
     "重新開始": "Restart",
@@ -357,7 +356,6 @@ EN_TEXT = {
     "ESP32 裝置序號不符。": "ESP32 device serial number does not match.",
     "ESP32 缺少可安全重連的唯一序號；請更新韌體。":
         "ESP32 has no unique serial number for safe reconnection. Update the firmware.",
-    "寫入並啟用 Android USB HID 獨立模式": "Write and enable Android USB HID standalone",
     "ESP32 模式已更新": "ESP32 Mode Updated",
     "獨立 PC XInput／Auto 已取消，已改為 Android USB HID；桌面 XInput 請切回 Bridge。":
         "Standalone PC XInput / Auto have been removed and migrated to Android USB HID. "
@@ -813,6 +811,7 @@ EN_TEXT = {
     "LF（左馬達）": "LF Motor",
     "HF（右馬達）": "HF Motor",
     "重複播放": "Repeat",
+    "重疊播放": "Overlap",
     "模板 LF（左馬達）": "LF",
     "模板 HF（右馬達）": "HF",
     "播放頻率": "Rate",
@@ -859,15 +858,11 @@ EN_TEXT = {
     "持續按壓": "Held",
     "已放開": "Released",
     "心跳": "Heartbeat",
-    "節拍": "Footsteps",
+    "腳步": "Footsteps",
     "路感": "Terrain",
-    "低鳴": "Low Rumble",
-    "爆裂": "Burst",
     "機槍": "Machine Gun",
-    "散彈": "Shotgun",
-    "加速": "Turbo",
     "旋翼": "Rotor",
-    "倒數": "Countdown",
+    "起跑倒數": "Start Countdown",
     "繪製 — FPS": "Render — FPS",
     "繪製 {fps:.0f} FPS": "Render {fps:.0f} FPS",
     "選擇支援震動的 XInput 手把":
@@ -878,7 +873,6 @@ EN_TEXT = {
     "撞擊": "Impact",
     "漸強": "Ramp",
     "雙擊": "Double",
-    "連射": "Rapid",
     "引擎": "Engine",
     "波浪": "Wave",
     "警示": "Alert",
@@ -1023,6 +1017,9 @@ EN_TEXT = {
     "LF 頻率": "LF Frequency",
     "HF 頻率": "HF Frequency",
     "最大振幅": "Max Amp",
+    "馬達模擬": "Motor Emulation",
+    "模擬 Xbox 傳統震動馬達的特性：震動越強，頻率越高。只影響遊戲震動。\n\n0.00 = 關閉（固定使用 LF／HF 頻率）\n1.00 = 最弱與最強的震動相差約半個八度\n中等強度的震動維持原本的頻率；頻率會限制在安全範圍內（LF 約 160 ～ 260，HF 約 280 ～ 350）。\n頻率越低顆粒感越明顯：輕震動較粗糙，強震動較滑順飽滿。\n建議：一般用途 0.50 ～ 0.75；想要更多路感與顆粒感時可到 1.00。\n獨立模式不支援此功能。":
+        "Emulates classic Xbox rumble motors: the stronger the rumble, the higher the frequency. Affects game rumble only.\n\n0.00 = off (fixed LF/HF frequencies)\n1.00 = the weakest and strongest rumble differ by about half an octave\nMedium rumble keeps the configured frequency; frequencies stay within a safe range (LF about 160–260, HF about 280–350).\nLower frequencies feel grainier: light rumble turns rougher and strong rumble smoother and fuller.\nSuggested: 0.50–0.75 for general use; up to 1.00 for more road feel and grain.\nNot supported in standalone mode.",
     " 按鍵映射 ": " Buttons ",
     " 搖桿方向映射 ": " Stick Map ",
     "按鍵映射": "Button Mapping",
@@ -1112,6 +1109,9 @@ EN_TEXT = {
     "混合": "Mix",
     "音訊反應": "Audio Response",
     "強度": "Lvl",
+    "細節增強": "Detail",
+    "頻率跟隨": "Freq",
+    "人聲抑制": "Voice Cut",
     "低頻": "LF",
     "高頻": "HF",
     "噪閘": "Gate",
@@ -1253,7 +1253,28 @@ EN_TEXT = {
     "還原": "Reset",
     "校正": "Calibrate",
     "校正搖桿": "Stick Calibration",
-    "刷入相容韌體": "Flash FW",
+    "刷入韌體": "Flash FW",
+    "刷入內建韌體": "Flash bundled firmware",
+    "刷入自訂韌體…": "Flash custom firmware…",
+    "選擇自訂韌體": "Select Custom Firmware",
+    "ESP32 韌體": "ESP32 firmware",
+    "無法使用這個韌體": "Cannot Use This Firmware",
+    "確認自訂韌體": "Confirm Custom Firmware",
+    "自訂韌體：": "Custom firmware: ",
+    "韌體版本：": "Firmware version: ",
+    "檔案大小：": "File size: ",
+    "只會替換韌體本體，bootloader 與分割表使用內建版本。":
+        "Only the application image is replaced; the bundled bootloader and "
+        "partition table are used.",
+    "是否刷入自訂韌體？": "Flash the custom firmware?",
+    "這個韌體沒有 S2P 韌體識別資訊。刷入後 S2P 可能無法連線或寫入設定，"
+    "之後可以用「刷入內建韌體」還原。\n\n是否仍要使用？":
+        "This firmware has no S2P firmware identity. After flashing, S2P may "
+        "not connect or write profiles; use Flash bundled firmware to restore "
+        "it.\n\nUse it anyway?",
+    "選擇的自訂韌體檔案在確認後已變更或無法讀取，已取消刷寫。":
+        "The selected custom firmware changed or became unreadable after "
+        "confirmation. Flashing cancelled.",
     "確認韌體版本": "Confirm Firmware Version",
     "目前韌體：": "Current firmware: ",
     "內建韌體：": "Bundled firmware: ",
@@ -1672,8 +1693,8 @@ EN_TEXT = {
         "Limits how strong LF and HF rumble can become, acting as the overall output ceiling.\n\nRange: 0–1023\nBundled profiles currently use 500; increase it gradually if stronger feedback is needed.\nHigher values allow stronger peaks; values near 1023 may increase noise, resonance, and hardware load.",
     "即將刷入相容的 ESP32-S3 韌體。\n\n程式將自動偵測 ESP32-S3 的刷機連接埠。\n\n是否繼續？":
         "Compatible ESP32-S3 firmware will be flashed.\n\nThe flash port will be detected automatically.\n\nContinue?",
-    "請讓 ESP32-S3 進入刷機模式：\n\n1. 連接 ESP32-S3 的 OTG 接口\n2. 按住 BOOT 按鈕\n3. 按一下 RESET / EN 按鈕\n4. 放開 RESET / EN\n5. 再放開 BOOT\n\n完成後不需要做其他操作。\n程式會自動偵測刷機連接埠。":
-        "Put the ESP32-S3 into flash mode:\n\n1. Connect its OTG port\n2. Hold BOOT\n3. Press RESET / EN\n4. Release RESET / EN\n5. Release BOOT\n\nThe flash port will then be detected automatically.",
+    "請讓 ESP32-S3 進入刷機模式：\n\n1. 連接 ESP32-S3 的 OTG 接口\n2. 按住 BOOT 按鈕\n3. 按一下 RESET / EN 按鈕\n4. 放開 RESET / EN\n5. 再放開 BOOT\n\n按「確定」後程式才開始偵測刷機連接埠（最多 30 秒），\n可以先按「確定」再操作。":
+        "Put the ESP32-S3 into flash mode:\n\n1. Connect its OTG port\n2. Hold BOOT\n3. Press RESET / EN\n4. Release RESET / EN\n5. Release BOOT\n\nThe flash port is detected for up to 30 seconds after you click OK,\nso you can click OK first and then do these steps.",
     "30 秒內未偵測到新的 COM Port。\n\n請確認 ESP32-S3 已正確進入刷機模式，然後重新嘗試。":
         "No new COM port was found within 30 seconds.\n\nConfirm that the ESP32-S3 is in flash mode and try again.",
     "韌體刷寫中": "Firmware flashing",
@@ -1688,6 +1709,9 @@ EN_TEXT = {
         "If the bridge device does not appear after a few seconds, press RESET / EN, "
         "or unplug and reconnect the ESP32-S3.",
     "韌體刷寫失敗": "Firmware flashing failed",
+    "韌體刷寫已取消": "Firmware flashing cancelled",
+    "是": "Yes",
+    "否": "No",
     "esptool 刷寫失敗，結束代碼：":
         "esptool flashing failed. Exit code: ",
     "偵測到尚未儲存的設定變更。\n\n是否先儲存設定，再重新啟動連接程式？\n\n是：儲存後重新啟動\n否：不儲存，直接重新啟動\n取消：返回設定畫面":
@@ -1817,6 +1841,24 @@ EN_TEXT = {
         "The current ESP32 firmware does not support gyro spike suppression. Update the firmware first.",
     "只有搖桿模式選擇「映射為滑鼠」時生效。\n\n代表搖桿推到最外圈時每秒移動的游標像素數。\n設定範圍：100 ～ 3000；數值越高，游標移動越快。":
         "Used only when a stick mode is Mouse.\n\nPixels per second at full stick deflection.\nRange: 100–3000; higher values move the cursor faster.",
+    "手把尚未連線":
+        "Controller Not Connected",
+    "感測器校正需要先連線手把。\n\n連接程式已在執行。請依連接程式視窗的提示喚醒或配對手把，手把連線後會自動繼續感測器校正。":
+        "Sensor calibration needs a connected controller.\n\n"
+        "The connector is already running. Wake or pair the controller as the connector window shows; "
+        "sensor calibration continues by itself once the controller connects.",
+    "感測器校正需要先連線手把。\n\n按下「確定」後會自動啟動連線並開啟連接程式視窗。請依視窗中的提示喚醒或配對手把，手把連線後會自動繼續感測器校正。":
+        "Sensor calibration needs a connected controller.\n\n"
+        "Select OK to start the connection and open the connector window. Wake or pair the controller as the window shows; "
+        "sensor calibration continues by itself once the controller connects.",
+    "等待手把連線...":
+        "Waiting for controller...",
+    "連接程式已結束，手把未連線。請重新開始感測器校正。":
+        "The connector exited before the controller connected. Start sensor calibration again.",
+    "連接程式已停止，手把未連線。請查看連接程式視窗中的訊息，排除問題後再重新開始感測器校正。":
+        "The connector stopped before the controller connected. Read the message in the connector window, fix the problem, and start sensor calibration again.",
+    "等待手把連線逾時。手把連線後請再選擇「感測器校正」。":
+        "Timed out waiting for the controller. Once it connects, choose Sensor Calibration again.",
     "請先啟動連接程式並確認手把已連線。":
         "Start the connector and make sure the controller is connected first.",
     "連接程式沒有回覆重設指令，請確認程式仍在執行。":
@@ -1919,8 +1961,12 @@ EN_TEXT = {
         "Game-to-audio mix ratio. 0.00 = game only; 1.00 = audio only.",
     "只在「混合」模式生效。\n\n0.00 = 只保留遊戲原生震動\n數值越高，音訊震動所占比例越多\n1.00 = 只保留音訊震動\n\n這個項目控制兩種來源的比例；音訊本身的靈敏度請用「音訊強度」調整。":
         "Used only in Mix mode.\n\n0.00 = native game rumble only\nHigher values give audio rumble a larger share\n1.00 = audio rumble only\n\nThis controls source balance. Use Audio Strength to adjust audio sensitivity.",
-    "只在「混合」模式生效。\n\n0.00 = 只保留遊戲原生震動\n數值越高，音訊震動所占比例越多\n1.00 = 只保留音訊震動":
-        "Used only in Mix mode.\n\n0.00 = native game rumble only\nHigher values give audio rumble a larger share\n1.00 = audio rumble only",
+    "讓 HD Rumble 的頻率跟著聲音的音色移動，只影響音訊震動。\n\n0.00 = 關閉（固定使用進階震動的 LF／HF 頻率）\n提高：低沉的聲音讓頻率往下（顆粒感更明顯），明亮的聲音讓頻率往上（較滑順）\n頻率會限制在安全範圍內（LF 約 160 ～ 260，HF 約 280 ～ 350）。\n建議：想要更有質感的變化時試 0.50 ～ 1.00。":
+        "Lets the HD Rumble frequencies follow the tone of the sound. Affects audio rumble only.\n\n0.00 = off (uses the fixed LF/HF frequencies from Advanced Rumble)\nHigher: deeper sounds lower the frequency (grainier), brighter sounds raise it (smoother)\nFrequencies stay within a safe range (LF about 160–260, HF about 280–350).\nSuggested: try 0.50–1.00 for more textured variation.",
+    "讓中小音量的聲音震得更明顯，只影響音訊震動。\n\n0.00 = 不增強（原本的手感）\n提高：細小的聲音更容易感覺到；最大強度不變，噪音閘附近的背景聲也不會被放大\n建議：從 0.10 開始，覺得太雜就調低。":
+        "Makes quieter sounds easier to feel. Affects audio rumble only.\n\n0.00 = no boost (the original feel)\nHigher: small sounds become easier to feel; maximum strength is unchanged, and background sound near the noise gate is not amplified\nSuggested: start at 0.10 and lower it if rumble feels busy.",
+    "只在「混合」模式生效。\n\n0.00 = 只保留遊戲原生震動\n0.00 ～ 0.50：遊戲震動維持完整強度，音訊震動依比例加入\n0.50 ～ 1.00：音訊比例繼續增加，遊戲震動逐步減弱\n1.00 = 只保留音訊震動":
+        "Used only in Mix mode.\n\n0.00 = native game rumble only\n0.00–0.50: game rumble stays at full strength while audio is added in proportion\n0.50–1.00: audio keeps growing while game rumble fades out\n1.00 = audio rumble only",
     "音訊轉震動的總強度。設定範圍：0.00 ～ 1.00。":
         "Overall audio-to-rumble strength. Range: 0.00–1.00.",
     "控制音訊轉換成震動前的總靈敏度。\n\n降低：整體音訊震動較弱\n提高：較小的聲音也會產生明顯震動\n聲音一出現就太強：降低此值\n只有很大的聲音才有反應：提高此值\n\n此項與混合比例不同；即使混合比例不變，也能單獨控制音訊震動的強弱。":
@@ -1958,10 +2004,12 @@ EN_TEXT = {
 
     "六個控制點的實際頻率範圍：\n\n低：20 ～ 120 Hz\n低中：120 ～ 300 Hz\n中：300 ～ 700 Hz\n中高：700 ～ 2000 Hz\n高：2000 ～ 4000 Hz\n極高：4000 ～ 8000 Hz\n\n拖曳控制點調整增益；雙擊控制點可還原該頻段預設。":
         "Frequency ranges for the six control points:\n\nLow: 20–120 Hz\nLow-mid: 120–300 Hz\nMid: 300–700 Hz\nHigh-mid: 700–2000 Hz\nHigh: 2000–4000 Hz\nUltra-high: 4000–8000 Hz\n\nDrag a point to adjust gain; double-click it to restore that band's default.",
-    "六頻段：調整不同聲音範圍轉成震動的強弱。\nLF／HF 重心：調整中間頻段偏向低頻或高頻輸出。\n將游標移到這段文字，可查看完整對照與操作說明。":
-        "6-band EQ adjusts how strongly different audio ranges become rumble.\nLF/HF Balance routes the middle bands more toward low- or high-frequency output.\nHover over this text for the full mapping and controls.",
-    "六頻段與 LF／HF 重心完整說明\n\n圖表標籤與頻率對照：\nLow：20 ～ 120 Hz（低沉衝擊與重低音）\nL-Mid：120 ～ 300 Hz（低頻厚度）\nMid：300 ～ 700 Hz（中低頻細節）\nH-Mid：700 ～ 2000 Hz（中高頻細節）\nHigh：2000 ～ 4000 Hz（高頻摩擦與人聲邊緣）\nUltra：4000 ～ 8000 Hz（尖銳提示音與極高頻細節）\n\n拖曳控制點調整增益；雙擊控制點還原該頻段預設。\n1.00 代表原始增益。\n\nLF／HF 重心只改變中間頻段的輸出分配，不改變六段增益：\n-1.00 偏向 LF；0.00 平衡；+1.00 偏向 HF。\n建議先在 -0.15 ～ +0.15 內調整。\n\n本區只影響音訊與混合模式，不影響純遊戲震動。":
-        "Complete 6-band and LF/HF balance guide\n\nChart labels and frequency ranges:\nLow: 20–120 Hz (deep impacts and sub-bass)\nL-Mid: 120–300 Hz (low-frequency body)\nMid: 300–700 Hz (low-mid detail)\nH-Mid: 700–2000 Hz (high-mid detail)\nHigh: 2000–4000 Hz (friction and vocal edges)\nUltra: 4000–8000 Hz (sharp alerts and ultra-high detail)\n\nDrag a point to adjust gain; double-click it to reset that band. 1.00 is neutral gain.\n\nLF/HF Balance changes only the routing of middle bands, not the six gains:\n-1.00 favors LF; 0.00 is balanced; +1.00 favors HF.\nStart within -0.15 to +0.15.\n\nThis section affects only Audio and Mix modes, not game-only rumble.",
+    "將游標移到這裡，可查看六頻段與 LF／HF 重心的說明。":
+        "Hover here for the 6-band EQ and LF/HF Balance guide.",
+    "看電影、影集時，讓講話不再一直震動，只影響音訊震動。\n\n0.00 = 關閉（原本的手感，聽音樂建議維持關閉）\n提高：辨識到人聲時，壓低人聲所在頻段的震動\n爆炸、槍聲、拳腳、刀劍等撞擊聲不會被壓低，疊在對白上時也會照常震動。\n歌曲的人聲也會被當成講話。\n建議：看電影 0.80 ～ 1.00。":
+        "Stops dialogue from rumbling constantly in films and shows. Affects audio rumble only.\n\n0.00 = off (the original feel; keep it off for music)\nHigher: when a voice is recognised, rumble from the bands it occupies is cut\nExplosions, gunshots, punches, blades and other impacts are not cut, even when they land over dialogue.\nSung vocals are treated as speech too.\nSuggested: 0.80–1.00 for films.",
+    "六頻段與 LF／HF 重心完整說明\n\n圖表標籤與頻率對照：\nLow：20 ～ 120 Hz（低沉衝擊與重低音）\nL-Mid：120 ～ 300 Hz（低頻厚度）\nMid：300 ～ 700 Hz（中低頻細節）\nH-Mid：700 ～ 2000 Hz（中高頻細節）\nHigh：2000 ～ 4000 Hz（高頻摩擦與人聲邊緣）\nUltra：4000 ～ 8000 Hz（尖銳提示音與極高頻細節）\n\n拖曳控制點調整增益；雙擊控制點還原該頻段預設。\n1.00 代表原始增益。\n\nLF／HF 重心只改變中間頻段的輸出分配，不改變六段增益：\n-1.00 偏向 LF；0.00 平衡；+1.00 偏向 HF。\n建議先在 -0.15 ～ +0.15 內調整。\n\n人聲抑制：辨識到講話時壓低人聲頻段，撞擊聲照常保留；看電影時使用，聽音樂建議關閉。\n\n本區只影響音訊與混合模式，不影響純遊戲震動。":
+        "Complete 6-band and LF/HF balance guide\n\nChart labels and frequency ranges:\nLow: 20–120 Hz (deep impacts and sub-bass)\nL-Mid: 120–300 Hz (low-frequency body)\nMid: 300–700 Hz (low-mid detail)\nH-Mid: 700–2000 Hz (high-mid detail)\nHigh: 2000–4000 Hz (friction and vocal edges)\nUltra: 4000–8000 Hz (sharp alerts and ultra-high detail)\n\nDrag a point to adjust gain; double-click it to reset that band. 1.00 is neutral gain.\n\nLF/HF Balance changes only the routing of middle bands, not the six gains:\n-1.00 favors LF; 0.00 is balanced; +1.00 favors HF.\nStart within -0.15 to +0.15.\n\nVoice Cut lowers the voice bands while speech is recognised and keeps impacts; use it for films and leave it off for music.\n\nThis section affects only Audio and Mix modes, not game-only rumble.",
     "調整中間音訊頻段分配到 LF 或 HF 震動的重心。\n\n-1.00：中間頻段較偏向 LF\n0.00：平衡分配\n+1.00：中間頻段較偏向 HF\n\n建議先在 -0.15 ～ +0.15 內調整。此設定不改變六個頻段的增益。":
         "Adjusts whether the middle audio bands are routed more toward LF or HF rumble.\n\n-1.00: middle bands favor LF\n0.00: balanced routing\n+1.00: middle bands favor HF\n\nStart within -0.15 to +0.15. This does not change the gain of the six bands.",
     "餘震是震動訊號減弱或停止時，暫時保留一部分剛才的震動，再依「衰減 ms」逐漸降到 0，讓停止感較柔和。\n\n0.00 = 關閉，立即跟隨原始訊號\n0.50 = 保留約一半的下降落差\n1.00 = 完整保留後再逐漸衰減\n\n套用於遊戲與音訊混合後的最終輸出；不會產生新的重複震動。":

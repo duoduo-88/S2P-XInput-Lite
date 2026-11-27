@@ -204,11 +204,18 @@ def build_status_and_footer(gui, right_frame):
     gui.gyro_calibration_button = gui.calibration_button
     gui.calibration_button.grid(row=1, column=2, sticky="nsew", padx=3, ipady=5)
 
-    ttk.Button(
+    gui.flash_firmware_button = _build_dropdown_button(
+        gui,
         footer_frame,
-        text="刷入相容韌體",
-        command=gui.flash_firmware
-    ).grid(row=1, column=3, sticky="nsew", padx=3, ipady=5)
+        "刷入韌體",
+        lambda: (
+            ("刷入內建韌體", gui.flash_firmware),
+            ("刷入自訂韌體…", gui.flash_custom_firmware),
+        ),
+    )
+    gui.flash_firmware_button.grid(
+        row=1, column=3, sticky="nsew", padx=3, ipady=5
+    )
 
     gui.write_esp32_button = ttk.Button(
         footer_frame,
@@ -224,7 +231,7 @@ def build_status_and_footer(gui, right_frame):
         menu = gui.write_esp32_menu
         menu.delete(0, "end")
         menu.add_command(
-            label=gui.tr("寫入並啟用 Android USB HID 獨立模式"),
+            label=gui.tr("寫入並啟用獨立模式"),
             command=lambda: gui.write_current_profile_to_esp32("standalone_hid"),
         )
         menu.add_separator()

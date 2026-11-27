@@ -35,6 +35,7 @@ the screenshots are examples.
   - [8.5 Aim Test](#aim-test-guide)
 - [9. ESP32-S3](#9-esp32-s3)
   - [9.2 Flash firmware](#flash-esp32-s3)
+  - [9.8 Build your own firmware](#build-firmware)
 - [10. Quick controls](#10-quick-controls)
 - [11. Troubleshooting](#11-troubleshooting)
 - [Appendix: Recommended tuning order](#appendix-recommended-tuning-order)
@@ -86,6 +87,8 @@ running, outputs XInput through ViGEmBus, and handles rumble and audio rumble.
 **Android USB HID standalone mode** needs no Windows program, because the
 ESP32-S3 itself acts as a USB HID controller. Physical USB XInput has
 licensing issues and must not be added.
+
+<a name="connector-window"></a>
 
 ### 1.4 Connector window and notification area
 
@@ -160,7 +163,7 @@ The main window has four areas:
 | **Pin** | Make the detected controller the preferred device. The controller vibrates when this succeeds. |
 | **Defaults** | Reset everything on screen to defaults. See [Restore a stable setup](#restore-a-stable-setup). |
 | **Calibrate ▼** | Menu: **Stick Calibration** (see [3.4](#34-stick-calibration)) and **Sensor Calibration**, which calibrates the gyro, accelerometer, and magnetometer (see [6.4](#64-gyro-response)). |
-| **Flash FW** | Check and flash the ESP32-S3 firmware. See [9.2](#flash-esp32-s3). |
+| **Flash FW ▼** | Check and flash the bundled or a custom ESP32-S3 firmware. See [9.2](#flash-esp32-s3). |
 | **ESP32 ▼** | Write the profile and switch to Android USB HID standalone mode, or switch back to Bridge. See [9.5](#95-write-settings-and-enable-android-usb-hid). |
 | **Restart** | Restart the desktop connection with the saved settings. Nothing is written to the ESP32. |
 | **Idle Disc.** | Choose how long a wireless connection may stay idle before it disconnects. See [2.6](#26-idle-disc). |
@@ -218,6 +221,8 @@ After it disconnects, the status bar shows
 `ESP32 · Idle; press any button to wake`. Press any controller button to wake
 and reconnect.
 
+<a name="extensions"></a>
+
 ### 2.7 Extensions
 
 ![The Extensions window with the built-in Gamepad Test and a connected tool that has an update](assets/v0.8.2/extensions.png)
@@ -247,6 +252,10 @@ separately from S2P-XInput-Lite, and the notes below apply to it as well.
 > - You are responsible for how you use extension tools and for the results.
 > - Some games and online services prohibit external input or automation;
 >   check their rules before use.
+> - Some extension tools may not work in ESP32 standalone mode: there the
+>   controller connects directly to the host or phone instead of going through
+>   S2P on the PC. Whether a tool supports standalone mode is set by that tool
+>   or its development kit; check its documentation.
 > - **Allow reading controller state** lets a tool see your button and stick
 >   output. Enable it only for tools that need it.
 > - S2P clears a tool's input immediately when the tool closes, times out, or
@@ -420,6 +429,8 @@ key combination to map, such as F12, Ctrl+S, or Ctrl+Shift+S. The field shows
 short forms such as `KB:1`, `KB:Ctrl+S`, and `M:Wheel↓`. Hover over it to see
 the full mapping.
 
+<a name="gamepad-combo"></a>
+
 #### Press several XInput buttons at once
 
 ![Choosing a gamepad combo](assets/v0.8.2/gamepad-combo.png)
@@ -589,6 +600,8 @@ explains it in detail.
   **Shortcut** reset the neutral angle. A shortcut assigned here only resets
   the neutral angle and no longer sends its game mapping.
 
+<a name="gyro-response"></a>
+
 ### 6.4 Gyro Response
 
 Only the fields that apply to the current target and control mode are shown.
@@ -611,9 +624,15 @@ Buttons below the fields:
   and stick output.
 - **Compensation Settings**: per-axis gyro output multipliers. Hidden for mouse output.
 
+<a name="sensor-calibration"></a>
+
 Sensor calibration is at the bottom of the main window: **Calibrate ▼** >
 **Sensor Calibration**. Place the controller flat on a steady surface first;
 the button shows the progress while it runs.
+If no controller is connected yet, S2P offers to start the connection.
+Wake or pair the controller as the connector window shows, and calibration
+continues by itself once it connects. The wait ends after 2 minutes, or as
+soon as the connector stops.
 
 #### Sensitivity curve
 
@@ -623,6 +642,8 @@ The horizontal axis is the gyro's base output and the vertical axis is the
 output after the curve. **Mode** chooses **Lin.**, **Late** (accelerates near
 the end), or **Early** (accelerates at the start). **Lvl** sets how strongly
 the curve bends. Select **OK**, then **Save/Apply** in the main window.
+
+<a name="gyro-compensation"></a>
 
 #### Compensation settings
 
@@ -645,6 +666,8 @@ and is off by default.
 
 To work out a suitable multiplier, use
 [Gyro Preview and Calculator](#gyro-preview-and-calculator) in Gamepad Tester.
+
+<a name="gyro-stability"></a>
 
 ### 6.5 Stability
 
@@ -706,6 +729,8 @@ feedback while reducing the chance of noise.
 > noise, or unnatural vibration, lower **Max Amp**, **LF/HF Strength**, or the
 > related band gains.
 
+<a name="rumble-game"></a>
+
 ### 7.2 Advanced Rumble: Game
 
 ![Advanced Rumble in Game mode](assets/v0.8.2/main-rumble-game.png)
@@ -715,10 +740,17 @@ feedback while reducing the chance of noise.
 - **Game**: native game rumble only. Audio Response and 6-Band EQ are disabled.
 - **Audio**: converts sound from the Windows default output device into rumble.
 - **Mix**: blends game and audio rumble with soft saturation instead of adding
-  them directly, to avoid clipping.
+  them directly, to avoid clipping. Up to a **Mix** value of 0.50, game rumble
+  keeps its full strength and audio is added in proportion; above 0.50, game
+  rumble fades out until 1.00 leaves audio only.
 
 Under **Final Output**, **Tail** and **Decay ms** control the rumble's tail
-and fade. **Reset Defaults** restores this tab.
+and fade. **Motor Emulation** emulates classic Xbox motors: stronger game
+rumble gets a higher frequency, while medium rumble keeps the configured
+frequency. It affects game rumble only; `0.00` is off and standalone mode
+ignores it. **Reset Defaults** restores this tab.
+
+<a name="audio-rumble"></a>
 
 ### 7.3 Audio and Mix
 
@@ -729,6 +761,8 @@ and fade. **Reset Defaults** restores this tab.
 | Field | Description | Adjusting |
 |---|---|---|
 | **Lvl** | Overall sensitivity of audio-to-rumble. | Raise it if rumble is weak; lower it if sounds start too strong. |
+| **Detail** | Makes quieter sounds easier to feel (audio rumble only). `0.00` is off. | Raise it (start around 0.10) to feel more small detail; maximum strength stays the same and background sound near the gate is not amplified. Lower it if rumble feels busy. |
+| **Freq** | Lets the HD Rumble frequencies follow the tone of the sound (audio rumble only). `0.00` is off. | Raise it (try 0.50–1.00) for more textured variation. Deeper sounds lower the frequency and brighter sounds raise it, within about LF 160–260 and HF 280–350. |
 | **Gate** | Noise threshold. | Raise it if quiet scenes still rumble; lower it if only loud sounds react. |
 | **Atk** | Attack speed. | Lower values respond faster. |
 | **Rel.** | Release time after a sound ends. | Higher values give a longer tail. |
@@ -751,6 +785,19 @@ and fade. **Reset Defaults** restores this tab.
 **LF/HF Balance** only changes how the middle bands are routed and does not
 change the six band gains. `-1.00` favors LF, `0.00` is balanced, and `+1.00`
 favors HF. Start between `-0.15` and `+0.15`.
+
+<a name="voice-cut"></a>
+
+**Voice Cut**, below LF/HF Balance, is for films and shows: while speech is
+recognised it lowers rumble from the bands the voice occupies, so dialogue no
+longer rumbles constantly. Explosions, gunshots, punches, blades and other
+impacts are not cut, even when they land over dialogue. `0.00` is off; use
+`0.80–1.00` for films. Sung vocals are treated as speech too, so leave it off
+for music. While it is on, rumble is delayed by about 15 ms so each sentence is
+recognised from its first syllable; the delay is not noticeable with video.
+
+The **Movie** profile turns Voice Cut on and raises the H-Mid, High and Ultra
+bands so gunshots and metal hits such as blades are clearly felt.
 
 ### 7.5 High-frequency noise
 
@@ -792,6 +839,8 @@ Selecting the button again brings the existing tester forward.
    Check that the dots and the event list change.
 4. Switch to **Aim Test**, **Rumble Test**, **Report Rate Test**, or
    **Diagnostics** as needed.
+
+<a name="test-source"></a>
 
 ### 8.1 Choose a test source
 
@@ -855,9 +904,9 @@ The **Aim Test** tab has four areas:
   comparison rules.
 - **Upper right**: **Gyro Preview**, **Calculator**, **Clear History**,
   **Test Settings**, and **Start**.
-- **Center**: saved rounds. Select one to see how it compares with the best match.
-- **Bottom**: the current test conditions and the change from the best round
-  with the same target settings.
+- **Center**: saved rounds. Select one to see how each result compares with its best.
+- **Bottom**: the current test conditions and how each result differs from its
+  best with the same target settings.
 
 #### Test mapped gyro output
 
@@ -963,6 +1012,8 @@ so dips show up even when the average is high. The drawing target follows the
 monitor's current refresh rate, and actual presentation also depends on
 Windows and the GPU.
 
+<a name="aim-display-size"></a>
+
 #### Screen Resolution, Size, and Aspect Ratio
 
 Resolution and physical screen size do not change how the Aim Test converts
@@ -1005,6 +1056,8 @@ targets look bigger. How far the view turns for a given controller rotation
 stays the same. Matching the **3D horizontal / vertical turn speed** to the
 game you play matters more than the screen: the closer it is to the game's
 turn speed, the closer the test feels to the game.
+
+<a name="gyro-preview"></a>
 
 #### Gyro Preview and Calculator
 
@@ -1055,6 +1108,8 @@ asked whether to reset them to 1.00 first.
    from **Gyro Map** in the main window. Enter the X and Y multipliers, select
    **OK**, then select **Save/Apply**.
 
+<a name="aim-results"></a>
+
 #### Read and compare results
 
 ![The end screen of a 3D Targets round](assets/v0.8.2/aim-test-result.png)
@@ -1069,22 +1124,27 @@ input, the result also shows the peak horizontal output and the longest
 continuous full-deflection time in milliseconds. That timer stops when
 horizontal output leaves full deflection or reverses.
 
-The end screen shows your result in the center and the change from the best
-earlier round with the same target settings. The comparison uses only the
+The end screen shows your result in the center and how each result differs
+from its best in earlier rounds with the same target settings. The comparison uses only the
 settings in the **Drills and targets (compared)** panel of Test Settings: the
 mode, resolution, seed, and the relevant target count, duration, 2D target
 size, depth, and spread. 3D Tracking also compares the arc and target speed.
 Results remain comparable across changes to controller turn speed, mouse
 sensitivity, colors, reticle, vibration, and sound.
 
-- **Targets** ranks by hits, then accuracy, completion time, and mean error.
-  Completion time is compared only when both rounds hit every target.
-- **Timed Targets** ranks by hits, then accuracy and mean error.
-- **Tracking** ranks by time on target, then mean error.
+Each result is compared with its own best, not with one particular round:
 
-Arrows show the direction of change. Green means better and red means worse.
+- Hits, accuracy, and On Target are compared with their highest values.
+- Completion time and mean error are compared with their lowest values.
+  Completion time counts only for **Targets** rounds that hit every target.
+  **Timed Targets** does not compare time.
+
+Arrows show the direction of change. Green marks a new best and red marks a
+result short of the best.
 Accuracy and On Target changes are in percentage points. **Clear History**
 removes saved rounds.
+
+<a name="rumble-test"></a>
 
 ### 8.6 Rumble Test
 
@@ -1094,8 +1154,15 @@ removes saved rounds.
    that supports rumble, then open **Rumble Test**.
 2. **Manual Output**: start low and move **LF Motor** and **HF Motor**.
 3. **Patterns**: select any pattern, such as Impact, Engine, or Machine Gun.
-   **Repeat** loops it, **LF / HF** choose the bands, and **Rate** and
-   **Strength** set its pace and strength.
+   **Repeat** loops the selected pattern until you select it again or stop
+   all rumble. **Overlap** plays a newly selected pattern on top of the ones
+   already playing; without it, the new pattern replaces them. **LF / HF**
+   choose the bands, and **Strength** sets its strength. **Rate** sets how
+   often a repeating pattern restarts; effects such as Heartbeat or Machine
+   Gun keep their own timing, so a faster rate shortens the rest (or restarts
+   the effect early) instead of speeding it up. The first row (LF Pulse,
+   HF Pulse, Alternate, Ramp, Wave) is made of shapes, and Rate sets their
+   tempo.
 4. Select **Stop All Rumble** when finished. **Reset** restores this tab.
 
 A Bridge test uses the current profile's LF/HF settings. With **Source** set
@@ -1192,7 +1259,7 @@ Before you start, have ready:
 
 **1. Check the version**
 
-Select **Flash FW** at the bottom of the main window. The program reads the
+Select **Flash FW ▼ → Flash bundled firmware** at the bottom of the main window. The program reads the
 installed firmware version first and shows "Reading the current ESP32-S3
 firmware version…" for a few seconds.
 
@@ -1201,6 +1268,13 @@ firmware version…" for a few seconds.
 The confirmation lists the installed version and the bundled **S2P-FW 1.0.9**.
 Choose **Yes** to continue or **No** to cancel. If the version check paused the
 connector, canceling resumes it. You can also reflash the same version.
+
+**Flash custom firmware…** first opens a window to select a `.bin` file. Only the
+application image is replaced; the bundled bootloader and partition table are always
+used. Files that are not ESP32-S3 firmware or exceed the app partition are rejected,
+and a file without the S2P firmware identity shows a warning first. The confirmation
+lists the file name, version, size and SHA-256; the remaining steps are the same.
+To restore, select **Flash bundled firmware**.
 
 **2. Put the ESP32-S3 into flash mode**
 
@@ -1219,6 +1293,8 @@ cable, then release `BOOT`.
 The program counts down and waits up to 30 seconds. It finds the ESP32-S3 ROM
 flashing port by its USB identity, even if that COM port already existed. If it
 times out, "Flash Port Not Found" appears. Select **Flash FW** again.
+While it waits, select **Cancel** or close the window to stop; nothing has
+been written yet.
 
 **3. Check the chip and flash capacity**
 
@@ -1272,7 +1348,7 @@ for the completion message before closing the program or starting another operat
 1. Choose the profile to write, finish your changes, and select **Save/Apply**.
    Changes to `System Default` must first be saved with **Save New**.
 2. Check that the ESP32 is connected and has the bundled S2P-FW 1.0.9.
-3. Select **ESP32 ▼ → Write and enable Android USB HID standalone**.
+3. Select **ESP32 ▼ → Write and enable standalone**.
 4. Review the compatibility notice. If the profile uses Windows-only outputs,
    cancel to change them or confirm skipping the unsupported items.
 5. Wait for the write, length / CRC check, apply, and controlled restart, and
@@ -1308,6 +1384,8 @@ the switch happened.
 Returning to Bridge keeps the last saved standalone settings. **Restart** only
 restarts the desktop connection.
 
+<a name="standalone-scope"></a>
+
 ### 9.7 Standalone mode scope
 
 **Supported**: stick calibration, curves, center and outer deadzones, output
@@ -1326,6 +1404,119 @@ rumble and audio rumble still go through Bridge.
 Android compatibility depends on the device, system, and game. Apple devices
 are not supported. For hardware validation status, see
 [validation and official references](../docs/usb-hid-standardization.md).
+
+<a name="build-firmware"></a>
+
+### 9.8 Build your own firmware
+
+The bundled S2P-FW 1.0.9 comes with its complete source. You can change it to
+suit your needs, rebuild it, and flash the result with **Flash custom
+firmware…**. The source is in:
+
+- The release package: `app\esp32s3\source\esp32s3_usb_bridge_bluedroid`
+- GitHub: `esp32s3/source/esp32s3_usb_bridge_bluedroid` under the same version tag
+
+> [!WARNING]
+> Modified firmware is not supported; use it at your own risk. Before you flash
+> it, make sure you can use the ROM Download Mode in
+> [9.6](#96-return-to-bridge-and-recovery), so that you can flash the bundled
+> firmware back if something goes wrong.
+
+**1. Set up the build tools**
+
+- Install Espressif's official **ESP-IDF 5.5.4**. Use this exact version; other
+  versions may fail to build or produce different results.
+- `esp_tinyusb 1.7.6~2` and `tinyusb 0.19.0~3` are locked in
+  `dependencies.lock`. The Component Manager downloads them on the first build,
+  so you do not install them yourself.
+- An ESP32-S3 board with 16 MB flash.
+
+**2. Build**
+
+Open an ESP-IDF 5.5.4 command prompt (the ESP-IDF PowerShell or CMD shortcut
+the installer creates) and run:
+
+```text
+cd esp32s3\source\esp32s3_usb_bridge_bluedroid
+idf.py set-target esp32s3
+idf.py build
+```
+
+The firmware image is `build\esp32s3_bluedroid_bridge.bin`. `build`,
+`managed_components` and `sdkconfig` are generated by the build; put
+configuration changes in `sdkconfig.defaults`.
+
+`scripts\build_firmware.ps1` in the source repository checks that a build
+matches the bundled images. Once you change the source the hashes will differ
+and the script will fail. That is expected; use `idf.py build` directly.
+
+**3. Flash**
+
+1. Click **Flash FW ▼ → Flash custom firmware…** and choose
+   `build\esp32s3_bluedroid_bridge.bin`.
+2. Enter flash mode and finish flashing as in [9.2](#flash-esp32-s3).
+
+Only the firmware image at `0x10000` is replaced. The bootloader and partition
+table always come from the bundled files, so:
+
+- Do not change the partition table or the flash size settings.
+- The image must fit in the app partition, or it is rejected.
+
+**4. Stay compatible with the desktop app**
+
+- The desktop app recognizes S2P firmware by the product, protocol and identity
+  the firmware reports. Keep the `S2P-FW` and `s2p_bridge` identity strings.
+  Without them you get a warning before flashing, and after connecting the S2P
+  features such as writing profiles and switching modes stay off.
+- If you change the CDC commands or the profile data format, the current
+  desktop app may not be able to write settings. Change the desktop side to
+  match.
+- To go back to the original firmware, choose **Flash bundled firmware**.
+
+**Android USB HID reference**
+
+| Item | Value |
+|---|---|
+| VID:PID | `303A:4005` (Espressif / TinyUSB shared default) |
+| Strings | Manufacturer `S2P-XInput-Lite`, product `S2P Mobile Gamepad`, serial `S2P-<12-digit MAC>` |
+| Interfaces | CDC control `0`, CDC data `1`, HID `2` |
+| Endpoints | CDC notification `0x81`, CDC OUT/IN `0x02` / `0x82`, HID interrupt IN `0x83` (32 bytes, 1 ms polling interval) |
+| Output report | None, so Android game rumble is not supported |
+
+The HID input report is 13 bytes with no report ID:
+
+| Byte | Contents |
+|---|---|
+| 0–1 | 16 button bits, little-endian. Bits 0–15 are A, B, X, Y, L1, R1, Select, Start, LS, RS, Mode (HOME), reserved, reserved, L2, R2, reserved |
+| 2 | Low 4 bits are the D-pad: `0` = up, plus 1 for every 45° clockwise, `8` = released. High 4 bits are zero |
+| 3–10 | Four int16 axes (−32768 to 32767, little-endian): left X, left Y, right X (usage Z), right Y (usage Rz). Y is positive downward |
+| 11 | Left trigger 0–255 (Simulation Brake) |
+| 12 | Right trigger 0–255 (Simulation Accelerator) |
+
+The button bits use Android's standard HID button usages rather than a
+sequential 1–16 range. When a trigger reaches 32 or more, the matching L2 / R2
+button bit is also set, for Android games that only read button events. For
+the full descriptor, see `s_hid_report_descriptor` in
+`main/standalone_xinput.c`, the compiled descriptor record
+[`esp32s3/firmware/usb-descriptors.json`](../esp32s3/firmware/usb-descriptors.json),
+and the [firmware source README](../esp32s3/source/esp32s3_usb_bridge_bluedroid/README.md).
+
+**License and legal notes**
+
+- The firmware is derived from
+  [Switch2Connect](https://github.com/TommyWabg/Switch2Connect) and licensed
+  under **GPL-3.0**. Changes for your own use are unrestricted.
+- If you give a modified firmware image (`.bin`) to anyone else, you must also
+  provide its complete corresponding source under GPL-3.0, mark it as a modified
+  version with what you changed and when, and keep the notices in `LICENSE`,
+  `THIRD_PARTY_NOTICES.md` and `third_party/licenses`.
+- `303A:4005` is an identifier Espressif shares for development and testing. To
+  distribute a device or turn it into a product, apply for your own PID under
+  [Espressif's PID rules](https://github.com/espressif/usb-pids/blob/main/README.md).
+  Do not use another vendor's VID/PID, product names or trademarks to make the
+  device pose as their product.
+- Do not add code, firmware or descriptors you have no right to distribute,
+  such as firmware dumped from a commercial device.
 
 ---
 

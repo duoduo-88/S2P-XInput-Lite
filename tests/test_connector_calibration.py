@@ -590,11 +590,19 @@ class GuiCalibrationTests(unittest.TestCase):
                     self.confirm.side_effect = None
                     self.confirm.return_value = True
 
+                self.gui._connect_then_calibrate_gyro = Mock()
                 self.gui.calibrate_gyro()
                 if stage == "while polling":
                     self.status = []
                     self.gui.root.after.call_args.args[1]()
 
+                if stage == "start":
+                    # No usable status at the start offers to connect first.
+                    self.gui._connect_then_calibrate_gyro.assert_called_once_with()
+                    self.showerror.assert_not_called()
+                    self.enqueue.assert_not_called()
+                    continue
+                self.gui._connect_then_calibrate_gyro.assert_not_called()
                 self.showerror.assert_called_once()
                 if stage == "while polling":
                     self.enqueue.assert_called_once()

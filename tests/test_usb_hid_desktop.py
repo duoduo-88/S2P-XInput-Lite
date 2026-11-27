@@ -316,7 +316,7 @@ class DesktopUSBUIAndAssociationTests(unittest.TestCase):
         scope["refresh_write_esp32_menu"]()
         entries = [call.kwargs for call in menu.add_command.call_args_list]
         self.assertEqual([e["label"] for e in entries],
-                         ["寫入並啟用 Android USB HID 獨立模式", "切回 ESP32 橋接模式"])
+                         ["寫入並啟用獨立模式", "切回 ESP32 橋接模式"])
         entries[0]["command"]()
         gui.write_current_profile_to_esp32.assert_called_once_with("standalone_hid")
 

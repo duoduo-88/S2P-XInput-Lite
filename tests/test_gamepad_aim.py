@@ -2439,7 +2439,7 @@ class AimPaneTests(unittest.TestCase):
         self.assertIn("跟靶率", text)
         self.assertIn("同設定", text)
         self.assertIn("手把視角速度、滑鼠感度、顏色、準心、震動與音效不影響比對", text)
-        self.assertIn("綠色代表進步，紅色代表退步", text)
+        self.assertIn("綠色代表刷新最佳紀錄，紅色代表不及最佳紀錄", text)
         self.assertIn("−14.4 pp", text)
         self.assertIn("平均偏差是準心與靶心的平均距離", text)
         help_mark.event_generate("<Leave>")

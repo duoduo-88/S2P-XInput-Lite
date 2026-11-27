@@ -5,9 +5,10 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import tkinter as tk
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from tkinter import ttk
 
 
@@ -102,6 +103,18 @@ class GUIUserWorkflowTests(unittest.TestCase):
         self.assertEqual(self.callback_errors, [])
         self.assertEqual(self.errors, [])
 
+    def test_motor_emulation_is_disabled_only_for_audio_only_rumble(self):
+        gui = self.gui
+        scale = next(
+            widget for widget in gui.audio_motor_emulation_widgets
+            if isinstance(widget, ttk.Scale)
+        )
+        for mode, disabled in (("AUDIO", True), ("MIX", False), ("GAME", False)):
+            gui.audio_haptics_mode_var.set(mode)
+            gui._update_audio_response_state()
+            self.root.update_idletasks()
+            self.assertEqual(scale.instate(["disabled"]), disabled, mode)
+
     def test_footer_buttons(self):
         gui = self.gui
         calibration = gui.calibration_button
@@ -137,6 +150,138 @@ class GUIUserWorkflowTests(unittest.TestCase):
             if isinstance(widget, ttk.Button)
         ]
         self.assertNotIn(gui.tr("感測器校正"), gyro_buttons)
+
+    class _RunningConnector:
+        def __init__(self):
+            self.exit_code = None
+
+        def poll(self):
+            return self.exit_code
+
+    def _start_sensor_calibration_without_controller(self, prompts, running=None):
+        gui = self.gui
+        connector = self._RunningConnector()
+        gui.main_process = running
+        started = []
+
+        def restart_main():
+            started.append(True)
+            gui.main_process = connector
+
+        asked = []
+        self.prompt_messages = []
+
+        def askokcancel(title, message, **_kwargs):
+            asked.append(title)
+            self.prompt_messages.append(message)
+            return prompts.pop(0)
+
+        for patcher in (
+            patch.object(gui, "restart_main", side_effect=restart_main),
+            patch.object(config_gui.messagebox, "askokcancel", side_effect=askokcancel),
+            patch.object(config_gui, "GYRO_CALIBRATION_CONNECT_POLL_MS", 1),
+            patch.object(config_gui, "activate_tk_window"),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        gui.calibrate_gyro()
+        return connector, started, asked
+
+    def _pump_until(self, condition, seconds=2.0):
+        deadline = time.monotonic() + seconds
+        while not condition() and time.monotonic() < deadline:
+            self.root.update()
+            time.sleep(0.005)
+
+    def test_sensor_calibration_connects_first_and_then_continues(self):
+        gui = self.gui
+        with patch.object(config_gui, "enqueue_controller_command") as enqueue:
+            connector, started, asked = self._start_sensor_calibration_without_controller(
+                [True, True],
+            )
+            # The connection starts at once and the button shows the wait.
+            self.assertEqual(started, [True])
+            self.assertEqual(asked, ["手把尚未連線"])
+            self.assertIn("disabled", gui.gyro_calibration_button.state())
+            self.assertEqual(gui.gyro_calibration_button.cget("text"), "Waiting for controller...")
+            self.root.update()
+            self.assertEqual(asked, ["手把尚未連線"])
+
+            config_gui.STATUS_PATH.write_text(json.dumps({
+                "state": "connected", "updated_at": time.time(),
+                "controller_id": "pad", "connection_id": "c1",
+            }), encoding="utf-8")
+            self._pump_until(lambda: enqueue.called)
+
+        # Sensor calibration continued with its first step by itself.
+        self.assertEqual(asked, ["手把尚未連線", "感測器校正（1/3）"])
+        config_gui.activate_tk_window.assert_called_with(gui.root)
+        enqueue.assert_called_once_with("calibrate_gyro", connection_id="c1")
+        self.assertIsNone(gui._gyro_calibration_wait_job)
+
+    def test_sensor_calibration_restores_settings_hidden_in_the_tray(self):
+        gui = self.gui
+        with patch.object(config_gui, "enqueue_controller_command") as enqueue, \
+                patch.object(gui, "restore_from_system_tray", return_value=True) as restore:
+            self._start_sensor_calibration_without_controller([True, True])
+            config_gui.STATUS_PATH.write_text(json.dumps({
+                "state": "connected", "updated_at": time.time(),
+                "controller_id": "pad", "connection_id": "c1",
+            }), encoding="utf-8")
+            self._pump_until(lambda: enqueue.called)
+        # The tray restore keeps the tray icon in step; no second activation.
+        restore.assert_called_once_with()
+        config_gui.activate_tk_window.assert_not_called()
+        enqueue.assert_called_once_with("calibrate_gyro", connection_id="c1")
+
+    def test_sensor_calibration_wait_ends_when_the_connector_stops_on_an_error(self):
+        gui = self.gui
+        with patch.object(config_gui.messagebox, "showwarning") as warning:
+            self._start_sensor_calibration_without_controller([True])
+            # The connector stays open on its error until a key is pressed.
+            config_gui.STATUS_PATH.write_text(json.dumps({
+                "state": "stopped", "updated_at": time.time() + 0.01,
+            }), encoding="utf-8")
+            self._pump_until(lambda: warning.called)
+        warning.assert_called_once()
+        self.assertIn("連接程式視窗", warning.call_args.args[1])
+        self.assertNotIn("disabled", gui.gyro_calibration_button.state())
+        self.assertIsNone(gui._gyro_calibration_wait_job)
+
+    def test_sensor_calibration_restarts_a_connector_stopped_on_an_error(self):
+        config_gui.STATUS_PATH.write_text(json.dumps({
+            "state": "stopped", "updated_at": time.time() - 30,
+        }), encoding="utf-8")
+        _connector, started, asked = self._start_sensor_calibration_without_controller(
+            [True], running=self._RunningConnector(),
+        )
+        # A connector waiting on its error message is restarted, and the old
+        # "stopped" written before the wait does not end it.
+        self.assertEqual(started, [True])
+        self.assertIn("自動啟動連線", self.prompt_messages[0])
+        self.root.update()
+        self.assertIsNotNone(self.gui._gyro_calibration_wait_job)
+        self.assertEqual(self.gui.gyro_calibration_button.cget("text"), "Waiting for controller...")
+
+    def test_sensor_calibration_wait_ends_when_the_connector_exits(self):
+        gui = self.gui
+        with patch.object(config_gui.messagebox, "showwarning") as warning:
+            connector, started, asked = self._start_sensor_calibration_without_controller([True])
+            connector.exit_code = 1
+            self._pump_until(lambda: warning.called)
+        warning.assert_called_once()
+        self.assertEqual(asked, ["手把尚未連線"])
+        self.assertNotIn("disabled", gui.gyro_calibration_button.state())
+        self.assertEqual(gui.gyro_calibration_button.cget("text"), "Calibrate")
+        self.assertIsNone(gui._gyro_calibration_wait_job)
+
+    def test_sensor_calibration_without_controller_can_be_cancelled(self):
+        gui = self.gui
+        _connector, started, asked = self._start_sensor_calibration_without_controller([False])
+        self.assertEqual(started, [])
+        self.assertEqual(asked, ["手把尚未連線"])
+        self.assertIsNone(getattr(gui, "_gyro_calibration_wait_job", None))
+        self.assertNotIn("disabled", gui.gyro_calibration_button.state())
 
     def test_extensions_window_manages_a_tool_list(self):
         from gui_sections import extensions as extensions_window
@@ -642,6 +787,26 @@ class GUIUserWorkflowTests(unittest.TestCase):
         )
         self.gui._finish_flash_operation()
         self.assertFalse(window.winfo_exists())
+
+    def test_flash_progress_offers_cancel_only_for_cancellable_steps(self):
+        before_children = set(self.root.winfo_children())
+        cancel = Mock()
+        self.gui._set_flash_progress("waiting", "", cancel=cancel)
+        window = next(child for child in self.root.winfo_children()
+                      if child not in before_children and isinstance(child, tk.Toplevel))
+        button = next(widget for widget in self.descendants(window)
+                      if isinstance(widget, ttk.Button))
+        self.assertEqual(button.winfo_manager(), "pack")
+        button.invoke()
+        window.tk.call(window.protocol("WM_DELETE_WINDOW"))
+        self.assertEqual(cancel.call_count, 2)
+
+        self.gui._set_flash_progress("flashing", "")
+        self.assertEqual(button.winfo_manager(), "")
+        window.tk.call(window.protocol("WM_DELETE_WINDOW"))
+        self.assertEqual(cancel.call_count, 2)
+        self.assertTrue(window.winfo_exists())
+        self.gui._finish_flash_operation()
 
     def test_gamepad_combo_picker_saves_and_cancel_restores(self):
         variable = self.gui.button_vars["A"]

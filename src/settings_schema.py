@@ -123,14 +123,20 @@ AUDIO_HAPTICS_SCHEMA = {
     "mode": _enum("音訊震動模式", "audio haptics mode", "GAME", "AUDIO", "MIX"),
     "mix_ratio": _float("混合比例", "mix ratio", 0.0, 1.0, 2),
     "strength": _float("音訊強度", "audio strength", 0.0, 1.0, 2),
+    "detail_boost": _float("細節增強", "detail boost", 0.0, 0.70, 2),
+    "freq_follow": _float("頻率跟隨", "frequency follow", 0.0, 1.0, 2),
     "lf_hf_balance": _float(
         "LF／HF 分配重心", "LF/HF routing balance", -1.0, 1.0, 2
+    ),
+    "voice_suppression": _float(
+        "人聲抑制", "voice suppression", 0.0, 1.0, 2
     ),
     "noise_gate": _float("噪音閘", "noise gate", 0.0, 0.25, 3),
     "attack_ms": _float("啟動 ms", "attack ms", 1.0, 500.0),
     "release_ms": _float("音訊釋放 ms", "release ms", 5.0, 2000.0),
     "final_tail_strength": _float("餘震強度", "tail strength", 0.0, 1.0, 2),
     "final_tail_decay_ms": _float("餘震衰減 ms", "tail decay ms", 50.0, 2000.0),
+    "motor_emulation": _float("馬達模擬", "motor emulation", 0.0, 1.0, 2),
     **{
         f"band_{index}_gain": _float(
             f"頻段 {index} 增益", f"band {index} gain", 0.0, 2.0, 2

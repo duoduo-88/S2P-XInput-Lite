@@ -1,6 +1,6 @@
 # S2P-XInput-Lite
 
-[繁體中文](README_zh-TW.md) · [User Guide](manual/USER_GUIDE.md) · [繁體中文使用手冊](manual/USER_GUIDE_zh-TW.md) · [v0.8.2 release notes](RELEASE_NOTES_v0.8.2.md)
+[繁體中文](README_zh-TW.md) · [User Guide](manual/USER_GUIDE.md) · [繁體中文使用手冊](manual/USER_GUIDE_zh-TW.md) · [v0.8.3 release notes](RELEASE_NOTES_v0.8.3.md)
 
 **[Download the latest Windows release](https://github.com/duoduo-88/S2P-XInput-Lite/releases/latest)** · **[Support the project on Ko-fi](https://ko-fi.com/duoduo88)**
 
@@ -12,10 +12,10 @@ bundled Gamepad Tester checks input, rumble, and report rate, and includes a
 2D/3D Aim Test.
 
 > [!IMPORTANT]
-> **v0.8.2 bundles ESP32-S3 firmware S2P-FW 1.0.9.** It brings the radial
-> gyro deadzone, button spike suppression, per-axis gyro compensation, and
-> gamepad combos to Android USB HID standalone mode. If you use the ESP32-S3 bridge, open
-> **Flash FW** in the main window to check and update your firmware.
+> **v0.8.3 bundles ESP32-S3 firmware S2P-FW 1.0.9, the same as v0.8.2.** If
+> you already flashed it with v0.8.2, nothing needs to be flashed again. Coming
+> from an earlier version with the ESP32-S3 bridge, open **Flash FW ▼ > Flash
+> bundled firmware** in the main window to check and update your firmware.
 > [Flashing instructions](manual/USER_GUIDE.md#flash-esp32-s3)
 
 ![S2P-XInput-Lite banner](image/S2P-XInput-Lite-banner.jpg)
@@ -93,7 +93,12 @@ use **Import Settings** to bring over your profiles, layers, and calibration.
 - The same XInput-to-HD Rumble 2 conversion over USB, ESP32, and BLE, always
   sending only the latest frame and prioritizing stop frames.
 - Audio-reactive rumble that analyzes six frequency bands, with Game, Audio,
-  and Mix sources.
+  and Mix sources. **Detail** lifts quiet detail, **Freq** moves the HD Rumble
+  frequencies with the tone of the sound, and **Voice Cut** keeps film dialogue
+  from rumbling while impacts still come through.
+- **Motor Emulation** makes game rumble behave like a classic motor: light rumble
+  feels grainier and strong rumble stays smooth.
+  [Rumble guide](manual/USER_GUIDE.md#rumble-game)
 
 **Profiles**
 - Game profiles switch stick, gyro, rumble, audio, and mapping settings
@@ -106,7 +111,9 @@ use **Import Settings** to bring over your profiles, layers, and calibration.
 - Write a profile to the ESP32 and run it as an Android USB HID controller
   without the Windows program. Controller button chords and the CDC console
   remain available for recovery.
-- Built-in firmware flashing that checks the installed version first.
+- Built-in firmware flashing that checks the installed version first, or
+  flashes a firmware image you built yourself after checking that it fits.
+  [Build your own firmware](manual/USER_GUIDE.md#build-firmware)
 
 **Extensions**
 - Independent tools such as [S2P-Joystick-Macro](https://github.com/duoduo-88/S2P-Extensions)
@@ -187,8 +194,8 @@ switching, gyro mouse, or BLE HID.
   `app/src/profiles/System Default.ini`, and keys missing from an older file
   are added without overwriting existing values. Keep `System Default.ini` in
   every release package.
-- The first launch provides General, Audio, FPS-COMP, FPS-IMM, Racing, Action,
-  and Rhythm profiles. **System Default** is a read-only baseline, and
+- The first launch provides General, Audio, Movie, FPS-COMP, FPS-IMM, Racing,
+  Action, and Rhythm profiles. **System Default** is a read-only baseline, and
   **Defaults** resets the current controls without deleting saved profiles or calibration.
 - Mapping layer files are global and stored in `app/src/layers`. Each profile
   stores which layers are enabled and their order. Only the highest-priority

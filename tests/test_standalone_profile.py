@@ -35,6 +35,21 @@ def _settings():
 
 
 class StandaloneProfileTests(unittest.TestCase):
+    def test_motor_emulation_is_exported_with_rumble(self):
+        settings = _settings()
+        settings["sections"]["audio_haptics"]["motor_emulation"] = "0.75"
+        rumble = compile_standalone_profile("Action", settings).document["rumble"]
+        self.assertEqual(rumble["motor_emulation"], 0.75)
+        self.assertEqual(rumble["max_amplitude"], 800)
+
+    def test_motor_emulation_export_tolerates_bad_audio_values(self):
+        settings = _settings()
+        settings["sections"]["audio_haptics"].update(
+            motor_emulation="9", detail_boost="not-a-number",
+        )
+        rumble = compile_standalone_profile("Action", settings).document["rumble"]
+        self.assertEqual(rumble["motor_emulation"], 1.0)
+
     def test_output_compensation_requires_firmware_support(self):
         settings = _settings()
         settings["sections"]["gyro_mapping"].update(activation_mode="HOLD", x_compensation="0.16")
@@ -257,6 +272,16 @@ class StandaloneProfileTests(unittest.TestCase):
         self.assertEqual(
             sum(issue.severity == "blocking" for issue in issues),
             4,
+        )
+
+    def test_v2_motor_emulation_does_not_prompt_before_writing(self):
+        # Android USB HID standalone mode has no rumble output at all, so a
+        # rumble-only setting must not raise the "ignored" confirmation.
+        settings = _settings()
+        settings["sections"].setdefault("audio_haptics", {})["motor_emulation"] = 0.6
+        self.assertNotIn(
+            "馬達模擬",
+            {issue.feature for issue in analyze_standalone_v2_compatibility(settings)},
         )
 
     def test_extended_standalone_fields_are_serialized(self):

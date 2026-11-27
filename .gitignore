@@ -28,6 +28,7 @@ src/controller_status.json
 !/src/profiles/FPS-COMP.ini
 !/src/profiles/FPS-IMM.ini
 !/src/profiles/General.ini
+!/src/profiles/Movie.ini
 !/src/profiles/Racing.ini
 !/src/profiles/Rhythm.ini
 !/src/profiles/System Default.ini

@@ -155,6 +155,55 @@ DLLIMPORT BOOLEAN WINAPI HidD_SetNumInputBuffers(HANDLE, ULONG);
 DLLIMPORT BOOLEAN WINAPI HidD_GetPreparsedData(HANDLE, void **);
 DLLIMPORT BOOLEAN WINAPI HidD_FreePreparsedData(void *);
 DLLIMPORT LONG WINAPI HidP_GetCaps(void *, HIDP_CAPS_MIN *);
+DLLIMPORT LONG WINAPI HidP_GetUsages(
+    int, WORD, WORD, WORD *, ULONG *, void *, CHAR *, ULONG
+);
+DLLIMPORT LONG WINAPI HidP_GetUsageValue(
+    int, WORD, WORD, WORD, ULONG *, void *, CHAR *, ULONG
+);
+DLLIMPORT LONG WINAPI HidP_GetSpecificValueCaps(
+    int, WORD, WORD, WORD, void *, WORD *, void *
+);
+
+#define HIDP_INPUT 0
+#define HID_PAGE_GENERIC_DESKTOP 0x01
+#define HID_PAGE_BUTTON 0x09
+#define HID_USAGE_Z 0x32
+#define HID_USAGE_HAT_SWITCH 0x39
+#define XUSB_HID_AXES_END 9UL
+#define XUSB_HID_MAX_BUTTONS 16
+
+/* HIDP_VALUE_CAPS: only the logical range is read, at bytes 40..47. */
+typedef struct HIDP_VALUE_CAPS_MIN {
+    BYTE leading[40];
+    LONG LogicalMin;
+    LONG LogicalMax;
+    BYTE trailing[24];
+} HIDP_VALUE_CAPS_MIN;
+typedef char hidp_value_caps_size_must_be_72[
+    sizeof(HIDP_VALUE_CAPS_MIN) == 72 ? 1 : -1
+];
+
+/*
+ * Controls of Windows' XInput HID collection (&IG_). Its descriptor lists
+ * Button 1..10 (A, B, X, Y, LB, RB, Back, Start, LS, RS), an eight-way hat
+ * and both triggers combined on one Z axis, and these are read through
+ * HidP so their bit positions never have to be assumed.
+ */
+typedef struct XusbHidControls {
+    void *preparsed;
+    int has_hat;
+    LONG hat_minimum;
+    LONG hat_maximum;
+    int has_z;
+    DWORD last_length;
+    BYTE last_tail[REPORT_BUFFER_SIZE];
+    DWORD buttons;
+    float left_trigger;
+    float right_trigger;
+} XusbHidControls;
+
+static XusbHidControls g_xusb;
 
 LONG _InterlockedExchange(volatile LONG *, LONG);
 LONGLONG _InterlockedExchange64(volatile LONGLONG *, LONGLONG);
@@ -169,6 +218,14 @@ void *memset(void *destination, int value, ULONG_PTR size) {
     BYTE *bytes = (BYTE *)destination;
     ULONG_PTR index;
     for (index = 0; index < size; ++index) bytes[index] = (BYTE)value;
+    return destination;
+}
+
+void *memcpy(void *destination, const void *source, ULONG_PTR size) {
+    BYTE *target = (BYTE *)destination;
+    const BYTE *bytes = (const BYTE *)source;
+    ULONG_PTR index;
+    for (index = 0; index < size; ++index) target[index] = bytes[index];
     return destination;
 }
 
@@ -316,6 +373,127 @@ static float normalize_signed16(short raw) {
     return (float)raw / 32768.0f;
 }
 
+static const DWORD XUSB_HID_BUTTON_MASKS[10] = {
+    0x1000, /* A */
+    0x2000, /* B */
+    0x4000, /* X */
+    0x8000, /* Y */
+    0x0100, /* LB */
+    0x0200, /* RB */
+    0x0020, /* Back */
+    0x0010, /* Start */
+    0x0040, /* LS */
+    0x0080, /* RS */
+};
+
+static const DWORD HAT_DPAD_MASKS[8] = {
+    0x0001,          /* up */
+    0x0001 | 0x0008, /* up-right */
+    0x0008,          /* right */
+    0x0002 | 0x0008, /* down-right */
+    0x0002,          /* down */
+    0x0002 | 0x0004, /* down-left */
+    0x0004,          /* left */
+    0x0001 | 0x0004, /* up-left */
+};
+
+static void xusb_hid_open(void *preparsed) {
+    HIDP_VALUE_CAPS_MIN value_caps;
+    WORD count;
+    zero_bytes(&g_xusb, sizeof(g_xusb));
+    g_xusb.preparsed = preparsed;
+    count = 1;
+    if (
+        HidP_GetSpecificValueCaps(
+            HIDP_INPUT, HID_PAGE_GENERIC_DESKTOP, 0, HID_USAGE_HAT_SWITCH,
+            &value_caps, &count, preparsed
+        ) == HIDP_STATUS_SUCCESS
+        && count == 1
+        && value_caps.LogicalMax - value_caps.LogicalMin == 7
+    ) {
+        g_xusb.has_hat = 1;
+        g_xusb.hat_minimum = value_caps.LogicalMin;
+        g_xusb.hat_maximum = value_caps.LogicalMax;
+    }
+    count = 1;
+    g_xusb.has_z = HidP_GetSpecificValueCaps(
+        HIDP_INPUT, HID_PAGE_GENERIC_DESKTOP, 0, HID_USAGE_Z,
+        &value_caps, &count, preparsed
+    ) == HIDP_STATUS_SUCCESS && count == 1;
+    /* Force the first report to be decoded. */
+    g_xusb.last_length = 0xFFFFFFFFUL;
+}
+
+static void xusb_hid_decode_controls(const BYTE *report, DWORD length) {
+    WORD usages[XUSB_HID_MAX_BUTTONS];
+    ULONG usage_count = XUSB_HID_MAX_BUTTONS;
+    ULONG value = 0;
+    DWORD buttons = 0;
+    DWORD index;
+    DWORD tail_length;
+    int changed = length != g_xusb.last_length;
+
+    /* Sticks come before byte 9. Skip HidP while the rest is unchanged. */
+    tail_length = length > XUSB_HID_AXES_END ? length - XUSB_HID_AXES_END : 0;
+    for (index = 0; !changed && index < tail_length; ++index) {
+        changed = report[XUSB_HID_AXES_END + index] != g_xusb.last_tail[index];
+    }
+    if (!changed) return;
+    g_xusb.last_length = length;
+    for (index = 0; index < tail_length; ++index) {
+        g_xusb.last_tail[index] = report[XUSB_HID_AXES_END + index];
+    }
+
+    if (
+        HidP_GetUsages(
+            HIDP_INPUT, HID_PAGE_BUTTON, 0, usages, &usage_count,
+            g_xusb.preparsed, (CHAR *)report, length
+        ) == HIDP_STATUS_SUCCESS
+    ) {
+        for (index = 0; index < usage_count; ++index) {
+            if (usages[index] >= 1 && usages[index] <= 10) {
+                buttons |= XUSB_HID_BUTTON_MASKS[usages[index] - 1];
+            }
+        }
+    }
+    if (
+        g_xusb.has_hat
+        && HidP_GetUsageValue(
+            HIDP_INPUT, HID_PAGE_GENERIC_DESKTOP, 0, HID_USAGE_HAT_SWITCH,
+            &value, g_xusb.preparsed, (CHAR *)report, length
+        ) == HIDP_STATUS_SUCCESS
+        && (LONG)value >= g_xusb.hat_minimum
+        && (LONG)value <= g_xusb.hat_maximum
+    ) {
+        /* Values outside the logical range are the centered null state. */
+        buttons |= HAT_DPAD_MASKS[(LONG)value - g_xusb.hat_minimum];
+    }
+    g_xusb.buttons = buttons;
+
+    /*
+     * Both triggers share Z, centered at 0x8000: the left trigger raises it
+     * and the right trigger lowers it, so pressing both cancels out. Only
+     * the net direction can be shown from this collection.
+     */
+    g_xusb.left_trigger = 0.0f;
+    g_xusb.right_trigger = 0.0f;
+    value = 0;
+    if (
+        g_xusb.has_z
+        && HidP_GetUsageValue(
+            HIDP_INPUT, HID_PAGE_GENERIC_DESKTOP, 0, HID_USAGE_Z,
+            &value, g_xusb.preparsed, (CHAR *)report, length
+        ) == HIDP_STATUS_SUCCESS
+    ) {
+        LONG offset = (LONG)(value & 0xFFFFUL) - 0x8000L;
+        if (offset > 0) {
+            g_xusb.left_trigger = (float)offset / 32767.0f;
+        } else if (offset < 0) {
+            g_xusb.right_trigger = (float)(-offset) / 32768.0f;
+        }
+    }
+}
+
 static DWORD parse_report(
     LPCWSTR path,
     const BYTE *report,
@@ -358,6 +536,15 @@ static DWORD parse_report(
         *left_y = normalize_unsigned16(read_u16_le(report, 3), 1);
         *right_x = normalize_unsigned16(read_u16_le(report, 5), 0);
         *right_y = normalize_unsigned16(read_u16_le(report, 7), 1);
+        if (g_xusb.preparsed) {
+            xusb_hid_decode_controls(report, length);
+            *left_trigger = g_xusb.left_trigger;
+            *right_trigger = g_xusb.right_trigger;
+            *buttons = g_xusb.buttons;
+            return g_xusb.has_z
+                ? STREAM_STICK_AXES | STREAM_TRIGGER_AXES
+                : STREAM_STICK_AXES;
+        }
         *left_trigger = 0.0f;
         *right_trigger = 0.0f;
         *buttons = 0;
@@ -473,7 +660,12 @@ static DWORD run_stream(
         return 1;
     }
     report_length = (DWORD)caps.InputReportByteLength;
-    HidD_FreePreparsedData(preparsed);
+    if (contains_ascii_ci(path, "&IG_")) {
+        /* Kept until the stream ends to read buttons, hat and triggers. */
+        xusb_hid_open(preparsed);
+    } else {
+        HidD_FreePreparsedData(preparsed);
+    }
     preparsed = 0;
     HidD_SetNumInputBuffers(device, 512);
     event = CreateEventW(0, TRUE, FALSE, 0);
@@ -583,6 +775,10 @@ finished:
     CancelIoEx(device, 0);
     if (event) CloseHandle(event);
     if (device != INVALID_HANDLE_VALUE) CloseHandle(device);
+    if (g_xusb.preparsed) {
+        HidD_FreePreparsedData(g_xusb.preparsed);
+        g_xusb.preparsed = 0;
+    }
     if (header->state != 3) _InterlockedExchange(&header->state, 2);
     UnmapViewOfFile(header);
     CloseHandle(mapping);

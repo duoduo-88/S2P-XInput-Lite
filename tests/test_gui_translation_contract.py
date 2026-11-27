@@ -61,6 +61,52 @@ class GUITranslationContractTests(unittest.TestCase):
                     )
         self.assertEqual(invalid, [])
 
+    def test_literal_gui_texts_translate_fully_to_english(self):
+        """Every literal Chinese text given to tr() or a message box has English."""
+        import re
+
+        from localization import translate_text
+
+        cjk = re.compile(r"[一-鿿]")
+        messageboxes = {
+            "showinfo", "showwarning", "showerror", "askquestion",
+            "askokcancel", "askretrycancel", "askyesno", "askyesnocancel",
+        }
+        paths = [
+            ROOT / "src" / "config_gui.py",
+            ROOT / "src" / "gamepad_test_app.py",
+            ROOT / "src" / "dialog_layout.py",
+            *sorted((ROOT / "src" / "gui_sections").glob("*.py")),
+        ]
+        untranslated = []
+        for path in paths:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                if isinstance(func, ast.Attribute) and func.attr == "tr":
+                    texts = node.args[:1]
+                elif (
+                    isinstance(func, ast.Attribute)
+                    and func.attr in messageboxes
+                    and getattr(func.value, "id", "") == "messagebox"
+                ):
+                    texts = node.args[:2]
+                else:
+                    continue
+                for text in texts:
+                    if (
+                        isinstance(text, ast.Constant)
+                        and isinstance(text.value, str)
+                        and cjk.search(text.value)
+                        and cjk.search(translate_text(text.value, "en"))
+                    ):
+                        untranslated.append(
+                            f"{path.relative_to(ROOT)}:{text.lineno} {text.value[:40]!r}"
+                        )
+        self.assertEqual(untranslated, [])
+
 
 if __name__ == "__main__":
     unittest.main()

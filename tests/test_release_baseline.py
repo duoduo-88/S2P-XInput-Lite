@@ -13,9 +13,9 @@ FIRMWARE_ROOT = (
 
 
 class ReleaseBaselineTests(unittest.TestCase):
-    def test_desktop_release_version_is_082(self):
+    def test_desktop_release_version_is_083(self):
         source = (ROOT / "src" / "version.py").read_text(encoding="utf-8")
-        self.assertRegex(source, r'VERSION\s*=\s*"0\.8\.2"')
+        self.assertRegex(source, r'VERSION\s*=\s*"0\.8\.3"')
 
     def test_release_manifest_requires_exact_payload_coverage(self):
         source = (ROOT / "scripts" / "verify_release.ps1").read_text(
@@ -44,6 +44,16 @@ class ReleaseBaselineTests(unittest.TestCase):
         self.assertIn("Launcher build version does not match", package_source)
         self.assertIn('"third_party"', package_source)
         self.assertIn('".ico"', package_source)
+        self.assertIn("ls-files -- $firmwareSourceRelative", package_source)
+        self.assertIn("diff --quiet HEAD -- $firmwareSourceRelative", package_source)
+        self.assertIn(
+            '"esp32s3\\source\\esp32s3_usb_bridge_bluedroid\\main\\main.c"',
+            source,
+        )
+        self.assertIn(
+            '"esp32s3\\source\\esp32s3_usb_bridge_bluedroid\\sdkconfig"',
+            source,
+        )
         self.assertIn("source_version = $version", build_source)
 
         launcher_source = (
